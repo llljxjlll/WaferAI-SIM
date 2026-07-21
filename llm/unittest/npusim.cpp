@@ -1,6 +1,7 @@
 #include "assert.h"
 #include "defs/global.h"
 #include "defs/spec.h"
+#include "die/d2d_link.h"
 #include "die/port.h"
 #include "monitor/monitor.h"
 #include "systemc.h"
@@ -40,6 +41,9 @@ Define_int64_opt("--trace-window", g_flag_trace_window, 2, "Trace window size");
 Define_bool_opt("--d2d-v0-selftest", g_flag_d2d_v0_selftest, false,
                 "run D2D V0 pure-function self-test and exit");
 
+Define_bool_opt("--d2d-link-selftest", g_flag_d2d_link_selftest, false,
+                "run D2D V1 SystemC link self-test (drives packets) and exit");
+
 int sc_main(int argc, char *argv[]) {
     clock_t start = clock();
 
@@ -67,6 +71,11 @@ int sc_main(int argc, char *argv[]) {
     // D2D V0 L0 自测：纯函数（编址/端点/矩形拓扑/端口校验），不建仿真
     if (g_flag_d2d_v0_selftest) {
         int fails = RunD2DV0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    // D2D V1 link 自测：SystemC testbench 驱动真实包穿过 D2DLinkUnit
+    if (g_flag_d2d_link_selftest) {
+        int fails = RunD2DLinkSelfTest();
         return fails == 0 ? 0 : 1;
     }
 
@@ -100,6 +109,9 @@ int sc_main(int argc, char *argv[]) {
             busy += p.stats.busy_cycles;
             stall += p.stats.stall_cycles;
         }
+        // V1-b：D2D link 单元实际穿越的包数（idle 时为 0）
+        in += g_d2d_link_in_pkts;
+        out += g_d2d_link_out_pkts;
         LOG_INFO(SYSTEM) << "[D2D] in_pkts=" << in << " out_pkts=" << out
                          << " busy_cycles=" << busy << " stall_cycles=" << stall;
     }

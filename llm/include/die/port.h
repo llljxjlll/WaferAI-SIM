@@ -160,3 +160,8 @@ extern long g_host_lane_mismatch;
 extern std::map<int, int> g_host_done_src;              // source -> count
 extern std::map<std::pair<int, int>, int> g_host_ack_sig; // (source,tag) -> count
 void ResetHostLaneStats(int n_lanes);
+
+// ---- V1-b：D2D Link 运行时统计（所有 link 单元累加；供 [D2D] dump 的 in/out）----
+extern long g_d2d_link_in_pkts;
+extern long g_d2d_link_out_pkts;
+void ResetD2DLinkStats();

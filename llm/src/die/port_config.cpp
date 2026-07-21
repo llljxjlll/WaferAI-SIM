@@ -17,6 +17,12 @@ std::vector<long> g_host_lane_ack;
 long g_host_lane_mismatch = 0;
 std::map<int, int> g_host_done_src;
 std::map<std::pair<int, int>, int> g_host_ack_sig;
+long g_d2d_link_in_pkts = 0;
+long g_d2d_link_out_pkts = 0;
+void ResetD2DLinkStats() {
+    g_d2d_link_in_pkts = 0;
+    g_d2d_link_out_pkts = 0;
+}
 void ResetHostLaneStats(int n_lanes) {
     g_host_lane_done.assign(n_lanes, 0);
     g_host_lane_ack.assign(n_lanes, 0);

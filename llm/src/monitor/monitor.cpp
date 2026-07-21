@@ -1,5 +1,6 @@
 #include "monitor/monitor.h"
 #include "defs/global.h"
+#include "die/d2d_link.h"
 #include "die/port.h"
 #include "monitor/config_helper_gpu.h"
 #include "monitor/config_helper_gpu_pd.h"
@@ -8,13 +9,16 @@
 // 独立统计 SystemC 层级中的 RouterUnit / WorkerCore 实例数（按类型 dynamic_cast，
 // 不依赖自报计数），供多 die 实例化验收独立核对模块数量。
 static void CountInstantiatedModules(const std::vector<sc_object *> &objs,
-                                     int &routers, int &workers) {
+                                     int &routers, int &workers, int &links) {
     for (auto *o : objs) {
         if (dynamic_cast<RouterUnit *>(o))
             routers++;
         if (dynamic_cast<WorkerCore *>(o))
             workers++;
-        CountInstantiatedModules(o->get_child_objects(), routers, workers);
+        if (dynamic_cast<D2DLinkUnit *>(o))
+            links++;
+        CountInstantiatedModules(o->get_child_objects(), routers, workers,
+                                 links);
     }
 }
 
@@ -270,6 +274,12 @@ void Monitor::init() {
         wc->ctrl_channel_o(rc_ctrl_channel[i]);
     }
 
+    // V1 runtime 前置配置校验（生产路径，非仅自测）：一旦存在 D2D link，就强制 V1 MVP 契约
+    //（每方向 ≤1 个 C2C 端口、邻 die 方向恰好 1 个、link_bw==1）——在任何 deferred binding /
+    // D2DLinkUnit 创建之前。非法配置在进入仿真前明确失败（异常 → 非零退出），不静默降级。
+    if (!g_d2d_links.empty())
+        ValidateV1MvpTopology();
+
     // router & router —— 开边 mesh（无 torus 环绕）。die 边缘方向无 die 内邻居，
     // 输入侧绑定共享终结通道（永不驱动），彻底移除运行时取模环绕连接。
     // 终结通道（只读、永不写）——多个边缘输入可共享。
@@ -300,7 +310,7 @@ void Monitor::init() {
             pos->ctrl_channel_avail_o[i](ctrl_channel_avail[i][j]);
             pos->ctrl_sent_o[i](ctrl_sent[i][j]);
 
-            // 输入侧：有邻居则读邻居输出，边缘则接终结通道（不再环绕）
+            // 输入侧：有邻居→读邻居输出；C2C 出口边→延后由 D2D link pass 绑定；否则接终结通道。
             if (nb >= 0) {
                 pos->channel_i[i](channel[input_dir][nb]);
                 pos->channel_avail_i[i](channel_avail[input_dir][nb]);
@@ -308,6 +318,9 @@ void Monitor::init() {
                 pos->ctrl_channel_i[i](ctrl_channel[input_dir][nb]);
                 pos->ctrl_channel_avail_i[i](ctrl_channel_avail[input_dir][nb]);
                 pos->ctrl_sent_i[i](ctrl_sent[input_dir][nb]);
+            } else if (c2c_edge) {
+                // 延后：channel_i / data_sent_i / channel_avail_i（+ctrl）由下面的 D2D link
+                // pass 绑定到 link 单元输出。此处不绑定（避免与 link 重复绑定）。
             } else {
                 pos->channel_i[i](*term_channel);
                 pos->channel_avail_i[i](*term_avail);
@@ -319,18 +332,67 @@ void Monitor::init() {
         }
     }
 
-    // 独立层级计数（非自报）：应等于 TOTAL_CORES
-    int hier_routers = 0, hier_workers = 0;
+    // ==================== V1-b2：D2D Link pass ====================
+    // 对每条有向 D2D link（g_d2d_links 含 A→B 与 B→A 两条），插入一个 D2DLinkUnit（latency FIFO），
+    // 取代 C2C 出口边的终结：link 读上游 A 的边缘输出、延迟后驱动下游 B 的边缘输入。
+    // 两条有向 link 一起覆盖两端所有被延后的输入端口（每个恰绑定一次）。
+    ResetD2DLinkStats();
+    for (const auto &l : g_d2d_links) {
+        const D2DPort &pa = g_die_ports.ports[l.local_port];
+        const D2DPort &pb = g_die_ports.ports[l.remote_port];
+        Directions SA = pa.side, SB = pb.side; // A 出口侧、B 接收侧（互反）
+        int Ta = l.local_die * CORES_PER_DIE + pa.tile;
+        int Tb = l.remote_die * CORES_PER_DIE + pb.tile;
+        RouterUnit *A = routerMonitor->routers[Ta];
+        RouterUnit *B = routerMonitor->routers[Tb];
+
+        // link 驱动的 router 输入信号（新建，进程退出回收）
+        auto *sA_avail = new sc_signal<bool>;
+        auto *sA_ctrl_avail = new sc_signal<bool>;
+        auto *sB_channel = new sc_signal<sc_bv<256>>;
+        auto *sB_sent = new sc_signal<bool>;
+        auto *sB_ctrl_channel = new sc_signal<sc_bv<256>>;
+        auto *sB_ctrl_sent = new sc_signal<bool>;
+
+        auto *link = new D2DLinkUnit(sc_gen_unique_name("d2d_link"), pa.latency);
+        // 上游 A：读其边缘输出（channel/sent = channel[SA][Ta]），驱动其 avail 输入
+        link->in_channel(channel[SA][Ta]);
+        link->in_sent(data_sent[SA][Ta]);
+        link->in_avail(*sA_avail);
+        link->in_ctrl_channel(ctrl_channel[SA][Ta]);
+        link->in_ctrl_sent(ctrl_sent[SA][Ta]);
+        link->in_ctrl_avail(*sA_ctrl_avail);
+        // 下游 B：驱动其边缘输入（channel/sent），读其 avail 输出（channel_avail[SB][Tb]）
+        link->out_channel(*sB_channel);
+        link->out_sent(*sB_sent);
+        link->out_avail(channel_avail[SB][Tb]);
+        link->out_ctrl_channel(*sB_ctrl_channel);
+        link->out_ctrl_sent(*sB_ctrl_sent);
+        link->out_ctrl_avail(ctrl_channel_avail[SB][Tb]);
+
+        // 绑定被延后的 router 输入：A 的 avail_i[SA]、B 的 channel_i/sent_i[SB]（+ctrl）
+        A->channel_avail_i[SA](*sA_avail);
+        A->ctrl_channel_avail_i[SA](*sA_ctrl_avail);
+        B->channel_i[SB](*sB_channel);
+        B->data_sent_i[SB](*sB_sent);
+        B->ctrl_channel_i[SB](*sB_ctrl_channel);
+        B->ctrl_sent_i[SB](*sB_ctrl_sent);
+    }
+
+    // 独立层级计数（非自报）：routers/workers 应等于 TOTAL_CORES；links 为实例化的 D2DLinkUnit 数
+    int hier_routers = 0, hier_workers = 0, hier_links = 0;
     CountInstantiatedModules(sc_get_top_level_objects(), hier_routers,
-                             hier_workers);
+                             hier_workers, hier_links);
     LOG_INFO(SYSTEM) << "Instantiated cores=" << TOTAL_CORES
                      << " routers=" << hier_routers << " workers=" << hier_workers
                      << " dies=" << DIE_COUNT
                      << " (CORES_PER_DIE=" << CORES_PER_DIE << ", GRID=" << GRID_X
                      << "x" << GRID_Y << ", expect " << TOTAL_CORES << ")";
     // V1-b：peer-connected C2C 出口边数（每条相邻 die 双向 link = 2 个有向出口边）。
-    // 单 die / 无 C2C 恒为 0；b1 仍终结这些边，b2 接入 D2D Link 单元取代终结。
-    LOG_INFO(SYSTEM) << "[D2D] link_sites=" << d2d_link_sites;
+    // link_units 为**独立层级计数**的 D2DLinkUnit 实例数（非自报 g_d2d_links.size()）。
+    // 单 die / 无 C2C 恒为 0。
+    LOG_INFO(SYSTEM) << "[D2D] link_sites=" << d2d_link_sites
+                     << " link_units=" << hier_links;
     LOG_INFO(SYSTEM) << "Components initialize complete, prepare to start.";
 
     SC_THREAD(start_simu);

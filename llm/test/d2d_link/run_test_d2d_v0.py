@@ -68,6 +68,13 @@ def main():
     record("L0 pure-function self-test", rc == 0 and passed,
            out.strip().splitlines()[-1] if out.strip() else "")
 
+    # 1b. V1 link SystemC 自测（驱动真实包：latency/序/无丢重/stall/drain/data-ctrl 独立）
+    rc, out = run([NPUSIM, "--d2d-link-selftest"], timeout=60)
+    lpassed = "link self-test:" in out and "FAILURES" not in out
+    record("V1 link SystemC self-test (driven packets)", rc == 0 and lpassed,
+           next((l.strip() for l in reversed(out.splitlines())
+                 if "link self-test:" in l), ""))
+
     # 2. 有效 die_ports 端到端，结果不变
     rc, out = run([NPUSIM, "--workload-config", WL, "--hardware-config", HW_OK,
                    "--simulation-config", SIM, "--mapping-config", MAP])
@@ -385,16 +392,17 @@ def main():
     check_dir("4x2 E-host (horiz mount)", WL42, "core_4x2_ports_ehost.json", "row", w2, a2, wd2)
     check_dir("4x2 N-host (vert mount)", WL42, "core_4x2_ports_nhost.json", "col", w2, a2, wd2)
 
-    # 3j. V1-b1: D2D link-site seam。2×1 单 E/W c2c 配置：识别 peer-connected C2C 出口边
-    #     （die0.E + die1.W = link_sites=2），b1 仍终结这些边——die-local workload 照跑、D2D=0、
-    #     两次 sim-time 确定。seam 只识别不改绑定，对 die-local 行为无可观测影响
-    #     （sim-time / 完成核集合 / 活动计数一致；stdout 仅多一行 link_sites 日志）。
+    # 3j. V1-b2: D2D Link 运行时接线。2×1 单 E/W c2c 配置：识别 C2C 出口边并各插入一个
+    #     D2DLinkUnit（latency FIFO）取代终结（link_sites=2、link_units=2）。无 C2C-bound 流量时
+    #     idle link（对上游 avail=true、data_sent=false）对 die-local workload 无可观测影响——
+    #     照跑、D2D=0、两次 sim-time 确定、无 unbound port。
     LS_RE = re.compile(r"link_sites=(\d+)")
+    LU_RE = re.compile(r"link_units=(\d+)")
 
-    def link_sites(out):
+    def _last(rx, out):
         m = None
         for line in out.splitlines():
-            mm = LS_RE.search(line)
+            mm = rx.search(line)
             if mm:
                 m = mm
         return int(m.group(1)) if m else None
@@ -405,17 +413,37 @@ def main():
         rc, out = run([NPUSIM, "--workload-config", WL, "--hardware-config", C2C21,
                        "--simulation-config", SIM, "--mapping-config", MAP], timeout=90)
         runs_b.append(dict(
-            rc=rc, ns=finish_ns(out), ls=link_sites(out),
+            rc=rc, ns=finish_ns(out), ls=_last(LS_RE, out), lu=_last(LU_RE, out),
             d0=len(set(re.findall(r"Core ([0-9]|1[0-5]) ", out))),
             d2d0="[D2D] in_pkts=0 out_pkts=0 busy_cycles=0 stall_cycles=0" in out,
             bind_ok=not any(k in out.lower()
                             for k in ("unbound", "multi-writer", "multi-bind"))))
-    ok = all(r["rc"] == 0 and r["ls"] == 2 and r["d0"] == CORES_PER_DIE and
-             r["d2d0"] and r["bind_ok"] and r["ns"] is not None
+    ok = all(r["rc"] == 0 and r["ls"] == 2 and r["lu"] == 2 and
+             r["d0"] == CORES_PER_DIE and r["d2d0"] and r["bind_ok"] and
+             r["ns"] is not None
              for r in runs_b) and runs_b[0]["ns"] == runs_b[1]["ns"]
-    record("V1-b1 D2D link-site seam (2x1 c2c: link_sites=2, die-local runs, D2D=0, det)",
-           ok, f"link_sites={runs_b[0]['ls']} ns={runs_b[0]['ns']}/{runs_b[1]['ns']} "
+    record("V1-b2 D2D link wired (2x1 c2c: link_units=2, idle link -> die-local runs, D2D=0, det)",
+           ok, f"link_sites={runs_b[0]['ls']} link_units={runs_b[0]['lu']} "
+               f"ns={runs_b[0]['ns']}/{runs_b[1]['ns']} "
                f"die0={runs_b[0]['d0']}/16 d2d0={runs_b[0]['d2d0']} bind_ok={runs_b[0]['bind_ok']}")
+
+    # 3k. V1-b2 生产路径校验：ValidateV1MvpTopology 在 Monitor Link 实例化前调用——
+    #     2×1 单端口但 link_bw=2（违反 V1 单 pkt/cycle 契约）必须在进入仿真前明确失败，
+    #     证明校验不是只在纯函数自测里被调用。
+    import json as _jbw
+    import tempfile as _tbw
+    cbw = _jbw.load(open(os.path.join(HERE, "hardware", "core_4x4_die2x1_c2c.json")))
+    cbw["die_ports"]["c2c"]["link_bw"] = 2
+    fd, bwpath = _tbw.mkstemp(suffix=".json", prefix="d2d_c2c_bw2_")
+    with os.fdopen(fd, "w") as f:
+        _jbw.dump(cbw, f)
+    rc, out = run([NPUSIM, "--workload-config", WL, "--hardware-config", bwpath,
+                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=30)
+    os.remove(bwpath)
+    entered = ("All requests finished" in out or "Catch test finished" in out)
+    rejected = (rc != 0 and "link_bw must be 1" in out and not entered)
+    record("V1-b2 production validation: link_bw=2 rejected before sim (2x1 c2c)",
+           rejected, f"exit={rc} entered_sim={entered}")
 
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
