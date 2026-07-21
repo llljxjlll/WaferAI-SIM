@@ -304,6 +304,14 @@ void ValidateV1MvpTopology() {
             throw std::runtime_error(
                 "V1 MVP: C2C link_bw must be 1 packet/cycle (multi-packet/cycle "
                 "is a later version)");
+    // pinned exit 编码上限：exit_port 字段 M_D_EXIT_PORT bit，编码 port_id+1，故
+    // port_id <= (1<<M_D_EXIT_PORT)-2。超出（大 die/端口过多）明确拒绝，不静默截断。
+    const int max_encodable = (1 << M_D_EXIT_PORT) - 2;
+    for (const auto &p : g_die_ports.ports)
+        if (p.role == ROLE_C2C && (p.port_id < 0 || p.port_id > max_encodable))
+            throw std::runtime_error(
+                "V1 MVP: C2C port_id exceeds exit_port field capacity "
+                "(cannot pin as msg field)");
     // peer-connectedness 由 BuildD2DLinks 保证：某方向存在邻 die 时，该方向 C2C 端口若找不到
     // 对侧镜像端口即抛错；边界方向的模板端口无 peer（允许）。故此处只需 count 契约。
 }

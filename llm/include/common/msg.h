@@ -20,6 +20,9 @@ public:
     bool refill_ = false;       // 在end包中表示是否需要refill
     bool config_end_ = false;   // 是否为一个原语config的最后一个包
     int roofline_packets_ = 0;  // 视作发送X个数据包，加快模拟速度
+    // V1-c0：跨 die pinned 出口端口（源 die CrossDieSelectExit 选一次并钉死，随包携带；
+    // 离开源 die 前不重选）。-1=未 pin / 非跨 die 包。V1-c1+ 才填充与使用。
+    int exit_port_ = -1;
     sc_bv<128> data_ = sc_bv<128>(0);
 
     Msg(bool e, MSG_TYPE m, int seq, int des, int offset, int tag, int length,

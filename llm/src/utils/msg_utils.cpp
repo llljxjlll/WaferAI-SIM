@@ -40,6 +40,10 @@ sc_bv<256> SerializeMsg(Msg msg) {
     pos += M_D_CONF_END;
     serialized_msg.range(pos + M_D_DATA - 1, pos) = msg.data_;
     pos += M_D_DATA;
+    // 编码：0=未 pin（exit_port_<0），合法端口=port_id+1。
+    serialized_msg.range(pos + M_D_EXIT_PORT - 1, pos) =
+        sc_bv<M_D_EXIT_PORT>(msg.exit_port_ >= 0 ? msg.exit_port_ + 1 : 0);
+    pos += M_D_EXIT_PORT;
     serialized_msg.range(255, pos) = sc_bv<32>(0);
 
     return serialized_msg;
@@ -73,6 +77,12 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
     msg.config_end_ = buffer.range(pos + M_D_CONF_END - 1, pos).to_uint64(),
     pos += M_D_CONF_END;
     msg.data_ = buffer.range(pos + M_D_DATA - 1, pos);
+    pos += M_D_DATA;
+    // exit_port_ 解码：0=未 pin(-1)，否则 port_id = enc-1。
+    {
+        unsigned ep = buffer.range(pos + M_D_EXIT_PORT - 1, pos).to_uint64();
+        msg.exit_port_ = (ep == 0u) ? -1 : (int)ep - 1;
+    }
 
     return msg;
 }

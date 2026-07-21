@@ -107,6 +107,11 @@
 #define M_D_ROOFLINE 24
 #define M_D_CONF_END 1
 #define M_D_DATA 128
+// V1-c0：跨 die 路由 pinned 出口端口（源 die 选一次并钉死，随包携带）。16-bit：编码
+// **0=未 pin，合法端口=port_id+1**（避免 8-bit 下 port_id==255 撞哨兵、>=256 静默截断——
+// port_id 是全局递增 int，大 die/较多 HOST/MEM 端口时可超 254）。用 0 表示未 pin 还使
+// 现有消息（exit_port_=-1）该段 wire bits 保持全零，与 c0 前逐位一致。前 239 bit + 16 = 255。
+#define M_D_EXIT_PORT 16
 
 // 路由消息负载相关
 #define MAX_BUFFER_PACKET_SIZE 3

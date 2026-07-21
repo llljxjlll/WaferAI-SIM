@@ -2,6 +2,7 @@
 // 不依赖 SystemC 运行；直接设置全局维度并调用纯函数。
 #include "die/port.h"
 #include "defs/spec.h"
+#include "common/flow.h"
 #include "common/msg.h"
 #include "monitor/host_envelope.h"
 #include "monitor/workload_normalize.h"
@@ -469,6 +470,7 @@ int RunD2DV0SelfTest() {
         m.refill_ = true;             // 1-bit -> 显式比较
         m.config_end_ = true;         // 1-bit -> 显式比较
         m.roofline_packets_ = 7;      // 24-bit
+        m.exit_port_ = 42;            // 8-bit（V1-c0 pinned 出口端口）
         m.data_ = sc_bv<128>(0xABCD);
         Msg r = DeserializeMsg(SerializeMsg(m));
         // 逐字段全比较（含 refill_/config_end_）
@@ -484,7 +486,17 @@ int RunD2DV0SelfTest() {
         check(r.config_end_ == m.config_end_, "round-trip: config_end_ (true)");
         check(r.roofline_packets_ == m.roofline_packets_,
               "round-trip: roofline_packets_");
+        check(r.exit_port_ == m.exit_port_, "round-trip: exit_port_ (42)");
         check(r.data_ == m.data_, "round-trip: data_");
+        // exit_port_ 编码边界（0=未 pin，port=port_id+1）：-1/0/254/255 均正确 round-trip
+        bool ep_ok = true;
+        for (int v : {-1, 0, 254, 255, 4096}) {
+            Msg mp;
+            mp.exit_port_ = v;
+            if (DeserializeMsg(SerializeMsg(mp)).exit_port_ != v)
+                ep_ok = false;
+        }
+        check(ep_ok, "round-trip: exit_port_ boundaries (-1/0/254/255/4096)");
         // 默认构造的 Msg 全成员有确定初值（无未初始化字段进入序列化）
         Msg d;
         Msg rd = DeserializeMsg(SerializeMsg(d));
@@ -1130,6 +1142,46 @@ int RunD2DV0SelfTest() {
             }
             check(rej, "ValidateV1MvpTopology rejects C2C link_bw != 1 (V1: 1 pkt/cycle)");
         }
+
+        // 16.5 pinned exit 编码上限：C2C port_id 超出 exit_port 字段容量 → 拒绝（不静默截断）
+        {
+            setTopo(4, 4, 2, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            ParseDiePorts(hw);
+            // 人为把一个 C2C 端口的 port_id 顶到不可编码（真实大 die 才会自然发生）
+            int bad = (1 << 16) - 1; // > max_encodable = 65534
+            for (auto &p : g_die_ports.ports)
+                if (p.role == ROLE_C2C) {
+                    p.port_id = bad;
+                    break;
+                }
+            bool rej = false;
+            try {
+                ValidateV1MvpTopology();
+            } catch (const std::runtime_error &) {
+                rej = true;
+            }
+            check(rej, "ValidateV1MvpTopology rejects C2C port_id beyond exit_port capacity");
+        }
+    }
+
+    // ---- 17. FlowKey (V1-c0)：(source,tag[,subflow]) 防别名 ----
+    {
+        FlowKey a{5, 3, 0}, b{21, 3, 0}, c{5, 3, 0}, d{5, 7, 0}, e{5, 3, 1};
+        // 同 tag 不同 source → 不同 key（跨 die 同 local-id/同 tag 不别名）
+        check(a != b && !(a == b), "FlowKey: same tag, different source -> distinct");
+        check(a == c, "FlowKey: same (source,tag,subflow) -> equal");
+        check(a != d, "FlowKey: different tag -> distinct");
+        check(a != e, "FlowKey: different subflow -> distinct");
+        // 严格弱序（可作 map key）：反对称
+        check((a < b) != (b < a) && !(a < c) && !(c < a),
+              "FlowKey: strict weak ordering (usable as map key)");
     }
 
     std::cout << "==== D2D V0 self-test: " << (g_total - g_fail) << "/" << g_total
