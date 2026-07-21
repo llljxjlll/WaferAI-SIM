@@ -280,12 +280,17 @@ void Monitor::init() {
     sc_signal<bool> *term_ctrl_avail = new sc_signal<bool>;
     sc_signal<bool> *term_ctrl_sent = new sc_signal<bool>;
 
+    int d2d_link_sites = 0; // V1-b：peer-connected C2C 出口边计数（b1 仍终结，b2 接 link）
     for (int j = 0; j < TOTAL_CORES; j++) {
         RouterUnit *pos = routerMonitor->routers[j];
 
         for (int i = 0; i < DIRECTIONS - 1; i++) {
             Directions input_dir = GetOpposeDirection(Directions(i));
             int nb = OpenMeshNeighbor(j, Directions(i)); // 开边邻居，-1=边缘
+            // V1-b seam：die 边界(nb<0)且是 C2C 出口边 → 记为 D2D link site（b1 暂仍终结）
+            bool c2c_edge = (nb < 0) && IsC2CEgressEdge(j, Directions(i));
+            if (c2c_edge)
+                d2d_link_sites++;
 
             // 输出侧始终绑定自身信号（边缘输出无人读取，无害）
             pos->channel_o[i](channel[i][j]);
@@ -323,6 +328,9 @@ void Monitor::init() {
                      << " dies=" << DIE_COUNT
                      << " (CORES_PER_DIE=" << CORES_PER_DIE << ", GRID=" << GRID_X
                      << "x" << GRID_Y << ", expect " << TOTAL_CORES << ")";
+    // V1-b：peer-connected C2C 出口边数（每条相邻 die 双向 link = 2 个有向出口边）。
+    // 单 die / 无 C2C 恒为 0；b1 仍终结这些边，b2 接入 D2D Link 单元取代终结。
+    LOG_INFO(SYSTEM) << "[D2D] link_sites=" << d2d_link_sites;
     LOG_INFO(SYSTEM) << "Components initialize complete, prepare to start.";
 
     SC_THREAD(start_simu);

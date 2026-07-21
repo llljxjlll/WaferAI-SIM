@@ -291,6 +291,13 @@ void ValidateV1MvpTopology() {
                 "V1 MVP: a die-neighbor direction must have exactly one C2C "
                 "port");
     }
+    // V1 单链路只支持 1 packet/cycle（单 256-bit 信号无法真实表达 >1 包/周期）——显式拒绝，
+    // 不静默降级。>1 packet/cycle（多 lane / flit 聚合）留到 V3+。
+    for (const auto &p : g_die_ports.ports)
+        if (p.role == ROLE_C2C && p.bw != 1)
+            throw std::runtime_error(
+                "V1 MVP: C2C link_bw must be 1 packet/cycle (multi-packet/cycle "
+                "is a later version)");
     // peer-connectedness 由 BuildD2DLinks 保证：某方向存在邻 die 时，该方向 C2C 端口若找不到
     // 对侧镜像端口即抛错；边界方向的模板端口无 peer（允许）。故此处只需 count 契约。
 }
@@ -396,6 +403,18 @@ int PortForHost(int local_core) {
     if (local_core < 0 || local_core >= (int)g_die_ports.port_for_host.size())
         return -1;
     return g_die_ports.port_for_host[local_core];
+}
+
+bool IsC2CEgressEdge(int global_tile, Directions dir) {
+    if (!g_die_ports.active)
+        return false;
+    int die = global_tile / CORES_PER_DIE, local = global_tile % CORES_PER_DIE;
+    if (DieNeighbor(die, dir) < 0)
+        return false; // 该方向无邻 die（边界）→ 无跨 die 连接
+    for (const auto &p : g_die_ports.ports)
+        if (p.role == ROLE_C2C && p.side == dir && p.tile == local)
+            return true;
+    return false;
 }
 
 int PortForDir(int local_core, Directions dir) {

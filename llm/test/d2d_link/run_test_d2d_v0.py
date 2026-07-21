@@ -385,6 +385,38 @@ def main():
     check_dir("4x2 E-host (horiz mount)", WL42, "core_4x2_ports_ehost.json", "row", w2, a2, wd2)
     check_dir("4x2 N-host (vert mount)", WL42, "core_4x2_ports_nhost.json", "col", w2, a2, wd2)
 
+    # 3j. V1-b1: D2D link-site seam。2×1 单 E/W c2c 配置：识别 peer-connected C2C 出口边
+    #     （die0.E + die1.W = link_sites=2），b1 仍终结这些边——die-local workload 照跑、D2D=0、
+    #     两次 sim-time 确定。seam 只识别不改绑定，对 die-local 行为无可观测影响
+    #     （sim-time / 完成核集合 / 活动计数一致；stdout 仅多一行 link_sites 日志）。
+    LS_RE = re.compile(r"link_sites=(\d+)")
+
+    def link_sites(out):
+        m = None
+        for line in out.splitlines():
+            mm = LS_RE.search(line)
+            if mm:
+                m = mm
+        return int(m.group(1)) if m else None
+
+    C2C21 = "../llm/test/d2d_link/hardware/core_4x4_die2x1_c2c.json"
+    runs_b = []
+    for _ in range(2):
+        rc, out = run([NPUSIM, "--workload-config", WL, "--hardware-config", C2C21,
+                       "--simulation-config", SIM, "--mapping-config", MAP], timeout=90)
+        runs_b.append(dict(
+            rc=rc, ns=finish_ns(out), ls=link_sites(out),
+            d0=len(set(re.findall(r"Core ([0-9]|1[0-5]) ", out))),
+            d2d0="[D2D] in_pkts=0 out_pkts=0 busy_cycles=0 stall_cycles=0" in out,
+            bind_ok=not any(k in out.lower()
+                            for k in ("unbound", "multi-writer", "multi-bind"))))
+    ok = all(r["rc"] == 0 and r["ls"] == 2 and r["d0"] == CORES_PER_DIE and
+             r["d2d0"] and r["bind_ok"] and r["ns"] is not None
+             for r in runs_b) and runs_b[0]["ns"] == runs_b[1]["ns"]
+    record("V1-b1 D2D link-site seam (2x1 c2c: link_sites=2, die-local runs, D2D=0, det)",
+           ok, f"link_sites={runs_b[0]['ls']} ns={runs_b[0]['ns']}/{runs_b[1]['ns']} "
+               f"die0={runs_b[0]['d0']}/16 d2d0={runs_b[0]['d2d0']} bind_ok={runs_b[0]['bind_ok']}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",

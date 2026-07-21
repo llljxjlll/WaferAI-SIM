@@ -103,6 +103,11 @@ int PortForHost(int local_core);
 // 局部核在 die 级方向 dir(N/S/E/W) 的 C2C 出口 port_id（-1=该方向无 C2C 端口）。
 int PortForDir(int local_core, Directions dir);
 
+// 全局 tile 在方向 dir 上是否是「peer-connected C2C 出口边」——即该 tile 的局部位置有一个
+// side==dir 的 C2C 端口，且该 die 在 dir 方向存在邻 die。V1-b 拓扑接线据此把该边接到 D2D Link
+// （取代开边终结）；单 die / 无 C2C 时恒 false，拓扑不变。
+bool IsC2CEgressEdge(int global_tile, Directions dir);
+
 // ---- V1-pre：HOST 物理挂载表（routing / enqueue / binding 的统一真源）----
 // lane = 一条 HOST 通道；每 lane 绑定一个全局 tile(router)。每个核经 HostLaneOfCore
 // 映射到一条 lane（去 HOST 与 收 HOST 均走该 lane 对应的 tile）。

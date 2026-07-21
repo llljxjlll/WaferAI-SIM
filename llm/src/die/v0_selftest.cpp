@@ -1061,6 +1061,77 @@ int RunD2DV0SelfTest() {
         }
     }
 
+    // ---- 16. V1-b seam：IsC2CEgressEdge + V1 link_bw==1 契约 ----
+    {
+        // 16.1 单 die / 无 die_ports：全 false
+        setTopo(4, 4, 1, 1);
+        BuildHostAttach();
+        HOST_LANES = g_host_attach.n_lanes;
+        check(!IsC2CEgressEdge(0, EAST) && !IsC2CEgressEdge(0, WEST) &&
+                  !IsC2CEgressEdge(3, EAST),
+              "IsC2CEgressEdge single-die/no die_ports: all false");
+
+        // 16.2 2×1 单 E/W：只有 die0.E(tile3)、die1.W(tile16) 为 true；边界/错向/非端口 tile false
+        {
+            setTopo(4, 4, 2, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            ParseDiePorts(hw);
+            bool ok = IsC2CEgressEdge(3, EAST) &&   // die0 E 出口
+                      IsC2CEgressEdge(16, WEST) &&  // die1 W 出口
+                      !IsC2CEgressEdge(0, WEST) &&  // die0 W：边界（无西邻）
+                      !IsC2CEgressEdge(19, EAST) && // die1 E：边界（无东邻）
+                      !IsC2CEgressEdge(1, EAST) &&  // 非端口 tile
+                      !IsC2CEgressEdge(3, WEST);    // 端口 tile 但错方向
+            check(ok, "IsC2CEgressEdge 2x1 E/W: only die0.E & die1.W true");
+        }
+
+        // 16.3 1×2 单 N/S：只有 die0.N(tile12)、die1.S(tile16) 为 true
+        {
+            setTopo(4, 4, 1, 2);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["W"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "N"}, {"idx", 0}, {"role", "c2c"}, {"dir", "N"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "S"}, {"idx", 0}, {"role", "c2c"}, {"dir", "S"}});
+            ParseDiePorts(hw);
+            bool ok = IsC2CEgressEdge(12, NORTH) &&  // die0 N 出口
+                      IsC2CEgressEdge(16, SOUTH) &&  // die1 S 出口
+                      !IsC2CEgressEdge(0, SOUTH) &&  // die0 S：边界
+                      !IsC2CEgressEdge(28, NORTH);   // die1 N：边界
+            check(ok, "IsC2CEgressEdge 1x2 N/S: only die0.N & die1.S true");
+        }
+
+        // 16.4 V1 契约：C2C link_bw != 1 被 ValidateV1MvpTopology 拒绝
+        {
+            setTopo(4, 4, 2, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            hw["die_ports"]["c2c"] = {{"link_bw", 2}, {"latency", 20},
+                                      {"buffer_depth", 8}};
+            ParseDiePorts(hw);
+            bool rej = false;
+            try {
+                ValidateV1MvpTopology();
+            } catch (const std::runtime_error &) {
+                rej = true;
+            }
+            check(rej, "ValidateV1MvpTopology rejects C2C link_bw != 1 (V1: 1 pkt/cycle)");
+        }
+    }
+
     std::cout << "==== D2D V0 self-test: " << (g_total - g_fail) << "/" << g_total
               << " passed" << (g_fail ? "  <<< FAILURES" : "") << " ====" << std::endl;
     return g_fail;
