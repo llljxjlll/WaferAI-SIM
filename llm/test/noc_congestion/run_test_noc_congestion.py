@@ -41,9 +41,15 @@ WL = {
 FINISH_RE = re.compile(r"All requests finished")
 NS_RE = re.compile(r"(\d+)\s*ns")
 
+# 冻结基线（V0-exit 阻塞门）：任一进程非零 / 结束时间缺失 / 数值不符 → sys.exit(1)。
+EXPECT = {
+    "no_congestion": {"beha": 14781, "cycle": 29109},
+    "congestion":    {"beha": 14833, "cycle": 45441},
+}
+
 
 def run_one(wl_path, sim_path):
-    """运行一次仿真，返回结束时刻（ns，int）或 None。"""
+    """运行一次仿真，返回 (returncode, 结束时刻 ns|None)。"""
     cmd = [NPUSIM,
            "--workload-config", wl_path,
            "--hardware-config", HW,
@@ -58,21 +64,22 @@ def run_one(wl_path, sim_path):
             if m:
                 finish_ns = int(m.group(1))
     p.wait()
-    if p.returncode != 0 and finish_ns is None:
+    if p.returncode != 0:
         print(f"   [warn] exit={p.returncode} for {wl_path} x {sim_path}")
-    return finish_ns
+    return p.returncode, finish_ns
 
 
 def main():
     if not os.path.exists(NPUSIM):
         sys.exit(f"npusim not found at {NPUSIM}; build it first (see README).")
 
-    # results[scenario][noc_model] = ns
+    # results[scenario][noc_model] = ns ; rcs[...] = 进程退出码
     results = {s: {} for s in WL}
+    rcs = {s: {} for s in WL}
     for scen, wl in WL.items():
         for noc, sim in SIM.items():
             print(f"Running scenario={scen:<14} noc={noc:<5} ...", flush=True)
-            results[scen][noc] = run_one(wl, sim)
+            rcs[scen][noc], results[scen][noc] = run_one(wl, sim)
 
     # ---- 汇总表 ----
     def fmt(v):
@@ -115,6 +122,26 @@ def main():
     with open(out, "w") as f:
         f.write(report + "\n")
     print(f"\nWritten: {out}")
+
+    # ---- 阻塞门：进程退出码 + 结束时间存在 + 数值与冻结基线精确一致 ----
+    failures = []
+    for scen in WL:
+        for noc in SIM:
+            rc, ns, exp = rcs[scen][noc], results[scen][noc], EXPECT[scen][noc]
+            if rc != 0:
+                failures.append(f"{scen}/{noc}: process exit={rc}")
+            elif ns is None:
+                failures.append(f"{scen}/{noc}: no finish time (sim did not complete)")
+            elif ns != exp:
+                failures.append(f"{scen}/{noc}: {ns} ns != frozen {exp} ns")
+    if failures:
+        print("\n==== NoC regression FAILED (frozen-baseline mismatch) ====")
+        for f_ in failures:
+            print("  " + f_)
+        sys.exit(1)
+    print("\n==== NoC regression PASS: 4/4 == frozen baseline "
+          "(no_cong 14781/29109, cong 14833/45441) ====")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
