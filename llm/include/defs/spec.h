@@ -5,11 +5,20 @@
 // 模拟模式
 extern SIM_MODE SYSTEM_MODE;
 
-// 计算核心维度
+// 计算核心维度（die 内 mesh）
 extern int GRID_X;
 extern int GRID_Y;
-extern int GRID_SIZE;
+extern int GRID_SIZE; // == CORES_PER_DIE，保留作单-die 兼容别名
 extern int CORE_PER_SM;
+
+// ---- D2D / 多 die 维度（V0 引入；单 die 时 DIE_COUNT=1，各量退化为旧 GRID_SIZE）----
+extern int DIE_X;         // die 级 mesh 宽
+extern int DIE_Y;         // die 级 mesh 高
+extern int DIE_COUNT;     // = DIE_X * DIE_Y
+extern int CORES_PER_DIE; // = GRID_X * GRID_Y（每 die 核数）
+extern int TOTAL_CORES;   // = CORES_PER_DIE * DIE_COUNT（核级数组维度）
+extern int HOST_ENDPOINT_ID; // = TOTAL_CORES，保留 endpoint 区段起点，替代所有 == GRID_SIZE 的 HOST 判定
+extern int HOST_LANES;    // = GRID_Y * DIE_COUNT（所有 die 西边缘 HOST lane 总数；单 die 方阵 = GRID_X）
 
 // simulation config中包含的参数
 extern bool SPEC_USE_BEHA_NOC;        // 是否使用行为级NoC

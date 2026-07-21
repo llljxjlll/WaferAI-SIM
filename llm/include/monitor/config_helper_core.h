@@ -1,8 +1,10 @@
 #pragma once
 #include <queue>
+#include <vector>
 
 #include "common/msg.h"
 #include "monitor/config_helper_base.h"
+#include "monitor/host_envelope.h"
 
 using namespace std;
 
@@ -30,6 +32,12 @@ public:
 
     void fill_queue_start(queue<Msg> *q);
     void fill_queue_config(queue<Msg> *q);
+
+    // 2B0：信封接口——只决定「发给哪个全局核 + 什么 Msg」，不含物理 HOST lane。
+    // fill_queue_* 现内部 = Build*Messages() + LegacyHostEnqueue（die0，逐位不变）；
+    // 2B1 会改由 per-die HostAttachment 消费这些信封。
+    std::vector<HostEnvelope> BuildConfigMessages();
+    std::vector<HostEnvelope> BuildStartMessages();
 
     CoreConfig *get_core(int id);
 };

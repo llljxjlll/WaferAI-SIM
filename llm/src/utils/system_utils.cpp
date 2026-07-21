@@ -33,14 +33,23 @@ int GetFromPairedVector(vector<pair<string, int>> &vector, string key) {
 }
 
 CoreHWConfig *GetCoreHWConfig(int id) {
+    // 多 die 同构复制：全局核 id 映射到 die 内 local 模板。
+    // 单 die 时 CORES_PER_DIE==GRID_SIZE 且 id 均在 [0,CORES_PER_DIE)，取模不改变值（逐位不变）。
+    int local = (CORES_PER_DIE > 0) ? (id % CORES_PER_DIE) : id;
     for (auto pair : g_core_hw_config) {
-        if (pair.first == id)
+        if (pair.first == local)
             return pair.second;
     }
 
     LOG_ERROR(system_utils.cpp)
-        << "Core HW config for id " << id << " does not exist.";
+        << "Core HW config for id " << id << " (local " << local
+        << ") does not exist.";
     return new CoreHWConfig();
+}
+
+CoreHWConfig *GetCoreHWConfigForGlobal(int global_id) {
+    // 显式全局->local 入口（GetCoreHWConfig 已做同构映射，此处保持接口清晰）
+    return GetCoreHWConfig(global_id);
 }
 
 int CeilingDivision(int a, int b) {
@@ -105,13 +114,13 @@ void SystemCleanup() {
 
 void InitGlobalMembers() {
 #if DUMMY == 1
-    dram_array = new uint32_t[GRID_SIZE];
+    dram_array = new uint32_t[TOTAL_CORES];
 #endif
 
 #if DCACHE == 1
-    dcache_tags = new uint64_t *[GRID_SIZE];
-    dcache_occupancy = new uint32_t[GRID_SIZE];
-    dcache_last_evicted = new uint32_t[GRID_SIZE];
+    dcache_tags = new uint64_t *[TOTAL_CORES];
+    dcache_occupancy = new uint32_t[TOTAL_CORES];
+    dcache_last_evicted = new uint32_t[TOTAL_CORES];
 #endif
 }
 

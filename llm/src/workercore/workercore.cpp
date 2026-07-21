@@ -220,7 +220,8 @@ void WorkerCoreExecutor::worker_core_execute() {
 
         if (prim_queue.size() == 0) {
             // 队列中没有指令，意味着现在是初始状态或者所有原语都被执行完了（假设所有原语只做一轮），默认作recv，直到config发进来
-            p = new Recv_prim(RECV_TYPE::RECV_CONF);
+            // 显式 tag=0、recv_cnt=0：CONFIG ACK tag 契约固定为 0（不依赖未初始化值）。
+            p = new Recv_prim(RECV_TYPE::RECV_CONF, /*tag=*/0, /*recv_cnt=*/0);
             prim_queue.emplace_front(p);
             conf_delete = true;
         } else {
@@ -622,6 +623,7 @@ WorkerCoreExecutor::~WorkerCoreExecutor() {
     delete start_global_mem_event;
     delete end_global_mem_event;
     delete sram_writer;
-    delete g_dram_kvtable;
+    // 只释放本核拥有的元素；g_dram_kvtable 数组本身由 Monitor 统一释放。
+    // （原实现先 delete 整个数组、再访问其元素，属 use-after-free + 多核 double-free）
     delete g_dram_kvtable[cid];
 }

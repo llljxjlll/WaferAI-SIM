@@ -182,7 +182,7 @@ void config_helper_gpu::fill_queue_start(queue<Msg> *q) {
         sc_bv<128> d(0x1);
         Msg m = Msg(true, MSG_TYPE::S_DATA, pkg_index + 1, config.id, 0,
                     config.id, 0, d);
-        m.source_ = GRID_SIZE;
+        m.source_ = HOST_ENDPOINT_ID;
         q[index].push(m);
     }
 

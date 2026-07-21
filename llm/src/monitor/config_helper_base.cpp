@@ -67,7 +67,7 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
                         Msg m =
                             Msg(false, MSG_TYPE::P_DATA, ++pkg_index, config.id,
                                 0, (1 << M_D_TAG_ID) - 1, length, d);
-                        m.source_ = GRID_SIZE;
+                        m.source_ = HOST_ENDPOINT_ID;
                         m.roofline_packets_ = pkg_num;
                         q[index].push(m);
                     } else {
@@ -84,7 +84,7 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
                             Msg m = Msg(false, MSG_TYPE::P_DATA, j + pkg_index,
                                         config.id, M_D_DATA * (j - 1),
                                         (1 << M_D_TAG_ID) - 1, length, d);
-                            m.source_ = GRID_SIZE;
+                            m.source_ = HOST_ENDPOINT_ID;
                             q[index].push(m);
                         }
 
@@ -104,7 +104,7 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
         // offset 弃用
         Msg m = Msg(true, MSG_TYPE::P_DATA, pkg_index + 1, config.id,
                     (1 << 16) - 1, (1 << M_D_TAG_ID) - 1, 0, d);
-        m.source_ = GRID_SIZE;
+        m.source_ = HOST_ENDPOINT_ID;
         m.roofline_packets_ = 1;
         q[index].push(m);
     }

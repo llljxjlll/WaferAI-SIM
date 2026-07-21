@@ -1,6 +1,7 @@
 #include "assert.h"
 #include "defs/global.h"
 #include "defs/spec.h"
+#include "die/port.h"
 #include "monitor/monitor.h"
 #include "systemc.h"
 #include "trace/Event_engine.h"
@@ -36,6 +37,9 @@ Define_string_opt("--mapping-config", g_flag_mapping_config,
 
 Define_int64_opt("--trace-window", g_flag_trace_window, 2, "Trace window size");
 
+Define_bool_opt("--d2d-v0-selftest", g_flag_d2d_v0_selftest, false,
+                "run D2D V0 pure-function self-test and exit");
+
 int sc_main(int argc, char *argv[]) {
     clock_t start = clock();
 
@@ -60,6 +64,12 @@ int sc_main(int argc, char *argv[]) {
         return 0;
     }
 
+    // D2D V0 L0 自测：纯函数（编址/端点/矩形拓扑/端口校验），不建仿真
+    if (g_flag_d2d_v0_selftest) {
+        int fails = RunD2DV0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
     // 清理所有上一次运行后产生的log文件
     DeleteCoreLogFiles();
     DeleteMemoryLogFiles();
@@ -80,6 +90,45 @@ int sc_main(int argc, char *argv[]) {
     sc_clock clk("clk", CYCLE, SC_NS);
 
     sc_start();
+
+    // 运行结束后 dump D2D 端口/链路统计（V0b-2A：无 C2C 端口时恒为 0，供 runner 断言）
+    {
+        long in = 0, out = 0, busy = 0, stall = 0;
+        for (auto &p : g_die_ports.ports) {
+            in += p.stats.in_pkts;
+            out += p.stats.out_pkts;
+            busy += p.stats.busy_cycles;
+            stall += p.stats.stall_cycles;
+        }
+        LOG_INFO(SYSTEM) << "[D2D] in_pkts=" << in << " out_pkts=" << out
+                         << " busy_cycles=" << busy << " stall_cycles=" << stall;
+    }
+
+    // HOST lane 接收统计（V1-pre 3b-2b）：每 lane DONE/ACK 数 + 错配数
+    // （消息应到 HostLaneOfCore(source_)；mismatch>0 说明路由送错 lane）。
+    {
+        long done_tot = 0, ack_tot = 0;
+        std::string per_lane;
+        for (size_t i = 0; i < g_host_lane_done.size(); i++) {
+            done_tot += g_host_lane_done[i];
+            ack_tot += g_host_lane_ack[i];
+            per_lane += (i ? "," : "") + std::to_string(g_host_lane_done[i]);
+        }
+        LOG_INFO(SYSTEM) << "[HOSTLANE] done_total=" << done_tot
+                         << " ack_total=" << ack_tot
+                         << " mismatch=" << g_host_lane_mismatch
+                         << " per_lane_done=" << per_lane;
+
+        // 多重集签名（src:count）——严格证明无丢包/重复需比对多重集而非总数
+        std::string dsig, asig;
+        for (auto &kv : g_host_done_src) // source:count
+            dsig += std::to_string(kv.first) + ":" + std::to_string(kv.second) + ",";
+        for (auto &kv : g_host_ack_sig) // source:tag:count
+            asig += std::to_string(kv.first.first) + ":" +
+                    std::to_string(kv.first.second) + ":" +
+                    std::to_string(kv.second) + ",";
+        LOG_INFO(SYSTEM) << "[HOSTSIG] done=" << dsig << " ack=" << asig;
+    }
 
     // destroy_dram_areas();
     // destroy_cache_structures();

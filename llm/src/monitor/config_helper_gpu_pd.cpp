@@ -100,7 +100,7 @@ void config_helper_gpu_pd::fill_queue_start(queue<Msg> *q) {
         // 这里相当于quick start，实际上也只有第一个原语需要初始数据
         sc_bv<128> d(0x1);
         Msg m = Msg(true, MSG_TYPE::S_DATA, pkg_index + 1, i, 0, i, 0, d);
-        m.source_ = GRID_SIZE;
+        m.source_ = HOST_ENDPOINT_ID;
         q[index].push(m);
     }
 }

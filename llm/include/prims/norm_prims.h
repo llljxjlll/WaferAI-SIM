@@ -31,9 +31,11 @@ public:
 
 class Recv_prim : public PrimBase {
 public:
-    RECV_TYPE type;
-    int tag_id;   // 和send原语对应的tag
-    int recv_cnt; // 需要接收到的end包数量（用于多发一）
+    // 类内默认值：避免 1-arg/默认构造留下未初始化字段（tag_id 曾被 RECV_CONF 的 CONFIG ACK
+    // 读到未初始化值 → 非确定 tag，属 UB）。RECV_CONF 的 CONFIG ACK tag 契约固定为 0。
+    RECV_TYPE type = RECV_CONF;
+    int tag_id = 0;   // 和send原语对应的tag（RECV_CONF 默认 0 = CONFIG ACK tag 契约）
+    int recv_cnt = 0; // 需要接收到的end包数量（用于多发一）
 
     int taskCoreDefault(TaskCoreContext &context);
 

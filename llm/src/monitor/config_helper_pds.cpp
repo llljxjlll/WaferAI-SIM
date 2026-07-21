@@ -158,7 +158,7 @@ void config_helper_pds::fill_queue_start(queue<Msg> *q) {
                 int length = M_D_DATA;
                 Msg m = Msg(false, MSG_TYPE::S_DATA, ++total_pkg, status.id, 0,
                             status.id, M_D_DATA, d);
-                m.source_ = GRID_SIZE;
+                m.source_ = HOST_ENDPOINT_ID;
                 m.roofline_packets_ = pkg_num;
                 q[index].push(m);
             } else {
@@ -168,7 +168,7 @@ void config_helper_pds::fill_queue_start(queue<Msg> *q) {
                     Msg m =
                         Msg(false, MSG_TYPE::S_DATA, j + total_pkg, status.id,
                             M_D_DATA * (j - 1), status.id, M_D_DATA, d);
-                    m.source_ = GRID_SIZE;
+                    m.source_ = HOST_ENDPOINT_ID;
                     m.roofline_packets_ = 1;
                     q[index].push(m);
                 }

@@ -8,6 +8,7 @@
 #include "defs/const.h"
 #include "defs/global.h"
 #include "defs/spec.h"
+#include "utils/router_utils.h"
 #include "link/nb_global_memif_v2.h"
 #include "memory/dram/GPUNB_DcacheIF.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
@@ -74,6 +75,7 @@ void WorkerCoreExecutor::send_logic() {
                                        prim->data_packet_id, prim->des_id, 0,
                                        prim->tag_id, length, sc_bv<128>(0x1));
                     temp_msg.roofline_packets_ = roofline_packets;
+                    temp_msg.source_ = cid; // 真实全局 source
                     send_buffer = temp_msg;
 
                     // send_helper_write = 3;
@@ -120,7 +122,7 @@ void WorkerCoreExecutor::send_logic() {
                 if (!ctrl_channel_avail_i.read())
                     wait(ev_ctrl_channel_avail_i);
 
-                send_buffer = Msg(MSG_TYPE::DONE, GRID_SIZE, cid);
+                send_buffer = Msg(MSG_TYPE::DONE, HostEndpointOfDie(DieOfGlobal(cid)), cid);
 
                 if (SYSTEM_MODE == SIM_PD || SYSTEM_MODE == SIM_PDS) {
                     for (int i = 0; i < core_context->decode_done_.size();
@@ -244,6 +246,7 @@ void WorkerCoreExecutor::send_para_logic() {
                                         MSG_TYPE::DATA, s_prim->data_packet_id,
                                         s_prim->des_id, 0, s_prim->tag_id,
                                         length, sc_bv<128>(0x1));
+                                send_buffer.source_ = cid; // 真实全局 source
                                 int delay = 0;
                                 TaskCoreContext context =
                                     generate_context(this);
@@ -291,6 +294,7 @@ void WorkerCoreExecutor::send_para_logic() {
                                 MSG_TYPE::DATA, s_prim->data_packet_id,
                                 s_prim->des_id, 0, s_prim->tag_id, length,
                                 sc_bv<128>(0x1));
+                            send_buffer.source_ = cid; // 真实全局 source
                             int delay = 0;
                             TaskCoreContext context = generate_context(this);
                             delay = prim->taskCoreDefault(context);
@@ -338,7 +342,7 @@ void WorkerCoreExecutor::send_para_logic() {
                     if (ctrl_channel_avail_i.read() &&
                         atomic_helper_lock(sc_time_stamp(), 3)) {
                         // 可以发送数据
-                        send_buffer = Msg(MSG_TYPE::DONE, GRID_SIZE, cid);
+                        send_buffer = Msg(MSG_TYPE::DONE, HostEndpointOfDie(DieOfGlobal(cid)), cid);
 
                         ev_send_helper.notify(0, SC_NS);
 
@@ -469,7 +473,7 @@ void WorkerCoreExecutor::recv_logic() {
 
                     // 向host发送一个ack包
                     send_buffer =
-                        Msg(MSG_TYPE::ACK, GRID_SIZE, prim->tag_id, cid);
+                        Msg(MSG_TYPE::ACK, HostEndpointOfDie(DieOfGlobal(cid)), prim->tag_id, cid);
                     ev_send_helper.notify(0, SC_NS);
 
                     LOG_DEBUG(NETWORK) << "Core " << cid << " <- PREPARE data";
@@ -575,9 +579,10 @@ void WorkerCoreExecutor::recv_logic() {
                             wait(CYCLE, SC_NS);
                     }
 
-                    // 正在等待向host发送ack包
+                    // 正在等待向host发送ack包（CONFIG ACK；tag 契约 = RECV_CONF 的 prim->tag_id == 0，
+                    // 现由 Recv_prim 类内默认值 + 显式构造保证确定，不再是未初始化 UB）。
                     send_buffer =
-                        Msg(MSG_TYPE::ACK, GRID_SIZE, prim->tag_id, cid);
+                        Msg(MSG_TYPE::ACK, HostEndpointOfDie(DieOfGlobal(cid)), prim->tag_id, cid);
                     ev_send_helper.notify(0, SC_NS);
 
                     LOG_DEBUG(NETWORK) << "Core " << cid << " <- CONFIG";

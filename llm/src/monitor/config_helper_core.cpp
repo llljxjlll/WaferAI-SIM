@@ -2,10 +2,14 @@
 #include <SFML/Graphics.hpp>
 #include <algorithm>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 
 #include "common/system.h"
 #include "defs/spec.h"
 #include "monitor/config_helper_core.h"
+#include "monitor/host_envelope.h"
+#include "monitor/workload_normalize.h"
 #include "prims/base.h"
 #include "utils/config_utils.h"
 #include "utils/display_utils.h"
@@ -28,24 +32,24 @@ CoreConfig *config_helper_core::get_core(int id) {
 void config_helper_core::printSelf() {}
 
 void config_helper_core::random_core() {
-    int o2r[GRID_SIZE];
-    int r2o[GRID_SIZE];
-    for (int i = 0; i < GRID_SIZE; i++) {
-        o2r[i] = r2o[i] = -1;
-    }
+    // 注：此随机放置路径当前已停用（构造函数里已注释）。生产路径的重映射由
+    // CoreConfigRemap（`g_core_remap` map，天然支持 global id）负责。这里按 V0b-2C1
+    // 用 vector(TOTAL_CORES) 取代固定 GRID_SIZE 数组、tag 边界改 TOTAL_CORES，保持一致。
+    std::vector<int> o2r(TOTAL_CORES, -1);
+    std::vector<int> r2o(TOTAL_CORES, -1);
 
     std::srand(std::time(nullptr));
     for (auto config : coreconfigs) {
         int id = config.id;
         int rand = 0;
         do {
-            rand = std::rand() % GRID_SIZE;
+            rand = std::rand() % TOTAL_CORES;
         } while (r2o[rand] != -1);
         o2r[id] = rand;
         r2o[rand] = id;
     }
 
-    // 改写
+    // 改写（只遍历 active core set）
     for (auto &config : coreconfigs) {
         int oid = config.id;
         config.id = o2r[oid];
@@ -56,18 +60,21 @@ void config_helper_core::random_core() {
             config.send_global_mem = o2r[config.send_global_mem];
 
         for (auto &work : config.worklist) {
-            if (work.recv_tag < GRID_SIZE)
+            if (work.recv_tag < TOTAL_CORES)
                 work.recv_tag = o2r[oid];
             for (auto &cast : work.cast) {
-                if (cast.tag < GRID_SIZE && cast.dest >= 0)
+                if (cast.tag < TOTAL_CORES && cast.dest >= 0)
                     cast.tag = o2r[cast.tag];
-                if (cast.dest < GRID_SIZE && cast.dest >= 0)
+                if (cast.dest < TOTAL_CORES && cast.dest >= 0)
                     cast.dest = o2r[cast.dest];
             }
         }
 
         config.printSelf();
     }
+
+    // 注：跨 die 拒绝已由 PreflightValidateWorkload（原始 JSON，绘图/构造前）负责（V0b-2C0）。
+    // CoreConfigRemap 阶段 work.cast 尚未填充，此处不再放二次 guard（会是死代码）。
 
     // 改写source
     for (auto &pair : source_info) {
@@ -111,6 +118,23 @@ void config_helper_core::random_core() {
 
 config_helper_core::config_helper_core(string filename, int config_chip_id) {
     LOG_INFO(CONFIG) << "Loading config file " << filename;
+
+    // 2C0/2C1：先解析一次 + 原始 id 校验（在绘图/构造/elaboration 之前）
+    {
+        ifstream pf(filename);
+        if (pf.is_open()) {
+            json praw;
+            try {
+                pf >> praw;
+            } catch (const json::parse_error &) {
+                praw = json(); // 解析错误留给下方原有逻辑报告
+            }
+            // 结构校验（bounds + 跨 die cast），纯函数（2C1）。
+            // 2B1：die>0 已可运行（per-die HOST attachment 就绪），移除原「die>0 不可运行」限制。
+            // 跨 die cast 仍被结构校验拒绝（需 D2D Link，V1）。
+            ValidateWorkloadStructure(praw, config_chip_id);
+        }
+    }
 
     plot_dataflow(filename);
     ifstream jfile(filename);
@@ -207,10 +231,9 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
     calculate_address(false);
 }
 
-void config_helper_core::fill_queue_config(queue<Msg> *q) {
+std::vector<HostEnvelope> config_helper_core::BuildConfigMessages() {
+    std::vector<HostEnvelope> envs;
     for (auto &config : coreconfigs) {
-        int index = config.id / GRID_X;
-
         auto build_msgs = [&](const vector<PrimBase *> &prims,
                               bool adjust_recv = false) {
             vector<Msg> msgs;
@@ -251,7 +274,7 @@ void config_helper_core::fill_queue_config(queue<Msg> *q) {
         int seq_cnt = 1;
         auto push_msg = [&](Msg m) {
             m.seq_id_ = seq_cnt++;
-            q[index].push(m);
+            envs.push_back(HostEnvelope{config.id, m});
         };
 
         // RECV_WEIGHT
@@ -295,6 +318,12 @@ void config_helper_core::fill_queue_config(queue<Msg> *q) {
             }
         }
     }
+    return envs;
+}
+
+// 2B0：接口不变，内部走「信封 + legacy backend」（die0 西边 row，逐位不变）。
+void config_helper_core::fill_queue_config(queue<Msg> *q) {
+    LegacyHostEnqueue(BuildConfigMessages(), q);
 }
 
 void config_helper_core::generate_prims(int i) {
@@ -435,7 +464,8 @@ void config_helper_core::calculate_address(bool do_loop) {
     }
 }
 
-void config_helper_core::fill_queue_start(queue<Msg> *q) {
+std::vector<HostEnvelope> config_helper_core::BuildStartMessages() {
+    std::vector<HostEnvelope> envs;
     LOG_INFO(NETWORK) << "Config helper start START data distribution";
 
     for (int pipe = 0; pipe < pipeline; pipe++) {
@@ -446,7 +476,6 @@ void config_helper_core::fill_queue_start(queue<Msg> *q) {
             int i = source.first;
             int size = source.second;
 
-            int index = i / GRID_X;
             int send_offset = 0;
             for (auto config : coreconfigs) {
                 if (config.id == i)
@@ -467,9 +496,9 @@ void config_helper_core::fill_queue_start(queue<Msg> *q) {
                 int length = M_D_DATA;
                 Msg m = Msg(true, MSG_TYPE::S_DATA, 1, i, send_offset, i,
                             length, d);
-                m.source_ = GRID_SIZE;
+                m.source_ = HOST_ENDPOINT_ID;
                 m.roofline_packets_ = pkg_num;
-                q[index].push(m);
+                envs.push_back(HostEnvelope{i, m});
             } else {
                 for (int j = 1; j <= pkg_num; j++) {
                     sc_bv<M_D_DATA> d(0x1);
@@ -481,13 +510,19 @@ void config_helper_core::fill_queue_start(queue<Msg> *q) {
 
                     Msg m = Msg(j == pkg_num, MSG_TYPE::S_DATA, j, i,
                                 send_offset + M_D_DATA * (j - 1), i, length, d);
-                    m.source_ = GRID_SIZE;
+                    m.source_ = HOST_ENDPOINT_ID;
                     m.roofline_packets_ = 1;
-                    q[index].push(m);
+                    envs.push_back(HostEnvelope{i, m});
                 }
             }
         }
     }
+    return envs;
+}
+
+// 2B0：接口不变，内部走「信封 + legacy backend」。
+void config_helper_core::fill_queue_start(queue<Msg> *q) {
+    LegacyHostEnqueue(BuildStartMessages(), q);
 }
 
 void config_helper_core::parse_ack_msg(Event_engine *event_engine, int flow_id,

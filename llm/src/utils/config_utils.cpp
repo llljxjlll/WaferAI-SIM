@@ -3,6 +3,7 @@
 #include "common/config.h"
 #include "defs/global.h"
 #include "defs/spec.h"
+#include "die/port.h"
 #include "utils/config_utils.h"
 #include "utils/print_utils.h"
 
@@ -50,8 +51,27 @@ void ParseSimulationType(json j) {
 void ParseHardwareConfig(json j) {
     if (j.contains("x"))
         GRID_X = j["x"];
-    GRID_Y = GRID_X;
+    // die 内 mesh：支持矩形（可选 "y"），缺省为方阵（回归安全）
+    GRID_Y = j.contains("y") ? int(j["y"]) : GRID_X;
+
+    // die 级 mesh：可选 "die":{"x":..,"y":..}，缺省单 die（DIE_COUNT=1）
+    DIE_X = 1;
+    DIE_Y = 1;
+    if (j.contains("die")) {
+        auto conf_die = j["die"];
+        if (conf_die.contains("x"))
+            DIE_X = conf_die["x"];
+        DIE_Y = conf_die.contains("y") ? int(conf_die["y"]) : DIE_X;
+    }
+    // 先用宽整数校验维度与容量（<=16-bit），再计算 int 全局量，
+    // 避免极大非法配置在赋值时发生有符号 int 溢出（UB）。
+    ValidateAddressSpace();
     GRID_SIZE = GRID_X * GRID_Y;
+    DIE_COUNT = DIE_X * DIE_Y;
+    CORES_PER_DIE = GRID_SIZE;
+    TOTAL_CORES = CORES_PER_DIE * DIE_COUNT;
+    HOST_ENDPOINT_ID = TOTAL_CORES;
+    HOST_LANES = GRID_Y * DIE_COUNT; // 每 die 西边缘 GRID_Y 个 HOST lane × die 数
 
     if (j.contains("noc")) {
         auto conf_noc = j["noc"];
@@ -136,6 +156,15 @@ void ParseHardwareConfig(json j) {
 
     for (auto core : g_core_hw_config)
         core.second->printSelf();
+
+    // 解析并校验 D2D 端口配置（无 "die_ports" 时为 no-op，单 die 兼容）
+    ParseDiePorts(j);
+    // 构造 HOST 物理挂载表（legacy=西边缘每行一 lane；须在维度常量 + 端口就绪后）。
+    // 强一致：lane 数以挂载表为唯一真源，HOST_LANES 从表派生，Monitor/MemInterface
+    // 的数组与循环都以 HOST_LANES 为界，杜绝 config 改变 lane 数后二者不一致。
+    BuildHostAttach();
+    HOST_LANES = g_host_attach.n_lanes;
+    ValidateHostAttach(); // 启动期结构校验（尺寸/tile/同 die/HOST_LANES 一致）
 }
 
 void ParseSimulationConfig(json j) {

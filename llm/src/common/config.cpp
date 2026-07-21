@@ -58,7 +58,7 @@ void from_json(const json &j, CoreJob &c) {
 void from_json(const json &j, CoreConfig &c) {
     SetParamFromJson<int>(j, "id", &(c.id));
 
-    if (c.id >= GRID_SIZE) {
+    if (c.id >= TOTAL_CORES) { // 2C-main：可寻址核总数用 TOTAL_CORES（支持 die>0 全局 id）
         LOG_ERROR(config.cpp) << "Core id " << c.id << " out of range";
         return;
     }

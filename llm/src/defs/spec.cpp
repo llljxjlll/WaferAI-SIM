@@ -8,6 +8,15 @@ int GRID_Y;
 int GRID_SIZE;
 int CORE_PER_SM;
 
+// D2D / 多 die 维度（默认单 die；ParseHardwareConfig 会覆写）
+int DIE_X = 1;
+int DIE_Y = 1;
+int DIE_COUNT = 1;
+int CORES_PER_DIE = 0;
+int TOTAL_CORES = 0;
+int HOST_ENDPOINT_ID = 0;
+int HOST_LANES = 0;
+
 bool SPEC_USE_BEHA_NOC = true;
 bool SPEC_USE_BEHA_SRAM = true;
 bool SPEC_USE_BEHA_DRAM = true;

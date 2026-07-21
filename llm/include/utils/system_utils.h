@@ -9,6 +9,9 @@ using namespace std;
 bool RandResult(int threshold);
 int GetFromPairedVector(vector<pair<string, int>> &vector, string key);
 CoreHWConfig *GetCoreHWConfig(int id);
+// 多 die：按全局核 id 取硬件配置（同构复制）——映射到 die 内 local id 的模板，
+// 避免隐藏的 % GRID_SIZE。单 die 时 global==local，与 GetCoreHWConfig 等价。
+CoreHWConfig *GetCoreHWConfigForGlobal(int global_id);
 int CeilingDivision(int a, int b);
 
 void InitGrid(string workload_config_path, string hardware_config_path,

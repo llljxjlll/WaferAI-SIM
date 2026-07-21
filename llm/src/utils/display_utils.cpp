@@ -356,6 +356,10 @@ void visualize_data_flow(sf::RenderTexture &renderTexture,
 
 
 void plot_dataflow(string filename) {
+    // 绘图仅为单 die 调试辅助；多 die 下网格假设不成立且会越界崩溃，
+    // 直接跳过（绘图失败不得阻断仿真配置解析）。见 V0b-2C。
+    if (DIE_COUNT > 1)
+        return;
     // sf::Context::Settings settings;
     // settings.attributeFlags = sf::Context::ATTRIBUTE_DEFAULT |
     // sf::Context::ATTRIBUTE_NON_CLIENT; sf::Context context(settings);
@@ -698,6 +702,10 @@ void visualize_data_flow(cairo_surface_t *surface,
 }
 
 void plot_dataflow(string filename) {
+    // 绘图仅为单 die 调试辅助；多 die 下网格假设不成立且会越界崩溃，
+    // 直接跳过（绘图失败不得阻断仿真配置解析）。见 V0b-2C。
+    if (DIE_COUNT > 1)
+        return;
     // 解析配置文件
     string workload_config = filename; // 替换为你的 JSON 配置文件路径
     json config = parse_config(workload_config);

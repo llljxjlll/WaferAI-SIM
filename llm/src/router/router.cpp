@@ -1,23 +1,25 @@
 #include "router/router.h"
+#include "die/port.h"
 #include "utils/print_utils.h"
 
 RouterMonitor::RouterMonitor(const sc_module_name &n,
                              Event_engine *event_engine)
     : sc_module(n), event_engine(event_engine) {
-    // WEAK: we now assume there are only 1*GRID_X tiles
-    routers = new RouterUnit *[GRID_SIZE];
-    for (int i = 0; i < GRID_SIZE; i++) {
+    // 多 die：全局 router 阵列（rid=全局核 id）。IsMarginCore(rid) 用 %GRID_X 判 die 内
+    // 西边缘，对各 die 独立成立（CORES_PER_DIE 为 GRID_X 的整数倍）。
+    routers = new RouterUnit *[TOTAL_CORES];
+    for (int i = 0; i < TOTAL_CORES; i++) {
         routers[i] =
             new RouterUnit(sc_gen_unique_name("router"), i, this->event_engine);
     }
 }
 
 RouterMonitor::~RouterMonitor() {
-    // free routers
-    for (int i = 0; i < GRID_SIZE; i++) {
+    // free routers（数组用 delete[]）
+    for (int i = 0; i < TOTAL_CORES; i++) {
         delete (routers[i]);
     }
-    delete (routers);
+    delete[] routers;
 }
 
 RouterUnit::RouterUnit(const sc_module_name &n, int rid,
@@ -43,9 +45,10 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
     }
 
 
-    if (IsMarginCore(rid)) {
+    // HOST 接口按挂载表创建（legacy=西边缘 IsMarginCore，config=role=HOST 端口 tile）。
+    if (IsHostAttachTile(rid)) {
         host_buffer_i = new queue<sc_bv<256>>;
-        host_buffer_o = new queue<sc_bv<256>>;       
+        host_buffer_o = new queue<sc_bv<256>>;
         host_ctrl_buffer_o = new queue<sc_bv<256>>;  
         host_channel_i = new sc_in<sc_bv<256>>;
         host_channel_o = new sc_out<sc_bv<256>>;
@@ -61,7 +64,7 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
     sensitive << data_sent_i[WEST].pos() << data_sent_i[EAST].pos()
               << data_sent_i[CENTER].pos() << data_sent_i[SOUTH].pos()
               << data_sent_i[NORTH].pos();
-    if (IsMarginCore(rid))
+    if (IsHostAttachTile(rid))
         sensitive << host_data_sent_i->pos();
     sensitive << channel_avail_i[WEST].pos() << channel_avail_i[EAST].pos()
               << channel_avail_i[SOUTH].pos() << channel_avail_i[NORTH].pos();
@@ -89,7 +92,7 @@ void RouterUnit::end_of_elaboration() {
         ctrl_sent_o[i].write(false);
     }
 
-    if (IsMarginCore(rid)) {
+    if (IsHostAttachTile(rid)) {
         host_channel_avail_o->write(true);
         host_data_sent_o->write(false);
         host_ctrl_sent_o->write(false);
@@ -309,7 +312,15 @@ void RouterUnit::router_execute() {
 
             sc_bv<256> temp = ctrl_buffer_i[i].front();
             Msg m = DeserializeMsg(temp);
-            Directions out = GetNextHop(m.des_, rid);
+            // egress anchor = 消息原始 source core（HOST 目的时决定挂载 tile，不用 rid）
+            Directions out = GetNextHop(m.des_, rid, m.source_);
+
+            // HOST 路由只能落在挂载 tile；直接同时查指针，杜绝挂载表与指针状态不同步时
+            // 的空指针解引用（当前合法路由恒在挂载 tile 才返回 HOST）。
+            if (out == HOST &&
+                (!IsHostAttachTile(rid) || host_ctrl_buffer_o == nullptr))
+                throw std::runtime_error(
+                    "HOST ctrl route reached a non-attachment tile");
 
             // 控制信道不需要上锁机制，直接检查buffer是否满
             // REQUEST包和其他控制消息（ACK/DONE）一样直接流动，不需要req_queue
@@ -337,11 +348,17 @@ void RouterUnit::router_execute() {
 
             sc_bv<256> temp = buffer_i[i].front();
             Msg m = DeserializeMsg(temp);
-            Directions out = GetNextHop(m.des_, rid);
+            // egress anchor = 消息原始 source core（HOST 目的时决定挂载 tile，不用 rid）
+            Directions out = GetNextHop(m.des_, rid, m.source_);
 
+            // HOST 路由只能落在挂载 tile；直接同时查指针，杜绝空指针解引用
+            // （3b-2 改此核心路径，此检查作兜底）。
+            if (out == HOST &&
+                (!IsHostAttachTile(rid) || host_buffer_o == nullptr))
+                throw std::runtime_error(
+                    "HOST data route reached a non-attachment tile");
 
-
-            if (m.des_ != GRID_SIZE && output_lock[out] != -1 &&
+            if (!IsHostEndpoint(m.des_) && output_lock[out] != -1 &&
                 output_lock[out] !=
                     m.tag_id_) // 如果不发往host，且目标通道上锁，且目标上锁tag不等同于自己的tag：continue
                 continue;
@@ -357,8 +374,8 @@ void RouterUnit::router_execute() {
 
 
             // FIX 上锁应该在第一个DATA 包
-            if (m.msg_type_ == DATA && m.seq_id_ == 1 && m.des_ != GRID_SIZE &&
-                m.source_ != GRID_SIZE) {
+            if (m.msg_type_ == DATA && m.seq_id_ == 1 && !IsHostEndpoint(m.des_) &&
+                !IsHostEndpoint(m.source_)) {
                 // i 是 ACK 的进入方向，需要计算 ACK 的输出方向
                 if (output_lock[out] == -1) {
                     // 上锁
@@ -393,8 +410,8 @@ void RouterUnit::router_execute() {
             // DTODO
             // 排除了Config DATA 包，不会减少 lock
             // START DATA 包也不会上锁？
-            if (m.msg_type_ == DATA && m.is_end_ && m.source_ != GRID_SIZE &&
-                m.des_ != GRID_SIZE) {
+            if (m.msg_type_ == DATA && m.is_end_ && !IsHostEndpoint(m.source_) &&
+                !IsHostEndpoint(m.des_)) {
                 // i 是 data 的进入方向，需要计算 data 的输出方向
                 out = GetNextHop(m.des_, rid);
 

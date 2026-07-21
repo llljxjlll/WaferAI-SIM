@@ -1,6 +1,7 @@
 #include <atomic>
 #include <vector>
 
+#include "die/port.h"
 #include "monitor/config_helper_core.h"
 #include "monitor/config_helper_gpu.h"
 #include "monitor/config_helper_gpu_pd.h"
@@ -49,22 +50,22 @@ void MemInterface::init() {
             }
         }
     }
-    host_data_sent_i = new sc_in<bool>[GRID_X];
-    host_data_sent_o = new sc_out<bool>[GRID_X];
+    host_data_sent_i = new sc_in<bool>[HOST_LANES];
+    host_data_sent_o = new sc_out<bool>[HOST_LANES];
 
-    host_channel_i = new sc_in<sc_bv<256>>[GRID_X];
-    host_channel_o = new sc_out<sc_bv<256>>[GRID_X];
+    host_channel_i = new sc_in<sc_bv<256>>[HOST_LANES];
+    host_channel_o = new sc_out<sc_bv<256>>[HOST_LANES];
 
-    host_channel_avail_i = new sc_in<bool>[GRID_X];
+    host_channel_avail_i = new sc_in<bool>[HOST_LANES];
 
     // 初始化控制信道接口
-    host_ctrl_sent_i = new sc_in<bool>[GRID_X];
-    //host_ctrl_sent_o = new sc_out<bool>[GRID_X];
-    host_ctrl_channel_i = new sc_in<sc_bv<256>>[GRID_X];
-    //host_ctrl_channel_o = new sc_out<sc_bv<256>>[GRID_X];
-    //host_ctrl_channel_avail_i = new sc_in<bool>[GRID_X];
+    host_ctrl_sent_i = new sc_in<bool>[HOST_LANES];
+    //host_ctrl_sent_o = new sc_out<bool>[HOST_LANES];
+    host_ctrl_channel_i = new sc_in<sc_bv<256>>[HOST_LANES];
+    //host_ctrl_channel_o = new sc_out<sc_bv<256>>[HOST_LANES];
+    //host_ctrl_channel_avail_i = new sc_in<bool>[HOST_LANES];
 
-    write_buffer = new queue<Msg>[GRID_X];
+    write_buffer = new queue<Msg>[HOST_LANES];
 
     phase = PRO_CONF;
 
@@ -85,13 +86,13 @@ void MemInterface::init() {
     dont_initialize();
 
     SC_THREAD(catch_host_ctrl_sent_i);
-    for (int i = 0; i < GRID_X; i++) {
+    for (int i = 0; i < HOST_LANES; i++) {
         sensitive << host_ctrl_sent_i[i].pos();
     }
     dont_initialize();
 
     SC_THREAD(catch_host_channel_available_i);
-    for (int i = 0; i < GRID_X; i++) {
+    for (int i = 0; i < HOST_LANES; i++) {
         sensitive << host_channel_avail_i[i].pos();
     }
     dont_initialize();
@@ -195,7 +196,7 @@ void MemInterface::end_of_simulation() {
 
 void MemInterface::end_of_elaboration() {
     // set signals
-    for (int i = 0; i < GRID_X; i++) {
+    for (int i = 0; i < HOST_LANES; i++) {
         host_data_sent_o[i].write(false);
     }
 }
@@ -221,7 +222,7 @@ void MemInterface::distribute_config() {
 
         // 检查write_buffer是否为空，如果为空则直接跳过发送阶段（PD模式）
         bool writable = false;
-        for (int i = 0; i < GRID_X; i++) {
+        for (int i = 0; i < HOST_LANES; i++) {
             if (write_buffer[i].size()) {
                 writable = true;
                 break;
@@ -295,8 +296,9 @@ void MemInterface::distribute_start_data() {
 }
 
 void MemInterface::recv_helper() {
+    ResetHostLaneStats(HOST_LANES); // 运行开始前清零 HOST lane 接收统计
     while (true) {
-        for (int i = 0; i < GRID_X; i++) {
+        for (int i = 0; i < HOST_LANES; i++) {
             if (host_ctrl_sent_i[i].read()) {
                 sc_bv<256> d = host_ctrl_channel_i[i].read();
                 Msg m = DeserializeMsg(d);
@@ -306,6 +308,11 @@ void MemInterface::recv_helper() {
                         << "Memory interface <- ACK <- " << m.source_;
                     config_helper->g_temp_ack_msg.push_back(m);
                     ev_recv_ack.notify(0, SC_NS);
+                    if (i < (int)g_host_lane_ack.size())
+                        g_host_lane_ack[i]++;
+                    g_host_ack_sig[{m.source_, m.tag_id_}]++;
+                    if (i != HostLaneOfCore(m.source_))
+                        g_host_lane_mismatch++; // 到达 lane != 应到 lane
                 }
 
                 else if (m.msg_type_ == DONE) {
@@ -313,6 +320,11 @@ void MemInterface::recv_helper() {
                         << "Memory interface <- DONE <- " << m.source_;
                     config_helper->g_temp_done_msg.push_back(m);
                     ev_recv_done.notify(0, SC_NS);
+                    if (i < (int)g_host_lane_done.size())
+                        g_host_lane_done[i]++;
+                    g_host_done_src[m.source_]++;
+                    if (i != HostLaneOfCore(m.source_))
+                        g_host_lane_mismatch++;
                 }
 
                 ev_recv_helper.notify(CYCLE, SC_NS);
@@ -379,8 +391,8 @@ void MemInterface::write_helper() {
         LOG_INFO(MEM_INTF) << "Start write operation";
 
         // 立刻将buffer中的内容复制到本地，并清空全局buffer
-        queue<Msg> temp_buffer[GRID_X];
-        for (int i = 0; i < GRID_X; i++) {
+        queue<Msg> temp_buffer[HOST_LANES];
+        for (int i = 0; i < HOST_LANES; i++) {
             while (write_buffer[i].size()) {
                 Msg t = write_buffer[i].front();
                 temp_buffer[i].push(t);
@@ -391,7 +403,7 @@ void MemInterface::write_helper() {
         while (true) {
             bool stop_flag = true; // 是否已经全部发送完毕
             bool all_block = true; // 是否所有节点都已经被阻塞
-            for (int i = 0; i < GRID_X; i++) {
+            for (int i = 0; i < HOST_LANES; i++) {
                 host_data_sent_o[i].write(false);
                 if (!temp_buffer[i].size()) {
                     continue;
@@ -524,7 +536,7 @@ void MemInterface::switch_phase() {
 
 
 void MemInterface::clear_write_buffer() {
-    for (int i = 0; i < GRID_X; i++) {
+    for (int i = 0; i < HOST_LANES; i++) {
         while (!write_buffer[i].empty())
             write_buffer[i].pop();
     }
