@@ -143,12 +143,24 @@ def main():
     rc, out = run([NPUSIM, "--workload-config", xpath,
                    "--hardware-config", "../llm/test/d2d_link/hardware/core_4x4_die2x1.json",
                    "--simulation-config", SIM, "--mapping-config", MAP], timeout=10)
-    os.remove(xpath)
     entered_sim = ("All requests finished" in out or "Catch test finished" in out)
     rejected = (rc not in (0, 124) and
                 "cross-die traffic requires D2D Link" in out and not entered_sim)
     record("V0b-2C0 cross-die dest rejected before sim (no hang)", rejected,
            f"exit={rc} entered_sim={entered_sim}")
+
+    # V1-c1a：即使实际双向 C2C link 已构造，生产放行也必须保持关闭，直到 c3
+    # REQUEST/ACK/DATA 全链闭环；否则会接受 workload 后在尚未接通的 DATA 路径挂死。
+    rc, out = run([NPUSIM, "--workload-config", xpath,
+                   "--hardware-config",
+                   "../llm/test/d2d_link/hardware/core_4x4_die2x1_c2c.json",
+                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=10)
+    os.remove(xpath)
+    entered_sim = ("All requests finished" in out or "Catch test finished" in out)
+    gated = (rc not in (0, 124) and "not enabled before V1-c3" in out and
+             not entered_sim)
+    record("V1-c1a production gate: peer link exists but cross-die workload waits for c3",
+           gated, f"exit={rc} entered_sim={entered_sim}")
 
     # 3e. V0b-2B1: die1 等价运行（workload 平移到 die1，HOST1->die1->HOST1），期望 sim-time==基线
     xw2 = _j2.load(open(os.path.join(

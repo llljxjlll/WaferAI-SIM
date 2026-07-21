@@ -225,6 +225,17 @@ SEND_REQ → RECV/ACK → SEND_DATA
 源 NoC → D2D Link → 目的 NoC
 ```
 
+#### 当前增量状态
+
+- **c0 ✔**：`FlowKey` + 消息内 16-bit pinned `exit_port_`，未 pin 的现有消息 wire 保留位仍为零。
+- **c1a ✔**：相邻/多跳/实际双向 peer-link 的 preflight helper 已可测；生产默认 gate 保持关闭，
+  直到 c3 控制与数据全链闭环才放行，避免“校验接受但运行挂死”的中间版本。
+- **c1b ✔**：REQUEST（串行/并行路径）和反向 ACK 在各自源核选择一次出口，Router 控制路径消费
+  固定出口；双向逐跳测试证明各跨一次正确有向 link，并覆盖序列化、same-die 等价与缺 pin 拒绝。
+- **证据边界**：当前是路由生产接线 + 纯函数 walk，生产 workload 仍被 gate；不提前声称真实 workload
+  的 REQUEST/ACK 已运行时跨链。当前门：209/209、Link 18/18、runner 27/27、NoC 冻结值全绿。
+- **后续**：c2 接 DATA；c3 打开生产 gate 并验证 REQUEST → ACK → DATA 完整运行时链路。
+
 #### 实现内容
 
 - 支持两个相邻 die。

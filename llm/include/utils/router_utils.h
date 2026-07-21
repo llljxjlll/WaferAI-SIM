@@ -1,4 +1,5 @@
 #pragma once
+#include "common/msg.h"
 #include "defs/enums.h"
 #include "defs/spec.h"
 
@@ -37,6 +38,11 @@ inline int DieManhattan(int a, int b) {
 // 纯函数，不改运行时。非法 core id 抛错。
 int CrossDieSelectExit(int at_core, int des_global);
 Directions CrossDieStep(int des_global, int pos, int exit_port);
+
+// V1-c1 控制包契约：源核对跨 die REQUEST/ACK 选一次出口并写入 msg.exit_port_；
+// router 每跳只消费该固定出口。相邻 die 之外明确拒绝。HOST 控制消息不需要 pin。
+void PinControlMsgExit(Msg &msg);
+Directions ControlMsgNextHop(const Msg &msg, int pos);
 Directions GetOpposeDirection(Directions dir);
 
 // ---- 全局核编址 helper（V0）：global_core_id <-> (die_id, local_id) ----

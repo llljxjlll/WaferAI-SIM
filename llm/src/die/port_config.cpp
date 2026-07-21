@@ -413,6 +413,16 @@ void BuildD2DLinks() {
     }
 }
 
+bool HasD2DLink(int local_die, int remote_die) {
+    if (local_die < 0 || local_die >= DIE_COUNT || remote_die < 0 ||
+        remote_die >= DIE_COUNT)
+        return false;
+    for (const auto &l : g_d2d_links)
+        if (l.local_die == local_die && l.remote_die == remote_die)
+            return true;
+    return false;
+}
+
 int PortForHost(int local_core) {
     if (local_core < 0 || local_core >= (int)g_die_ports.port_for_host.size())
         return -1;

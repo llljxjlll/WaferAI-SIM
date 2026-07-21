@@ -45,6 +45,7 @@ void setTopo(int gx, int gy, int dx, int dy) {
     // 清空端口状态：确保随后 BuildHostAttach 默认走 legacy（不受上一段 ParseDiePorts 残留
     // 的 role=HOST 端口影响）；需要 config 模式的段会在 setTopo 后再 ParseDiePorts。
     g_die_ports = D2DPortTable{};
+    g_d2d_links.clear();
 }
 
 bool throwsRuntime(const D2DJson &hw) {
@@ -1182,6 +1183,167 @@ int RunD2DV0SelfTest() {
         // 严格弱序（可作 map key）：反对称
         check((a < b) != (b < a) && !(a < c) && !(c < a),
               "FlowKey: strict weak ordering (usable as map key)");
+    }
+
+    // ---- 18. preflight 能力 + 生产 gate（V1-c1a）：helper 可验，c3 前不放行 ----
+    {
+        auto mkwl = [&](int cid, int dest) {
+            D2DJson wl;
+            wl["id_space"] = "global";
+            D2DJson cast;
+            cast["dest"] = dest;
+            D2DJson job;
+            job["cast"] = D2DJson::array();
+            job["cast"].push_back(cast);
+            D2DJson core;
+            core["id"] = cid;
+            core["worklist"] = D2DJson::array();
+            core["worklist"].push_back(job);
+            D2DJson chip;
+            chip["cores"] = D2DJson::array();
+            chip["cores"].push_back(core);
+            wl["chips"] = D2DJson::array();
+            wl["chips"].push_back(chip);
+            return wl;
+        };
+        auto wsErr = [&](const D2DJson &wl,
+                         bool allow_adjacent = false) -> std::string {
+            try {
+                ValidateWorkloadStructure(wl, 0, allow_adjacent);
+            } catch (const std::runtime_error &e) {
+                return e.what();
+            }
+            return "";
+        };
+
+        // (a) 无 die_ports（无 C2C link）：相邻 die 仍拒绝，报 "requires D2D Link"
+        setTopo(4, 4, 2, 1); // setTopo 清空 g_die_ports
+        {
+            std::string e = wsErr(mkwl(0, CORES_PER_DIE)); // die0 -> die1
+            check(e.find("requires D2D Link") != std::string::npos,
+                  "preflight: adjacent cross-die but no C2C link -> rejected");
+        }
+        // (b) 相邻 die + 单端口 E/W link：helper 允许，但生产默认 gate 仍拒绝
+        {
+            setTopo(4, 4, 2, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            ParseDiePorts(hw);
+            check(HasD2DLink(0, 1) && HasD2DLink(1, 0),
+                  "preflight: exact bidirectional die0<->die1 links exist");
+            check(wsErr(mkwl(0, CORES_PER_DIE), true).empty(),
+                  "preflight helper: adjacent cross-die with peer link -> valid");
+            check(wsErr(mkwl(0, CORES_PER_DIE)).find("not enabled before V1-c3") !=
+                      std::string::npos,
+                  "preflight production gate: adjacent workload rejected until c3");
+        }
+        // (c) 多跳（3×1，die0 -> die2，距离 2）：拒绝，报 "multi-hop"
+        {
+            setTopo(4, 4, 3, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            ParseDiePorts(hw);
+            std::string e =
+                wsErr(mkwl(0, 2 * CORES_PER_DIE), true); // die0 -> die2
+            check(e.find("multi-hop") != std::string::npos,
+                  "preflight: multi-hop cross-die (die0->die2) -> rejected");
+        }
+    }
+
+    // ---- 19. REQUEST/ACK 控制路由 + 源端 pinned exit（V1-c1b；生产 workload 仍 gated）----
+    {
+        setTopo(4, 4, 2, 1);
+        D2DJson hw;
+        hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+        hw["die_ports"]["overrides"] = D2DJson::array();
+        hw["die_ports"]["overrides"].push_back(
+            {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+        hw["die_ports"]["overrides"].push_back(
+            {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+        ParseDiePorts(hw);
+
+        auto walkControl = [&](const Msg &msg) {
+            int pos = msg.source_;
+            int crossings = 0;
+            std::set<int> visited;
+            for (int step = 0; step < TOTAL_CORES + 8; step++) {
+                if (pos == msg.des_)
+                    return crossings == 1;
+                if (!visited.insert(pos).second)
+                    return false;
+                Directions d = ControlMsgNextHop(msg, pos);
+                int nb = OpenMeshNeighbor(pos, d);
+                if (nb >= 0) {
+                    pos = nb;
+                    continue;
+                }
+
+                // 开边且路由选择朝外：必须命中消息携带的 source-die 有向 link，
+                // 再从其 remote_port 对应 tile 进入目标 die。
+                const D2DLink *link = nullptr;
+                for (const auto &l : g_d2d_links)
+                    if (l.local_die == DieOfGlobal(pos) &&
+                        l.local_port == msg.exit_port_) {
+                        link = &l;
+                        break;
+                    }
+                if (!link)
+                    return false;
+                const D2DPort &lp = g_die_ports.ports[link->local_port];
+                if (lp.tile != LocalOfGlobal(pos) || lp.side != d ||
+                    lp.dir != d)
+                    return false;
+
+                const D2DPort &rp = g_die_ports.ports[link->remote_port];
+                pos = GlobalId(link->remote_die, rp.tile);
+                crossings++;
+            }
+            return false;
+        };
+
+        Msg req(MSG_TYPE::REQUEST, CORES_PER_DIE, 7, 0);
+        PinControlMsgExit(req);
+        int req_exit = CrossDieSelectExit(req.source_, req.des_);
+        check(req.exit_port_ == req_exit && req.exit_port_ >= 0,
+              "c1b REQUEST: source selects and pins one C2C exit");
+        check(DeserializeMsg(SerializeMsg(req)).exit_port_ == req.exit_port_,
+              "c1b REQUEST: pinned exit survives packet serialization");
+        check(walkControl(req),
+              "c1b REQUEST: fixed exit -> D2D crossing -> destination core");
+
+        Msg ack(MSG_TYPE::ACK, 0, 7, CORES_PER_DIE);
+        PinControlMsgExit(ack);
+        check(ack.exit_port_ == CrossDieSelectExit(ack.source_, ack.des_) &&
+                  ack.exit_port_ != req.exit_port_,
+              "c1b ACK: destination core independently pins reverse exit");
+        check(walkControl(ack),
+              "c1b ACK: reverse D2D crossing returns to request source");
+
+        Msg local(MSG_TYPE::REQUEST, 1, 9, 0);
+        PinControlMsgExit(local);
+        check(local.exit_port_ == -1 &&
+                  ControlMsgNextHop(local, 0) == GetNextHop(local.des_, 0),
+              "c1b same-die control: unpinned and legacy XY-equivalent");
+
+        Msg missing_pin(MSG_TYPE::REQUEST, CORES_PER_DIE, 7, 0);
+        bool missing_threw = false;
+        try {
+            ControlMsgNextHop(missing_pin, 0);
+        } catch (const std::runtime_error &) {
+            missing_threw = true;
+        }
+        check(missing_threw,
+              "c1b cross-die control: missing pinned exit rejected clearly");
     }
 
     std::cout << "==== D2D V0 self-test: " << (g_total - g_fail) << "/" << g_total

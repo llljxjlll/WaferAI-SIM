@@ -13,8 +13,12 @@ using WLJson = nlohmann::json;
 // die_id==0 时为恒等（不改，兼容旧单 die 配置）。
 void NormalizeWorkloadJson(WLJson &j, int die_id);
 
-// 结构校验（bounds + 跨 die cast），纯函数、可独立测试。非法抛 std::runtime_error。
+// 结构校验（bounds + 跨 die cast），只读、无副作用，可独立测试；会读取已构造的全局
+// die/port/link 拓扑。非法抛 std::runtime_error。
 // 不含「die>0 能否运行」的运行时判断（那属 HOST attachment 就绪与否，见 config_helper）。
 //   - id_space 缺省=die0 local（旧配置兼容），"global"=[0,TOTAL_CORES)
-//   - 越界 id、die0-local 下引用 die>0、跨 die cast 均报错
-void ValidateWorkloadStructure(const WLJson &j, int chip_id);
+//   - 越界 id、die0-local 下引用 die>0 报错；多跳/无实际双向 link 的跨 die cast 报错
+//   - allow_adjacent_d2d 默认 false：c1/c2 开发期间生产路径仍拒绝相邻 die workload；
+//     c3 REQUEST/ACK/DATA 闭环后才由生产调用显式置 true。
+void ValidateWorkloadStructure(const WLJson &j, int chip_id,
+                               bool allow_adjacent_d2d = false);

@@ -240,6 +240,50 @@ Directions CrossDieStep(int des_global, int pos, int exit_port) {
     return GetNextHop(port_tile, pos); // 片内 XY 朝固定出口 tile 收敛
 }
 
+void PinControlMsgExit(Msg &msg) {
+    if (!msg.IsControlMsg())
+        throw std::runtime_error(
+            "cross-die control pinning requires a control message");
+
+    EndpointType des_type = DecodeEndpointType(msg.des_);
+    if (des_type == EP_HOST) {
+        msg.exit_port_ = -1; // DONE/host ACK 仍走同 die HOST attachment
+        return;
+    }
+    if (des_type != EP_CORE)
+        throw std::runtime_error(
+            "control message destination is neither a core nor HOST endpoint");
+    if (msg.source_ < 0 || msg.source_ >= TOTAL_CORES)
+        throw std::runtime_error(
+            "cross-die control pinning requires a legal source core");
+
+    int sd = DieOfGlobal(msg.source_), dd = DieOfGlobal(msg.des_);
+    if (sd == dd) {
+        msg.exit_port_ = -1;
+        return;
+    }
+    if (DieManhattan(sd, dd) != 1)
+        throw std::runtime_error(
+            "multi-hop control routing is not supported in V1");
+    msg.exit_port_ = CrossDieSelectExit(msg.source_, msg.des_);
+}
+
+Directions ControlMsgNextHop(const Msg &msg, int pos) {
+    if (!msg.IsControlMsg())
+        throw std::runtime_error(
+            "ControlMsgNextHop requires a control message");
+    if (pos < 0 || pos >= TOTAL_CORES)
+        throw std::runtime_error("control routing: illegal router position");
+
+    EndpointType des_type = DecodeEndpointType(msg.des_);
+    if (des_type == EP_CORE)
+        return CrossDieStep(msg.des_, pos, msg.exit_port_);
+    if (des_type == EP_HOST)
+        return GetNextHop(msg.des_, pos, msg.source_);
+    throw std::runtime_error(
+        "control message destination is neither a core nor HOST endpoint");
+}
+
 Directions GetOpposeDirection(Directions dir) {
     switch (dir) {
     case WEST:

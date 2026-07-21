@@ -1,5 +1,7 @@
 #include "monitor/workload_normalize.h"
 #include "defs/spec.h"
+#include "die/port.h"
+#include "utils/router_utils.h"
 #include <stdexcept>
 #include <string>
 
@@ -44,7 +46,8 @@ void NormalizeWorkloadJson(WLJson &j, int die_id) {
     j["id_space"] = "global";
 }
 
-void ValidateWorkloadStructure(const WLJson &j, int chip_id) {
+void ValidateWorkloadStructure(const WLJson &j, int chip_id,
+                               bool allow_adjacent_d2d) {
     bool global = j.contains("id_space") &&
                   j.at("id_space").get<std::string>() == "global";
 
@@ -91,14 +94,31 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id) {
                 if (dest < 0)
                     continue;
                 check_bounds(dest, "cast.dest");
-                if (dest / CORES_PER_DIE != src_die)
-                    throw std::runtime_error(
-                        "cross-die traffic requires D2D Link (V1): core " +
-                        std::to_string(cid) + " (die " +
-                        std::to_string(src_die) + ") -> core " +
-                        std::to_string(dest) + " (die " +
-                        std::to_string(dest / CORES_PER_DIE) +
-                        "); not supported yet.");
+                int dest_die = dest / CORES_PER_DIE;
+                if (dest_die != src_die) {
+                    // V1-c1：先精确验证相邻 die 的实际双向 link。c1/c2 期间生产放行
+                    // 开关保持 false；到 c3 控制+数据闭环后再启用，避免接受后挂死。
+                    std::string edge = "core " + std::to_string(cid) + " (die " +
+                                       std::to_string(src_die) + ") -> core " +
+                                       std::to_string(dest) + " (die " +
+                                       std::to_string(dest_die) + ")";
+                    if (DieManhattan(src_die, dest_die) != 1)
+                        throw std::runtime_error(
+                            "multi-hop cross-die not supported in V1 "
+                            "(adjacent-die only; V2): " +
+                            edge);
+                    if (!HasD2DLink(src_die, dest_die) ||
+                        !HasD2DLink(dest_die, src_die))
+                        throw std::runtime_error(
+                            "cross-die traffic requires D2D Link (V1): " + edge +
+                            "; no bidirectional peer link between the dies");
+                    if (!allow_adjacent_d2d)
+                        throw std::runtime_error(
+                            "adjacent cross-die runtime is not enabled before "
+                            "V1-c3 (REQUEST/ACK/DATA must all be connected): " +
+                            edge);
+                    // c3+：相邻且实际双向 link 存在，允许。
+                }
             }
         }
     }

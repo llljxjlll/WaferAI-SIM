@@ -129,9 +129,10 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
             } catch (const json::parse_error &) {
                 praw = json(); // 解析错误留给下方原有逻辑报告
             }
-            // 结构校验（bounds + 跨 die cast），纯函数（2C1）。
+            // 结构校验（bounds + 跨 die cast），只读启动期校验（2C1）。
             // 2B1：die>0 已可运行（per-die HOST attachment 就绪），移除原「die>0 不可运行」限制。
-            // 跨 die cast 仍被结构校验拒绝（需 D2D Link，V1）。
+            // V1-c1/c2 开发期间相邻跨 die cast 仍在生产路径拒绝；到 c3 的
+            // REQUEST/ACK/DATA 全链闭环后才显式启用 allow_adjacent_d2d。
             ValidateWorkloadStructure(praw, config_chip_id);
         }
     }

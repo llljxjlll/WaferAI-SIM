@@ -312,8 +312,9 @@ void RouterUnit::router_execute() {
 
             sc_bv<256> temp = ctrl_buffer_i[i].front();
             Msg m = DeserializeMsg(temp);
-            // egress anchor = 消息原始 source core（HOST 目的时决定挂载 tile，不用 rid）
-            Directions out = GetNextHop(m.des_, rid, m.source_);
+            // core 目的：跨 die 时消费源核选定并随包携带的固定 exit_port；进入目标 die
+            // 后退回片内 XY。HOST 目的仍以消息 source 作为 egress anchor。
+            Directions out = ControlMsgNextHop(m, rid);
 
             // HOST 路由只能落在挂载 tile；直接同时查指针，杜绝挂载表与指针状态不同步时
             // 的空指针解引用（当前合法路由恒在挂载 tile 才返回 HOST）。

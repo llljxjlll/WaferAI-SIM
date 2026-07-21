@@ -146,6 +146,11 @@ int HostLaneOfTile(int global_tile);
 // 边界方向（无邻 die）的 C2C 端口无 peer（允许，不成 link）。非法即抛 std::runtime_error。
 void BuildD2DLinks();
 
+// 是否存在从 local_die 到 remote_die 的实际有向 D2D link。
+// 与 PortsForDir（同构端口模板是否声明某方向端口）不同，本函数查询 BuildD2DLinks
+// 已构造的具体 die-peer 元组，供 workload preflight 精确验证运行时通路。
+bool HasD2DLink(int local_die, int remote_die);
+
 // V0 L0 纯函数自测（编址/端点/矩形拓扑/端口配置校验）。返回失败数（0=全过）。
 int RunD2DV0SelfTest();
 

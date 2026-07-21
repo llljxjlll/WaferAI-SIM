@@ -105,6 +105,7 @@ void WorkerCoreExecutor::send_logic() {
 
                 send_buffer =
                     Msg(MSG_TYPE::REQUEST, prim->des_id, prim->tag_id, cid);
+                PinControlMsgExit(send_buffer);
 
                 send_helper_write = 3;
                 ev_send_helper.notify(0, SC_NS);
@@ -324,6 +325,7 @@ void WorkerCoreExecutor::send_para_logic() {
                         // 可以发送数据
                         send_buffer = Msg(MSG_TYPE::REQUEST, s_prim->des_id,
                                           s_prim->tag_id, cid);
+                        PinControlMsgExit(send_buffer);
 
                         ev_send_helper.notify(0, SC_NS);
 
@@ -693,6 +695,7 @@ void WorkerCoreExecutor::req_logic() {
                     ack_queue.pop();
 
                     send_buffer = Msg(MSG_TYPE::ACK, des, des, cid);
+                    PinControlMsgExit(send_buffer);
                     ev_send_helper.notify(0, SC_NS);
 
                     LOG_DEBUG(NETWORK)
