@@ -189,7 +189,47 @@ V0b-2B1 per-die HOST lane —— workload 真正在 die>0 运行  ← 里程碑
 - **最终测试数值（以此为准）**：纯函数自测 **165/165**、端到端 **23/23**、
   noc_congestion 四场景 **精确不变**（no_congestion 14781/29109、congestion 14833/45441）。
 
-### 6.3 真正剩余（纯 polish，不影响功能，不在 V0 冻结范围）
+### 6.3 V0 基线冻结与发布记录（2026-07-21）
+
+V0 没有直接在 `main` 上开发和打 tag，而是先在功能分支完成提交、验证后再 fast-forward 合并：
+
+1. `feat/d2d-v0-baseline` 上形成 V0 功能提交
+   `d260b609b6ddf68ee0c06d1831b4958efe3b9c00`
+   （`feat(d2d): add V0 multi-die and config-driven HOST support`）。
+2. 在同一分支追加冻结门提交
+   `b6334397e43f704739692fcdc9e9ca450a469320`
+   （`test(d2d): freeze V0 regression baseline`），其中包含 `run_v0_exit.py`、NoC 精确数值断言和
+   本开发日志的冻结状态更新。
+3. 确认本地 `main == origin/main` 且工作树干净后，以 **fast-forward** 将上述两个提交并入
+   `main`；没有 squash/rebase，因此冻结提交的身份保持不变。
+4. 在 `main` 上重新执行统一准入门 `python3 llm/test/run_v0_exit.py`，结果为：
+   - D2D 纯函数自测 **165/165**；
+   - D2D 端到端 runner **23/23**；
+   - NoC 四场景 **4/4** 精确命中冻结值
+     （no_congestion 14781/29109、congestion 14833/45441）；
+   - 汇总退出码为 **0**。
+5. 创建并推送 annotated tag **`d2d-v0-baseline`**。tag 的 peeled commit 精确为
+   `b6334397e43f704739692fcdc9e9ca450a469320`；tag 注释同时记录 165/165、23/23 和 NoC 4/4。
+6. tag 创建后，在 README 回填完整 tag/SHA，形成仅含文档变更的提交
+   `1ca02e27efa2a6fefbf3b1148bde8de2dfd7e948`
+   （`docs(d2d): backfill V0 baseline tag/SHA in README`）。tag 不包含这个后续提交是有意设计：
+   提交无法记录自身尚未产生的 SHA，而真正的代码和阻塞门均已包含在冻结点中。
+
+发布后核验状态：
+
+- `origin/main` 指向 `1ca02e2`，本地 `main` 与其一致；
+- `origin/feat/d2d-v0-baseline` 指向冻结提交 `b633439`；
+- 远端 `refs/tags/d2d-v0-baseline` 存在，且解引用后指向 `b633439`；
+- 重新运行冻结门后工作树仍为 clean，`git diff --check` 无错误；
+- 可用 `git checkout d2d-v0-baseline` 精确恢复 V0 冻结代码与测试；该 tag 此后应保持不可变，
+  V1 开发必须从新的功能分支继续。
+
+这里的“已发布”仅指推送到个人 fork `origin`（`llljxjlll/WaferAI-SIM`）。当时
+`upstream`（`IPADS-SAI/WaferAI-SIM`）仍停留在冻结前基线 `7940afa`，**尚未合入 V0**；若需要进入
+上游，应另外创建 PR。上游若采用 squash/rebase，产生的新提交 SHA 不会改变本 fork 中
+`d2d-v0-baseline` 的含义，也不应移动或重打该 tag。
+
+### 6.4 真正剩余（纯 polish，不影响功能，不在 V0 冻结范围）
 - ASan/UBSan 干净性、完整 WorkerCore teardown、pd/gpu 等非 dataflow 模式多 die 化、
   ACK 逐消息唯一序号（`ack_seq`）、mem-role at-edge 真实内存流量。
 
