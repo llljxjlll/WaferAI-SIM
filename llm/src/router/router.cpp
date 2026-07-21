@@ -349,8 +349,9 @@ void RouterUnit::router_execute() {
 
             sc_bv<256> temp = buffer_i[i].front();
             Msg m = DeserializeMsg(temp);
-            // egress anchor = 消息原始 source core（HOST 目的时决定挂载 tile，不用 rid）
-            Directions out = GetNextHop(m.des_, rid, m.source_);
+            // core 目的 DATA：跨 die 时消费 SEND_DATA 原语一次选定、随所有包携带的
+            // exit_port；进入目标 die 后退回片内 XY。HOST 目的仍使用 source anchor。
+            Directions out = DataMsgNextHop(m, rid);
 
             // HOST 路由只能落在挂载 tile；直接同时查指针，杜绝空指针解引用
             // （3b-2 改此核心路径，此检查作兜底）。
@@ -413,8 +414,8 @@ void RouterUnit::router_execute() {
             // START DATA 包也不会上锁？
             if (m.msg_type_ == DATA && m.is_end_ && !IsHostEndpoint(m.source_) &&
                 !IsHostEndpoint(m.des_)) {
-                // i 是 data 的进入方向，需要计算 data 的输出方向
-                out = GetNextHop(m.des_, rid);
+                // 必须使用本轮 DataMsgNextHop 已解析出的同一 out；跨 die 源侧若回退到
+                // GetNextHop(des,rid) 会把全局 dest 当作片内坐标并解错锁。
 
                 output_lock_ref[out]--;
 

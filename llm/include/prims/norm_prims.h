@@ -61,6 +61,11 @@ public:
     int tag_id;                        // send_tag，用于与recv原语对应
     int end_length;                    // 尾包长度，避免覆盖
 
+    // V1-c2 运行时路由状态（不进入 prim 配置序列化）：一条 SEND_DATA 原语只选一次
+    // source-die C2C 出口，所有 DATA 包复制同一 pinned port。same-die 为 -1。
+    int d2d_exit_port = -1;
+    bool d2d_exit_selected = false;
+
     int data_packet_id; // 已经发送的包裹数量
 
     int taskCoreDefault(TaskCoreContext &context);

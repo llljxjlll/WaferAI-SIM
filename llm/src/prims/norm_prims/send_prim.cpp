@@ -11,15 +11,19 @@ REGISTER_PRIM(Send_prim);
 void Send_prim::printSelf() {}
 
 void Send_prim::deserialize(vector<sc_bv<128>> segments) {
+    // d2d_exit_* 是一次执行期间的运行态，不能从上一次反序列化/执行继承。
+    d2d_exit_port = -1;
+    d2d_exit_selected = false;
+
     auto buffer = segments[0];
 
     des_id = buffer.range(23, 8).to_uint64();
+    type = SEND_TYPE(buffer.range(59, 56).to_uint64());
 
     if (type == SEND_DATA)
         output_label =
             g_addr_label_table.findRecord(buffer.range(35, 24).to_uint64());
 
-    type = SEND_TYPE(buffer.range(59, 56).to_uint64());
     max_packet = buffer.range(91, 60).to_uint64();
     tag_id = buffer.range(111, 92).to_uint64();
     end_length = buffer.range(119, 112).to_uint64();

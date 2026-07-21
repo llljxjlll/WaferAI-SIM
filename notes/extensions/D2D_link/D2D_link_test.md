@@ -232,9 +232,14 @@ SEND_REQ → RECV/ACK → SEND_DATA
   直到 c3 控制与数据全链闭环才放行，避免“校验接受但运行挂死”的中间版本。
 - **c1b ✔**：REQUEST（串行/并行路径）和反向 ACK 在各自源核选择一次出口，Router 控制路径消费
   固定出口；双向逐跳测试证明各跨一次正确有向 link，并覆盖序列化、same-die 等价与缺 pin 拒绝。
-- **证据边界**：当前是路由生产接线 + 纯函数 walk，生产 workload 仍被 gate；不提前声称真实 workload
-  的 REQUEST/ACK 已运行时跨链。当前门：209/209、Link 18/18、runner 27/27、NoC 冻结值全绿。
-- **后续**：c2 接 DATA；c3 打开生产 gate 并验证 REQUEST → ACK → DATA 完整运行时链路。
+- **c2 ✔**：每条 `SEND_DATA` 原语在源核选一次 C2C 出口，所有 DATA 包携带相同 pin；Router 数据
+  dispatch 消费固定出口，进入目标 die 后恢复片内 XY，尾包按同一 `out` 解锁。覆盖 3 包同 pin/序列化、
+  双向 link、same-die 等价、缺 pin 与非 DATA 跨 die 拒绝；`Send_prim::deserialize` 清空运行态 pin，
+  并先解析 `type` 后读取 DATA 字段。
+- **证据边界**：当前是控制/数据路由生产接线 + 纯函数 walk，生产 workload 仍被 gate；不提前声称真实
+  workload 的 REQUEST/ACK/DATA 已运行时跨链。当前门：215/215、Link 18/18、runner 27/27、
+  NoC 冻结值全绿。
+- **后续**：c3 打开生产 gate 并验证 REQUEST → ACK → SEND_DATA 完整运行时链路。
 
 #### 实现内容
 

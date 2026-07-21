@@ -32,6 +32,10 @@ void WorkerCoreExecutor::send_logic() {
         Send_prim *prim = (Send_prim *)prim_queue.front();
 
         prim->data_packet_id = 0;
+        if (prim->type == SEND_DATA && !prim->d2d_exit_selected) {
+            prim->d2d_exit_port = SelectCoreMsgExit(cid, prim->des_id);
+            prim->d2d_exit_selected = true;
+        }
         bool job_done = false; // 结束内圈循环的标志
 
         LOG_INFO(PRIM) << "Core " << cid << " start send primitive "
@@ -76,6 +80,7 @@ void WorkerCoreExecutor::send_logic() {
                                        prim->tag_id, length, sc_bv<128>(0x1));
                     temp_msg.roofline_packets_ = roofline_packets;
                     temp_msg.source_ = cid; // 真实全局 source
+                    temp_msg.exit_port_ = prim->d2d_exit_port;
                     send_buffer = temp_msg;
 
                     // send_helper_write = 3;
@@ -214,6 +219,11 @@ void WorkerCoreExecutor::send_para_logic() {
                     ((Send_prim *)prim)->type == SEND_DATA) {
                     // [发送方] 正常发送数据，数据从DRAM中获取
                     Send_prim *s_prim = (Send_prim *)prim;
+                    if (!s_prim->d2d_exit_selected) {
+                        s_prim->d2d_exit_port =
+                            SelectCoreMsgExit(cid, s_prim->des_id);
+                        s_prim->d2d_exit_selected = true;
+                    }
 
                     // atomic_helper_lock 其实是为了表示上锁
                     if (SPEC_ROUTER_PIPE) {
@@ -248,6 +258,7 @@ void WorkerCoreExecutor::send_para_logic() {
                                         s_prim->des_id, 0, s_prim->tag_id,
                                         length, sc_bv<128>(0x1));
                                 send_buffer.source_ = cid; // 真实全局 source
+                                send_buffer.exit_port_ = s_prim->d2d_exit_port;
                                 int delay = 0;
                                 TaskCoreContext context =
                                     generate_context(this);
@@ -296,6 +307,7 @@ void WorkerCoreExecutor::send_para_logic() {
                                 s_prim->des_id, 0, s_prim->tag_id, length,
                                 sc_bv<128>(0x1));
                             send_buffer.source_ = cid; // 真实全局 source
+                            send_buffer.exit_port_ = s_prim->d2d_exit_port;
                             int delay = 0;
                             TaskCoreContext context = generate_context(this);
                             delay = prim->taskCoreDefault(context);

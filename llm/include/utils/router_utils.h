@@ -39,10 +39,17 @@ inline int DieManhattan(int a, int b) {
 int CrossDieSelectExit(int at_core, int des_global);
 Directions CrossDieStep(int des_global, int pos, int exit_port);
 
+// 相邻 die core→core 消息的源端出口选择；same-die 返回 -1，多跳/非法端点拒绝。
+// DATA 原语调用一次并保存结果；控制包由 PinControlMsgExit 包装调用。
+int SelectCoreMsgExit(int source_core, int des_core);
+
 // V1-c1 控制包契约：源核对跨 die REQUEST/ACK 选一次出口并写入 msg.exit_port_；
 // router 每跳只消费该固定出口。相邻 die 之外明确拒绝。HOST 控制消息不需要 pin。
 void PinControlMsgExit(Msg &msg);
 Directions ControlMsgNextHop(const Msg &msg, int pos);
+
+// V1-c2 DATA/数据通道路由：core 目的消费固定 exit_port；HOST 目的保持原 anchor 路由。
+Directions DataMsgNextHop(const Msg &msg, int pos);
 Directions GetOpposeDirection(Directions dir);
 
 // ---- 全局核编址 helper（V0）：global_core_id <-> (die_id, local_id) ----

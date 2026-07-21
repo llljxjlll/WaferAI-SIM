@@ -1272,7 +1272,7 @@ int RunD2DV0SelfTest() {
             {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
         ParseDiePorts(hw);
 
-        auto walkControl = [&](const Msg &msg) {
+        auto walkMessage = [&](const Msg &msg, bool control) {
             int pos = msg.source_;
             int crossings = 0;
             std::set<int> visited;
@@ -1281,7 +1281,8 @@ int RunD2DV0SelfTest() {
                     return crossings == 1;
                 if (!visited.insert(pos).second)
                     return false;
-                Directions d = ControlMsgNextHop(msg, pos);
+                Directions d = control ? ControlMsgNextHop(msg, pos)
+                                       : DataMsgNextHop(msg, pos);
                 int nb = OpenMeshNeighbor(pos, d);
                 if (nb >= 0) {
                     pos = nb;
@@ -1318,7 +1319,7 @@ int RunD2DV0SelfTest() {
               "c1b REQUEST: source selects and pins one C2C exit");
         check(DeserializeMsg(SerializeMsg(req)).exit_port_ == req.exit_port_,
               "c1b REQUEST: pinned exit survives packet serialization");
-        check(walkControl(req),
+        check(walkMessage(req, true),
               "c1b REQUEST: fixed exit -> D2D crossing -> destination core");
 
         Msg ack(MSG_TYPE::ACK, 0, 7, CORES_PER_DIE);
@@ -1326,7 +1327,7 @@ int RunD2DV0SelfTest() {
         check(ack.exit_port_ == CrossDieSelectExit(ack.source_, ack.des_) &&
                   ack.exit_port_ != req.exit_port_,
               "c1b ACK: destination core independently pins reverse exit");
-        check(walkControl(ack),
+        check(walkMessage(ack, true),
               "c1b ACK: reverse D2D crossing returns to request source");
 
         Msg local(MSG_TYPE::REQUEST, 1, 9, 0);
@@ -1344,6 +1345,67 @@ int RunD2DV0SelfTest() {
         }
         check(missing_threw,
               "c1b cross-die control: missing pinned exit rejected clearly");
+        // ---- 20. DATA 流级 pin + Router 数据 dispatch（V1-c2）----
+        int data_exit = SelectCoreMsgExit(0, CORES_PER_DIE);
+        std::vector<Msg> packets;
+        for (int seq = 1; seq <= 3; seq++) {
+            Msg p(seq == 3, MSG_TYPE::DATA, seq, CORES_PER_DIE, 0, 7,
+                  M_D_DATA, sc_bv<128>(seq));
+            p.source_ = 0;
+            p.exit_port_ = data_exit; // 生产路径从 Send_prim 的一次性选择复制
+            packets.push_back(p);
+        }
+        bool same_pin = data_exit >= 0;
+        bool all_walk = true;
+        for (const auto &p : packets) {
+            Msg wire = DeserializeMsg(SerializeMsg(p));
+            same_pin = same_pin && wire.exit_port_ == data_exit;
+            all_walk = all_walk && walkMessage(wire, false);
+        }
+        check(same_pin,
+              "c2 DATA: every packet carries the same serialized flow-level pin");
+        check(all_walk,
+              "c2 DATA: 3-packet flow uses fixed exit and crosses expected D2D link");
+
+        Msg reverse(true, MSG_TYPE::DATA, 1, 0, 0, 7, M_D_DATA,
+                    sc_bv<128>(1));
+        reverse.source_ = CORES_PER_DIE;
+        reverse.exit_port_ = SelectCoreMsgExit(reverse.source_, reverse.des_);
+        check(reverse.exit_port_ != data_exit && walkMessage(reverse, false),
+              "c2 DATA: reverse direction independently pins and crosses reverse link");
+
+        Msg local_data(true, MSG_TYPE::DATA, 1, 1, 0, 9, M_D_DATA,
+                       sc_bv<128>(1));
+        local_data.source_ = 0;
+        local_data.exit_port_ = SelectCoreMsgExit(0, 1);
+        check(local_data.exit_port_ == -1 &&
+                  DataMsgNextHop(local_data, 0) == GetNextHop(1, 0),
+              "c2 same-die DATA: unpinned and legacy XY-equivalent");
+
+        Msg missing_data(true, MSG_TYPE::DATA, 1, CORES_PER_DIE, 0, 7,
+                         M_D_DATA, sc_bv<128>(1));
+        missing_data.source_ = 0;
+        bool missing_data_threw = false;
+        try {
+            DataMsgNextHop(missing_data, 0);
+        } catch (const std::runtime_error &) {
+            missing_data_threw = true;
+        }
+        check(missing_data_threw,
+              "c2 cross-die DATA: missing pinned exit rejected clearly");
+
+        Msg config(false, MSG_TYPE::CONFIG, 1, CORES_PER_DIE, 0, 0,
+                   M_D_DATA, sc_bv<128>(1));
+        config.source_ = 0;
+        config.exit_port_ = data_exit;
+        bool config_threw = false;
+        try {
+            DataMsgNextHop(config, 0);
+        } catch (const std::runtime_error &) {
+            config_threw = true;
+        }
+        check(config_threw,
+              "c2 data channel: non-DATA message cannot borrow cross-die route");
     }
 
     std::cout << "==== D2D V0 self-test: " << (g_total - g_fail) << "/" << g_total

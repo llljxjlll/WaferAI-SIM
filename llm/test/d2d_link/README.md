@@ -64,10 +64,17 @@ cd build && ./npusim --d2d-v0-selftest
   `ControlMsgNextHop`，在源 die 朝固定端口收敛，过 link 后在目标 die 退回片内 XY。
   当前证据为双向 REQUEST/ACK 逐跳 walk + 序列化 + Router 生产调用点；生产 workload 仍由 c1a gate
   拒绝，故尚不声称真实 workload 控制包已经运行时穿链。
-- **当前验证**：纯函数/路由自测 **209/209**、Link SystemC 自测 **18/18**、D2D runner
+- **V1-c2 ✔（DATA 路由接线，生产 gate 保持关闭）**：每条 `SEND_DATA` 原语在源核调用
+  `SelectCoreMsgExit` 一次，并把同一 `exit_port_` 复制到该 flow 的所有 DATA 包；Router 数据路径统一调用
+  `DataMsgNextHop`，在源 die 使用固定出口、进入目标 die 后退回片内 XY。尾包解锁复用该包本轮已经解析的
+  `out`，不再用全局目的核重新做片内路由。覆盖 3 包同 pin/序列化、E→W 与 W→E、same-die 等价、
+  缺 pin 与非 DATA 跨 die 拒绝。`Send_prim::deserialize` 同时先解析 `type` 再消费 DATA 字段，并清空
+  运行态 pin，消除旧的未初始化读取与复用污染风险。生产 workload 仍由 c1a gate 拒绝，因此尚不声称
+  REQUEST/ACK/DATA 已完成真实跨 die 端到端运行。
+- **当前验证**：纯函数/路由自测 **215/215**、Link SystemC 自测 **18/18**、D2D runner
   **27/27**（含“有 peer link 但 c3 前仍拒绝”的真实启动负例）、NoC 冻结值
   **14781/29109、14833/45441**。
-- **下一步**：V1-c2 接 DATA 源端 pin 与数据路由；V1-c3 再显式打开生产 preflight，并增加第一条
+- **下一步**：V1-c3 显式打开生产 preflight，并增加第一条
   REQUEST → ACK → DATA 的真实跨 die 端到端用例。
 
 ## V0 基线冻结（V0-exit / Inc 4）—— 进 V1 前的准入门
