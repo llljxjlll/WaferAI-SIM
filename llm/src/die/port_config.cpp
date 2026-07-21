@@ -201,6 +201,28 @@ void ParseDiePorts(const D2DJson &hw_json) {
         g_die_ports.port_for_host[c] = best;
     }
 
+    // port_for[tile][dir]：每核就近选一个 dir 方向的 C2C 出口端口（V1 跨 die 路由用）。
+    // V1 每方向至多一个 C2C 端口 → 就近即该端口；无该方向 C2C → -1。
+    g_die_ports.port_for.assign(CORES_PER_DIE, std::vector<int>(DIRECTIONS, -1));
+    const Directions kDirs[4] = {WEST, EAST, NORTH, SOUTH};
+    for (int c = 0; c < CORES_PER_DIE; c++) {
+        int cx = c % GRID_X, cy = c / GRID_X;
+        for (Directions d : kDirs) {
+            int best = -1, best_d = 1 << 30;
+            for (auto &p : g_die_ports.ports) {
+                if (p.role != ROLE_C2C || p.dir != d)
+                    continue;
+                int px = p.tile % GRID_X, py = p.tile / GRID_X;
+                int dist = std::abs(cx - px) + std::abs(cy - py);
+                if (dist < best_d) {
+                    best_d = dist;
+                    best = p.port_id;
+                }
+            }
+            g_die_ports.port_for[c][d] = best;
+        }
+    }
+
     // V0b-4：构造并校验 D2D peer/link（结构级）
     BuildD2DLinks();
 }
@@ -245,6 +267,32 @@ void ValidateDiePorts() {
         throw std::runtime_error(
             "die_ports: no HOST port (all margin ports taken by C2C/MEM) -> "
             "HOST unreachable");
+}
+
+void ValidateV1MvpTopology() {
+    // V1 runtime 前置：多 die 必须有 die_ports 提供 C2C（V0 允许「多 die 实例化但无 die_ports」，
+    // 那种配置下没有任何跨 die 通路，V1 runtime 启用时必须明确拒绝，不能静默无链路）。
+    if (DIE_COUNT > 1 && !g_die_ports.active)
+        throw std::runtime_error(
+            "V1 MVP: multi-die requires die_ports with C2C ports "
+            "(no cross-die path otherwise)");
+    if (!g_die_ports.active)
+        return; // 单 die 且无 die_ports：无跨 die 流量，合法
+    const Directions dirs[4] = {WEST, EAST, NORTH, SOUTH};
+    for (Directions D : dirs) {
+        int cnt = (int)g_die_ports.PortsForDir(D).size();
+        bool neighbor = (D == EAST || D == WEST) ? (DIE_X > 1) : (DIE_Y > 1);
+        if (cnt > 1)
+            throw std::runtime_error(
+                "V1 MVP: at most one C2C port per direction "
+                "(multi-port per direction is a later version)");
+        if (neighbor && cnt != 1)
+            throw std::runtime_error(
+                "V1 MVP: a die-neighbor direction must have exactly one C2C "
+                "port");
+    }
+    // peer-connectedness 由 BuildD2DLinks 保证：某方向存在邻 die 时，该方向 C2C 端口若找不到
+    // 对侧镜像端口即抛错；边界方向的模板端口无 peer（允许）。故此处只需 count 契约。
 }
 
 static Directions OppositeSide(Directions d) {
@@ -348,6 +396,14 @@ int PortForHost(int local_core) {
     if (local_core < 0 || local_core >= (int)g_die_ports.port_for_host.size())
         return -1;
     return g_die_ports.port_for_host[local_core];
+}
+
+int PortForDir(int local_core, Directions dir) {
+    if (local_core < 0 || local_core >= (int)g_die_ports.port_for.size())
+        return -1;
+    if (dir < 0 || dir >= (int)g_die_ports.port_for[local_core].size())
+        return -1;
+    return g_die_ports.port_for[local_core][dir];
 }
 
 void BuildHostAttach() {

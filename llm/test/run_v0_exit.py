@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """V0-exit 统一准入门（冻结基线）：依次执行三道阻塞门并汇总退出码。
 
-  门 1+2  D2D 纯函数自测 165/165 + 端到端 23/23   -> run_test_d2d_v0.py
-  门 3     NoC 四场景精确数值 14781/29109/14833/45441 -> run_test_noc_congestion.py
+  门 1+2  D2D 纯函数自测 + 端到端 runner（全部通过）      -> run_test_d2d_v0.py
+  门 3     NoC 四场景精确数值 14781/29109/14833/45441      -> run_test_noc_congestion.py
 
+冻结契约：V0 的功能测试（自测 + 端到端，冻结时 165/23）必须**继续全部通过**、NoC 四场景
+数值**精确不变**；随 V1+ 增量测试总数可以增长，但既有 V0 契约不得回归。
 任一门失败（非零退出）即整体非零退出，可直接用于 CI / pre-commit 阻塞。
 用法（任意目录）：python3 llm/test/run_v0_exit.py
 """
@@ -12,8 +14,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 门以「全部通过」判定，不硬编码计数——自测/端到端组数会随 V1+ 增长（V0 冻结时为
+# 165/23）。冻结契约：既有 V0 功能测试必须继续全通过、NoC 四场景数值精确不变；
+# 测试总数可增长，但 V0 契约不得回归。
 GATES = [
-    ("D2D self-test + e2e (165/165 + 23/23)",
+    ("D2D self-test + e2e (all pass)",
      [sys.executable, os.path.join(HERE, "d2d_link", "run_test_d2d_v0.py")]),
     ("NoC four-scenario exact (14781/29109, 14833/45441)",
      [sys.executable, os.path.join(HERE, "noc_congestion",

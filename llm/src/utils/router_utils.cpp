@@ -188,6 +188,58 @@ Directions GetNextHopReverse(int des, int pos, int anchor_core) {
     }
 }
 
+// 校验携带的 pinned exit_port 对「从 md 去 dd」仍是合法 C2C 出口——不信任 flow 状态里带来的值：
+//   范围合法、ROLE_C2C（非 HOST/MEM 冒充）、dir == die 首跳方向、MVP 下 side==dir、tile 合法。
+// 返回该端口引用，或抛 std::runtime_error。
+static const D2DPort &ValidatePinnedExit(int exit_port, int md, int dd) {
+    if (exit_port < 0 || exit_port >= (int)g_die_ports.ports.size())
+        throw std::runtime_error("cross-die: pinned exit port out of range");
+    const D2DPort &p = g_die_ports.ports[exit_port];
+    Directions D = DieFirstHopDir(md, dd);
+    if (p.role != ROLE_C2C)
+        throw std::runtime_error(
+            "cross-die: pinned exit is not a C2C port (HOST/MEM impersonation)");
+    if (p.dir != D)
+        throw std::runtime_error(
+            "cross-die: pinned exit dir != die first-hop direction");
+    if (p.side != p.dir) // MVP：side==dir
+        throw std::runtime_error("cross-die: pinned exit violates MVP side==dir");
+    if (p.tile < 0 || p.tile >= CORES_PER_DIE)
+        throw std::runtime_error("cross-die: pinned exit tile invalid");
+    return p;
+}
+
+int CrossDieSelectExit(int at_core, int des_global) {
+    if (at_core < 0 || at_core >= TOTAL_CORES || des_global < 0 ||
+        des_global >= TOTAL_CORES)
+        throw std::runtime_error("cross-die: illegal core id");
+    int md = DieOfGlobal(at_core), dd = DieOfGlobal(des_global);
+    if (md == dd)
+        return -1; // 同 die，无需出口端口
+    Directions D = DieFirstHopDir(md, dd); // die 级首跳方向
+    int port = PortForDir(LocalOfGlobal(at_core), D);
+    if (port < 0)
+        throw std::runtime_error(
+            "cross-die routing: no C2C port toward die-direction (unreachable)");
+    ValidatePinnedExit(port, md, dd); // 完整校验（role/dir/side/tile）
+    return port;
+}
+
+Directions CrossDieStep(int des_global, int pos, int exit_port) {
+    if (pos < 0 || pos >= TOTAL_CORES || des_global < 0 ||
+        des_global >= TOTAL_CORES)
+        throw std::runtime_error("cross-die: illegal core id");
+    int md = DieOfGlobal(pos), dd = DieOfGlobal(des_global);
+    if (md == dd)
+        return GetNextHop(des_global, pos); // 同 die：片内 XY 到目的核
+    // 不信任携带的 exit_port：完整校验它对「从 md 去 dd」仍合法
+    const D2DPort &p = ValidatePinnedExit(exit_port, md, dd);
+    int port_tile = md * CORES_PER_DIE + p.tile; // 本 die 的固定出口端口 tile
+    if (pos == port_tile)
+        return p.dir; // 到端口 tile：egress 出 C2C 链路（side==dir）
+    return GetNextHop(port_tile, pos); // 片内 XY 朝固定出口 tile 收敛
+}
+
 Directions GetOpposeDirection(Directions dir) {
     switch (dir) {
     case WEST:

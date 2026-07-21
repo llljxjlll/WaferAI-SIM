@@ -843,6 +843,224 @@ int RunD2DV0SelfTest() {
               "egress anchor: routing uses fixed source anchor (A), never falls back to pos");
     }
 
+    // ---- 15. 跨 die 路由（V1-a，纯函数）：die 级首跳/距离 + 单端口 pinning + V1 MVP 校验 ----
+    {
+        // 15.1 die 级首跳方向 + Manhattan 距离
+        setTopo(4, 4, 2, 1);
+        check(DieFirstHopDir(0, 1) == EAST && DieFirstHopDir(1, 0) == WEST &&
+                  DieManhattan(0, 1) == 1,
+              "die-mesh 2x1: first-hop E/W, adjacent (dist 1)");
+        setTopo(4, 4, 2, 2); // die0(0,0) die1(1,0) die2(0,1) die3(1,1)
+        check(DieFirstHopDir(0, 3) == EAST && DieFirstHopDir(0, 2) == NORTH &&
+                  DieFirstHopDir(3, 0) == WEST && DieManhattan(0, 3) == 2 &&
+                  DieManhattan(0, 1) == 1,
+              "die-mesh 2x2: X-first XY; die0->die3 non-adjacent (dist 2, V1-c rejects)");
+
+        // man()：读当前 GRID_X 的片内 Manhattan
+        auto man = [&](int a, int b) {
+            int dv = a % GRID_X - b % GRID_X, dh = a / GRID_X - b / GRID_X;
+            return (dv < 0 ? -dv : dv) + (dh < 0 ? -dh : dh);
+        };
+        // 单端口 pinning walk：每 die 只 CrossDieSelectExit 一次，携固定 exit_port 逐跳 step。
+        auto walkPinned = [&](int src_die, int des_die, Directions egress) {
+            bool all = true;
+            for (int lc = 0; lc < CORES_PER_DIE && all; lc++) {
+                int c = src_die * CORES_PER_DIE + lc;
+                int des = des_die * CORES_PER_DIE + lc;
+                int ep = CrossDieSelectExit(c, des); // 选一次并钉死
+                int ptile = src_die * CORES_PER_DIE + g_die_ports.ports[ep].tile;
+                int pos = c, prev = man(pos, ptile), steps = 0;
+                std::set<int> visited;
+                visited.insert(pos);
+                while (true) {
+                    Directions d = CrossDieStep(des, pos, ep); // 携固定 ep
+                    if (pos == ptile) {
+                        if (d != egress) all = false;
+                        break;
+                    }
+                    if (d != WEST && d != EAST && d != NORTH && d != SOUTH) {
+                        all = false;
+                        break;
+                    }
+                    int nxt = OpenMeshNeighbor(pos, d);
+                    if (nxt < 0 || nxt / CORES_PER_DIE != src_die) {
+                        all = false;
+                        break;
+                    }
+                    int nd = man(nxt, ptile);
+                    if (nd >= prev || visited.count(nxt)) {
+                        all = false;
+                        break;
+                    }
+                    visited.insert(nxt);
+                    pos = nxt;
+                    prev = nd;
+                    if (++steps > CORES_PER_DIE + 2) {
+                        all = false;
+                        break;
+                    }
+                }
+            }
+            return all;
+        };
+
+        // 15.2 单端口 E/W（2×1 4×4）：override 单个 E/W 端口（非整边），S 整边 host 保可达
+        {
+            setTopo(4, 4, 2, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            ParseDiePorts(hw);
+            check((int)g_die_ports.PortsForDir(EAST).size() == 1 &&
+                      (int)g_die_ports.PortsForDir(WEST).size() == 1,
+                  "single-port 2x1: exactly one E and one W C2C port");
+            bool v1ok = true;
+            try {
+                ValidateV1MvpTopology();
+            } catch (...) {
+                v1ok = false;
+            }
+            check(v1ok, "ValidateV1MvpTopology accepts single-port 2x1 E/W");
+            check(walkPinned(0, 1, EAST),
+                  "pinned die0->die1: select-once EAST, converge to port tile, egress");
+            check(walkPinned(1, 0, WEST),
+                  "pinned die1->die0: select-once WEST, converge to port tile, egress");
+            // 同 die：CrossDieStep 退回片内 XY（== GetNextHop）
+            bool same = true;
+            for (int a = 0; a < CORES_PER_DIE && same; a++)
+                for (int b = 0; b < CORES_PER_DIE && same; b++)
+                    if (CrossDieStep(b, a, -1) != GetNextHop(b, a))
+                        same = false;
+            check(same, "CrossDieStep same-die == within-die GetNextHop");
+            // 非法 core id 报错
+            bool badthrew = false;
+            try {
+                CrossDieSelectExit(-1, 0);
+            } catch (const std::runtime_error &) {
+                badthrew = true;
+            }
+            check(badthrew, "CrossDieSelectExit illegal core id throws");
+
+            // CrossDieStep 不信任携带的 exit_port：负例
+            int host_pid = -1, w_pid = -1, e_pid = -1;
+            for (auto &p : g_die_ports.ports) {
+                if (p.role == ROLE_HOST && host_pid < 0)
+                    host_pid = p.port_id;
+                if (p.role == ROLE_C2C && p.dir == WEST)
+                    w_pid = p.port_id;
+                if (p.role == ROLE_C2C && p.dir == EAST)
+                    e_pid = p.port_id;
+            }
+            int des1 = CORES_PER_DIE; // die1 核0；从 die0 核0 去，D=EAST
+            auto stepThrows = [&](int des, int pos, int ep) {
+                try {
+                    CrossDieStep(des, pos, ep);
+                } catch (const std::runtime_error &) {
+                    return true;
+                }
+                return false;
+            };
+            check(stepThrows(des1, 0, w_pid),
+                  "CrossDieStep rejects wrong-direction pinned exit (W when going E)");
+            check(stepThrows(des1, 0, host_pid),
+                  "CrossDieStep rejects HOST port impersonating C2C exit");
+            check(stepThrows(des1, -1, e_pid),
+                  "CrossDieStep rejects illegal core id");
+            check(stepThrows(des1, 0, 999),
+                  "CrossDieStep rejects out-of-range pinned exit port");
+        }
+
+        // 15.3 单端口 N/S（1×2 纵向双 die）
+        {
+            setTopo(4, 4, 1, 2);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["W"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "N"}, {"idx", 0}, {"role", "c2c"}, {"dir", "N"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "S"}, {"idx", 0}, {"role", "c2c"}, {"dir", "S"}});
+            ParseDiePorts(hw);
+            bool v1ok = true;
+            try {
+                ValidateV1MvpTopology();
+            } catch (...) {
+                v1ok = false;
+            }
+            check(v1ok && g_die_ports.PortsForDir(NORTH).size() == 1 &&
+                      g_die_ports.PortsForDir(SOUTH).size() == 1,
+                  "single-port 1x2: exactly one N and one S C2C port; V1 MVP ok");
+            check(walkPinned(0, 1, NORTH),
+                  "pinned die0->die1 (1x2): select-once NORTH, egress N");
+            check(walkPinned(1, 0, SOUTH),
+                  "pinned die1->die0 (1x2): select-once SOUTH, egress S");
+        }
+
+        // 15.4 矩形 4×2 die 内 mesh、单端口 E/W（2 个 die，每 die 8 核）
+        {
+            setTopo(4, 2, 2, 1);
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            ParseDiePorts(hw);
+            bool v1ok = true;
+            try {
+                ValidateV1MvpTopology();
+            } catch (...) {
+                v1ok = false;
+            }
+            check(v1ok, "rectangular 4x2 die-inner mesh single-port E/W: V1 MVP ok");
+            check(walkPinned(0, 1, EAST) && walkPinned(1, 0, WEST),
+                  "pinned 4x2 die-inner mesh: die0<->die1 converge+egress E/W");
+        }
+
+        // 15.5 V1 MVP 拒绝：整边 C2C（多端口）；邻 die 方向缺 C2C（不可达）
+        {
+            setTopo(4, 4, 2, 1);
+            D2DJson mp;
+            mp["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            mp["die_ports"]["edges"]["E"] = {{"role", "c2c"}, {"dir", "E"}}; // 整边=4端口
+            mp["die_ports"]["edges"]["W"] = {{"role", "c2c"}, {"dir", "W"}};
+            ParseDiePorts(mp);
+            bool rej = false;
+            try {
+                ValidateV1MvpTopology();
+            } catch (const std::runtime_error &) {
+                rej = true;
+            }
+            check(rej, "ValidateV1MvpTopology rejects whole-edge multi-port C2C");
+
+            // 邻 die 方向缺 C2C：2×1 只给 E 单端口（缺 W）——启动期 ValidateDiePorts 已拒
+            setTopo(4, 4, 2, 1);
+            D2DJson miss;
+            miss["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            miss["die_ports"]["overrides"] = D2DJson::array();
+            miss["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            check(throwsRuntime(miss),
+                  "2x1 with E but no W C2C: rejected at startup (neighbor unreachable)");
+
+            // V1 runtime 前置：多 die 但无 die_ports（无 C2C 通路）必须被 ValidateV1MvpTopology 拒绝
+            setTopo(4, 4, 2, 1); // setTopo 已清空 g_die_ports → active=false
+            bool mdrej = false;
+            try {
+                ValidateV1MvpTopology();
+            } catch (const std::runtime_error &) {
+                mdrej = true;
+            }
+            check(mdrej,
+                  "ValidateV1MvpTopology rejects multi-die without die_ports (no C2C path)");
+        }
+    }
+
     std::cout << "==== D2D V0 self-test: " << (g_total - g_fail) << "/" << g_total
               << " passed" << (g_fail ? "  <<< FAILURES" : "") << " ====" << std::endl;
     return g_fail;

@@ -46,6 +46,9 @@ struct D2DPortTable {
     bool active = false;         // 配置里是否出现 die_ports
     std::vector<D2DPort> ports;  // 已指派的端口
     std::vector<int> port_for_host; // 每个局部核 → 去 HOST 走的 port_id（-1=无）
+    // 每个局部核 → 各 die 级方向(N/S/E/W) 的 C2C 出口 port_id（就近；-1=该方向无 C2C）。
+    // key 是 (tile, dir)（非 source_core）——多跳接力时中间 die 用入口 tile 查同一张表（V1 单跳即够）。
+    std::vector<std::vector<int>> port_for; // [CORES_PER_DIE][DIRECTIONS]
 
     // 按方向取 C2C 端口集合
     std::vector<int> PortsForDir(Directions d) const {
@@ -84,6 +87,12 @@ void ParseDiePorts(const D2DJson &hw_json);
 // 供测试/外部单独触发的校验（ParseDiePorts 内部也会调用）。
 void ValidateDiePorts();
 
+// V1 MVP 拓扑契约校验（**V1 runtime 启用时**调用，V0/V1-a 结构阶段不强制）：
+//   - 任一 die 级方向的 C2C 端口数 <= 1（多端口留 V5）；
+//   - 存在邻 die 的方向（DIE_X>1→E/W，DIE_Y>1→N/S）必须**恰好一个** peer-connected C2C 端口。
+// 违反即抛 std::runtime_error（明确拒绝，不静默降级）。
+void ValidateV1MvpTopology();
+
 // 维度与 endpoint 地址空间容量校验：GRID_X/Y、DIE_X/Y 为正；
 // 且 core+host+mem 端点总数 <= 65536（des_/source_ 为 16-bit）。用宽整数防溢出。
 // 非法即抛 std::runtime_error（启动失败）。
@@ -91,6 +100,8 @@ void ValidateAddressSpace();
 
 // 便捷查询
 int PortForHost(int local_core);
+// 局部核在 die 级方向 dir(N/S/E/W) 的 C2C 出口 port_id（-1=该方向无 C2C 端口）。
+int PortForDir(int local_core, Directions dir);
 
 // ---- V1-pre：HOST 物理挂载表（routing / enqueue / binding 的统一真源）----
 // lane = 一条 HOST 通道；每 lane 绑定一个全局 tile(router)。每个核经 HostLaneOfCore
