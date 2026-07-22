@@ -75,10 +75,24 @@ cd build && ./npusim --d2d-v0-selftest
   capture/delivery 统计，实测 REQUEST=`1/1`、ACK=`1/1`、DATA=`4/4`、总计=`6/6`，HOST mismatch=0、
   唯一 DONE=`{16:1}`、五个生产协议阶段日志齐全、无绑定错误。3×1 die0→die2 生产负例证明开 gate
   后多跳仍在仿真前拒绝。
-- **当前验证**：纯函数/路由自测 **215/215**、Link SystemC 自测 **18/18**、D2D runner
-  **28/28**（含 c3 双运行闭环与生产多跳负例）、NoC 冻结值 **14781/29109、14833/45441**。
-- **下一步**：V1-d 做四方向相邻 die e2e、link latency 扫描/端到端增量标定，以及更完整的
-  flow 包数/checksum/活动归零检查。
+- **V1-d1 ✔（四方向相邻 die）**：2×1 的 die0→die1 / die1→die0 覆盖 E/W，1×2 覆盖 N/S；
+  每方向连续两次均为 **398/398 ns**，REQUEST/ACK/DATA=`1/1,1/1,4/4`、consumer 唯一 DONE、
+  反向 ACK 回到 producer、HOST mismatch=0、Router/Link FIFO drain=`0/0`。非法
+  `side=N,dir=E` 在仿真前以精确 `MVP requires C2C dir == side` 诊断拒绝。
+- **V1-d2 ✔（逐包完整性与大小边界）**：新增 DATA capture/delivery 探针，比较包数、
+  顺序敏感 seq hash 和完整 256-bit payload checksum，并检查 base-agnostic 连续序列、
+  唯一尾包、尾包长度及 Link cycle span。覆盖 **1/2/5(partial tail)/7/8/9/32** 包；
+  5 包用例尾长 96 bit，其余尾长 128 bit；全部 in/out 指纹一致、完成时间严格递增、
+  Router/Link 均排空。7/8/9 只覆盖消息尺寸跨过配置的 `buffer_depth=8`，V1 FIFO 仍是
+  无限功能队列，不赋予 V3 有限缓冲/背压语义。
+- **V1-d3 ✔（latency 标定）**：生产端到端扫描 `L=0/1/7/20`，每点连续两次，完成时间
+  分别为 **278/284/320/398 ns**。Link DATA 的 delivery-capture 相对增量精确为 `L cycle`，
+  DATA span 恒为 6 cycles；完整协议因 REQUEST→ACK→DATA 三个因果串联跨链阶段，满足
+  **`T(L)-T(0)=3*L*CYCLE=6L ns`**（`CYCLE=2 ns`），不是错误的 `ΔT=ΔL`。
+- **当前验证 / V1 完成**：纯函数/路由自测 **218/218**、Link SystemC 自测 **18/18**、
+  D2D runner **48/48**、NoC 冻结值 **14781/29109、14833/45441**。V1 的相邻 die、
+  单端口、1 packet/cycle、固定 latency、功能性无限 FIFO 范围已闭合；多跳进入 V2，
+  有限缓冲/带宽/背压进入 V3。
 
 ## V0 基线冻结（V0-exit / Inc 4）—— 进 V1 前的准入门
 

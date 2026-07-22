@@ -241,9 +241,20 @@ SEND_REQ → RECV/ACK → SEND_DATA
   **398 ns**；按类型 Link capture/delivery 为 REQUEST=`1/1`、ACK=`1/1`、DATA=`4/4`，总计=`6/6`，
   HOST mismatch=0、唯一 DONE=`{16:1}`、五个生产协议阶段日志齐全、无绑定错误。3×1 die0→die2
   生产负例仍在仿真前拒绝，多跳边界未被 gate 放宽。
-- **当前门**：215/215、Link 18/18、runner **28/28**、NoC 冻结值全绿。c3 已有真实 workload
-  运行时闭环，不再只是纯函数 walk。
-- **后续**：V1-d 做四方向相邻 die e2e、latency 扫描/端到端增量标定，以及包数/checksum/归零检查。
+- **d1 ✔**：2×1 正反向覆盖 E/W，1×2 正反向覆盖 N/S；每方向连续两次均为 398 ns，
+  REQUEST/ACK/DATA 全闭环、反向 ACK 回 producer、consumer 唯一 DONE，Router/Link
+  drain=`0/0`。非法 `side!=dir` 以精确诊断在仿真前拒绝。
+- **d2 ✔**：DATA capture/delivery 两侧记录包数、顺序敏感 seq hash、完整 payload checksum、
+  连续序号区间、唯一尾包/尾长和 cycle span。覆盖 1/2/5(partial tail)/7/8/9/32 包；
+  5 包尾长 96 bit，其余 128 bit，全部指纹守恒、顺序正确、完成时间严格递增并排空。
+  7/8/9 是消息尺寸边界覆盖，不把 V1 无限功能 FIFO 误表述为有限缓冲测试。
+- **d3 ✔**：生产端到端 `link_latency=0/1/7/20` 各跑两次，得到
+  278/284/320/398 ns。单次 Link DATA 交付相对 capture 增量为 `L cycle`，DATA span
+  恒定；完整 REQUEST→ACK→DATA 事务满足
+  `T(L)-T(0)=3*L*CYCLE=6L ns`（`CYCLE=2 ns`）。
+- **当前门 / V1 完成**：218/218、Link 18/18、runner **48/48**、NoC 冻结值全绿。
+  V1 支持范围（相邻 die、每方向单端口、1 packet/cycle、固定 latency、功能性无限 FIFO）
+  已全部闭合；多跳属于 V2，有限缓冲/背压属于 V3。
 
 #### 实现内容
 
@@ -276,9 +287,12 @@ SEND_REQ → RECV/ACK → SEND_DATA
 4. 接收包数、序号和 checksum 完全正确。
 5. 无丢包、重复包和乱序。
 6. `link_latency = 0/1/7/20` 扫描。
-7. 单跳 latency 每增加 `ΔL`，端到端延迟增加 `ΔL`，允许最多 1 cycle 边界误差。
+7. 分层验证 latency：独立单包 Link 的 delivery-capture 增量为 `ΔL cycle`；完整
+   REQUEST→ACK→DATA 事务含三个因果串联跨链阶段，故
+   `ΔT=3*ΔL*CYCLE`（当前 `CYCLE=2 ns`），不能误写成完整事务 `ΔT=ΔL`。
 8. 反向 ACK 使用正确的反向 endpoint。
-9. 仿真结束所有 FIFO、lock 和 credit 归零。
+9. 仿真结束 Router buffer/lock 与 D2D data/control FIFO 直接统计归零；V1 无有限缓冲
+   credit 状态，credit/背压归零测试从 V3 开始。
 10. V0 的全部单 die 回归继续通过。
 
 #### 完成标准
@@ -683,8 +697,8 @@ V3 网络级覆盖：
 | T01 | 地址/消息往返 | V0 | 基础数据正确 | 所有边界值逐字段一致 |
 | T02 | 非法 topology/config | V0 | 防止运行时挂死 | 启动阶段明确报错 |
 | T03 | 四方向相邻 die 单流 | V1 | 基本 D2D 功能 | REQ/ACK/DATA 正确闭环 |
-| T04 | 单跳 latency 扫描 | V1 | 固定延迟准确性 | `ΔT = ΔL`，误差不超过 1 cycle |
-| T05 | 消息大小边界 | V1 | 包化与尾包正确 | 无丢包/重复，完成时间单调 |
+| T04 | 单跳 latency 扫描 | V1 | 固定延迟准确性 | Link：`Δdelivery=ΔL cycle`；完整三阶段事务：`ΔT=3ΔL·CYCLE` |
+| T05 | 消息大小边界 | V1 | 包化与尾包正确 | 1/2/5/7/8/9/32 包的 seq/hash/checksum/尾长正确，完成时间单调 |
 | T06 | 3-die 多跳 | V2 | 中间 die 接力 | hop 数和路径精确，中间 NoC 有活动 |
 | T07 | 2×2 对角路径 | V2 | die 级 XY | 路径收敛、无绕圈 |
 | T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | 合法模式完成；已知协议环被正确诊断 |
