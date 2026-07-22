@@ -8,6 +8,39 @@ void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
     if (type >= 0 && type < MSG_TYPE_NUM)
         counts[type]++;
 }
+
+// FNV-1a 风格顺序敏感混合：h 依次吸收一个 64-bit 字。乱序/改值都会改变结果。
+inline void MixWord(unsigned long long &h, unsigned long long w) {
+    h = (h ^ w) * 1099511628211ULL;
+}
+
+// 对 DATA 型包更新完整性探针：seqhash 吸收 seq_id，csum 吸收完整 256-bit payload（含 data 段），
+// out 侧另记 canonical 形状（inorder / endseq / maxseq）。非 DATA 包不触碰探针。
+void ProbeData(D2DDataProbe &p, const sc_bv<256> &payload, long long cycle) {
+    Msg m = DeserializeMsg(payload);
+    if (m.msg_type_ != DATA)
+        return;
+    bool first = (p.pkts == 0);
+    p.pkts++;
+    if (first)
+        p.first_cycle = cycle;
+    p.last_cycle = cycle;
+    MixWord(p.seqhash, (unsigned long long)(m.seq_id_ + 1));
+    for (int w = 0; w < 256; w += 64)
+        MixWord(p.csum, payload.range(w + 63, w).to_uint64());
+    if (!first && m.seq_id_ != p.expect) // 非首包必须等于 prev+1（连续、不丢/不重/不乱序）
+        p.inorder = false;
+    p.expect = m.seq_id_ + 1;
+    if (first || m.seq_id_ < p.minseq)
+        p.minseq = m.seq_id_;
+    if (m.seq_id_ > p.maxseq)
+        p.maxseq = m.seq_id_;
+    if (m.is_end_) {
+        p.endseq = m.seq_id_;
+        p.end_count++;
+        p.end_length = m.length_;
+    }
+}
 } // namespace
 
 D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_)
@@ -31,9 +64,11 @@ void D2DLinkUnit::forward() {
 
         // 采集（capture 在交付前 → latency==0 可当拍交付）
         if (in_sent.read()) {
-            fifo_.push_back({cyc + latency, in_channel.read()});
+            sc_bv<256> payload = in_channel.read();
+            fifo_.push_back({cyc + latency, payload});
             g_d2d_link_in_pkts++;
-            CountType(g_d2d_link_in_by_type, in_channel.read());
+            CountType(g_d2d_link_in_by_type, payload);
+            ProbeData(g_d2d_data_in, payload, cyc);
         }
         if (in_ctrl_sent.read()) {
             cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
@@ -46,6 +81,7 @@ void D2DLinkUnit::forward() {
             out_channel.write(fifo_.front().second);
             out_sent.write(true);
             CountType(g_d2d_link_out_by_type, fifo_.front().second);
+            ProbeData(g_d2d_data_out, fifo_.front().second, cyc);
             fifo_.pop_front();
             g_d2d_link_out_pkts++;
         } else {

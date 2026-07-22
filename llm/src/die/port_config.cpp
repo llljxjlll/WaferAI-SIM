@@ -21,6 +21,7 @@ long g_d2d_link_in_pkts = 0;
 long g_d2d_link_out_pkts = 0;
 long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
 long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
+D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 void ResetD2DLinkStats() {
     g_d2d_link_in_pkts = 0;
     g_d2d_link_out_pkts = 0;
@@ -28,6 +29,8 @@ void ResetD2DLinkStats() {
         g_d2d_link_in_by_type[i] = 0;
         g_d2d_link_out_by_type[i] = 0;
     }
+    g_d2d_data_in = D2DDataProbe();
+    g_d2d_data_out = D2DDataProbe();
 }
 void ResetHostLaneStats(int n_lanes) {
     g_host_lane_done.assign(n_lanes, 0);

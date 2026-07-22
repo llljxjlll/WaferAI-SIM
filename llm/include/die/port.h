@@ -174,3 +174,25 @@ extern long g_d2d_link_out_pkts;
 extern long g_d2d_link_in_by_type[MSG_TYPE_NUM];
 extern long g_d2d_link_out_by_type[MSG_TYPE_NUM];
 void ResetD2DLinkStats();
+
+// ---- V1-d2：DATA 逐包完整性探针 ----
+// 仅对 DATA 型包累加，capture(in)/delivery(out) 两侧各一份。比对两侧
+// pkts/seqhash/csum 相等，为链路无丢/重/乱序/损坏提供比「类型总数守恒」更强的证据。
+// 单 DATA 消息的序号契约是 base-agnostic 的连续区间 [minseq,maxseq]（当前生产发送从 1
+// 开始，不能硬编码 0..N-1）；必须满足区间长度==pkts、恰好一个尾包且 endseq==maxseq。
+// first/last_cycle 用于证明增加 link latency 只平移固定延迟、不改变 DATA 包间跨度。
+struct D2DDataProbe {
+    long pkts = 0;
+    unsigned long long seqhash = 1469598103934665603ULL; // FNV-1a offset
+    unsigned long long csum = 1469598103934665603ULL;
+    int minseq = -1; // 最小 seq（首包设基，base-agnostic）
+    int maxseq = -1;
+    int endseq = -1; // is_end 包的 seq_id（-1=未见）
+    int end_count = 0;
+    int end_length = -1;
+    int expect = 0;  // 期望下一个 seq（prev+1）
+    bool inorder = true; // 交付序严格 +1 连续（与 base 无关）
+    long long first_cycle = -1;
+    long long last_cycle = -1;
+};
+extern D2DDataProbe g_d2d_data_in, g_d2d_data_out;

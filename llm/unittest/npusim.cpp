@@ -123,6 +123,26 @@ int sc_main(int argc, char *argv[]) {
             << " ack_out=" << g_d2d_link_out_by_type[ACK]
             << " data_in=" << g_d2d_link_in_by_type[DATA]
             << " data_out=" << g_d2d_link_out_by_type[DATA];
+        // V1-d2 DATA 逐包完整性：in/out 两侧 pkts/seqhash/csum 相等提供链路无丢/重/
+        // 乱序/损坏的强证据；序号是 base-agnostic 连续区间（当前生产从 1 开始），唯一
+        // is_end 必须落在 maxseq。cycle span 用于 V1-d3 验证 latency 不改变稳态包间距。
+        LOG_INFO(SYSTEM)
+            << "[D2D_DATA] in_pkts=" << g_d2d_data_in.pkts
+            << " out_pkts=" << g_d2d_data_out.pkts
+            << " in_seqhash=" << g_d2d_data_in.seqhash
+            << " out_seqhash=" << g_d2d_data_out.seqhash
+            << " in_csum=" << g_d2d_data_in.csum
+            << " out_csum=" << g_d2d_data_out.csum
+            << " out_inorder=" << (g_d2d_data_out.inorder ? 1 : 0)
+            << " out_minseq=" << g_d2d_data_out.minseq
+            << " out_maxseq=" << g_d2d_data_out.maxseq
+            << " out_endseq=" << g_d2d_data_out.endseq
+            << " out_end_count=" << g_d2d_data_out.end_count
+            << " out_end_length=" << g_d2d_data_out.end_length
+            << " in_first_cycle=" << g_d2d_data_in.first_cycle
+            << " in_last_cycle=" << g_d2d_data_in.last_cycle
+            << " out_first_cycle=" << g_d2d_data_out.first_cycle
+            << " out_last_cycle=" << g_d2d_data_out.last_cycle;
     }
 
     // 结束态 drain 不变量（V1 验收）：遍历 SystemC 层级，累加所有 RouterUnit 的残留
@@ -140,6 +160,20 @@ int sc_main(int argc, char *argv[]) {
             return r;
         };
         LOG_INFO(SYSTEM) << "[DRAIN] router_residual="
+                         << resid(sc_get_top_level_objects());
+    }
+    {
+        std::function<long(const std::vector<sc_object *> &)> resid =
+            [&](const std::vector<sc_object *> &objs) -> long {
+            long r = 0;
+            for (auto *o : objs) {
+                if (auto *link = dynamic_cast<D2DLinkUnit *>(o))
+                    r += link->residual();
+                r += resid(o->get_child_objects());
+            }
+            return r;
+        };
+        LOG_INFO(SYSTEM) << "[DRAIN] d2d_link_residual="
                          << resid(sc_get_top_level_objects());
     }
 

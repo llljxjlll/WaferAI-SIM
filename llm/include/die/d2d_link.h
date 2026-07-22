@@ -38,6 +38,9 @@ public:
     D2DLinkUnit(const sc_module_name &n, int latency_);
     void forward();
 
+    // V1 drain 不变量：仿真正常完成后数据/控制 FIFO 均须为空。
+    long residual() const { return (long)fifo_.size() + (long)cfifo_.size(); }
+
 private:
     // 只存真实包 {ready_cycle, payload}（不每周期存 bubble）。ready_cycle=capture_cycle+latency；
     // 队首成熟(ready<=当前 cycle)且下游 ready(out_avail=true) 才出队——成熟包在 Link 中等待

@@ -609,11 +609,13 @@ def main():
             f"Core {consumer} end recv primitive RECV_DATA",
             f"Core {consumer} start send primitive SEND_DONE"))
         dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
         return dict(
             rc=rc, ns=finish_ns(out), agg=last_groups(D2D_RE, out),
             typed=last_groups(D2D_TYPE_RE, out), mism=mism,
             done=sig_to_dict(done_sig), phases=phases,
             drain=int(dr.group(1)) if dr else None,
+            link_drain=int(ldr.group(1)) if ldr else None,
             ls=_last(LS_RE, out), lu=_last(LU_RE, out),
             bind_ok=not any(k in out.lower()
                             for k in ("unbound", "multi-writer", "multi-bind")))
@@ -629,7 +631,8 @@ def main():
                 rin == rout == 1 and ain == aout == 1 and
                 din == dout and din > 1 and
                 total_in == total_out == rin + ain + din and
-                busy == 0 and stall == 0 and r["drain"] == 0)
+                busy == 0 and stall == 0 and
+                r["drain"] == 0 and r["link_drain"] == 0)
 
     C2C12 = "../llm/test/d2d_link/hardware/core_4x4_die1x2_c2c.json"
     REV_WL = "../llm/test/d2d_link/workload/cross_die_rev.json"
@@ -647,10 +650,11 @@ def main():
         record(f"V1-d1 {tag}: REQUEST->ACK->DATA e2e (2x, reverse-ACK@producer, drain=0)",
                ok, f"ns={runs[0]['ns']}/{runs[1]['ns']} typed={runs[0]['typed']} "
                    f"agg={runs[0]['agg']} done={runs[0]['done']} "
-                   f"phases={runs[0]['phases']} drain={runs[0]['drain']}")
+                   f"phases={runs[0]['phases']} drain={runs[0]['drain']}/"
+                   f"{runs[0]['link_drain']}")
 
     # 3q. V1-d1 绑定负例：1×2 的 c2c 端口方向 N/S 必须与 die 首跳方向一致。把 N 口错标成 E
-    #     （side=N 但 dir=E）会在拓扑校验阶段被 ValidateV1MvpTopology 拒绝，不进入仿真。
+    #     （side=N 但 dir=E）必须由 ParseDiePorts/ParseRoleSpec 给出精确诊断并在仿真前拒绝。
     import json as _jd1
     import tempfile as _tfd1
     bad12 = _jd1.load(open(os.path.join(
@@ -665,7 +669,8 @@ def main():
                    "--simulation-config", SIM, "--mapping-config", MAP], timeout=10)
     os.remove(bpath)
     entered = ("All requests finished" in out or "Catch test finished" in out)
-    rejected = rc not in (0, 124) and not entered
+    rejected = (rc not in (0, 124) and
+                "MVP requires C2C dir == side" in out and not entered)
     record("V1-d1 topology guard: c2c port side!=dir rejected before sim",
            rejected, f"exit={rc} entered_sim={entered}")
 
