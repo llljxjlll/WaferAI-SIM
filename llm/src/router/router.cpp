@@ -121,10 +121,11 @@ void RouterUnit::router_execute() {
                 sc_bv<256> temp = channel_i[i].read();
                 // V2-b：该方向是 peer-connected C2C 边 ⇒ 本包刚跨 link 进入本 die，
                 // 入口处清除上一跳 pin 并按本 die 重新 pin（见 RepinOnC2CIngress）。
-                if (IsC2CEgressEdge(rid, Directions(i)))
+                bool from_c2c = IsC2CEgressEdge(rid, Directions(i));
+                if (from_c2c)
                     temp = RepinOnC2CIngress(temp);
                 Msg tt = DeserializeMsg(temp);
-                CountDieRouterPkt(); // V2-c：本 die NoC 活动（中间 die >0 = 真穿过其 NoC）
+                CountDieRouterPkt(i, from_c2c); // V2-c：本 die NoC 活动
 
                 buffer_i[i].emplace(temp);
 
@@ -140,10 +141,11 @@ void RouterUnit::router_execute() {
                 // move the control data into the ctrl buffer
                 sc_bv<256> temp = ctrl_channel_i[i].read();
                 // V2-b：控制包（REQUEST/ACK）与 DATA 一样，跨 link 进入本 die 后必须重新 pin。
-                if (IsC2CEgressEdge(rid, Directions(i)))
+                bool from_c2c = IsC2CEgressEdge(rid, Directions(i));
+                if (from_c2c)
                     temp = RepinOnC2CIngress(temp);
                 Msg tt = DeserializeMsg(temp);
-                CountDieRouterPkt(); // V2-c：本 die NoC 活动
+                CountDieRouterPkt(i, from_c2c); // V2-c：本 die NoC 活动
 
                 ctrl_buffer_i[i].emplace(temp);
 
@@ -511,10 +513,15 @@ void RouterUnit::trans_next_trigger() {
     }
 }
 
-void RouterUnit::CountDieRouterPkt() const {
+void RouterUnit::CountDieRouterPkt(int dir, bool from_c2c) const {
     int d = DieOfGlobal(rid);
-    if (d >= 0 && d < (int)g_die_router_pkts.size())
+    if (d < 0)
+        return;
+    if (d < (int)g_die_router_pkts.size())
         g_die_router_pkts[d]++;
+    // 片内 mesh hop：来自同 die 邻 router 的四向输入（排除跨 die link 入口与本核注入）
+    if (!from_c2c && dir != CENTER && d < (int)g_die_mesh_pkts.size())
+        g_die_mesh_pkts[d]++;
 }
 
 sc_bv<256> RouterUnit::RepinOnC2CIngress(const sc_bv<256> &payload) const {

@@ -25,8 +25,11 @@ D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
 std::vector<D2DLinkStat> g_d2d_link_stats;
 std::vector<long> g_die_router_pkts;
+std::vector<long> g_die_mesh_pkts;
 void ResetDieActivityStats() {
-    g_die_router_pkts.assign(DIE_COUNT > 0 ? DIE_COUNT : 1, 0);
+    int n = DIE_COUNT > 0 ? DIE_COUNT : 1;
+    g_die_router_pkts.assign(n, 0);
+    g_die_mesh_pkts.assign(n, 0);
 }
 void ResetD2DLinkStats() {
     g_d2d_repin_total = 0;

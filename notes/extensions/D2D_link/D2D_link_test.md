@@ -307,7 +307,7 @@ SEND_REQ → RECV/ACK → SEND_DATA
 
 本版只讨论协议级等待，例如双方都先发送再接收造成的 rendezvous 环形等待。有限 port/link buffer 的资源约束、背压和由此产生的 hold-and-wait 网络死锁尚未进入模型，因此不在 V2 声称或验证 buffer 死锁安全。
 
-#### 当前进展（V2-a / V2-b / V2-b2 已完成）
+#### 当前进展（V2-a / V2-b / V2-b2 / V2-c 已完成）
 
 - **V2-a ✔ 多跳路由纯函数**：源端只 pin 首跳，`exit_port` 只对当前 die 有效；`CrossDieStep` 现算
   `md` 并校验携带值（携带上一跳出口 → 抛错而非错误路由）。新增 `CrossDieIngressTile` 由
@@ -328,8 +328,15 @@ SEND_REQ → RECV/ACK → SEND_DATA
 - **实测**：3×1 两跳 `typed=(2,2,2,2,8,8)`、`repin=(12,6,6)`；2×2 对角 `typed=(2,2,2,2,8,8)`、
   `repin=(12,12,0)`（方向真的改变 → `changed==total`、`same=0`）；两者均只有终点 DONE、
   ACK 源不含中间 die、router 与 link drain=0。自测 241/241、runner 51/51、NoC 冻结值不变。
-- **待办**：V2-c（经过的 link/方向/hop 数与中间 die NoC 活动的精确断言）、V2-d（hop/latency
-  扫描分离 NoC 与每跳 D2D 延迟、watchdog 活性、多流）并冻结 `d2d-v2-baseline`。
+- **V2-c ✔ 多跳端到端闭环**：新增逐条有向 link 归因 `[D2D_LINK]` 与每 die 活动 `[DIE_ACT]`
+  （`router_pkts` 全部输入 / `mesh_pkts` 仅片内 router→router）。精确断言：DATA、REQUEST、ACK
+  各自承载的有向 link 集合**恰好**等于期望路径（方向与每条包数精确、`in==out`）、每包 hop 数
+  == 路径长度、入口重写数 == 总跨链包数、中间 die `mesh_pkts>0`（`router_pkts>0` 不足以排除
+  零片内 hop）、只有终点 DONE 且 ACK 源恰为首尾、mismatch=0、drain=0。覆盖 3×1 正/反向与
+  2×2 对角；对角**正反路径不对称**（维序两向都先走 X，往返成矩形）已固化。
+- **当前门**：自测 241/241、Link 18/18、runner **54/54**、NoC 冻结值不变。
+- **待办**：V2-d（hop/latency 扫描分离 NoC 与每跳 D2D 延迟、watchdog 活性、多流）并冻结
+  `d2d-v2-baseline`。
 
 #### 实现内容
 
@@ -723,8 +730,8 @@ V3 网络级覆盖：
 | T03 | 四方向相邻 die 单流 | V1 | 基本 D2D 功能 | REQ/ACK/DATA 正确闭环 |
 | T04 | 单跳 latency 扫描 | V1 | 固定延迟准确性 | Link：`Δdelivery=ΔL cycle`；完整三阶段事务：`ΔT=3ΔL·CYCLE` |
 | T05 | 消息大小边界 | V1 | 包化与尾包正确 | 1/2/5/7/8/9/32 包的 seq/hash/checksum/尾长正确，完成时间单调 |
-| T06 | 3-die 多跳 | V2 | 中间 die 接力 | **V2-b 已覆盖基础**：3×1 两跳 typed=(2,2,2,2,8,8)、repin total==跨 link 包数且 same>0（排除同 port id 巧合）、仅终点 DONE、drain=0；中间 NoC 活动的精确断言留 V2-c |
-| T07 | 2×2 对角路径 | V2 | die 级 XY | **V2-b2 已覆盖**：die0-(E)->die1-(N)->die3，反向 ACK W→S；repin=(12,12,0) 即每次入口重写都改方向（changed==total、same=0），仅 core48 DONE、drain=0 |
+| T06 | 3-die 多跳 | V2 | 中间 die 接力 | **V2-b/V2-c 已覆盖**：3×1 正向 E,E 与反向 W,W；承载 DATA/REQUEST/ACK 的有向 link 集合恰好等于期望路径且每条 in==out；每包 hop 数==2；repin total==跨链包数且 same>0（排除同 port id 巧合）；中间 die mesh_pkts=18>0（真片内 hop）；仅终点 DONE、drain=0 |
+| T07 | 2×2 对角路径 | V2 | die 级 XY | **V2-b2/V2-c 已覆盖**：正向 die0-(E)->die1-(N)->die3，ACK die3-(W)->die2-(S)->die0——**正反不对称**（维序两向都先走 X，往返成矩形）已固化为期望；repin=(12,12,0)（每次入口重写都改方向）；mesh_pkts=[52,15,3,9] 示 die1 承载正向、die2 只承载 ACK；路径收敛无绕圈、仅 core48 DONE、drain=0 |
 | T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | 合法模式完成；已知协议环被正确诊断 |
 | T09 | 三类瓶颈隔离 | V3 | 带宽准确性 | goodput 等于最小段速率 |
 | T10 | 同 link/独立 link | V3 | D2D 争用 | 共享受总容量限制，独立可并行 |

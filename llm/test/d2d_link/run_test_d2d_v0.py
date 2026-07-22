@@ -971,7 +971,8 @@ def main():
         r"\[D2D_LINK\] idx=(\d+) die(\d+)->die(\d+) dir=(\w+) "
         r"req_in=(\d+) req_out=(\d+) ack_in=(\d+) ack_out=(\d+) "
         r"data_in=(\d+) data_out=(\d+)")
-    DIEACT_RE = re.compile(r"\[DIE_ACT\] router_pkts=([0-9,]+)")
+    DIEACT_RE = re.compile(
+        r"\[DIE_ACT\] router_pkts=([0-9,]+) mesh_pkts=([0-9,]+)")
 
     def path_run(wl, hw):
         rc, out = run([NPUSIM, "--workload-config", wl, "--hardware-config", hw,
@@ -984,11 +985,16 @@ def main():
                 dir=d, req=(int(rin), int(rout)), ack=(int(ain), int(aout)),
                 data=(int(din), int(dout)))
         da = DIEACT_RE.findall(out)
-        die_act = [int(x) for x in da[-1].split(",")] if da else []
+        die_act = [int(x) for x in da[-1][0].split(",")] if da else []
+        die_mesh = [int(x) for x in da[-1][1].split(",")] if da else []
         done_sig, ack_sig = parse_sig(out)
         dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
         ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
+        mism, _ = parse_hl(out)
         return dict(rc=rc, ns=finish_ns(out), links=links, die_act=die_act,
+                    die_mesh=die_mesh, mism=mism,
+                    bind_ok=not any(k in out.lower()
+                                    for k in ("unbound", "multi-writer", "multi-bind")),
                     done=sig_to_dict(done_sig),
                     ack_srcs={int(t.split(":")[0])
                               for t in (ack_sig or "").split(",") if t},
@@ -998,10 +1004,13 @@ def main():
 
     def path_ok(r, fwd, ack, npkt, src, dest, busy_dies):
         """fwd/ack: [(src_die, dst_die, dir), ...] 期望的**精确**有向 link 序列。"""
-        if r["rc"] != 0 or r["drain"] != 0 or r["link_drain"] != 0:
+        if (r["rc"] != 0 or r["drain"] != 0 or r["link_drain"] != 0 or
+                r["mism"] != 0 or not r["bind_ok"]):
             return False
-        # 1) 承载 DATA 的有向 link 集合必须**恰好**等于期望正向路径，且方向、每条包数精确
-        data_links = {k for k, v in r["links"].items() if v["data"][0] > 0}
+        # 1) 承载 DATA 的有向 link 集合必须**恰好**等于期望正向路径，且方向、每条包数精确。
+        #    active-set 用 in 或 out 判定（只看 in 会漏掉理论上的 out-only 异常）。
+        data_links = {k for k, v in r["links"].items()
+                      if v["data"][0] > 0 or v["data"][1] > 0}
         if data_links != {(a, b) for a, b, _ in fwd}:
             return False
         for a, b, d in fwd:
@@ -1010,8 +1019,14 @@ def main():
             if (v["dir"] != d or v["data"] != (npkt, npkt) or
                     v["req"] != (1, 1) or v["ack"] != (0, 0)):
                 return False
+        # 1b) REQUEST 也必须**恰好**只出现在正向路径上——否则多余 link 上的 REQUEST 不会被发现
+        req_links = {k for k, v in r["links"].items()
+                     if v["req"][0] > 0 or v["req"][1] > 0}
+        if req_links != {(a, b) for a, b, _ in fwd}:
+            return False
         # 2) 承载 ACK 的有向 link 集合必须恰好等于期望反向路径（维序 X-first，可能与正向不对称）
-        ack_links = {k for k, v in r["links"].items() if v["ack"][0] > 0}
+        ack_links = {k for k, v in r["links"].items()
+                     if v["ack"][0] > 0 or v["ack"][1] > 0}
         if ack_links != {(a, b) for a, b, _ in ack}:
             return False
         for a, b, d in ack:
@@ -1025,12 +1040,16 @@ def main():
         # 4) 入口重写次数 == 总跨链包数（REQ+ACK+DATA 各自跨满全程）
         if r["repin"] is None or r["repin"][0] != (1 + npkt) * hops + 1 * len(ack):
             return False
-        # 5) 中间 die 的 NoC 必须真有活动（包确实穿过其 mesh，而非 link 直连 link）
+        # 5) 中间 die 必须发生**片内 mesh hop**。注意 die_act 含「跨 link 到达那一拍」，
+        #    单看它 >0 不能排除「入口 tile 恰好就是下一条 link 的出口 tile、零片内 hop」；
+        #    die_mesh 只统计同 die router→router 输入，才是穿越 NoC 的直接证据。
         for d in busy_dies:
-            if d >= len(r["die_act"]) or r["die_act"][d] <= 0:
+            if (d >= len(r["die_mesh"]) or r["die_mesh"][d] <= 0 or
+                    d >= len(r["die_act"]) or r["die_act"][d] <= 0):
                 return False
-        # 6) 中间 die 不消费、不产生 ACK/DONE：只有终点 DONE，ACK 源只含首尾
-        return r["done"] == {dest: 1} and r["ack_srcs"] <= {src, dest}
+        # 6) 中间 die 不消费、不产生 ACK/DONE：只有终点 DONE；ACK 源**恰好**是首尾两端
+        #    （用 == 而非 <=，否则空集/单端点也会通过）
+        return r["done"] == {dest: 1} and r["ack_srcs"] == {src, dest}
 
     HW31 = "../llm/test/d2d_link/hardware/core_4x4_die3x1_c2c.json"
     v2c_cases = (
@@ -1049,13 +1068,15 @@ def main():
         pr = [path_run(wl, hw) for _ in range(2)]
         ok = (all(path_ok(r, fwd, ack, 4, src, dest, busy) for r in pr) and
               pr[0]["ns"] == pr[1]["ns"] and pr[0]["links"] == pr[1]["links"] and
-              pr[0]["die_act"] == pr[1]["die_act"])
+              pr[0]["die_act"] == pr[1]["die_act"] and
+              pr[0]["die_mesh"] == pr[1]["die_mesh"])
         record(f"V2-c {name}: exact per-link counts + direction sequence + hops + "
                f"intermediate-die NoC activity",
                ok, f"ns={pr[0]['ns']}/{pr[1]['ns']} "
                    f"data_links={sorted(k for k, v in pr[0]['links'].items() if v['data'][0])} "
                    f"ack_links={sorted(k for k, v in pr[0]['links'].items() if v['ack'][0])} "
-                   f"die_act={pr[0]['die_act']} repin={pr[0]['repin']} "
+                   f"die_act={pr[0]['die_act']} die_mesh={pr[0]['die_mesh']} "
+                   f"repin={pr[0]['repin']} "
                    f"done={pr[0]['done']} drain={pr[0]['drain']}/{pr[0]['link_drain']}")
 
     # 4. 单 die 回归

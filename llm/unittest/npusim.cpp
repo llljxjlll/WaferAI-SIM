@@ -174,10 +174,13 @@ int sc_main(int argc, char *argv[]) {
         }
         // V2-c：每 die 的 router 入口包数。中间 die >0 证明包确实穿越了该 die 的 NoC。
         {
-            std::string per_die;
+            std::string per_die, per_mesh;
             for (size_t i = 0; i < g_die_router_pkts.size(); i++)
                 per_die += (i ? "," : "") + std::to_string(g_die_router_pkts[i]);
-            LOG_INFO(SYSTEM) << "[DIE_ACT] router_pkts=" << per_die;
+            for (size_t i = 0; i < g_die_mesh_pkts.size(); i++)
+                per_mesh += (i ? "," : "") + std::to_string(g_die_mesh_pkts[i]);
+            LOG_INFO(SYSTEM) << "[DIE_ACT] router_pkts=" << per_die
+                             << " mesh_pkts=" << per_mesh;
         }
     }
 

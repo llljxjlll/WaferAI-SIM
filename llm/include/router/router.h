@@ -129,9 +129,10 @@ public:
     // 则清为 -1（转片内 XY）。非 core 端点（HOST/MEM）原样返回。同时累加 g_d2d_repin_* 计数。
     sc_bv<256> RepinOnC2CIngress(const sc_bv<256> &payload) const;
 
-    // V2-c：记一次本 die 的 router 入口包（每方向、含片内跳）。中间 die 计数 >0
-    // 证明包真的穿过了该 die 的 NoC，而不是从一条 link 直接跳到下一条。
-    void CountDieRouterPkt() const;
+    // V2-c：记一次本 die 的 router 入口包。from_c2c=该输入方向是 peer-connected C2C 边
+    // （即本包刚跨 link 到达），dir=输入方向。只有「非 C2C 且非 CENTER」才计入
+    // g_die_mesh_pkts——那才是片内 router→router 的真实 mesh hop。
+    void CountDieRouterPkt(int dir, bool from_c2c) const;
 };
 
 // 全程观测到的 output_lock_ref 峰值。>=2 证明**同 tag 的多条流共享了同一把锁**（多发一聚合，

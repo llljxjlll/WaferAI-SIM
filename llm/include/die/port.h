@@ -220,7 +220,11 @@ struct D2DLinkStat {
 };
 extern std::vector<D2DLinkStat> g_d2d_link_stats;
 
-// 每个 die 的 router 入口包数（所有方向，含片内跳）。中间 die 计数 >0 证明包**真的穿过了
-// 该 die 的 NoC**（而非凭空从一条 link 跳到下一条 link）。
+// 每个 die 的 router 入口包数（所有方向：C2C link 入口 + 片内邻 router + 本核注入）。
 extern std::vector<long> g_die_router_pkts;
+// 每个 die **仅片内 router→router** 的输入包数：排除 C2C link 入口（跨 die 到达那一拍）
+// 与 CENTER（本核注入）。这才是「包确实在该 die 的 mesh 里走了片内 hop」的直接证据——
+// g_die_router_pkts>0 只能说明包进入过该 die 的入口 router，不能排除「入口 tile 恰好就是
+// 下一条 link 的出口 tile、零片内 hop」。中间 die 的本计数 >0 才真正证明穿越了 NoC。
+extern std::vector<long> g_die_mesh_pkts;
 void ResetDieActivityStats();
