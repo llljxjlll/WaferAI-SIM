@@ -240,6 +240,19 @@ Directions CrossDieStep(int des_global, int pos, int exit_port) {
     return GetNextHop(port_tile, pos); // 片内 XY 朝固定出口 tile 收敛
 }
 
+int CrossDieIngressTile(int local_die, int exit_port_id) {
+    if (exit_port_id < 0 || exit_port_id >= (int)g_die_ports.ports.size())
+        return -1;
+    // g_d2d_links 由 BuildD2DLinks 构造：本地 (die,port) → 邻 die 对侧镜像端口。
+    for (const auto &l : g_d2d_links) {
+        if (l.local_die == local_die && l.local_port == exit_port_id) {
+            const D2DPort &rp = g_die_ports.ports[l.remote_port];
+            return l.remote_die * CORES_PER_DIE + rp.tile;
+        }
+    }
+    return -1; // 边界方向端口无 peer
+}
+
 int SelectCoreMsgExit(int source_core, int des_core) {
     if (source_core < 0 || source_core >= TOTAL_CORES || des_core < 0 ||
         des_core >= TOTAL_CORES)
@@ -248,9 +261,8 @@ int SelectCoreMsgExit(int source_core, int des_core) {
     int sd = DieOfGlobal(source_core), dd = DieOfGlobal(des_core);
     if (sd == dd)
         return -1;
-    if (DieManhattan(sd, dd) != 1)
-        throw std::runtime_error(
-            "multi-hop core-message routing is not supported in V1");
+    // V2：多跳允许。源端只 pin **第一跳** 出口（CrossDieSelectExit 按 DieFirstHopDir 给出方向）；
+    // 中间 die 到达后由运行时清除并对该 die 重新 pin（每个 die 选一次），不在此处判 die 距离。
     return CrossDieSelectExit(source_core, des_core);
 }
 

@@ -23,23 +23,35 @@ inline Directions DieFirstHopDir(int my_die, int des_die) {
         return dy > myy ? NORTH : SOUTH;
     return CENTER;
 }
-// die 级 Manhattan 距离（相邻=1；V1 只支持相邻，>1 由 V1-c preflight 拒绝）。
+// die 级 Manhattan 距离（相邻=1）。也是跨 die 的 **hop 数**（link 跨越次数）：die 级维序
+// 路由每跳把距离严格 -1，故 source→des 恰好 DieManhattan 跳。V1 只支持相邻（=1），V2 起支持 >1。
 inline int DieManhattan(int a, int b) {
     int ax = a % DIE_X, ay = a / DIE_X, bx = b % DIE_X, by = b / DIE_X;
     return (ax > bx ? ax - bx : bx - ax) + (ay > by ? ay - by : by - ay);
 }
 
-// 跨 die 路由，拆成两步以坐实 V1「每 die 选一次出口、离开前不重选」（per-flow pinning）：
+// 跨 die 路由，拆成两步以坐实「**每进入一个 die 选一次**出口、该 die 内不重选」（per-flow pinning）：
 //   1) CrossDieSelectExit：进入一个 die 时（在 src 核 / 中间 die 入口 tile）**选一次**出口 C2C
 //      端口并钉死。die 级首跳方向 D，查 port_for[local][D]，完整校验（范围/ROLE_C2C/dir==D/tile）。
 //      同 die 目的返回 -1（无需出口）；无该方向 C2C（邻 die 不可达）抛 std::runtime_error。
-//   2) CrossDieStep：携**固定** exit_port 逐跳收敛（不再按 pos 重查）——同 die 目的→片内 XY；
-//      否则朝 exit_port 的端口 tile 走，pos 到该 tile 返回 egress 方向（side==dir）。
+//   2) CrossDieStep：携**当前 die 的固定** exit_port 逐跳收敛（不按 pos 重查）——同 die 目的→片内
+//      XY；否则朝 exit_port 的端口 tile 走，pos 到该 tile 返回 egress 方向（side==dir）。
+// **V2 多跳语义**：exit_port 只对**当前 die** 有效。跨 link 落到下一 die 后，运行时必须清除并对
+// 新 die 重新 CrossDieSelectExit（每 die 选一次）。CrossDieStep 用 DieOfGlobal(pos) 现算 md 并
+// 校验携带的 exit_port 对「从 md 去 dd」仍合法——若携带的是上一跳（别的 die 首跳方向）的出口，
+// 会被 ValidatePinnedExit 拒绝而抛错（防止中间 die 用陈旧出口错误路由）。
 // 纯函数，不改运行时。非法 core id 抛错。
 int CrossDieSelectExit(int at_core, int des_global);
 Directions CrossDieStep(int des_global, int pos, int exit_port);
 
-// 相邻 die core→core 消息的源端出口选择；same-die 返回 -1，多跳/非法端点拒绝。
+// 跨 link 落点：给定本 die 的出口 C2C 端口 id，返回跨 link 后邻 die 的**入口全局 tile**
+// （对侧镜像端口 tile，同垂直坐标、对侧边），查 BuildD2DLinks 构造的 g_d2d_links 精确 peer。
+// 无 peer（边界方向端口）或非法输入返回 -1。多跳路由据此确定「下一 die 从哪个 tile 进入」，
+// 该 tile 即中间 die 重新 pin 出口的锚点。
+int CrossDieIngressTile(int local_die, int exit_port_id);
+
+// core→core 消息的源端**第一跳**出口选择；same-die 返回 -1。V2：多跳允许——只 pin 首跳
+// （DieFirstHopDir 给出的方向），中间 die 由运行时重新 pin，不在此处判 die 距离。
 // DATA 原语调用一次并保存结果；控制包由 PinControlMsgExit 包装调用。
 int SelectCoreMsgExit(int source_core, int des_core);
 

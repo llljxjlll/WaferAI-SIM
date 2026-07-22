@@ -1074,6 +1074,214 @@ int RunD2DV0SelfTest() {
         }
     }
 
+    // ---- 15b. V2-a 多跳跨 die 路由（纯函数）：每进入一个 die 重新 pin 出口、hop 数=die 距离、
+    //          逐跳 die 距离严格 -1；覆盖 3×1 直线与 2×2 对角（die 级 X-first XY）----
+    {
+        // man()：当前 GRID_X 的片内 Manhattan
+        auto man = [&](int a, int b) {
+            int dv = a % GRID_X - b % GRID_X, dh = a / GRID_X - b / GRID_X;
+            return (dv < 0 ? -dv : dv) + (dh < 0 ? -dh : dh);
+        };
+        // 配置：所有边默认 host（保 host 可达），逐方向 override idx0 为单 c2c（MVP 每向 ≤1 端口）。
+        auto build = [&](std::vector<std::string> c2c_dirs) {
+            D2DJson hw;
+            for (const char *s : {"N", "S", "E", "W"})
+                hw["die_ports"]["edges"][s] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            for (auto &d : c2c_dirs)
+                hw["die_ports"]["overrides"].push_back(
+                    {{"side", d}, {"idx", 0}, {"role", "c2c"}, {"dir", d}});
+            hw["die_ports"]["c2c"] = {
+                {"link_bw", 1}, {"latency", 20}, {"buffer_depth", 8}};
+            ParseDiePorts(hw);
+        };
+        // 多跳 walk：每进入一个 die 用当前 pos 重新 CrossDieSelectExit（每 die 选一次），该 die 内
+        // 携固定 ep 逐跳收敛到出口 tile→egress→经 CrossDieIngressTile 落到下一 die 入口。校验：
+        // 片内每步向出口 tile 距离严格 -1、egress 方向序列、每跨 link die 距离严格 -1、最终到 des。
+        auto walkMulti = [&](int src, int des, std::vector<Directions> exp_egress) {
+            int pos = src, hops = 0, guard = 0;
+            int prevd = DieManhattan(DieOfGlobal(pos), DieOfGlobal(des));
+            std::vector<Directions> egresses;
+            while (DieOfGlobal(pos) != DieOfGlobal(des)) {
+                int cur_die = DieOfGlobal(pos);
+                int ep = CrossDieSelectExit(pos, des); // 进入该 die：选一次
+                if (ep < 0)
+                    return false;
+                int ptile = cur_die * CORES_PER_DIE + g_die_ports.ports[ep].tile;
+                while (pos != ptile) { // 携固定 ep 收敛到出口 tile
+                    Directions d = CrossDieStep(des, pos, ep);
+                    int nxt = OpenMeshNeighbor(pos, d);
+                    if (nxt < 0 || DieOfGlobal(nxt) != cur_die ||
+                        man(nxt, ptile) >= man(pos, ptile))
+                        return false;
+                    pos = nxt;
+                    if (++guard > TOTAL_CORES * 2)
+                        return false;
+                }
+                egresses.push_back(CrossDieStep(des, pos, ep)); // 出口 tile：egress 方向
+                int ingress = CrossDieIngressTile(cur_die, ep); // 跨 link 落点
+                if (ingress < 0 || DieOfGlobal(ingress) == cur_die)
+                    return false;
+                pos = ingress;
+                hops++;
+                int nd = DieManhattan(DieOfGlobal(pos), DieOfGlobal(des));
+                if (nd != prevd - 1) // die 距离严格 -1
+                    return false;
+                prevd = nd;
+            }
+            while (pos != des) { // 已到 des die：片内 XY 收敛到 des
+                Directions d = CrossDieStep(des, pos, -1);
+                int nxt = OpenMeshNeighbor(pos, d);
+                if (nxt < 0 || DieOfGlobal(nxt) != DieOfGlobal(des))
+                    return false;
+                pos = nxt;
+                if (++guard > TOTAL_CORES * 2)
+                    return false;
+            }
+            return hops == (int)exp_egress.size() &&
+                   hops == DieManhattan(DieOfGlobal(src), DieOfGlobal(des)) &&
+                   egresses == exp_egress;
+        };
+
+        // 15b.1 3×1 直线两跳：die0->die2 (E,E) / die2->die0 (W,W)
+        setTopo(4, 4, 3, 1);
+        build({"E", "W"});
+        bool v1ok = true;
+        try {
+            ValidateV1MvpTopology();
+        } catch (...) {
+            v1ok = false;
+        }
+        check(v1ok, "V2-a 3x1: single-port E/W topology accepted");
+        check(DieManhattan(0, 2) == 2, "V2-a 3x1: die0->die2 hop count 2");
+        check(walkMulti(0, 2 * CORES_PER_DIE, {EAST, EAST}),
+              "V2-a 3x1 die0->die2: re-pin per die, 2 hops E,E, die-dist strictly -1");
+        check(walkMulti(2 * CORES_PER_DIE, 0, {WEST, WEST}),
+              "V2-a 3x1 die2->die0: reverse 2 hops W,W");
+
+        // 15b.2 2×2 对角两跳：die0->die3 (E then N) / die3->die0 (W then S)——die 级 X-first XY
+        setTopo(4, 4, 2, 2);
+        build({"N", "S", "E", "W"});
+        v1ok = true;
+        try {
+            ValidateV1MvpTopology();
+        } catch (...) {
+            v1ok = false;
+        }
+        check(v1ok, "V2-a 2x2: single-port N/S/E/W topology accepted");
+        check(DieManhattan(0, 3) == 2, "V2-a 2x2: die0->die3 hop count 2");
+        check(walkMulti(0, 3 * CORES_PER_DIE, {EAST, NORTH}),
+              "V2-a 2x2 die0->die3: X-first XY, re-pin E then N, die-dist strictly -1");
+        check(walkMulti(3 * CORES_PER_DIE, 0, {WEST, SOUTH}),
+              "V2-a 2x2 die3->die0: reverse X-first, W then S");
+
+        // 15b.3 防御（V2 关键设计点）：中间 die 若仍携**源 die 首跳** exit（不重新 pin），
+        // CrossDieStep 拒绝——2×2 die0 首跳 E 出口在 die1 处应为 N，携旧 E 出口 → 抛错。
+        {
+            setTopo(4, 4, 2, 2);
+            build({"N", "S", "E", "W"});
+            int des3 = 3 * CORES_PER_DIE;
+            int stale = CrossDieSelectExit(0, des3);      // die0 的 E 出口
+            int ingress1 = CrossDieIngressTile(0, stale); // die1 入口 tile
+            bool threw = false;
+            try {
+                CrossDieStep(des3, ingress1, stale); // die1 仍用旧 E 出口
+            } catch (const std::runtime_error &) {
+                threw = true;
+            }
+            check(threw, "V2-a stale exit: source-die first-hop carried into next die is "
+                         "rejected (re-pin required)");
+            int repin = CrossDieSelectExit(ingress1, des3); // die1 正确重新 pin
+            bool okstep = false;
+            try {
+                CrossDieStep(des3, ingress1, repin);
+                okstep = (g_die_ports.ports[repin].dir == NORTH);
+            } catch (...) {
+                okstep = false;
+            }
+            check(okstep, "V2-a re-pin at die1 yields NORTH exit, routes cleanly");
+        }
+
+        // 15b.4 生产包装接口 SelectCoreMsgExit（真正被 Send_prim / PinControlMsgExit 调用的那层）：
+        //       多跳下不再抛错、与 CrossDieSelectExit 一致、只 pin 首跳、且能写进包头并 round-trip。
+        {
+            setTopo(4, 4, 2, 2);
+            build({"N", "S", "E", "W"});
+            int des3 = 3 * CORES_PER_DIE; // die0 -> die3，距离 2
+            int wrapped = SelectCoreMsgExit(0, des3);
+            check(wrapped >= 0 && wrapped == CrossDieSelectExit(0, des3),
+                  "V2-a SelectCoreMsgExit(multi-hop) == CrossDieSelectExit (production wrapper)");
+            check(g_die_ports.ports[wrapped].dir == EAST,
+                  "V2-a SelectCoreMsgExit(die0->die3) pins the FIRST hop only (EAST)");
+            check(SelectCoreMsgExit(0, 1) == -1,
+                  "V2-a SelectCoreMsgExit same-die still unpinned (-1)");
+            Msg mm; // 该值必须能真实进包头
+            mm.exit_port_ = wrapped;
+            check(DeserializeMsg(SerializeMsg(mm)).exit_port_ == wrapped,
+                  "V2-a multi-hop pinned exit survives Msg.exit_port_ serialization");
+
+            setTopo(4, 4, 3, 1); // 3×1 直线同样不再因距离 2 被拒
+            build({"E", "W"});
+            int w31 = SelectCoreMsgExit(0, 2 * CORES_PER_DIE);
+            check(w31 >= 0 && w31 == CrossDieSelectExit(0, 2 * CORES_PER_DIE) &&
+                      g_die_ports.ports[w31].dir == EAST,
+                  "V2-a 3x1 SelectCoreMsgExit(die0->die2) accepts distance 2 (was V1 throw)");
+            Msg m31;
+            m31.exit_port_ = w31;
+            check(DeserializeMsg(SerializeMsg(m31)).exit_port_ == w31,
+                  "V2-a 3x1 multi-hop pinned exit survives serialization");
+        }
+
+        // 15b.5 CrossDieIngressTile 精确性：对每条 link 都 == remote_die/remote_port.tile；
+        //       反向 link 回到原出口 tile；非法 port / 非法 die / 无 peer 边界端口 → -1。
+        {
+            setTopo(4, 4, 2, 2);
+            build({"N", "S", "E", "W"});
+            bool exact = true, rev = true;
+            int checked = 0;
+            for (const auto &l : g_d2d_links) {
+                int want = l.remote_die * CORES_PER_DIE +
+                           g_die_ports.ports[l.remote_port].tile;
+                if (CrossDieIngressTile(l.local_die, l.local_port) != want)
+                    exact = false;
+                // 反向：从落点 die 用镜像端口回跨 → 原 die 的出口端口 tile
+                if (CrossDieIngressTile(l.remote_die, l.remote_port) !=
+                    l.local_die * CORES_PER_DIE +
+                        g_die_ports.ports[l.local_port].tile)
+                    rev = false;
+                checked++;
+            }
+            check(exact && checked > 0,
+                  "V2-a CrossDieIngressTile == g_d2d_links remote_die/remote_port.tile (every link)");
+            check(rev,
+                  "V2-a CrossDieIngressTile reverse link returns the original egress tile");
+            int e_pid = -1;
+            for (auto &p : g_die_ports.ports)
+                if (p.role == ROLE_C2C && p.dir == EAST)
+                    e_pid = p.port_id;
+            check(CrossDieIngressTile(0, -1) == -1 &&
+                      CrossDieIngressTile(0, 9999) == -1,
+                  "V2-a CrossDieIngressTile: illegal port id -> -1");
+            check(CrossDieIngressTile(999, e_pid) == -1 &&
+                      CrossDieIngressTile(-1, e_pid) == -1,
+                  "V2-a CrossDieIngressTile: illegal die -> -1");
+            // 无 peer 的边界端口（3×1：die0 的 W、die2 的 E）
+            setTopo(4, 4, 3, 1);
+            build({"E", "W"});
+            int w_pid = -1, e_pid2 = -1;
+            for (auto &p : g_die_ports.ports) {
+                if (p.role == ROLE_C2C && p.dir == WEST)
+                    w_pid = p.port_id;
+                if (p.role == ROLE_C2C && p.dir == EAST)
+                    e_pid2 = p.port_id;
+            }
+            check(CrossDieIngressTile(0, w_pid) == -1,
+                  "V2-a CrossDieIngressTile: boundary port without peer -> -1 (3x1 die0 W)");
+            check(CrossDieIngressTile(2, e_pid2) == -1,
+                  "V2-a CrossDieIngressTile: boundary port without peer -> -1 (3x1 die2 E)");
+        }
+    }
+
     // ---- 16. V1-b seam：IsC2CEgressEdge + V1 link_bw==1 契约 ----
     {
         // 16.1 单 die / 无 die_ports：全 false
