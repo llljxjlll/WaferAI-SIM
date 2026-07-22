@@ -279,7 +279,16 @@ void Monitor::init() {
     //（每方向 ≤1 个 C2C 端口、邻 die 方向恰好 1 个、link_bw==1）——在任何 deferred binding /
     // D2DLinkUnit 创建之前。非法配置在进入仿真前明确失败（异常 → 非零退出），不静默降级。
     if (!g_d2d_links.empty())
-        ValidateV1MvpTopology();
+        ValidateD2DTopology(); // V3-a：版本感知（functional_v2 沿用 V1/V2 契约）
+    // V3-a 只落地**配置契约**，生产数据路径仍是 V2 的功能性无限 FIFO。若此时放行
+    // bounded_saf，配置会声称有限缓冲/背压而实际按 functional_v2 运行——语义错误且难察觉。
+    // 故在有限 FIFO(V3-b) 与 SAF admission(V3-c) 真正接通前，这里显式拒绝。
+    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF)
+        throw std::runtime_error(
+            "die_ports.c2c: mode=bounded_saf runtime is not enabled yet "
+            "(V3-a is config-contract only; the production path still uses the "
+            "V2 functional unbounded FIFO). Refusing to run a configuration "
+            "that claims bounded buffers but would execute as functional_v2");
 
     // router & router —— 开边 mesh（无 torus 环绕）。die 边缘方向无 die 内邻居，
     // 输入侧绑定共享终结通道（永不驱动），彻底移除运行时取模环绕连接。

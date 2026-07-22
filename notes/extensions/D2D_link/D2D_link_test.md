@@ -403,6 +403,20 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 
 多跳传输功能正确、路径可解释；合法协议调度能够完成，已知协议依赖环能够被 watchdog 正确诊断。本版不对有限缓冲网络死锁作出保证。
 
+### 4.3b V3 当前进展（V3-a 已完成）
+
+> **边界**：V3-a **只落地配置契约**，生产数据路径仍是 V2 的功能性无限 FIFO；
+> `mode=bounded_saf` 会在 Monitor 被**显式拒绝**（非零退出），杜绝「配置声称有限缓冲、
+> 实际按 functional_v2 运行」。该 gate 待 V3-b/V3-c 接通生产路径后移除。
+
+- **V3-a ✔**：`functional_v2`（默认，旧配置逐位不变）/ `bounded_saf` 双模式；
+  `bounded_saf` 必须显式 `safety=whole_flow_saf`；速率为整数有理数且 `0 < rate <= 1`
+  （`rate>1` 明确拒绝，不静默按 1）；四类容量分别必填并校验
+  `link_inflight_depth >= BDP=ceil(2*L*rate)`（64-bit 整数运算），
+  `saf_buffer_depth >= F` 留待 V3-c；字段按模式严格分区，杜绝接受后忽略与静默覆盖；
+  `ValidateD2DTopology` 版本感知且**生产 Monitor 已切换**。
+  self-test **271/271**、runner **65/65**（含 3 组真实启动路径用例）。
+
 ### 4.4 V3：周期精确拥塞与背压版
 
 #### 实现目标

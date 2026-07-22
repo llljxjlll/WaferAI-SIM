@@ -1418,15 +1418,16 @@ int RunD2DV0SelfTest() {
         D2DJson bad = legacy;
         bad["mode"] = "wormhole";
         check(throwsRuntime(mk(bad)), "V3-a unknown mode rejected");
-        bad = legacy;
-        bad["mode"] = "bounded_saf";
-        bad["safety"] = "escape_vc";
+        bad = D2DJson{{"mode", "bounded_saf"}, {"safety", "escape_vc"}};
         check(throwsRuntime(mk(bad)), "V3-a unknown safety policy rejected");
 
         // (c) bounded_saf 缺安全策略 → 拒绝（有限 buffer 必须有明确死锁安全论证）
-        bad = legacy;
-        bad["mode"] = "bounded_saf";
-        bad.erase("buffer_depth");
+        bad = D2DJson{{"mode", "bounded_saf"},
+                      {"link_latency", 20},
+                      {"saf_buffer_depth", 64},
+                      {"link_inflight_depth", 10},
+                      {"rx_buffer_depth", 8},
+                      {"ctrl_buffer_depth", 4}};
         check(throwsRuntime(mk(bad)),
               "V3-a bounded_saf without safety policy rejected");
 
@@ -1436,8 +1437,7 @@ int RunD2DV0SelfTest() {
                          {"safety", "whole_flow_saf"},
                          {"port_rate", {{"num", 1}, {"den", 2}}},
                          {"link_rate", {{"num", 1}, {"den", 4}}},
-                         {"link_latency", 20},
-                         {"link_bw", 1}};
+                         {"link_latency", 20}};
             if (saf)
                 c["saf_buffer_depth"] = saf;
             if (inflight)
@@ -1505,6 +1505,49 @@ int RunD2DV0SelfTest() {
         mix["safety"] = "whole_flow_saf";
         check(throwsRuntime(mk(mix)),
               "V3-a safety policy without bounded_saf rejected");
+        // 速率/延迟字段同样是 bounded-only：functional_v2 下必须拒绝而非接受后忽略
+        mix = legacy;
+        mix["link_rate"] = {{"num", 1}, {"den", 4}};
+        check(throwsRuntime(mk(mix)),
+              "V3-a link_rate under functional_v2 rejected (would be ignored)");
+        mix = legacy;
+        mix["port_rate"] = {{"num", 1}, {"den", 2}};
+        check(throwsRuntime(mk(mix)),
+              "V3-a port_rate under functional_v2 rejected (would be ignored)");
+        mix = legacy;
+        mix["link_latency"] = 7;
+        check(throwsRuntime(mk(mix)),
+              "V3-a link_latency under functional_v2 rejected (conflicts with 'latency')");
+        // 反向：bounded_saf 下 legacy 字段必须拒绝，杜绝 latency=20 与 link_latency=7 并存
+        D2DJson conflict = bounded(64, 10, 8, 4);
+        conflict["latency"] = 20;
+        check(throwsRuntime(mk(conflict)),
+              "V3-a legacy 'latency' under bounded_saf rejected (no silent override)");
+        conflict = bounded(64, 10, 8, 4);
+        conflict["link_bw"] = 4;
+        check(throwsRuntime(mk(conflict)),
+              "V3-a legacy 'link_bw' under bounded_saf rejected (contradicts link_rate)");
+
+        // (h) link_inflight_depth 必须 >= BDP = ceil(2*L*rate)；SAF depth>=F 留待 V3-c
+        //     L=20, rate=1/4 -> BDP = ceil(40/4) = 10
+        D2DJson bdp = bounded(64, 10, 8, 4);
+        check(!throwsRuntime(mk(bdp)), "V3-a link_inflight_depth == BDP (10) accepted");
+        bdp = bounded(64, 9, 8, 4);
+        check(throwsRuntime(mk(bdp)),
+              "V3-a link_inflight_depth < BDP rejected (link could not stay full)");
+        // latency=0 -> BDP=0，任何 depth>=1 均可
+        D2DJson zero = bounded(64, 1, 8, 4);
+        zero["link_latency"] = 0;
+        check(!throwsRuntime(mk(zero)), "V3-a latency=0 -> BDP=0, depth 1 accepted");
+
+        // (i) 无 die_ports 时必须复位 g_d2d_cfg（防止重复解析残留上次 bounded 配置）
+        ParseDiePorts(mk(bounded(64, 10, 8, 4)));
+        D2DJson none;
+        ParseDiePorts(none);
+        check(g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
+                  g_d2d_cfg.saf_buffer_depth == 0 &&
+                  g_d2d_cfg.safety == SAFETY_NONE,
+              "V3-a re-parse without die_ports resets g_d2d_cfg (no stale bounded state)");
 
         // 恢复默认，避免影响后续段落
         ParseDiePorts(mk(legacy));

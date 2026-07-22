@@ -1225,6 +1225,54 @@ def main():
            rc_ok == 0 and "PROTO_WAIT" not in out_ok and finish_ns(out_ok) is not None,
            f"exit={rc_ok} ns={finish_ns(out_ok)} proto_wait={'PROTO_WAIT' in out_ok}")
 
+    # 3z. V3-a：**真实启动路径**的配置契约（self-test 之外，覆盖生产 Monitor 分支）。
+    #     V3-a 只落地配置契约，生产数据路径仍是 V2 的功能性无限 FIFO。
+    def run_with_c2c(c2c, timeout=90):
+        cfg = _jd1.load(open(os.path.join(
+            HERE, "hardware", "core_4x4_die2x1_c2c.json")))
+        cfg["die_ports"]["c2c"] = c2c
+        fd, path = _tfd1.mkstemp(suffix=".json", prefix="d2d_v3a_hw_")
+        with os.fdopen(fd, "w") as f:
+            _jd1.dump(cfg, f)
+        rc, out = run([NPUSIM, "--workload-config", C3_WL,
+                       "--hardware-config", path,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=timeout)
+        os.remove(path)
+        entered = ("All requests finished" in out or "Catch test finished" in out)
+        return rc, out, entered
+
+    # (1) 合法 functional_v2（旧 schema）照常运行，且时序与 V2 冻结值一致
+    rc, out, entered = run_with_c2c({"link_bw": 1, "latency": 20,
+                                     "buffer_depth": 8})
+    record("V3-a startup: legacy functional_v2 config still runs (V2 timing intact)",
+           rc == 0 and entered and finish_ns(out) == 398,
+           f"exit={rc} ns={finish_ns(out)} (expect 398)")
+
+    # (2) functional_v2 下出现 bounded-only 字段 → 启动期拒绝（不得接受后忽略）
+    rc, out, entered = run_with_c2c(
+        {"link_bw": 1, "latency": 20, "buffer_depth": 8,
+         "link_rate": {"num": 1, "den": 4}}, timeout=20)
+    record("V3-a startup: link_rate under functional_v2 rejected before sim",
+           rc not in (0, 124) and not entered and
+           "only applies to mode=bounded_saf" in out,
+           f"exit={rc} entered_sim={entered}")
+
+    # (3) 合法 bounded_saf 配置解析通过，但 runtime 尚未启用 → 必须明确拒绝，
+    #     绝不能让「声称有限缓冲」的配置实际按 functional_v2 的无限 FIFO 跑完。
+    rc, out, entered = run_with_c2c(
+        {"mode": "bounded_saf", "safety": "whole_flow_saf",
+         "port_rate": {"num": 1, "den": 2},
+         "link_rate": {"num": 1, "den": 4},
+         "link_latency": 20, "saf_buffer_depth": 64,
+         "link_inflight_depth": 10, "rx_buffer_depth": 8,
+         "ctrl_buffer_depth": 4}, timeout=20)
+    record("V3-a startup: valid bounded_saf refused while its runtime is unimplemented "
+           "(no silent fallback to functional_v2)",
+           rc not in (0, 124) and not entered and
+           "runtime is not enabled yet" in out,
+           f"exit={rc} entered_sim={entered}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",

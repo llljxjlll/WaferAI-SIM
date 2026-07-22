@@ -124,6 +124,7 @@ static void ParseRoleSpec(const D2DJson &spec, Directions side, PortRole &role,
 
 void ParseDiePorts(const D2DJson &hw_json) {
     g_die_ports = D2DPortTable{};
+    g_d2d_cfg = D2DLinkConfig{}; // V3-a：无 die_ports 也必须复位，防止重复解析残留上次 bounded 配置
     g_d2d_links.clear(); // 重复解析/自测时清空上次结果
     if (!hw_json.contains("die_ports")) {
         g_die_ports.active = false;
@@ -146,9 +147,16 @@ void ParseDiePorts(const D2DJson &hw_json) {
             c2c_lat = c.at("latency");
         if (c.contains("buffer_depth"))
             c2c_buf = c.at("buffer_depth");
-        ParseD2DLinkConfig(c); // V3-a：模式/速率/四类容量契约（旧配置恒为 functional_v2）
-    } else {
-        g_d2d_cfg = D2DLinkConfig{}; // 无 c2c 段：默认 functional_v2
+        // V3-a：模式/速率/四类容量契约（旧配置恒为 functional_v2；字段按模式严格分区）
+        ParseD2DLinkConfig(c);
+        if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
+            // bounded 模式下 legacy 字段被拒，端口物理参数改由 V3 字段派生：
+            // 速率语义由 g_d2d_cfg.link_rate 承载（端口 bw 保持 1 packet/cycle 的信道上限），
+            // 端口侧可见容量取远端接收深度。
+            c2c_lat = g_d2d_cfg.link_latency;
+            c2c_bw = 1;
+            c2c_buf = g_d2d_cfg.rx_buffer_depth;
+        }
     }
     if (c2c_bw < 1)
         throw std::runtime_error(
@@ -355,6 +363,42 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
                 "die_ports.c2c.mode: unknown mode '" + m +
                 "' (expected functional_v2 or bounded_saf)");
     }
+
+    // **字段按模式严格分区**：不允许「接受后忽略」，也不允许新旧字段并存后靠优先级静默覆盖
+    // （例如 latency=20 与 link_latency=7 同时出现、link_bw=4 与 link_rate=1/4 同时出现）。
+    static const char *LEGACY[] = {"latency", "link_bw", "bw_per_cycle",
+                                   "buffer_depth"};
+    static const char *V3ONLY[] = {"safety",        "port_rate",
+                                   "link_rate",     "link_latency",
+                                   "saf_buffer_depth", "link_inflight_depth",
+                                   "rx_buffer_depth",  "ctrl_buffer_depth"};
+    if (g_d2d_cfg.mode == MODE_FUNCTIONAL_V2) {
+        for (const char *k : V3ONLY)
+            if (c2c.contains(k))
+                throw std::runtime_error(
+                    std::string("die_ports.c2c: '") + k +
+                    "' only applies to mode=bounded_saf; functional_v2 would "
+                    "accept it and then ignore it. Set mode=bounded_saf or "
+                    "remove the field");
+    } else {
+        for (const char *k : LEGACY)
+            if (c2c.contains(k))
+                throw std::runtime_error(
+                    std::string("die_ports.c2c: legacy field '") + k +
+                    "' is not allowed under mode=bounded_saf; use "
+                    "link_latency / link_rate / the four *_depth fields so the "
+                    "configuration cannot contradict itself");
+    }
+
+    if (g_d2d_cfg.mode == MODE_FUNCTIONAL_V2) {
+        if (c2c.contains("latency"))
+            g_d2d_cfg.link_latency = c2c.at("latency").get<int>();
+        if (g_d2d_cfg.link_latency < 0)
+            throw std::runtime_error("die_ports.c2c: latency must be >= 0");
+        return; // functional_v2 到此为止：速率/容量语义完全沿用 V2
+    }
+
+    // ---- 以下仅 bounded_saf ----
     if (c2c.contains("safety")) {
         std::string sf = c2c.at("safety").get<std::string>();
         if (sf == "whole_flow_saf")
@@ -366,15 +410,10 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
                 "die_ports.c2c.safety: unknown policy '" + sf +
                 "' (expected whole_flow_saf)");
     }
-
     g_d2d_cfg.port_rate = ParseRate(c2c, "port_rate", D2DRate{}, "port_rate");
     g_d2d_cfg.link_rate = ParseRate(c2c, "link_rate", D2DRate{}, "link_rate");
-    // legacy link_bw/bw_per_cycle 仍被 functional_v2 使用（V1 契约要求 ==1）；
-    // 在 bounded_saf 下速率一律由 link_rate 表达，legacy 字段 >1 会被下面的契约校验拒绝。
     if (c2c.contains("link_latency"))
         g_d2d_cfg.link_latency = c2c.at("link_latency").get<int>();
-    else if (c2c.contains("latency"))
-        g_d2d_cfg.link_latency = c2c.at("latency").get<int>();
     if (g_d2d_cfg.link_latency < 0)
         throw std::runtime_error("die_ports.c2c: link_latency must be >= 0");
 
@@ -391,38 +430,38 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
     depth("rx_buffer_depth", g_d2d_cfg.rx_buffer_depth);
     depth("ctrl_buffer_depth", g_d2d_cfg.ctrl_buffer_depth);
 
-    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
-        // 有限缓冲下必须显式选定死锁安全策略——不允许「有限 buffer 但无安全论证」。
-        if (g_d2d_cfg.safety != SAFETY_WHOLE_FLOW_SAF)
+    // 有限缓冲下必须显式选定死锁安全策略——不允许「有限 buffer 但无安全论证」。
+    if (g_d2d_cfg.safety != SAFETY_WHOLE_FLOW_SAF)
+        throw std::runtime_error(
+            "die_ports.c2c: mode=bounded_saf requires an explicit safety "
+            "policy (safety=whole_flow_saf)");
+    // 四类容量分工不同，必须逐项显式给出，禁止用单一 buffer_depth 混代。
+    struct { const char *n; int v; } need[] = {
+        {"saf_buffer_depth", g_d2d_cfg.saf_buffer_depth},
+        {"link_inflight_depth", g_d2d_cfg.link_inflight_depth},
+        {"rx_buffer_depth", g_d2d_cfg.rx_buffer_depth},
+        {"ctrl_buffer_depth", g_d2d_cfg.ctrl_buffer_depth}};
+    for (auto &e : need)
+        if (e.v < 1)
             throw std::runtime_error(
-                "die_ports.c2c: mode=bounded_saf requires an explicit "
-                "safety policy (safety=whole_flow_saf)");
-        // 四类容量分工不同，必须逐项显式给出，禁止用单一 buffer_depth 混代。
-        struct { const char *n; int v; } need[] = {
-            {"saf_buffer_depth", g_d2d_cfg.saf_buffer_depth},
-            {"link_inflight_depth", g_d2d_cfg.link_inflight_depth},
-            {"rx_buffer_depth", g_d2d_cfg.rx_buffer_depth},
-            {"ctrl_buffer_depth", g_d2d_cfg.ctrl_buffer_depth}};
-        for (auto &e : need)
-            if (e.v < 1)
-                throw std::runtime_error(
-                    std::string("die_ports.c2c: mode=bounded_saf requires ") +
-                    e.n + " >= 1 (the four capacities are distinct: SAF holds a "
-                          "whole flow, inflight covers BDP, rx is remote "
-                          "receive, ctrl is the control sub-channel)");
-    } else {
-        // functional_v2：V3 专属字段出现即说明配置意图与模式不符，明确拒绝而非静默忽略。
-        const char *v3only[] = {"saf_buffer_depth", "link_inflight_depth",
-                                "rx_buffer_depth", "ctrl_buffer_depth"};
-        for (const char *k : v3only)
-            if (c2c.contains(k))
-                throw std::runtime_error(
-                    std::string("die_ports.c2c: '") + k +
-                    "' only applies to mode=bounded_saf; set mode explicitly");
-        if (g_d2d_cfg.safety != SAFETY_NONE)
-            throw std::runtime_error(
-                "die_ports.c2c: safety policy requires mode=bounded_saf");
-    }
+                std::string("die_ports.c2c: mode=bounded_saf requires ") + e.n +
+                " >= 1 (the four capacities are distinct: SAF holds a whole "
+                "flow, inflight covers BDP, rx is remote receive, ctrl is the "
+                "control sub-channel)");
+
+    // link_inflight_depth 必须 >= 带宽时延积，否则链路填不满、稳态吞吐低于 link_rate。
+    // 用 64-bit 整数有理数运算（防溢出、无浮点）：BDP = ceil(2 * L * num / den)。
+    long long bdp_num = 2LL * g_d2d_cfg.link_latency * g_d2d_cfg.link_rate.num;
+    long long bdp = (bdp_num + g_d2d_cfg.link_rate.den - 1) /
+                    g_d2d_cfg.link_rate.den;
+    if ((long long)g_d2d_cfg.link_inflight_depth < bdp)
+        throw std::runtime_error(
+            "die_ports.c2c: link_inflight_depth (" +
+            std::to_string(g_d2d_cfg.link_inflight_depth) +
+            ") < bandwidth-delay product (" + std::to_string(bdp) +
+            " = ceil(2 * link_latency * link_rate)); the link could not stay "
+            "full. Note this is separate from saf_buffer_depth >= flow size, "
+            "which is a correctness requirement checked with the workload");
 }
 
 void ValidateD2DTopology() {

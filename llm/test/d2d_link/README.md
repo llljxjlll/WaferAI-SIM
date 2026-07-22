@@ -597,3 +597,40 @@ runner **15 → 23 组**(4×4 W/S/E/N + 4×2 W/S/E/N);self-test 165/165。
    + 开边 mesh 终结信号（进程退出即回收，不影响正确性）；独立清理项。
 3. **非 dataflow 模式（pd/gpu/pds）多 die 化**：其 `config_helper` 仍按 `GRID_SIZE`——**V0 不要求**
    （D2D 走 dataflow 路径），若需再单独做。
+
+## V3（有限缓冲与背压）—— 进行中
+
+> **当前边界（务必先读）**：V3-a **只落地配置契约**，**生产数据路径仍是 V2 的功能性无限 FIFO**。
+> 因此 `mode=bounded_saf` 的配置虽然能通过解析与校验，但会在 Monitor **被显式拒绝**并非零退出——
+> 绝不允许「配置声称有限缓冲、实际按 functional_v2 跑完」这种静默错误语义。该 gate 要等
+> V3-b（有限 FIFO）与 V3-c（SAF admission）真正接通生产路径后才移除。
+
+- **V3-a ✔（配置契约与兼容模式）**
+  - **模式**：`functional_v2`（默认；旧配置不写 `mode` 即此，行为与 V2 逐位一致）与
+    `bounded_saf`（V3 有限缓冲模型）。`bounded_saf` 必须显式声明死锁安全策略
+    `safety=whole_flow_saf`——**有限 buffer 但无安全论证**的配置一律拒绝。
+  - **速率为整数有理数** `{num, den}`（避免浮点非确定性）。单个 `sc_bv<256>` 信道每拍最多
+    载 1 包，故 **`0 < rate <= 1`**；`link_bw=4` / `rate>1` **启动期明确拒绝**，
+    **不**静默按 1 建模（真正 >1 packet/cycle 需多 lane，属后续版本）。
+  - **四类容量必须分别给出**，不可用单一 `buffer_depth` 混代：
+
+    | 字段 | 约束 | 作用 |
+    | --- | --- | --- |
+    | `saf_buffer_depth` | `>= F`（整条 flow 包数） | whole-flow SAF 的**正确性**要求 |
+    | `link_inflight_depth` | `>= BDP = ceil(2*L*rate)` | 在途 FIFO，维持流水利用率 |
+    | `rx_buffer_depth` | `>= 1` | 远端接收与背压 |
+    | `ctrl_buffer_depth` | `>= 1` | 独立控制子通道 |
+
+    「buffer >= BDP」**不能**代替「buffer >= flow」。BDP 用 64-bit 整数有理数运算校验；
+    `saf_buffer_depth >= F` 依赖 workload，留到 V3-c 的 admission 阶段校验。
+  - **字段按模式严格分区**，杜绝「接受后忽略」与「新旧并存靠优先级静默覆盖」：
+    `functional_v2` 只接受 `latency`/`link_bw`/`bw_per_cycle`/`buffer_depth`；
+    `bounded_saf` 只接受 V3 字段。故 `latency=20` 与 `link_latency=7` 并存、
+    或 `link_bw=4` 与 `link_rate=1/4` 并存，都会被拒绝而非静默取其一。
+  - `ValidateV1MvpTopology` 泛化为**版本感知**的 `ValidateD2DTopology`：`functional_v2` 沿用
+    V1/V2 MVP 契约；`bounded_saf` 校验速率/容量契约，且每方向仍限单端口（多端口属 V5）。
+    **生产 Monitor 已切换到该版本感知校验器**（不再调用旧的 V1 校验器）。
+  - 无 `die_ports` 时同样复位 `g_d2d_cfg`，防止重复解析残留上一次的 bounded 配置。
+  - **验证**：self-test **271/271**（含 30 项 V3-a 契约用例）；runner **65/65**，其中 3 组是
+    **真实启动路径**——合法 functional_v2 仍跑出 **398 ns**（V2 冻结值不变）、
+    `functional_v2 + link_rate` 启动期拒绝、合法 `bounded_saf` 因 runtime 未启用而明确拒绝。
