@@ -131,9 +131,8 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
             }
             // 结构校验（bounds + 跨 die cast），只读启动期校验（2C1）。
             // 2B1：die>0 已可运行（per-die HOST attachment 就绪），移除原「die>0 不可运行」限制。
-            // V1-c1/c2 开发期间相邻跨 die cast 仍在生产路径拒绝；到 c3 的
-            // REQUEST/ACK/DATA 全链闭环后才显式启用 allow_adjacent_d2d。
-            ValidateWorkloadStructure(praw, config_chip_id);
+            // V1-c3：REQUEST/ACK/DATA 已接通，放行有精确双向 peer link 的相邻 die。
+            ValidateWorkloadStructure(praw, config_chip_id, true);
         }
     }
 

@@ -169,4 +169,8 @@ void ResetHostLaneStats(int n_lanes);
 // ---- V1-b：D2D Link 运行时统计（所有 link 单元累加；供 [D2D] dump 的 in/out）----
 extern long g_d2d_link_in_pkts;
 extern long g_d2d_link_out_pkts;
+// V1-c3：按 wire 消息类型分别统计 capture/delivery，端到端测试据此验证
+// REQUEST/ACK/DATA 都真实穿链且各自守恒；非法/未知类型不计入此数组。
+extern long g_d2d_link_in_by_type[MSG_TYPE_NUM];
+extern long g_d2d_link_out_by_type[MSG_TYPE_NUM];
 void ResetD2DLinkStats();

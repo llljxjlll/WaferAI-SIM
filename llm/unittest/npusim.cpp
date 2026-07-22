@@ -114,6 +114,14 @@ int sc_main(int argc, char *argv[]) {
         out += g_d2d_link_out_pkts;
         LOG_INFO(SYSTEM) << "[D2D] in_pkts=" << in << " out_pkts=" << out
                          << " busy_cycles=" << busy << " stall_cycles=" << stall;
+        // c3 端到端证据：分别证明握手双向控制包与 DATA 都实际穿越 Link，且交付数守恒。
+        LOG_INFO(SYSTEM)
+            << "[D2D_TYPE] request_in=" << g_d2d_link_in_by_type[REQUEST]
+            << " request_out=" << g_d2d_link_out_by_type[REQUEST]
+            << " ack_in=" << g_d2d_link_in_by_type[ACK]
+            << " ack_out=" << g_d2d_link_out_by_type[ACK]
+            << " data_in=" << g_d2d_link_in_by_type[DATA]
+            << " data_out=" << g_d2d_link_out_by_type[DATA];
     }
 
     // HOST lane 接收统计（V1-pre 3b-2b）：每 lane DONE/ACK 数 + 错配数

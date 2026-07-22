@@ -19,9 +19,15 @@ std::map<int, int> g_host_done_src;
 std::map<std::pair<int, int>, int> g_host_ack_sig;
 long g_d2d_link_in_pkts = 0;
 long g_d2d_link_out_pkts = 0;
+long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
+long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
 void ResetD2DLinkStats() {
     g_d2d_link_in_pkts = 0;
     g_d2d_link_out_pkts = 0;
+    for (int i = 0; i < MSG_TYPE_NUM; i++) {
+        g_d2d_link_in_by_type[i] = 0;
+        g_d2d_link_out_by_type[i] = 0;
+    }
 }
 void ResetHostLaneStats(int n_lanes) {
     g_host_lane_done.assign(n_lanes, 0);

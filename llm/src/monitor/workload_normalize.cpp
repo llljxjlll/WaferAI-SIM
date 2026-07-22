@@ -96,8 +96,8 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                 check_bounds(dest, "cast.dest");
                 int dest_die = dest / CORES_PER_DIE;
                 if (dest_die != src_die) {
-                    // V1-c1：先精确验证相邻 die 的实际双向 link。c1/c2 期间生产放行
-                    // 开关保持 false；到 c3 控制+数据闭环后再启用，避免接受后挂死。
+                    // V1-c3：精确验证相邻 die 的实际双向 link；生产 dataflow 路径在
+                    // REQUEST/ACK/DATA 闭环后显式传 allow_adjacent_d2d=true。
                     std::string edge = "core " + std::to_string(cid) + " (die " +
                                        std::to_string(src_die) + ") -> core " +
                                        std::to_string(dest) + " (die " +
@@ -114,10 +114,10 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                             "; no bidirectional peer link between the dies");
                     if (!allow_adjacent_d2d)
                         throw std::runtime_error(
-                            "adjacent cross-die runtime is not enabled before "
-                            "V1-c3 (REQUEST/ACK/DATA must all be connected): " +
+                            "adjacent cross-die runtime is disabled for this "
+                            "validation path: " +
                             edge);
-                    // c3+：相邻且实际双向 link 存在，允许。
+                    // 相邻且实际双向 link 存在：允许。
                 }
             }
         }

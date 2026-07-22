@@ -148,19 +148,7 @@ def main():
                 "cross-die traffic requires D2D Link" in out and not entered_sim)
     record("V0b-2C0 cross-die dest rejected before sim (no hang)", rejected,
            f"exit={rc} entered_sim={entered_sim}")
-
-    # V1-c1a：即使实际双向 C2C link 已构造，生产放行也必须保持关闭，直到 c3
-    # REQUEST/ACK/DATA 全链闭环；否则会接受 workload 后在尚未接通的 DATA 路径挂死。
-    rc, out = run([NPUSIM, "--workload-config", xpath,
-                   "--hardware-config",
-                   "../llm/test/d2d_link/hardware/core_4x4_die2x1_c2c.json",
-                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=10)
     os.remove(xpath)
-    entered_sim = ("All requests finished" in out or "Catch test finished" in out)
-    gated = (rc not in (0, 124) and "not enabled before V1-c3" in out and
-             not entered_sim)
-    record("V1-c1a production gate: peer link exists but cross-die workload waits for c3",
-           gated, f"exit={rc} entered_sim={entered_sim}")
 
     # 3e. V0b-2B1: die1 等价运行（workload 平移到 die1，HOST1->die1->HOST1），期望 sim-time==基线
     xw2 = _j2.load(open(os.path.join(
@@ -455,6 +443,95 @@ def main():
     entered = ("All requests finished" in out or "Catch test finished" in out)
     rejected = (rc != 0 and "link_bw must be 1" in out and not entered)
     record("V1-b2 production validation: link_bw=2 rejected before sim (2x1 c2c)",
+           rejected, f"exit={rc} entered_sim={entered}")
+
+    # 3l. V1-c3：第一条真实跨 die 协议闭环。core0(die0) 经过 REQUEST→反向 ACK→
+    #     多包 DATA 向 core16(die1) 发送；core16 只有收齐完整 DATA 才会 DONE。
+    #     按类型 capture/delivery 计数分别守恒，避免仅凭“仿真结束”推断穿链成功。
+    D2D_RE = re.compile(
+        r"\[D2D\] in_pkts=(\d+) out_pkts=(\d+) busy_cycles=(\d+) stall_cycles=(\d+)")
+    D2D_TYPE_RE = re.compile(
+        r"\[D2D_TYPE\] request_in=(\d+) request_out=(\d+) "
+        r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)")
+
+    def last_groups(rx, text):
+        m = None
+        for line in text.splitlines():
+            mm = rx.search(line)
+            if mm:
+                m = mm
+        return tuple(int(x) for x in m.groups()) if m else None
+
+    C3_WL = "../llm/test/d2d_link/workload/cross_die_2core.json"
+    c3_runs = []
+    for _ in range(2):
+        rc, out = run([NPUSIM, "--workload-config", C3_WL,
+                       "--hardware-config", C2C21,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=90)
+        agg = last_groups(D2D_RE, out)
+        typed = last_groups(D2D_TYPE_RE, out)
+        mism, _ = parse_hl(out)
+        done_sig, _ = parse_sig(out)
+        phases = all(s in out for s in (
+            "Core 0 start send primitive SEND_REQ",
+            "Core 0 end recv primitive RECV_ACK",
+            "Core 0 start send primitive SEND_DATA",
+            "Core 16 end recv primitive RECV_DATA",
+            "Core 16 start send primitive SEND_DONE"))
+        c3_runs.append(dict(
+            rc=rc, ns=finish_ns(out), agg=agg, typed=typed, mism=mism,
+            done=sig_to_dict(done_sig), phases=phases,
+            ls=_last(LS_RE, out), lu=_last(LU_RE, out),
+            bind_ok=not any(k in out.lower()
+                            for k in ("unbound", "multi-writer", "multi-bind"))))
+
+    def c3_run_ok(r):
+        if (r["rc"] != 0 or r["ns"] is None or r["agg"] is None or
+                r["typed"] is None or r["mism"] != 0 or not r["bind_ok"]):
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        total_in, total_out, busy, stall = r["agg"]
+        return (r["ls"] == 2 and r["lu"] == 2 and
+                r["phases"] and r["done"] == {16: 1} and
+                rin == rout == 1 and ain == aout == 1 and
+                din == dout and din > 1 and
+                total_in == total_out == rin + ain + din and
+                busy == 0 and stall == 0)
+
+    c3_ok = (all(c3_run_ok(r) for r in c3_runs) and
+             c3_runs[0]["ns"] == c3_runs[1]["ns"] and
+             c3_runs[0]["agg"] == c3_runs[1]["agg"] and
+             c3_runs[0]["typed"] == c3_runs[1]["typed"])
+    record("V1-c3 cross-die REQUEST -> ACK -> multi-packet DATA runtime e2e (2x)",
+           c3_ok, f"ns={c3_runs[0]['ns']}/{c3_runs[1]['ns']} "
+                  f"typed={c3_runs[0]['typed']} agg={c3_runs[0]['agg']} "
+                  f"done={c3_runs[0]['done']} phases={c3_runs[0]['phases']}")
+
+    # 3m. c3 开 gate 后的生产负例：3×1 die0→die2 即使逐段物理 link 都存在，V1 仍不支持
+    #     多跳。必须在进入仿真前拒绝，防止 c3 的 adjacent 放行误扩成任意跨 die。
+    mw = json.load(open(os.path.join(HERE, "workload", "cross_die_2core.json")))
+    mw["chips"][0]["cores"][0]["worklist"][0]["cast"][0].update(
+        {"dest": 32, "tag": 32})
+    mw["chips"][0]["cores"][1]["id"] = 32
+    mw["chips"][0]["cores"][1]["worklist"][0]["recv_tag"] = 32
+    mhw = json.load(open(os.path.join(
+        HERE, "hardware", "core_4x4_die2x1_c2c.json")))
+    mhw["die"] = {"x": 3, "y": 1}
+    fdw, mwpath = tempfile.mkstemp(suffix=".json", prefix="d2d_c3_multihop_wl_")
+    fdh, mhwpath = tempfile.mkstemp(suffix=".json", prefix="d2d_c3_multihop_hw_")
+    with os.fdopen(fdw, "w") as f:
+        json.dump(mw, f)
+    with os.fdopen(fdh, "w") as f:
+        json.dump(mhw, f)
+    rc, out = run([NPUSIM, "--workload-config", mwpath,
+                   "--hardware-config", mhwpath,
+                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=10)
+    os.remove(mwpath)
+    os.remove(mhwpath)
+    entered = ("All requests finished" in out or "Catch test finished" in out)
+    rejected = rc not in (0, 124) and "multi-hop cross-die not supported" in out and not entered
+    record("V1-c3 production guard: multi-hop die0->die2 rejected before sim",
            rejected, f"exit={rc} entered_sim={entered}")
 
     # 4. 单 die 回归

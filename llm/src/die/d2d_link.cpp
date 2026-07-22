@@ -1,5 +1,14 @@
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "utils/msg_utils.h"
+
+namespace {
+void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
+    int type = static_cast<int>(DeserializeMsg(payload).msg_type_);
+    if (type >= 0 && type < MSG_TYPE_NUM)
+        counts[type]++;
+}
+} // namespace
 
 D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_)
     : sc_module(n), latency(latency_) {
@@ -24,16 +33,19 @@ void D2DLinkUnit::forward() {
         if (in_sent.read()) {
             fifo_.push_back({cyc + latency, in_channel.read()});
             g_d2d_link_in_pkts++;
+            CountType(g_d2d_link_in_by_type, in_channel.read());
         }
         if (in_ctrl_sent.read()) {
             cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
             g_d2d_link_in_pkts++;
+            CountType(g_d2d_link_in_by_type, in_ctrl_channel.read());
         }
 
         // 交付数据：队首成熟且下游 ready
         if (!fifo_.empty() && fifo_.front().first <= cyc && out_avail.read()) {
             out_channel.write(fifo_.front().second);
             out_sent.write(true);
+            CountType(g_d2d_link_out_by_type, fifo_.front().second);
             fifo_.pop_front();
             g_d2d_link_out_pkts++;
         } else {
@@ -44,6 +56,7 @@ void D2DLinkUnit::forward() {
             out_ctrl_avail.read()) {
             out_ctrl_channel.write(cfifo_.front().second);
             out_ctrl_sent.write(true);
+            CountType(g_d2d_link_out_by_type, cfifo_.front().second);
             cfifo_.pop_front();
             g_d2d_link_out_pkts++;
         } else {
