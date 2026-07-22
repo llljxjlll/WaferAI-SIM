@@ -590,6 +590,85 @@ def main():
            f"ns={m1[0]['ns']}/{m1[1]['ns']} typed={m1[0]['typed']} done={m1[0]['done']} "
            f"maxref={m1[0]['maxref']} drain={m1[0]['drain']}")
 
+    # 3p. V1-d1：四方向相邻 die 端到端。同一对 workload（正向 die0->die1 / 反向 die1->die0）
+    #     分别跑在 2×1（横向：E/W）与 1×2（纵向：N/S）两个 C2C 布局上，覆盖 die 首跳的四个方向。
+    #     每方向连续两次，两次都校验：REQUEST/ACK/DATA 类型计数（REQ 正向、ACK 反向都真实穿 Link）、
+    #     agg 守恒、consumer 恰好 DONE 一次（反向 ACK 已被 producer 收到 → 见 phases 的 RECV_ACK）、
+    #     link_sites==link_units==2、无绑定错误、mism==0、drain==0、两次 sim-time/typed 确定一致。
+    def cross_dir_run(wl, hw, producer, consumer):
+        rc, out = run([NPUSIM, "--workload-config", wl, "--hardware-config", hw,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=90)
+        mism, _ = parse_hl(out)
+        done_sig, _ = parse_sig(out)
+        # producer 侧完整握手 + 反向 ACK 落回 producer；consumer 侧收数据并 DONE。
+        phases = all(s in out for s in (
+            f"Core {producer} start send primitive SEND_REQ",
+            f"Core {producer} end recv primitive RECV_ACK",
+            f"Core {producer} start send primitive SEND_DATA",
+            f"Core {consumer} end recv primitive RECV_DATA",
+            f"Core {consumer} start send primitive SEND_DONE"))
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        return dict(
+            rc=rc, ns=finish_ns(out), agg=last_groups(D2D_RE, out),
+            typed=last_groups(D2D_TYPE_RE, out), mism=mism,
+            done=sig_to_dict(done_sig), phases=phases,
+            drain=int(dr.group(1)) if dr else None,
+            ls=_last(LS_RE, out), lu=_last(LU_RE, out),
+            bind_ok=not any(k in out.lower()
+                            for k in ("unbound", "multi-writer", "multi-bind")))
+
+    def dir_run_ok(r, consumer):
+        if (r["rc"] != 0 or r["ns"] is None or r["agg"] is None or
+                r["typed"] is None or r["mism"] != 0 or not r["bind_ok"]):
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        total_in, total_out, busy, stall = r["agg"]
+        return (r["ls"] == 2 and r["lu"] == 2 and
+                r["phases"] and r["done"] == {consumer: 1} and
+                rin == rout == 1 and ain == aout == 1 and
+                din == dout and din > 1 and
+                total_in == total_out == rin + ain + din and
+                busy == 0 and stall == 0 and r["drain"] == 0)
+
+    C2C12 = "../llm/test/d2d_link/hardware/core_4x4_die1x2_c2c.json"
+    REV_WL = "../llm/test/d2d_link/workload/cross_die_rev.json"
+    # (方向名, workload, hw, producer, consumer)：2×1 横向 E/W；1×2 纵向 N/S。
+    for tag, wl, hw, producer, consumer in (
+            ("E (2x1 die0->die1)", C3_WL, C2C21, 0, 16),
+            ("W (2x1 die1->die0)", REV_WL, C2C21, 16, 0),
+            ("N (1x2 die0->die1)", C3_WL, C2C12, 0, 16),
+            ("S (1x2 die1->die0)", REV_WL, C2C12, 16, 0)):
+        runs = [cross_dir_run(wl, hw, producer, consumer) for _ in range(2)]
+        ok = (all(dir_run_ok(r, consumer) for r in runs) and
+              runs[0]["ns"] == runs[1]["ns"] and
+              runs[0]["typed"] == runs[1]["typed"] and
+              runs[0]["agg"] == runs[1]["agg"])
+        record(f"V1-d1 {tag}: REQUEST->ACK->DATA e2e (2x, reverse-ACK@producer, drain=0)",
+               ok, f"ns={runs[0]['ns']}/{runs[1]['ns']} typed={runs[0]['typed']} "
+                   f"agg={runs[0]['agg']} done={runs[0]['done']} "
+                   f"phases={runs[0]['phases']} drain={runs[0]['drain']}")
+
+    # 3q. V1-d1 绑定负例：1×2 的 c2c 端口方向 N/S 必须与 die 首跳方向一致。把 N 口错标成 E
+    #     （side=N 但 dir=E）会在拓扑校验阶段被 ValidateV1MvpTopology 拒绝，不进入仿真。
+    import json as _jd1
+    import tempfile as _tfd1
+    bad12 = _jd1.load(open(os.path.join(
+        HERE, "hardware", "core_4x4_die1x2_c2c.json")))
+    for ov in bad12["die_ports"]["overrides"]:
+        if ov["side"] == "N":
+            ov["dir"] = "E"  # side N 却声称朝 E：非法
+    fdb, bpath = _tfd1.mkstemp(suffix=".json", prefix="d2d_d1_baddir_")
+    with os.fdopen(fdb, "w") as f:
+        _jd1.dump(bad12, f)
+    rc, out = run([NPUSIM, "--workload-config", C3_WL, "--hardware-config", bpath,
+                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=10)
+    os.remove(bpath)
+    entered = ("All requests finished" in out or "Catch test finished" in out)
+    rejected = rc not in (0, 124) and not entered
+    record("V1-d1 topology guard: c2c port side!=dir rejected before sim",
+           rejected, f"exit={rc} entered_sim={entered}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",
