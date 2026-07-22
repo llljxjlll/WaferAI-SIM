@@ -56,26 +56,29 @@ cd build && ./npusim --d2d-v0-selftest
 
 - **V1-c0 ✔**：`FlowKey(source_global_id,tag,subflow)` 与消息内 16-bit
   `exit_port_`；`0=unpinned`、有效端口编码为 `port_id+1`，现有未 pin 消息的保留位仍为零。
-- **V1-c1a ✔（能力就绪、生产 gate 保持关闭）**：preflight 可精确验证相邻 die 的实际双向
-  `g_d2d_links`，拒绝无 link 与多跳；但 `ValidateWorkloadStructure` 的生产调用默认
-  `allow_adjacent_d2d=false`，在 c3 的 REQUEST/ACK/DATA 全链闭环前仍启动期拒绝，避免接受后挂死。
+- **V1-c1a ✔（能力就绪；当时生产 gate 保持关闭）**：preflight 可精确验证相邻 die 的实际双向
+  `g_d2d_links`，拒绝无 link 与多跳；c1/c2 期间生产调用保持 `allow_adjacent_d2d=false`，避免接受后
+  挂死；该 gate 已在 c3 闭环后显式打开。
 - **V1-c1b ✔（控制路由接线）**：串行/并行 REQUEST 与接收端返回 ACK 均在源核调用
   `PinControlMsgExit`，相邻跨 die 时只选一次出口并随包携带；Router 控制路径统一调用
-  `ControlMsgNextHop`，在源 die 朝固定端口收敛，过 link 后在目标 die 退回片内 XY。
-  当前证据为双向 REQUEST/ACK 逐跳 walk + 序列化 + Router 生产调用点；生产 workload 仍由 c1a gate
-  拒绝，故尚不声称真实 workload 控制包已经运行时穿链。
-- **V1-c2 ✔（DATA 路由接线，生产 gate 保持关闭）**：每条 `SEND_DATA` 原语在源核调用
+  `ControlMsgNextHop`，在源 die 朝固定端口收敛，过 link 后在目标 die 退回片内 XY。本增量当时的证据为
+  双向 REQUEST/ACK 逐跳 walk + 序列化 + Router 生产调用点；真实运行时证据见 c3。
+- **V1-c2 ✔（DATA 路由接线；当时生产 gate 保持关闭）**：每条 `SEND_DATA` 原语在源核调用
   `SelectCoreMsgExit` 一次，并把同一 `exit_port_` 复制到该 flow 的所有 DATA 包；Router 数据路径统一调用
   `DataMsgNextHop`，在源 die 使用固定出口、进入目标 die 后退回片内 XY。尾包解锁复用该包本轮已经解析的
   `out`，不再用全局目的核重新做片内路由。覆盖 3 包同 pin/序列化、E→W 与 W→E、same-die 等价、
   缺 pin 与非 DATA 跨 die 拒绝。`Send_prim::deserialize` 同时先解析 `type` 再消费 DATA 字段，并清空
-  运行态 pin，消除旧的未初始化读取与复用污染风险。生产 workload 仍由 c1a gate 拒绝，因此尚不声称
-  REQUEST/ACK/DATA 已完成真实跨 die 端到端运行。
+  运行态 pin，消除旧的未初始化读取与复用污染风险。
+- **V1-c3 ✔（第一条真实跨 die 协议闭环）**：生产 dataflow preflight 显式放行“相邻且存在精确双向
+  peer link”的 cast；最小 workload `core0(die0) → core16(die1)` 连续两次完成
+  `SEND_REQ → RECV/ACK → 4-packet SEND_DATA → DONE`，sim-time 均为 **398 ns**。Link 新增按消息类型
+  capture/delivery 统计，实测 REQUEST=`1/1`、ACK=`1/1`、DATA=`4/4`、总计=`6/6`，HOST mismatch=0、
+  唯一 DONE=`{16:1}`、五个生产协议阶段日志齐全、无绑定错误。3×1 die0→die2 生产负例证明开 gate
+  后多跳仍在仿真前拒绝。
 - **当前验证**：纯函数/路由自测 **215/215**、Link SystemC 自测 **18/18**、D2D runner
-  **27/27**（含“有 peer link 但 c3 前仍拒绝”的真实启动负例）、NoC 冻结值
-  **14781/29109、14833/45441**。
-- **下一步**：V1-c3 显式打开生产 preflight，并增加第一条
-  REQUEST → ACK → DATA 的真实跨 die 端到端用例。
+  **28/28**（含 c3 双运行闭环与生产多跳负例）、NoC 冻结值 **14781/29109、14833/45441**。
+- **下一步**：V1-d 做四方向相邻 die e2e、link latency 扫描/端到端增量标定，以及更完整的
+  flow 包数/checksum/活动归零检查。
 
 ## V0 基线冻结（V0-exit / Inc 4）—— 进 V1 前的准入门
 

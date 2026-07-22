@@ -228,18 +228,22 @@ SEND_REQ → RECV/ACK → SEND_DATA
 #### 当前增量状态
 
 - **c0 ✔**：`FlowKey` + 消息内 16-bit pinned `exit_port_`，未 pin 的现有消息 wire 保留位仍为零。
-- **c1a ✔**：相邻/多跳/实际双向 peer-link 的 preflight helper 已可测；生产默认 gate 保持关闭，
-  直到 c3 控制与数据全链闭环才放行，避免“校验接受但运行挂死”的中间版本。
+- **c1a ✔**：相邻/多跳/实际双向 peer-link 的 preflight helper 已可测；c1/c2 期间生产 gate 保持
+  关闭，避免“校验接受但运行挂死”的中间版本；c3 闭环后已显式放行相邻 peer-link。
 - **c1b ✔**：REQUEST（串行/并行路径）和反向 ACK 在各自源核选择一次出口，Router 控制路径消费
   固定出口；双向逐跳测试证明各跨一次正确有向 link，并覆盖序列化、same-die 等价与缺 pin 拒绝。
 - **c2 ✔**：每条 `SEND_DATA` 原语在源核选一次 C2C 出口，所有 DATA 包携带相同 pin；Router 数据
   dispatch 消费固定出口，进入目标 die 后恢复片内 XY，尾包按同一 `out` 解锁。覆盖 3 包同 pin/序列化、
   双向 link、same-die 等价、缺 pin 与非 DATA 跨 die 拒绝；`Send_prim::deserialize` 清空运行态 pin，
   并先解析 `type` 后读取 DATA 字段。
-- **证据边界**：当前是控制/数据路由生产接线 + 纯函数 walk，生产 workload 仍被 gate；不提前声称真实
-  workload 的 REQUEST/ACK/DATA 已运行时跨链。当前门：215/215、Link 18/18、runner 27/27、
-  NoC 冻结值全绿。
-- **后续**：c3 打开生产 gate 并验证 REQUEST → ACK → SEND_DATA 完整运行时链路。
+- **c3 ✔**：生产 preflight 放行“相邻 + 精确双向 peer link”的 cast。两核 workload
+  `core0(die0) → core16(die1)` 连续两次完成 REQUEST → 反向 ACK → 4 个 DATA → DONE，均为
+  **398 ns**；按类型 Link capture/delivery 为 REQUEST=`1/1`、ACK=`1/1`、DATA=`4/4`，总计=`6/6`，
+  HOST mismatch=0、唯一 DONE=`{16:1}`、五个生产协议阶段日志齐全、无绑定错误。3×1 die0→die2
+  生产负例仍在仿真前拒绝，多跳边界未被 gate 放宽。
+- **当前门**：215/215、Link 18/18、runner **28/28**、NoC 冻结值全绿。c3 已有真实 workload
+  运行时闭环，不再只是纯函数 walk。
+- **后续**：V1-d 做四方向相邻 die e2e、latency 扫描/端到端增量标定，以及包数/checksum/归零检查。
 
 #### 实现内容
 
@@ -250,7 +254,7 @@ SEND_REQ → RECV/ACK → SEND_DATA
 - REQUEST、ACK 和 DATA 全部能够经过 D2D Link。
 - 静态、确定性的端口选择。
 - flow 进入一个 die 时选择一次出口，离开该 die 前不允许重选。
-- **flow 标识从 V1 起即用 `(source_global_id, tag[, subflow])`（点 3）**：router/端口的流跟踪与 output_lock 不得只按 `tag` 区分，否则不同 die 同 local-id 的流会互相别名。V1 虽单流不撞 tag，但该 key 结构必须此版就位，供 V2 起的并发场景兜底。
+- **flow 标识与 output_lock 语义（点 3，V1 审查修正）**：本工程 `tag == 接收核 recv_tag == 全局核 id`，即 tag 就是**接收端聚合槽**。故 `output_lock` **有意按 tag 锁**——同 tag（=同接收核）的多个源流本应**共享锁、交错通过**（「多发一」聚合，接收端按包内地址重组）；给锁加 source 维反而会把多发一错误拆成串行。**防别名的正确不变量是 tag→dest 唯一性**（同一 tag 只能指向一个接收核，preflight 校验，禁止两接收核撞 tag），而非「按 source 分流」。`FlowKey(source,tag,subflow)` 类型**保留给 V5 subflow striping**（同 `(source,tag)` 拆多条子流时用三元组区分），**不用于 output_lock**。
 - D2D Link 支持固定 latency、`1 packet/cycle` 和功能性 FIFO；V1 测试将其配置为不饱和，不在本版赋予有限容量背压或网络死锁语义。
 - 输出 flow 路径、端口和时间戳。
 
@@ -335,7 +339,7 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 9. 仿真结束所有网络状态排空和归零。
 10. 连续多次运行的路径和周期一致。
 11. 缺少中间方向端口时在启动阶段报错。
-12. **flow-key 消歧（点 3，前移自 V5）**：两个不同 die 的 source 并发发出**相同 tag** 的流，不被 router 的 per-tag output_lock 误认为同一 flow（各自独立完成、数据不串）。此风险从多流并发一出现就存在，故在 V2 就测，V5 的同名测试是其 striping/subflow 扩展。
+12. **tag=接收槽 语义（点 3，V1 审查修正；V1-c 已覆盖）**：`tag` 是接收端聚合槽，故 output_lock 按 tag 锁是正确的。已在 V1-c 验证：(a) **tag→dest 唯一性**——preflight 拒绝「同 tag 指向不同接收核」；(b) **many-to-one**——两源同 tag 发一个接收核（recv_cnt=2）**共享同一把锁**（`max_output_ref>=2`）、正确聚合、结束态归零；(c) **distinct-tag**——两条不同 tag 流经同一 C2C 端口各自独占锁（`max_output_ref==1`）、串行、数据不串。（原「同 tag 不同 source 应被视为不同 flow」的表述与「tag=接收槽 / 多发一」直接矛盾，已更正。）
 
 #### 完成标准
 
@@ -546,7 +550,7 @@ hybrid
 6. 遇到源注入或共享 NoC cut 后，继续增加 stripe 不再错误提速。
 7. 共享 link group 的总吞吐不超过物理 link 容量。
 8. 同一 flow 的所有包在每个 die 内使用固定出口。
-9. 两个 source 使用相同 tag 时不会被误认为同一 flow。
+9. 同一 `(source, tag)` 被 striping 拆成的多条 subflow 用 subflow 号区分、正确重组，不被误判为乱序/重复；（注：`tag` 本身是接收端聚合槽，同 tag 多源发一个接收核属「多发一」聚合，见 V1 审查修正与 T22。）
 10. static/hash 在固定 seed 下完全可复现。
 11. dynamic 不产生乱序、锁泄漏或死锁。
 12. 多流公平性达到预定阈值，或测试明确记录固定优先级仲裁的预期偏差。
@@ -697,7 +701,7 @@ V3 网络级覆盖：
 | T19 | SAF 容量 admission 边界（采用 SAF 时） | V3 | 防止 SAF 保证静默失效 | `capacity=F` 完成；`capacity=F-1` 在注入前拒绝或显式安全降级 |
 | T20 | Escape VC 有限缓冲压力（采用 escape VC 时） | V3 | 验证网络 buffer 死锁安全 | 最小合法 buffer/credit 下持续进展并最终排空 |
 | T21 | HOST 可达性与 endpoint 解码 | V0 | 统一端口框架校验（点 5） | 无 HOST 端口/全被 C2C override 时启动报错；`port_for_host` 每核有定义 |
-| T22 | flow-key 消歧 | V2 | 跨 die 同 tag 不别名（点 3） | 不同 source 同 tag 并发流独立完成、数据不串 |
+| T22 | tag=接收槽 语义 | V1 | tag→dest 唯一 + 多发一聚合（点 3，审查修正） | tag→dest 唯一性拒绝撞槽；同 tag 多源共享锁聚合（maxref≥2）；distinct-tag 串行不串 |
 
 ## 7. 测试目录建议
 
