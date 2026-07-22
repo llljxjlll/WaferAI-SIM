@@ -12,6 +12,10 @@ struct HostEnvelope {
     Msg msg;
 };
 
-// Legacy backend：把信封按 die0 西边 row（dest/GRID_X）落入 write_buffer，保持原行为。
-// 仅对 die0（dest < CORES_PER_DIE）有效；多 die 路由属 2B1。
+// 单消息入口：经 HOST 挂载表解析 lane（HostLaneOfCore）并校验范围后直接入队。
+// 供大批量下发（如权重）**逐条生成、逐条入队**，避免先把整批信封缓存进 vector 再复制到
+// write_buffer 造成的双份峰值内存（大 workload 下权重包数量可观）。
+void HostEnqueue(const HostEnvelope &env, std::queue<Msg> *q);
+
+// 批量版本：等价于对每个信封依次调用 HostEnqueue（lane 解析与校验完全一致）。
 void LegacyHostEnqueue(const std::vector<HostEnvelope> &envs, std::queue<Msg> *q);
