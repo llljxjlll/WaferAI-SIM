@@ -479,9 +479,11 @@ def main():
             "Core 0 start send primitive SEND_DATA",
             "Core 16 end recv primitive RECV_DATA",
             "Core 16 start send primitive SEND_DONE"))
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
         c3_runs.append(dict(
             rc=rc, ns=finish_ns(out), agg=agg, typed=typed, mism=mism,
             done=sig_to_dict(done_sig), phases=phases,
+            drain=int(dr.group(1)) if dr else None,
             ls=_last(LS_RE, out), lu=_last(LU_RE, out),
             bind_ok=not any(k in out.lower()
                             for k in ("unbound", "multi-writer", "multi-bind"))))
@@ -497,7 +499,8 @@ def main():
                 rin == rout == 1 and ain == aout == 1 and
                 din == dout and din > 1 and
                 total_in == total_out == rin + ain + din and
-                busy == 0 and stall == 0)
+                busy == 0 and stall == 0 and
+                r["drain"] == 0)  # 结束态所有 router lock/buffer 归零
 
     c3_ok = (all(c3_run_ok(r) for r in c3_runs) and
              c3_runs[0]["ns"] == c3_runs[1]["ns"] and
@@ -506,7 +509,8 @@ def main():
     record("V1-c3 cross-die REQUEST -> ACK -> multi-packet DATA runtime e2e (2x)",
            c3_ok, f"ns={c3_runs[0]['ns']}/{c3_runs[1]['ns']} "
                   f"typed={c3_runs[0]['typed']} agg={c3_runs[0]['agg']} "
-                  f"done={c3_runs[0]['done']} phases={c3_runs[0]['phases']}")
+                  f"done={c3_runs[0]['done']} phases={c3_runs[0]['phases']} "
+                  f"drain={c3_runs[0]['drain']}")
 
     # 3m. c3 开 gate 后的生产负例：3×1 die0→die2 即使逐段物理 link 都存在，V1 仍不支持
     #     多跳。必须在进入仿真前拒绝，防止 c3 的 adjacent 放行误扩成任意跨 die。

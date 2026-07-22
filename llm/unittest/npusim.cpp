@@ -4,6 +4,7 @@
 #include "die/d2d_link.h"
 #include "die/port.h"
 #include "monitor/monitor.h"
+#include "router/router.h"
 #include "systemc.h"
 #include "trace/Event_engine.h"
 #include "utils/print_utils.h"
@@ -122,6 +123,24 @@ int sc_main(int argc, char *argv[]) {
             << " ack_out=" << g_d2d_link_out_by_type[ACK]
             << " data_in=" << g_d2d_link_in_by_type[DATA]
             << " data_out=" << g_d2d_link_out_by_type[DATA];
+    }
+
+    // 结束态 drain 不变量（V1 验收）：遍历 SystemC 层级，累加所有 RouterUnit 的残留
+    // （未释放的 in/out lock ref + 各方向 data/ctrl buffer + host buffer）。仿真正常结束时
+    // 应为 0——非 0 说明有锁泄漏或滞留包（如尾包丢失 / 别名导致的 ref 未归零）。
+    {
+        std::function<long(const std::vector<sc_object *> &)> resid =
+            [&](const std::vector<sc_object *> &objs) -> long {
+            long r = 0;
+            for (auto *o : objs) {
+                if (auto *ru = dynamic_cast<RouterUnit *>(o))
+                    r += ru->residual();
+                r += resid(o->get_child_objects());
+            }
+            return r;
+        };
+        LOG_INFO(SYSTEM) << "[DRAIN] router_residual="
+                         << resid(sc_get_top_level_objects());
     }
 
     // HOST lane 接收统计（V1-pre 3b-2b）：每 lane DONE/ACK 数 + 错配数

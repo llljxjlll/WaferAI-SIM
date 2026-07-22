@@ -491,6 +491,25 @@ void RouterUnit::trans_next_trigger() {
     }
 }
 
+long RouterUnit::residual() const {
+    long r = 0;
+    for (int i = 0; i < DIRECTIONS; i++) {
+        if (input_lock_ref[i] > 0)
+            r += input_lock_ref[i];
+        if (output_lock_ref[i] > 0)
+            r += output_lock_ref[i];
+        r += (long)buffer_i[i].size() + (long)buffer_o[i].size();
+        r += (long)ctrl_buffer_i[i].size() + (long)ctrl_buffer_o[i].size();
+    }
+    if (host_buffer_i)
+        r += (long)host_buffer_i->size();
+    if (host_buffer_o)
+        r += (long)host_buffer_o->size();
+    if (host_ctrl_buffer_o)
+        r += (long)host_ctrl_buffer_o->size();
+    return r;
+}
+
 RouterUnit::~RouterUnit() {
     if (host_buffer_i) {
         delete host_buffer_i;

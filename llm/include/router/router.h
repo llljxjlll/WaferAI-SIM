@@ -119,4 +119,8 @@ public:
     void trans_next_trigger();
 
     void end_of_elaboration();
+
+    // 结束态残留量（drain 不变量）：所有 in/out lock ref + 各方向 data/ctrl buffer +
+    // host buffer 的总占用。仿真正常结束时应为 0（无未释放锁、无滞留包）。
+    long residual() const;
 };
