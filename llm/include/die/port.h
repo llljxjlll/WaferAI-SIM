@@ -196,3 +196,13 @@ struct D2DDataProbe {
     long long last_cycle = -1;
 };
 extern D2DDataProbe g_d2d_data_in, g_d2d_data_out;
+
+// ---- V2-b：C2C 入口 re-pin（每进入一个 die 重新选出口）统计 ----
+// 包跨 link 进入本 die 时，router 在入口清除上一跳的 pinned exit 并按本 die 重新 pin：
+// 目的在本 die → -1（转片内 XY）；否则 → CrossDieSelectExit(入口 tile, des)。
+//   total   = 入口重写次数（每包每跨一次 link 记一次）；
+//   changed = 新值 != 携带值（如 2×2 对角 E→N，或到达目的 die 清为 -1）；
+//   same    = 新值 == 携带值（如 3×1 直线 E→E：相邻 die 用同一模板 port id）。
+// **same 是本计数器存在的理由**：该情形下「已重新 pin」与「沿用旧值」路由结果完全相同，
+// 只能靠计数证明入口重写确实执行了，不能靠端到端是否送达来推断。
+extern long g_d2d_repin_total, g_d2d_repin_changed, g_d2d_repin_same;

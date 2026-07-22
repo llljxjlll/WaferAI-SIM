@@ -22,7 +22,11 @@ long g_d2d_link_out_pkts = 0;
 long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
 long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
 D2DDataProbe g_d2d_data_in, g_d2d_data_out;
+long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
 void ResetD2DLinkStats() {
+    g_d2d_repin_total = 0;
+    g_d2d_repin_changed = 0;
+    g_d2d_repin_same = 0;
     g_d2d_link_in_pkts = 0;
     g_d2d_link_out_pkts = 0;
     for (int i = 0; i < MSG_TYPE_NUM; i++) {

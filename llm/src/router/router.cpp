@@ -119,6 +119,10 @@ void RouterUnit::router_execute() {
             if (data_sent_i[i].read()) {
                 // move the data into the buffer
                 sc_bv<256> temp = channel_i[i].read();
+                // V2-b：该方向是 peer-connected C2C 边 ⇒ 本包刚跨 link 进入本 die，
+                // 入口处清除上一跳 pin 并按本 die 重新 pin（见 RepinOnC2CIngress）。
+                if (IsC2CEgressEdge(rid, Directions(i)))
+                    temp = RepinOnC2CIngress(temp);
                 Msg tt = DeserializeMsg(temp);
 
                 buffer_i[i].emplace(temp);
@@ -134,6 +138,9 @@ void RouterUnit::router_execute() {
             if (ctrl_sent_i[i].read()) {
                 // move the control data into the ctrl buffer
                 sc_bv<256> temp = ctrl_channel_i[i].read();
+                // V2-b：控制包（REQUEST/ACK）与 DATA 一样，跨 link 进入本 die 后必须重新 pin。
+                if (IsC2CEgressEdge(rid, Directions(i)))
+                    temp = RepinOnC2CIngress(temp);
                 Msg tt = DeserializeMsg(temp);
 
                 ctrl_buffer_i[i].emplace(temp);
@@ -500,6 +507,27 @@ void RouterUnit::trans_next_trigger() {
         need_next_trigger.notify(CYCLE, SC_NS);
         wait();
     }
+}
+
+sc_bv<256> RouterUnit::RepinOnC2CIngress(const sc_bv<256> &payload) const {
+    Msg m = DeserializeMsg(payload);
+    // 只有 core→core 的包参与 C2C pinning；HOST/MEM 端点走各自路径，不碰 exit_port_。
+    if (DecodeEndpointType(m.des_) != EP_CORE)
+        return payload;
+    int old = m.exit_port_;
+    // 目的已在本 die → 清除 pin，转片内 XY；否则为**下一跳**重新选出口（锚点=本 die 入口 tile）。
+    int repin = (DieOfGlobal(m.des_) == DieOfGlobal(rid))
+                    ? -1
+                    : CrossDieSelectExit(rid, m.des_);
+    g_d2d_repin_total++;
+    if (repin == old)
+        g_d2d_repin_same++; // 数值巧合（如 3×1 直线两 die 同模板 port id）——仍是一次真实重写
+    else
+        g_d2d_repin_changed++;
+    if (repin == old)
+        return payload; // 无需重新序列化
+    m.exit_port_ = repin;
+    return SerializeMsg(m);
 }
 
 long RouterUnit::residual() const {

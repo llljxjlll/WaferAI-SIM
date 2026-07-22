@@ -1452,7 +1452,8 @@ int RunD2DV0SelfTest() {
                       std::string::npos,
                   "preflight default-closed path: adjacent workload requires explicit opt-in");
         }
-        // (c) 多跳（3×1，die0 -> die2，距离 2）：拒绝，报 "multi-hop"
+        // (c) 多跳（3×1，die0 -> die2，距离 2）：**V2-b 起放行**——沿 die 级维序路径逐跳校验，
+        //     每跳都有双向 peer link 才允许；任一跳缺 link 仍必须拒绝（护栏没被删掉）。
         {
             setTopo(4, 4, 3, 1);
             D2DJson hw;
@@ -1463,10 +1464,20 @@ int RunD2DV0SelfTest() {
             hw["die_ports"]["overrides"].push_back(
                 {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
             ParseDiePorts(hw);
-            std::string e =
-                wsErr(mkwl(0, 2 * CORES_PER_DIE), true); // die0 -> die2
-            check(e.find("multi-hop") != std::string::npos,
-                  "preflight: multi-hop cross-die (die0->die2) -> rejected");
+            check(wsErr(mkwl(0, 2 * CORES_PER_DIE), true).empty(),
+                  "preflight V2-b: multi-hop die0->die2 accepted (every hop has a peer link)");
+            // 负例：抽掉中间一跳的 link（die1->die2 方向），多跳必须被拒
+            std::vector<D2DLink> saved = g_d2d_links;
+            g_d2d_links.erase(
+                std::remove_if(g_d2d_links.begin(), g_d2d_links.end(),
+                               [](const D2DLink &l) {
+                                   return l.local_die == 1 && l.remote_die == 2;
+                               }),
+                g_d2d_links.end());
+            std::string e = wsErr(mkwl(0, 2 * CORES_PER_DIE), true);
+            check(e.find("no bidirectional peer link on hop") != std::string::npos,
+                  "preflight V2-b: multi-hop with a broken intermediate hop -> rejected");
+            g_d2d_links = saved;
         }
 
         // (d) tag -> dest 唯一性（output_lock 按接收槽=tag）：同 tag 指向不同接收核 → 拒绝；

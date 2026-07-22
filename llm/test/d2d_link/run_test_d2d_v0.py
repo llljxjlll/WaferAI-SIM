@@ -519,8 +519,9 @@ def main():
                   f"done={c3_runs[0]['done']} phases={c3_runs[0]['phases']} "
                   f"drain={c3_runs[0]['drain']}")
 
-    # 3m. c3 开 gate 后的生产负例：3×1 die0→die2 即使逐段物理 link 都存在，V1 仍不支持
-    #     多跳。必须在进入仿真前拒绝，防止 c3 的 adjacent 放行误扩成任意跨 die。
+    # 3m. V2-b 生产负例：多跳本身已放行（见 3t），但**路径上任一跳缺 C2C link** 仍必须在进入
+    #     仿真前拒绝。这里 3×1 只给 E 向单端口、不给 W——die 级路径 die0→die1→die2 无双向
+    #     peer link，必须报错退出且不进仿真（护栏没有随多跳放行一起被删掉）。
     mw = json.load(open(os.path.join(HERE, "workload", "cross_die_2core.json")))
     mw["chips"][0]["cores"][0]["worklist"][0]["cast"][0].update(
         {"dest": 32, "tag": 32})
@@ -529,6 +530,9 @@ def main():
     mhw = json.load(open(os.path.join(
         HERE, "hardware", "core_4x4_die2x1_c2c.json")))
     mhw["die"] = {"x": 3, "y": 1}
+    # 去掉 W 向 c2c：E 有端口但反向缺失 → 每一跳都不成双向 peer link
+    mhw["die_ports"]["overrides"] = [
+        o for o in mhw["die_ports"]["overrides"] if o.get("dir") != "W"]
     fdw, mwpath = tempfile.mkstemp(suffix=".json", prefix="d2d_c3_multihop_wl_")
     fdh, mhwpath = tempfile.mkstemp(suffix=".json", prefix="d2d_c3_multihop_hw_")
     with os.fdopen(fdw, "w") as f:
@@ -541,8 +545,9 @@ def main():
     os.remove(mwpath)
     os.remove(mhwpath)
     entered = ("All requests finished" in out or "Catch test finished" in out)
-    rejected = rc not in (0, 124) and "multi-hop cross-die not supported" in out and not entered
-    record("V1-c3 production guard: multi-hop die0->die2 rejected before sim",
+    rejected = (rc not in (0, 124) and not entered and
+                "requires >=1 C2C port" in out)
+    record("V2-b production guard: multi-hop over a direction lacking C2C rejected before sim",
            rejected, f"exit={rc} entered_sim={entered}")
 
     # output_lock tag-only 语义的两个对照用例（共用解析器）。
@@ -819,6 +824,66 @@ def main():
     record("V1-d3 latency law: link delta=L cycles, transaction delta=3*L*CYCLE, span fixed",
            latency_law, f"ns={latency_times} base_link_delay={base_link_delay} "
                         f"data_span={base_out_span}")
+
+    # 3t. V2-b：中间 die 运行时转发（3×1 两跳 die0->die2，直线 E->E）。
+    #     关键：3×1 相邻两 die 的 E 出口用**同一个模板 port id**，所以「已重新 pin」与「沿用
+    #     上一跳旧值」路由结果完全相同——端到端送达**不能**证明入口重写发生。故必须断言
+    #     [D2D_REPIN] 的 same>0（数值相同但确实重写过）与 total==跨 link 包数。
+    REPIN_RE = re.compile(r"\[D2D_REPIN\] total=(\d+) changed=(\d+) same=(\d+)")
+    HW31 = "../llm/test/d2d_link/hardware/core_4x4_die3x1_c2c.json"
+    WL2HOP = "../llm/test/d2d_link/workload/cross_die_2hop.json"
+
+    def twohop_run():
+        rc, out = run([NPUSIM, "--workload-config", WL2HOP,
+                       "--hardware-config", HW31,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=120)
+        done_sig, ack_sig = parse_sig(out)
+        mism, _ = parse_hl(out)
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
+        # 中间 die（die1，核 16..31）不得消费包或提前产生 ACK/DONE
+        ack_srcs = {int(t.split(":")[0]) for t in (ack_sig or "").split(",") if t}
+        phases = all(s in out for s in (
+            "Core 0 start send primitive SEND_REQ",
+            "Core 0 end recv primitive RECV_ACK",
+            "Core 0 start send primitive SEND_DATA",
+            "Core 32 end recv primitive RECV_DATA",
+            "Core 32 start send primitive SEND_DONE"))
+        return dict(rc=rc, ns=finish_ns(out), typed=last_groups(D2D_TYPE_RE, out),
+                    repin=last_groups(REPIN_RE, out), done=sig_to_dict(done_sig),
+                    ack_srcs=ack_srcs, mism=mism, phases=phases,
+                    drain=int(dr.group(1)) if dr else None,
+                    link_drain=int(ldr.group(1)) if ldr else None,
+                    ls=_last(LS_RE, out), lu=_last(LU_RE, out),
+                    bind_ok=not any(k in out.lower()
+                                    for k in ("unbound", "multi-writer", "multi-bind")))
+
+    def twohop_ok(r):
+        if (r["rc"] != 0 or r["typed"] is None or r["repin"] is None or
+                r["mism"] != 0 or not r["bind_ok"] or not r["phases"]):
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        total, changed, same = r["repin"]
+        crossings = rin + ain + din  # 每个包每跨一次 link 记一次入口重写
+        return (r["ls"] == 4 and r["lu"] == 4 and       # 3×1：2 对 die × 双向 = 4 条有向 link
+                rin == rout == 2 and ain == aout == 2 and  # REQ/ACK 各跨 2 跳
+                din == dout and din == 8 and               # 4 个 DATA 包 × 2 跳
+                total == crossings and same + changed == total and
+                same == changed == total // 2 and same > 0 and
+                r["done"] == {32: 1} and                  # 只有最终目的核 DONE
+                r["ack_srcs"] <= {0, 32} and              # 中间 die 未产生 ACK
+                r["drain"] == 0 and r["link_drain"] == 0)
+
+    th = [twohop_run() for _ in range(2)]
+    record("V2-b 3x1 two-hop relay: intermediate die re-pins (same>0 proves rewrite), "
+           "no premature ACK/DONE, drain=0",
+           all(twohop_ok(r) for r in th) and th[0]["ns"] == th[1]["ns"] and
+           th[0]["typed"] == th[1]["typed"] and th[0]["repin"] == th[1]["repin"],
+           f"ns={th[0]['ns']}/{th[1]['ns']} typed={th[0]['typed']} "
+           f"repin={th[0]['repin']} done={th[0]['done']} "
+           f"ack_srcs={sorted(th[0]['ack_srcs'])} "
+           f"drain={th[0]['drain']}/{th[0]['link_drain']}")
 
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,

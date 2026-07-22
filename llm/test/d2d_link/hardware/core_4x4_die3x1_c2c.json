@@ -1,0 +1,63 @@
+{
+    "x": 4,
+    "die": {
+        "x": 3,
+        "y": 1
+    },
+    "noc": {
+        "noc_payload_per_cycle": 4
+    },
+    "operand": {
+        "comp_util": 0.7,
+        "core_credit": 8,
+        "pd_ratio": 5
+    },
+    "memory": {
+        "beha_dram_util": 0.7,
+        "dram_default_bitwidth": 32,
+        "sram_size": 33554432
+    },
+    "gpu": {
+        "dram_bandwidth": 512,
+        "dram_burst_size": 2048,
+        "dram_aligned": 64
+    },
+    "die_ports": {
+        "edges": {
+            "S": {
+                "role": "host"
+            }
+        },
+        "overrides": [
+            {
+                "side": "E",
+                "idx": 0,
+                "role": "c2c",
+                "dir": "E"
+            },
+            {
+                "side": "W",
+                "idx": 0,
+                "role": "c2c",
+                "dir": "W"
+            }
+        ],
+        "c2c": {
+            "link_bw": 1,
+            "latency": 20,
+            "buffer_depth": 8
+        }
+    },
+    "cores": [
+        {
+            "id": 0,
+            "exu_x": 32,
+            "sfu_x": 1024,
+            "vec_x": 128,
+            "sa_cnt": 10,
+            "vec_cnt": 32,
+            "sram_bitwidth": 4096,
+            "dram_bw": 400
+        }
+    ]
+}

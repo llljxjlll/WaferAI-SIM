@@ -122,16 +122,40 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                                        std::to_string(src_die) + ") -> core " +
                                        std::to_string(dest) + " (die " +
                                        std::to_string(dest_die) + ")";
-                    if (DieManhattan(src_die, dest_die) != 1)
-                        throw std::runtime_error(
-                            "multi-hop cross-die not supported in V1 "
-                            "(adjacent-die only; V2): " +
-                            edge);
-                    if (!HasD2DLink(src_die, dest_die) ||
-                        !HasD2DLink(dest_die, src_die))
-                        throw std::runtime_error(
-                            "cross-die traffic requires D2D Link (V1): " + edge +
-                            "; no bidirectional peer link between the dies");
+                    // V2-b：多跳放行。沿 die 级维序（X 先于 Y）路径逐跳校验——每一跳的相邻
+                    // die 对都必须有双向 peer link，否则该跳不可达。路径长度==DieManhattan，
+                    // 每跳距离严格 -1，故循环必然终止（guard 仅防御非预期拓扑）。
+                    int cur = src_die;
+                    int guard = 0;
+                    while (cur != dest_die) {
+                        Directions D = DieFirstHopDir(cur, dest_die);
+                        int cx = cur % DIE_X, cy = cur / DIE_X;
+                        if (D == EAST)
+                            cx++;
+                        else if (D == WEST)
+                            cx--;
+                        else if (D == NORTH)
+                            cy++;
+                        else if (D == SOUTH)
+                            cy--;
+                        else
+                            throw std::runtime_error(
+                                "cross-die path: no die-level direction: " + edge);
+                        if (cx < 0 || cx >= DIE_X || cy < 0 || cy >= DIE_Y)
+                            throw std::runtime_error(
+                                "cross-die path leaves the die mesh: " + edge);
+                        int nxt = cy * DIE_X + cx;
+                        if (!HasD2DLink(cur, nxt) || !HasD2DLink(nxt, cur))
+                            throw std::runtime_error(
+                                "cross-die traffic requires D2D Link: " + edge +
+                                "; no bidirectional peer link on hop die " +
+                                std::to_string(cur) + " -> die " +
+                                std::to_string(nxt));
+                        cur = nxt;
+                        if (++guard > DIE_X + DIE_Y + 2)
+                            throw std::runtime_error(
+                                "cross-die path did not converge: " + edge);
+                    }
                     if (!allow_adjacent_d2d)
                         throw std::runtime_error(
                             "adjacent cross-die runtime is disabled for this "

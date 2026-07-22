@@ -143,6 +143,12 @@ int sc_main(int argc, char *argv[]) {
             << " in_last_cycle=" << g_d2d_data_in.last_cycle
             << " out_first_cycle=" << g_d2d_data_out.first_cycle
             << " out_last_cycle=" << g_d2d_data_out.last_cycle;
+        // V2-b 多跳证据：每个包每跨一次 link，在落点 die 的入口被重新 pin 一次。
+        // same>0 说明存在「新旧 exit_port 数值相同」的重写（如 3×1 直线 E→E），这类情形
+        // 光看路由结果无法证明重写发生，必须靠本计数。
+        LOG_INFO(SYSTEM) << "[D2D_REPIN] total=" << g_d2d_repin_total
+                         << " changed=" << g_d2d_repin_changed
+                         << " same=" << g_d2d_repin_same;
     }
 
     // 结束态 drain 不变量（V1 验收）：遍历 SystemC 层级，累加所有 RouterUnit 的残留

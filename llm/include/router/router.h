@@ -123,6 +123,11 @@ public:
     // 结束态残留量（drain 不变量）：所有 in/out lock ref + 各方向 data/ctrl buffer +
     // host buffer 的总占用。仿真正常结束时应为 0（无未释放锁、无滞留包）。
     long residual() const;
+
+    // V2-b：包跨 C2C link 进入本 die 时的入口重写。携带的 exit_port_ 只对**上一跳 die** 有效，
+    // 必须在此清除并按本 die 重新 pin（每进入一个 die 选一次；die 内不再重选）。目的已在本 die
+    // 则清为 -1（转片内 XY）。非 core 端点（HOST/MEM）原样返回。同时累加 g_d2d_repin_* 计数。
+    sc_bv<256> RepinOnC2CIngress(const sc_bv<256> &payload) const;
 };
 
 // 全程观测到的 output_lock_ref 峰值。>=2 证明**同 tag 的多条流共享了同一把锁**（多发一聚合，
