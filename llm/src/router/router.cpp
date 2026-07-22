@@ -1,5 +1,6 @@
 #include "router/router.h"
 #include "die/port.h"
+#include "monitor/watchdog.h"
 #include "utils/print_utils.h"
 
 long g_max_output_lock_ref = 0;
@@ -519,6 +520,7 @@ void RouterUnit::CountDieRouterPkt(int dir, bool from_c2c) const {
         return;
     if (d < (int)g_die_router_pkts.size())
         g_die_router_pkts[d]++;
+    g_protocol_progress++; // V2-d2：协议进展（watchdog 据此判断是否停顿）
     // 片内 mesh hop：来自同 die 邻 router 的四向输入（排除跨 die link 入口与本核注入）
     if (!from_c2c && dir != CENTER && d < (int)g_die_mesh_pkts.size())
         g_die_mesh_pkts[d]++;

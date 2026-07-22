@@ -1,5 +1,6 @@
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "monitor/watchdog.h"
 #include "utils/msg_utils.h"
 
 namespace {
@@ -100,6 +101,7 @@ void D2DLinkUnit::forward() {
             ProbeData(g_d2d_data_out, fifo_.front().second, cyc);
             fifo_.pop_front();
             g_d2d_link_out_pkts++;
+            g_protocol_progress++;
         } else {
             out_sent.write(false);
         }
@@ -112,6 +114,7 @@ void D2DLinkUnit::forward() {
             CountLink(link_idx, false, cfifo_.front().second);
             cfifo_.pop_front();
             g_d2d_link_out_pkts++;
+            g_protocol_progress++;
         } else {
             out_ctrl_sent.write(false);
         }

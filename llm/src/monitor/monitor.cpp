@@ -1,6 +1,7 @@
 #include "monitor/monitor.h"
 #include "defs/global.h"
 #include "die/d2d_link.h"
+#include "monitor/watchdog.h"
 #include "die/port.h"
 #include "monitor/config_helper_gpu.h"
 #include "monitor/config_helper_gpu_pd.h"
@@ -337,6 +338,9 @@ void Monitor::init() {
     // 取代 C2C 出口边的终结：link 读上游 A 的边缘输出、延迟后驱动下游 B 的边缘输入。
     // 两条有向 link 一起覆盖两端所有被延后的输入端口（每个恰绑定一次）。
     ResetD2DLinkStats();
+    ResetProtocolWatchdog();
+    // V2-d2：仿真器内部协议进展 watchdog（主动诊断，不依赖外部 wall-clock 超时）
+    new ProtocolWatchdog("protocol_watchdog");
     int link_seq = 0; // V2-c：与 g_d2d_link_stats 下标一一对应（按 g_d2d_links 顺序创建）
     for (const auto &l : g_d2d_links) {
         const D2DPort &pa = g_die_ports.ports[l.local_port];

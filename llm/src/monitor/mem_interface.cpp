@@ -8,6 +8,7 @@
 #include "monitor/config_helper_pd.h"
 #include "monitor/config_helper_pds.h"
 #include "monitor/mem_interface.h"
+#include "monitor/watchdog.h"
 #include "prims/comp_prims.h"
 #include "prims/norm_prims.h"
 #include "utils/msg_utils.h"
@@ -322,6 +323,7 @@ void MemInterface::recv_helper() {
                     ev_recv_done.notify(0, SC_NS);
                     if (i < (int)g_host_lane_done.size())
                         g_host_lane_done[i]++;
+                        g_protocol_progress++; // V2-d2：DONE 也是协议进展
                     g_host_done_src[m.source_]++;
                     if (i != HostLaneOfCore(m.source_))
                         g_host_lane_mismatch++;

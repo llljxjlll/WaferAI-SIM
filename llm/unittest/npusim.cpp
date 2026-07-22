@@ -4,6 +4,7 @@
 #include "die/d2d_link.h"
 #include "die/port.h"
 #include "monitor/monitor.h"
+#include "monitor/watchdog.h"
 #include "router/router.h"
 #include "systemc.h"
 #include "trace/Event_engine.h"
@@ -271,5 +272,12 @@ int sc_main(int argc, char *argv[]) {
         LOG_ERROR(SYSTEM) << "Unable to open file for writing timestamp";
     }
     delete event_engine;
+    // V2-d2：协议 watchdog 判定停顿 ⇒ 仿真器**主动**非零退出（不依赖测试框架超时）。
+    if (g_protocol_stall_detected) {
+        LOG_ERROR(SYSTEM) << "[PROTO_WAIT] simulation aborted by protocol "
+                             "progress watchdog at cycle "
+                          << g_protocol_stall_cycle;
+        return 3;
+    }
     return 0;
 }

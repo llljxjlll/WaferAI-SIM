@@ -1002,7 +1002,7 @@ def main():
                     link_drain=int(ldr.group(1)) if ldr else None,
                     repin=last_groups(REPIN_RE, out))
 
-    def path_ok(r, fwd, ack, npkt, src, dest, busy_dies):
+    def path_ok(r, fwd, ack, npkt, src, dest, exp_mesh):
         """fwd/ack: [(src_die, dst_die, dir), ...] 期望的**精确**有向 link 序列。"""
         if (r["rc"] != 0 or r["drain"] != 0 or r["link_drain"] != 0 or
                 r["mism"] != 0 or not r["bind_ok"]):
@@ -1040,33 +1040,41 @@ def main():
         # 4) 入口重写次数 == 总跨链包数（REQ+ACK+DATA 各自跨满全程）
         if r["repin"] is None or r["repin"][0] != (1 + npkt) * hops + 1 * len(ack):
             return False
-        # 5) 中间 die 必须发生**片内 mesh hop**。注意 die_act 含「跨 link 到达那一拍」，
-        #    单看它 >0 不能排除「入口 tile 恰好就是下一条 link 的出口 tile、零片内 hop」；
-        #    die_mesh 只统计同 die router→router 输入，才是穿越 NoC 的直接证据。
-        for d in busy_dies:
-            if (d >= len(r["die_mesh"]) or r["die_mesh"][d] <= 0 or
-                    d >= len(r["die_act"]) or r["die_act"][d] <= 0):
-                return False
+        # 5) 逐 die 片内 mesh hop 数必须**精确**等于期望（不只是 >0）。die_mesh 只统计同 die
+        #    router→router 输入，是「包确实穿过该 die 的 mesh」的直接证据；die_act 含「跨 link
+        #    到达那一拍」，>0 不能排除零片内 hop。期望值随几何而定：目的 die 若入口 tile 恰为
+        #    目的核本身，则该 die 的片内 hop 为 0（如 3×1/1×3 的 die2），这正是要精确固化的信息。
+        if r["die_mesh"] != exp_mesh:
+            return False
         # 6) 中间 die 不消费、不产生 ACK/DONE：只有终点 DONE；ACK 源**恰好**是首尾两端
         #    （用 == 而非 <=，否则空集/单端点也会通过）
         return r["done"] == {dest: 1} and r["ack_srcs"] == {src, dest}
 
     HW31 = "../llm/test/d2d_link/hardware/core_4x4_die3x1_c2c.json"
+    HW13 = "../llm/test/d2d_link/hardware/core_4x4_die1x3_c2c.json"
     v2c_cases = (
-        # (名称, workload, hw, 正向 link 序列, ACK link 序列, 源核, 目的核, 中间 die)
+        # (名称, workload, hw, 正向 link 序列, ACK link 序列, 源核, 目的核, 逐 die 期望片内 hop)
         ("3x1 fwd die0->die2 (E,E / ACK W,W)", WL2HOP, HW31,
-         [(0, 1, "E"), (1, 2, "E")], [(2, 1, "W"), (1, 0, "W")], 0, 32, [1]),
+         [(0, 1, "E"), (1, 2, "E")], [(2, 1, "W"), (1, 0, "W")], 0, 32, [18, 18, 0]),
         ("3x1 rev die2->die0 (W,W / ACK E,E)",
          "../llm/test/d2d_link/workload/cross_die_2hop_rev.json", HW31,
-         [(2, 1, "W"), (1, 0, "W")], [(0, 1, "E"), (1, 2, "E")], 32, 0, [1]),
+         [(2, 1, "W"), (1, 0, "W")], [(0, 1, "E"), (1, 2, "E")], 32, 0, [18, 18, 0]),
+        # 1×3 纵向两跳（计划要求的第三种拓扑）：正向 N,N；反向 S,S
+        ("1x3 fwd die0->die2 (N,N / ACK S,S)",
+         "../llm/test/d2d_link/workload/cross_die_2hop_v.json", HW13,
+         [(0, 1, "N"), (1, 2, "N")], [(2, 1, "S"), (1, 0, "S")], 0, 32, [18, 18, 0]),
+        ("1x3 rev die2->die0 (S,S / ACK N,N)",
+         "../llm/test/d2d_link/workload/cross_die_2hop_v_rev.json", HW13,
+         [(2, 1, "S"), (1, 0, "S")], [(0, 1, "N"), (1, 2, "N")], 32, 0, [18, 18, 0]),
         # 2×2 对角：die 级维序 X-first ⇒ 正向 die0-E->die1-N->die3，而 ACK 从 die3 出发也先走 X
         # ⇒ die3-W->die2-S->die0。**正反路径不对称**（构成一个矩形），这里精确固化该行为。
         ("2x2 diag die0->die3 (E,N / ACK W,S; asymmetric)", WLDIAG, HW22,
-         [(0, 1, "E"), (1, 3, "N")], [(3, 2, "W"), (2, 0, "S")], 0, 48, [1, 2]),
+         [(0, 1, "E"), (1, 3, "N")], [(3, 2, "W"), (2, 0, "S")], 0, 48,
+         [52, 15, 3, 9]),
     )
-    for name, wl, hw, fwd, ack, src, dest, busy in v2c_cases:
+    for name, wl, hw, fwd, ack, src, dest, exp_mesh in v2c_cases:
         pr = [path_run(wl, hw) for _ in range(2)]
-        ok = (all(path_ok(r, fwd, ack, 4, src, dest, busy) for r in pr) and
+        ok = (all(path_ok(r, fwd, ack, 4, src, dest, exp_mesh) for r in pr) and
               pr[0]["ns"] == pr[1]["ns"] and pr[0]["links"] == pr[1]["links"] and
               pr[0]["die_act"] == pr[1]["die_act"] and
               pr[0]["die_mesh"] == pr[1]["die_mesh"])
@@ -1083,9 +1091,12 @@ def main():
     #     V1-d3 在**单跳**上标定了 T(L)-T(0)=3*L*CYCLE（REQUEST/ACK/DATA 三个因果串联跨链阶段）。
     #     多跳时三个阶段各自跨 H 条 link，故推广为 **T(L)-T(0) = 3*H*L*CYCLE**。
     #     并且把「NoC 路由开销」与「每跳 D2D 固定延迟」分离：
-    #       T(H,L) = T_noc(H) + 3*H*L*CYCLE
-    #     ⇒ (T2(L)-T1(L)) - (T2(0)-T1(0)) = 3*L*CYCLE —— 多出的那一跳里，NoC 部分与 L 无关，
-    #       D2D 部分严格正比于 L。这样「变慢」能被归因到具体来源，而不是笼统的总时间。
+    #       T(H,L) = T_fixed(H) + 3*H*L*CYCLE
+    #     ⇒ (T2(L)-T1(L)) - (T2(0)-T1(0)) = 3*L*CYCLE
+    #     即多出的那一跳里，**与 L 无关的固定开销**和**可编程 D2D latency 增量**被分离开。
+    #     注意措辞：该固定开销（本配置下 54 ns）是「每多一跳的 L-independent 固定成本」，
+    #     它同时包含中间 die 的 NoC/router traversal、ingress re-pin、D2D 接口固定 pipeline
+    #     以及两组实验端点位置差异，**本测试并未把这些分项进一步拆开**，故不称其为纯 NoC 开销。
     CYCLE_NS = 2      # llm/include/macros/macros.h: CYCLE
     PHASES = 3        # REQUEST + ACK + DATA
     HW21 = "../llm/test/d2d_link/hardware/core_4x4_die2x1_c2c.json"
@@ -1132,12 +1143,13 @@ def main():
            f"invariant={inv}")
 
     # 3x-2：NoC 与 D2D 分离——多出的一跳里，NoC 开销与 L 无关，D2D 部分严格 = 3*L*CYCLE
-    noc_hop = (t2[0] - t1[0]) if (t2[0] and t1[0]) else None
+    noc_hop = (t2[0] - t1[0]) if (t2[0] and t1[0]) else None  # L-independent 固定开销
     sep_ok = all(v is not None for v in list(t2.values()) + list(t1.values())) and all(
         (t2[L] - t1[L]) - noc_hop == PHASES * L * CYCLE_NS for L in LAT_SWEEP)
-    record("V2-d hop/latency decomposition: extra hop = constant NoC cost + 3*L*CYCLE D2D",
+    record("V2-d hop/latency decomposition: extra hop = L-independent fixed cost "
+           "+ 3*L*CYCLE programmable D2D latency",
            sep_ok,
-           f"T1={t1} T2={t2} noc_cost_per_extra_hop={noc_hop}ns "
+           f"T1={t1} T2={t2} fixed_cost_per_extra_hop={noc_hop}ns "
            f"d2d_part={ {L: (t2[L] - t1[L]) - noc_hop for L in LAT_SWEEP} } "
            f"expect={ {L: PHASES * L * CYCLE_NS for L in LAT_SWEEP} }")
 
@@ -1176,6 +1188,42 @@ def main():
            f"ns={mf[0]['ns']}/{mf[1]['ns']} repin={mf[0]['repin']} "
            f"done={mf[0]['done']} die_mesh={mf[0]['die_mesh']} "
            f"drain={mf[0]['drain']}/{mf[0]['link_drain']}")
+
+    # 3y. V2-d2：**仿真器内部**协议进展 watchdog + 已知协议依赖环的诊断。
+    #     动机：Python 的 subprocess timeout（哨兵 124）只能把「永久挂起」变成测试失败，
+    #     无法区分协议依赖环 / 路由丢包 / 网络残留，也拿不到等待状态。这里构造一个真实的
+    #     rendezvous 依赖环（core0 等 core16 的 tag0，core16 等 core0 的 tag16，双方都先等
+    #     对方），要求**仿真器自己**在 wall-clock 超时前主动诊断并非零退出。
+    rc, out = run([NPUSIM, "--workload-config",
+                   "../llm/test/d2d_link/workload/cross_die_rendezvous_cycle.json",
+                   "--hardware-config", C2C21,
+                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=300)
+    wd = re.search(r"\[PROTO_WAIT\] protocol_wait_cycle=(\d+) "
+                   r"last_progress_cycle=(\d+) stalled_for=(\d+) "
+                   r"router_residual=(-?\d+) d2d_link_residual=(-?\d+)", out)
+    # 必须由仿真器主动退出（专用码 3），**不是** Python 超时哨兵 124
+    wd_ok = (rc == 3 and wd is not None and
+             "protocol progress watchdog fired" in out and
+             int(wd.group(3)) > 0 and
+             # 该环是原语层 rendezvous：网络已排空（无在途包 / 无持锁），watchdog 应如实指出
+             int(wd.group(4)) == 0 and int(wd.group(5)) == 0 and
+             "wait is at the primitive/rendezvous layer" in out)
+    record("V2-d2 protocol watchdog diagnoses a rendezvous dependency cycle "
+           "(simulator exits non-zero itself, not via test-framework timeout)",
+           wd_ok,
+           f"exit={rc} (3=watchdog, 124=framework timeout) "
+           f"wait_cycle={wd.group(1) if wd else None} "
+           f"stalled_for={wd.group(3) if wd else None} "
+           f"residual=router{wd.group(4) if wd else '?'}/link{wd.group(5) if wd else '?'}")
+
+    # 3y-2：watchdog 不得误伤合法用例——正常的两跳多流必须照常完成且不触发任何诊断。
+    rc_ok, out_ok = run([NPUSIM, "--workload-config", WLMF,
+                         "--hardware-config", HW31,
+                         "--simulation-config", SIM, "--mapping-config", MAP],
+                        timeout=300)
+    record("V2-d2 watchdog does not fire on a healthy multi-hop multi-flow run",
+           rc_ok == 0 and "PROTO_WAIT" not in out_ok and finish_ns(out_ok) is not None,
+           f"exit={rc_ok} ns={finish_ns(out_ok)} proto_wait={'PROTO_WAIT' in out_ok}")
 
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,

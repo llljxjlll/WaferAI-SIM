@@ -339,7 +339,15 @@ SEND_REQ → RECV/ACK → SEND_DATA
   `T2(0)-T1(0)=54 ns`（与 L 无关），而 `(T2(L)-T1(L))-54 = 0/6/42/120` 精确等于 `3*L*CYCLE`；
   latency 只平移固定延迟（各 L 下路径/包数/repin/mesh 不变）；watchdog 把超时哨兵判为失败
   （16 次扫描 0 超时）；多流两条 2 跳流共享同一对 link，每条计数恰为单流两倍、均 drain=0。
-- **当前门 / V2 完成**：自测 241/241、Link 18/18、runner **58/58**、NoC 冻结值不变。
+- **V2-d2 ✔ 仿真器内部协议 watchdog**：`ProtocolWatchdog` 维护「最后一次协议进展时间」，
+  超阈值无进展即 dump `[PROTO_WAIT]`（wait_cycle / stalled_for / router+link residual /
+  output lock / 队首 `(source,tag,dest,phase,wait_reason)`）并由 npusim 以**退出码 3** 主动结束；
+  rendezvous 依赖环用例实测 `exit=3`、residual 全 0、判定为原语层等待；健康用例不误触发。
+  Python `timeout=` 退居测试框架保险。
+- 拓扑覆盖补齐：除 3×1 与 2×2 外，新增 **1×3 纵向两跳**（正向 `N,N`、反向 `S,S`）。
+  逐 die 片内 hop 数改为**精确期望**（如 3×1/1×3 `[18,18,0]`、2×2 对角 `[52,15,3,9]`），
+  不再只断言 >0；目的 die 为 0 是因入口 tile 恰为目的核本身（几何决定），已固化说明。
+- **当前门 / V2 完成**：自测 241/241、Link 18/18、runner **62/62**、NoC 冻结值不变。
   V2 范围（多跳接力、per-die 重新 pin、精确路径证据、延迟标定、协议级活性）已闭合；
   **有限缓冲/带宽/背压与网络死锁安全属 V3，V2 不声称也未验证**。
 
@@ -737,7 +745,7 @@ V3 网络级覆盖：
 | T05 | 消息大小边界 | V1 | 包化与尾包正确 | 1/2/5/7/8/9/32 包的 seq/hash/checksum/尾长正确，完成时间单调 |
 | T06 | 3-die 多跳 | V2 | 中间 die 接力 | **V2-b/V2-c 已覆盖**：3×1 正向 E,E 与反向 W,W；承载 DATA/REQUEST/ACK 的有向 link 集合恰好等于期望路径且每条 in==out；每包 hop 数==2；repin total==跨链包数且 same>0（排除同 port id 巧合）；中间 die mesh_pkts=18>0（真片内 hop）；仅终点 DONE、drain=0 |
 | T07 | 2×2 对角路径 | V2 | die 级 XY | **V2-b2/V2-c 已覆盖**：正向 die0-(E)->die1-(N)->die3，ACK die3-(W)->die2-(S)->die0——**正反不对称**（维序两向都先走 X，往返成矩形）已固化为期望；repin=(12,12,0)（每次入口重写都改方向）；mesh_pkts=[52,15,3,9] 示 die1 承载正向、die2 只承载 ACK；路径收敛无绕圈、仅 core48 DONE、drain=0 |
-| T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | **V2-d 已覆盖合法模式**：多跳 latency 扫描 16 次运行 0 超时（超时哨兵=失败），多流两条 2 跳流均完成且 drain=0；「已知协议环被正确诊断」需要构造 rendezvous 环用例，仍待补 |
+| T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | **V2-d/V2-d2 已完整覆盖**：合法模式——latency 扫描 16 次 0 超时、多流两条 2 跳流均完成 drain=0；**已知协议环**——`cross_die_rendezvous_cycle.json` 由**仿真器内部** `ProtocolWatchdog` 主动诊断，dump `protocol_wait_cycle`/`stalled_for`/residual/output lock/`(source,tag,dest,phase,wait_reason)` 并以**退出码 3** 结束（非框架 124 超时），且明确判定「等待在原语/rendezvous 层而非网络层」；健康用例不误触发 |
 | T09 | 三类瓶颈隔离 | V3 | 带宽准确性 | goodput 等于最小段速率 |
 | T10 | 同 link/独立 link | V3 | D2D 争用 | 共享受总容量限制，独立可并行 |
 | T11 | Local+D2D shared/disjoint | V3 | 混合 NoC 拥塞 | 仅 shared 出现显著 queue/stall |
