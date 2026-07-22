@@ -57,7 +57,7 @@ cd build && ./npusim --d2d-v0-selftest
 - **V1-c0 ✔**：`FlowKey(source_global_id,tag,subflow)` 与消息内 16-bit
   `exit_port_`；`0=unpinned`、有效端口编码为 `port_id+1`，现有未 pin 消息的保留位仍为零。
 - **V1-c1a ✔（能力就绪；当时生产 gate 保持关闭）**：preflight 可精确验证相邻 die 的实际双向
-  `g_d2d_links`，拒绝无 link 与多跳；c1/c2 期间生产调用保持 `allow_adjacent_d2d=false`，避免接受后
+  `g_d2d_links`，拒绝无 link 与多跳；c1/c2 期间生产调用保持 `allow_d2d=false`，避免接受后
   挂死；该 gate 已在 c3 闭环后显式打开。
 - **V1-c1b ✔（控制路由接线）**：串行/并行 REQUEST 与接收端返回 ACK 均在源核调用
   `PinControlMsgExit`，相邻跨 die 时只选一次出口并随包携带；Router 控制路径统一调用
@@ -89,10 +89,48 @@ cd build && ./npusim --d2d-v0-selftest
   分别为 **278/284/320/398 ns**。Link DATA 的 delivery-capture 相对增量精确为 `L cycle`，
   DATA span 恒为 6 cycles；完整协议因 REQUEST→ACK→DATA 三个因果串联跨链阶段，满足
   **`T(L)-T(0)=3*L*CYCLE=6L ns`**（`CYCLE=2 ns`），不是错误的 `ΔT=ΔL`。
-- **当前验证 / V1 完成**：纯函数/路由自测 **218/218**、Link SystemC 自测 **18/18**、
-  D2D runner **48/48**、NoC 冻结值 **14781/29109、14833/45441**。V1 的相邻 die、
-  单端口、1 packet/cycle、固定 latency、功能性无限 FIFO 范围已闭合；多跳进入 V2，
-  有限缓冲/带宽/背压进入 V3。
+- **V1 完成（tag `d2d-v1-baseline`）**：V1 的相邻 die、单端口、1 packet/cycle、固定 latency、
+  功能性无限 FIFO 范围已闭合；多跳进入 V2，有限缓冲/带宽/背压进入 V3。
+
+## V2（多跳跨 die）—— 进行中
+
+V2 继续沿用 V1 的**功能性无限 FIFO**，**不**引入有限缓冲/背压（属 V3），因此 V2 **不**声称
+解决了 buffer deadlock。
+
+- **V2-a ✔（多跳路由纯函数）**：去掉 `SelectCoreMsgExit` 的「仅相邻」拒绝——源端只 pin
+  **第一跳**，每进入一个 die 再重新 pin。`exit_port` 只对**当前 die** 有效：`CrossDieStep`
+  用 `DieOfGlobal(pos)` 现算 `md` 并校验携带值，携带上一跳出口会被拒（而非错误路由）。
+  新增 `CrossDieIngressTile(die, port)` 由 `g_d2d_links` 精确 peer 元组给出落点 tile。
+  自测走完整多跳路径（3×1 `E,E`；2×2 对角 `E` 然后 `N`，含两个反向），断言
+  hop 数 == `DieManhattan`、每跨 link die 距离严格 −1、片内距离严格下降、egress 方向序列；
+  并直测生产包装 `SelectCoreMsgExit`（== `CrossDieSelectExit`、只 pin 首跳、可进包头）
+  与 peer 映射（== `remote_die/remote_port.tile`、反向回原 egress tile、非法/无 peer → −1）。
+- **V2-b ✔（中间 die 运行时转发）**：`RouterUnit::RepinOnC2CIngress` 在 C2C 入口重写 pinned
+  exit——目的在本 die 清为 −1，否则按 `CrossDieSelectExit(入口 tile, des)` 重新 pin；数据与
+  控制两条入口路径都接入，故 REQUEST/ACK/DATA 均可中继。preflight 沿 die 级维序路径逐跳要求
+  双向 peer link。**关键证据**：3×1 直线相邻两 die 的 E 出口是**同一个模板 port id**，送达成功
+  无法区分「已重新 pin」与「沿用旧值」，故新增 `[D2D_REPIN] total/changed/same` 计数，
+  断言 `same>0` 且 `total == 跨 link 包数`。3×1 两跳实测 `typed=(2,2,2,2,8,8)`、
+  `repin=(12,6,6)`、仅终点 DONE、ACK 源 `{0,32}`（中间 die 未提前产生 ACK/DONE）、
+  router 与 link 均 drain=0。
+- **V2-b2 ✔（HOST lane 缺口修复 + 方向变化的多跳证据）**：
+  - **修复潜伏的 V1 dataflow 缺口**：config 与 START 早已走 `HostLaneOfCore`，唯独权重下发
+    `config_helper_base::fill_queue_data` 仍用 `config.id / GRID_X` 直接索引 `write_buffer`。
+    该式只在「每 die lane 数 == `GRID_Y`」的 legacy 布局下才等于 lane；config 驱动 HOST 时
+    （2×2 每 die 3 lane → `HOST_LANES=12`）die3 的 core48 算出 12，越界 `q[12]` **段错误**。
+    此前所有配置恰好每 die 4 lane，故未暴露。现统一走 `HostEnvelope + LegacyHostEnqueue`
+    （内部 `HostLaneOfCore` + lane 范围校验，非法 dest 抛异常而非静默越界）。
+  - **die3 本地回归**：2×2 config 驱动 HOST、workload 只在 die3 内跑，**D2D 活动恒为 0**，
+    正常完成、drain=0 —— 把 HOST lane 缺陷与多跳彻底解耦。
+  - **2×2 对角多跳 e2e**：`die0 -(E)-> die1 -(N)-> die3`（反向 ACK `W` 然后 `S`）。方向**真的
+    改变**，故每次入口重写都必须改值：实测 `typed=(2,2,2,2,8,8)`、**`repin=(12,12,0)`**
+    （`changed==total`、`same=0`）、仅 core48 DONE、ACK 源 `{0,48}`、drain=0。这与 3×1 直线
+    互补，构成「运行时确实没有沿用 stale exit」的完整证据。
+  - `allow_adjacent_d2d` 改名 **`allow_d2d`**（它现在放行任意已连通的多跳路径，不只相邻）。
+- **当前验证**：纯函数/路由自测 **241/241**、Link SystemC 自测 **18/18**、D2D runner **51/51**、
+  NoC 冻结值 **14781/29109、14833/45441**。
+- **V2 待办**：V2-c 多跳端到端补全（经过的 link/方向/hop 数、中间 die NoC 活动）、
+  V2-d 延迟与活性验收（hop/latency 扫描、watchdog、多流）并冻结 `d2d-v2-baseline`。
 
 ## V0 基线冻结（V0-exit / Inc 4）—— 进 V1 前的准入门
 

@@ -885,6 +885,85 @@ def main():
            f"ack_srcs={sorted(th[0]['ack_srcs'])} "
            f"drain={th[0]['drain']}/{th[0]['link_drain']}")
 
+    # 3u. V2-b2 回归：config 驱动 HOST（每 die lane 数 != GRID_Y）下最高 die 的纯 die 内 workload。
+    #     曾因权重下发用 legacy 的 `config.id / GRID_X` 索引 write_buffer 而越界段错误
+    #     （2×2：core48 -> 12，而 HOST_LANES=12，合法 0..11）。现统一走 HostLaneOfCore。
+    #     该用例**无任何跨 die 流量**，故 D2D 活动必须恒为 0——把 HOST lane 缺陷与多跳解耦。
+    HW22 = "../llm/test/d2d_link/hardware/core_4x4_die2x2_c2c.json"
+    d3wl = _jd1.load(open(os.path.join(HERE, "workload", "cross_die_2core.json")))
+    d3wl["source"] = [{"dest": 48, "size": "BTP"}]
+    d3wl["chips"][0]["cores"][0]["id"] = 48
+    d3wl["chips"][0]["cores"][0]["worklist"][0]["cast"] = [{"dest": 49, "tag": 49}]
+    d3wl["chips"][0]["cores"][1]["id"] = 49
+    d3wl["chips"][0]["cores"][1]["worklist"][0]["recv_tag"] = 49
+    fdw, d3path = _tfd1.mkstemp(suffix=".json", prefix="d2d_v2b2_die3_")
+    with os.fdopen(fdw, "w") as f:
+        _jd1.dump(d3wl, f)
+    rc, out = run([NPUSIM, "--workload-config", d3path, "--hardware-config", HW22,
+                   "--simulation-config", SIM, "--mapping-config", MAP], timeout=120)
+    os.remove(d3path)
+    d3_done, _ = parse_sig(out)
+    d3_dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+    d3_ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
+    d3_ok = (rc == 0 and finish_ns(out) is not None and
+             "[D2D] in_pkts=0 out_pkts=0 busy_cycles=0 stall_cycles=0" in out and
+             sig_to_dict(d3_done) == {49: 1} and
+             d3_dr is not None and int(d3_dr.group(1)) == 0 and
+             d3_ldr is not None and int(d3_ldr.group(1)) == 0)
+    record("V2-b2 die3-local on config-driven HOST: weight fill uses HostLaneOfCore "
+           "(was q[12] overflow -> SIGSEGV), D2D=0",
+           d3_ok, f"exit={rc} ns={finish_ns(out)} done={sig_to_dict(d3_done)}")
+
+    # 3v. V2-b2：2×2 对角多跳 die0 -> die1 -> die3（正向 E 然后 N；反向 ACK W 然后 S）。
+    #     这是**方向真的改变**的多跳，与 3×1 直线互补：每次入口重写都必须把 E 改成 N（反向 W->S），
+    #     因此 changed==total、same==0。若运行时沿用上一跳 exit，ValidatePinnedExit 会直接抛错。
+    WLDIAG = "../llm/test/d2d_link/workload/cross_die_diag.json"
+
+    def diag_run():
+        rc, out = run([NPUSIM, "--workload-config", WLDIAG, "--hardware-config", HW22,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=180)
+        done_sig, ack_sig = parse_sig(out)
+        mism, _ = parse_hl(out)
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
+        ack_srcs = {int(t.split(":")[0]) for t in (ack_sig or "").split(",") if t}
+        phases = all(s in out for s in (
+            "Core 0 start send primitive SEND_REQ",
+            "Core 0 end recv primitive RECV_ACK",
+            "Core 0 start send primitive SEND_DATA",
+            "Core 48 end recv primitive RECV_DATA",
+            "Core 48 start send primitive SEND_DONE"))
+        return dict(rc=rc, ns=finish_ns(out), typed=last_groups(D2D_TYPE_RE, out),
+                    repin=last_groups(REPIN_RE, out), done=sig_to_dict(done_sig),
+                    ack_srcs=ack_srcs, mism=mism, phases=phases,
+                    drain=int(dr.group(1)) if dr else None,
+                    link_drain=int(ldr.group(1)) if ldr else None,
+                    bind_ok=not any(k in out.lower()
+                                    for k in ("unbound", "multi-writer", "multi-bind")))
+
+    def diag_ok(r):
+        if (r["rc"] != 0 or r["typed"] is None or r["repin"] is None or
+                r["mism"] != 0 or not r["bind_ok"] or not r["phases"]):
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        total, changed, same = r["repin"]
+        return (rin == rout == 2 and ain == aout == 2 and din == dout == 8 and
+                total == rin + ain + din and
+                changed == total and same == 0 and  # 每次重写都改变方向（E->N / W->S / ->-1）
+                r["done"] == {48: 1} and r["ack_srcs"] <= {0, 48} and
+                r["drain"] == 0 and r["link_drain"] == 0)
+
+    dg = [diag_run() for _ in range(2)]
+    record("V2-b2 2x2 diagonal two-hop (E then N, ACK W then S): every ingress re-pin "
+           "changes direction (changed==total, same=0), drain=0",
+           all(diag_ok(r) for r in dg) and dg[0]["ns"] == dg[1]["ns"] and
+           dg[0]["typed"] == dg[1]["typed"] and dg[0]["repin"] == dg[1]["repin"],
+           f"ns={dg[0]['ns']}/{dg[1]['ns']} typed={dg[0]['typed']} "
+           f"repin={dg[0]['repin']} done={dg[0]['done']} "
+           f"ack_srcs={sorted(dg[0]['ack_srcs'])} "
+           f"drain={dg[0]['drain']}/{dg[0]['link_drain']}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",

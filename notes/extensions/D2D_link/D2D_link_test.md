@@ -307,6 +307,30 @@ SEND_REQ → RECV/ACK → SEND_DATA
 
 本版只讨论协议级等待，例如双方都先发送再接收造成的 rendezvous 环形等待。有限 port/link buffer 的资源约束、背压和由此产生的 hold-and-wait 网络死锁尚未进入模型，因此不在 V2 声称或验证 buffer 死锁安全。
 
+#### 当前进展（V2-a / V2-b / V2-b2 已完成）
+
+- **V2-a ✔ 多跳路由纯函数**：源端只 pin 首跳，`exit_port` 只对当前 die 有效；`CrossDieStep` 现算
+  `md` 并校验携带值（携带上一跳出口 → 抛错而非错误路由）。新增 `CrossDieIngressTile` 由
+  `g_d2d_links` 精确 peer 给出落点。自测覆盖 3×1 `E,E` 与 2×2 对角 `E→N`（含反向）：
+  hop 数 == `DieManhattan`、逐跳 die 距离严格 −1、片内距离严格下降、egress 序列；并直测生产
+  包装 `SelectCoreMsgExit` 与 peer 映射的精确性/非法输入。
+- **V2-b ✔ 中间 die 运行时转发**：`RepinOnC2CIngress` 在 C2C 入口重写 pinned exit（到目的 die
+  清 −1，否则按入口 tile 重新 pin），数据/控制两路都接入，REQUEST/ACK/DATA 均中继；preflight
+  逐跳要求双向 peer link。**同 port id 的巧合必须排除**：3×1 相邻两 die 的 E 出口是同一模板
+  port id，送达成功无法区分「重新 pin」与「沿用旧值」，故以 `[D2D_REPIN] total/changed/same`
+  计数为准，断言 `same>0` 且 `total == 跨 link 包数`。
+- **V2-b2 ✔ HOST lane 缺口 + 方向变化证据**：修复潜伏的 V1 dataflow 缺口——权重下发
+  `fill_queue_data` 仍用 `config.id / GRID_X` 索引 write_buffer，在 config 驱动 HOST
+  （每 die lane 数 ≠ `GRID_Y`）下越界段错误（2×2 die3：`48/4=12` 而 `HOST_LANES=12`）；
+  改走 `HostEnvelope + LegacyHostEnqueue`（`HostLaneOfCore` + 范围校验）。补 die3 本地回归
+  （D2D 活动恒 0，与多跳解耦）与 2×2 对角 e2e。
+- 参数 `allow_adjacent_d2d` 更名 `allow_d2d`（现放行任意已连通多跳路径）。
+- **实测**：3×1 两跳 `typed=(2,2,2,2,8,8)`、`repin=(12,6,6)`；2×2 对角 `typed=(2,2,2,2,8,8)`、
+  `repin=(12,12,0)`（方向真的改变 → `changed==total`、`same=0`）；两者均只有终点 DONE、
+  ACK 源不含中间 die、router 与 link drain=0。自测 241/241、runner 51/51、NoC 冻结值不变。
+- **待办**：V2-c（经过的 link/方向/hop 数与中间 die NoC 活动的精确断言）、V2-d（hop/latency
+  扫描分离 NoC 与每跳 D2D 延迟、watchdog 活性、多流）并冻结 `d2d-v2-baseline`。
+
 #### 实现内容
 
 - 支持 `DIE_X × DIE_Y`。
@@ -699,8 +723,8 @@ V3 网络级覆盖：
 | T03 | 四方向相邻 die 单流 | V1 | 基本 D2D 功能 | REQ/ACK/DATA 正确闭环 |
 | T04 | 单跳 latency 扫描 | V1 | 固定延迟准确性 | Link：`Δdelivery=ΔL cycle`；完整三阶段事务：`ΔT=3ΔL·CYCLE` |
 | T05 | 消息大小边界 | V1 | 包化与尾包正确 | 1/2/5/7/8/9/32 包的 seq/hash/checksum/尾长正确，完成时间单调 |
-| T06 | 3-die 多跳 | V2 | 中间 die 接力 | hop 数和路径精确，中间 NoC 有活动 |
-| T07 | 2×2 对角路径 | V2 | die 级 XY | 路径收敛、无绕圈 |
+| T06 | 3-die 多跳 | V2 | 中间 die 接力 | **V2-b 已覆盖基础**：3×1 两跳 typed=(2,2,2,2,8,8)、repin total==跨 link 包数且 same>0（排除同 port id 巧合）、仅终点 DONE、drain=0；中间 NoC 活动的精确断言留 V2-c |
+| T07 | 2×2 对角路径 | V2 | die 级 XY | **V2-b2 已覆盖**：die0-(E)->die1-(N)->die3，反向 ACK W→S；repin=(12,12,0) 即每次入口重写都改方向（changed==total、same=0），仅 core48 DONE、drain=0 |
 | T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | 合法模式完成；已知协议环被正确诊断 |
 | T09 | 三类瓶颈隔离 | V3 | 带宽准确性 | goodput 等于最小段速率 |
 | T10 | 同 link/独立 link | V3 | D2D 争用 | 共享受总容量限制，独立可并行 |

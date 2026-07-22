@@ -48,7 +48,7 @@ void NormalizeWorkloadJson(WLJson &j, int die_id) {
 }
 
 void ValidateWorkloadStructure(const WLJson &j, int chip_id,
-                               bool allow_adjacent_d2d) {
+                               bool allow_d2d) {
     bool global = j.contains("id_space") &&
                   j.at("id_space").get<std::string>() == "global";
 
@@ -116,8 +116,8 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                 tag2dest[tag] = dest;
                 int dest_die = dest / CORES_PER_DIE;
                 if (dest_die != src_die) {
-                    // V1-c3：精确验证相邻 die 的实际双向 link；生产 dataflow 路径在
-                    // REQUEST/ACK/DATA 闭环后显式传 allow_adjacent_d2d=true。
+                    // 精确验证路径上每一跳的实际双向 link；生产 dataflow 路径在
+                    // REQUEST/ACK/DATA 闭环后显式传 allow_d2d=true。
                     std::string edge = "core " + std::to_string(cid) + " (die " +
                                        std::to_string(src_die) + ") -> core " +
                                        std::to_string(dest) + " (die " +
@@ -156,12 +156,12 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                             throw std::runtime_error(
                                 "cross-die path did not converge: " + edge);
                     }
-                    if (!allow_adjacent_d2d)
+                    if (!allow_d2d)
                         throw std::runtime_error(
-                            "adjacent cross-die runtime is disabled for this "
+                            "cross-die runtime is disabled for this "
                             "validation path: " +
                             edge);
-                    // 相邻且实际双向 link 存在：允许。
+                    // 路径每跳均有双向 link 且已显式放行：允许（V2 起含多跳）。
                 }
             }
         }

@@ -8,6 +8,7 @@
 #include "defs/global.h"
 #include "defs/spec.h"
 #include "monitor/config_helper_base.h"
+#include "monitor/host_envelope.h"
 
 using json = nlohmann::json;
 
@@ -39,8 +40,15 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
     // dram内容安排如下：（左侧offset更小）
     // | output area | input (last core's output) | input (get from host) |
     // 可以复用delta offset这个map
+    //
+    // V2-b2：权重下发不再用 legacy 的 `config.id / GRID_X` 直接索引 write_buffer row。
+    // 该式只有在「每 die lane 数 == GRID_Y」的 legacy 布局下才等于 lane；config 驱动 HOST
+    // （lane 数可不同）时会越界——例如 2×2 config-driven host 每 die 3 lane 时 HOST_LANES=12，
+    // 而 die3 的 core48 算出 48/4=12，落在合法区间 0..11 之外，直接段错误。config/START 早已
+    // 走 HostLaneOfCore，唯独这里残留旧式索引；统一改走 HostEnvelope + LegacyHostEnqueue
+    // （内部 HostLaneOfCore + 范围校验，非法 dest 抛异常而非静默越界写）。
+    std::vector<HostEnvelope> envs;
     for (auto config : coreconfigs) {
-        int index = config.id / GRID_X;
         int pkg_index = 0;
         int core_prim_cnt = 0;
 
@@ -69,7 +77,7 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
                                 0, (1 << M_D_TAG_ID) - 1, length, d);
                         m.source_ = HOST_ENDPOINT_ID;
                         m.roofline_packets_ = pkg_num;
-                        q[index].push(m);
+                        envs.push_back({config.id, m});
                     } else {
                         for (int j = 1; j <= pkg_num; j++) {
                             // CTODO: 拿到真正的数据
@@ -85,7 +93,7 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
                                         config.id, M_D_DATA * (j - 1),
                                         (1 << M_D_TAG_ID) - 1, length, d);
                             m.source_ = HOST_ENDPOINT_ID;
-                            q[index].push(m);
+                            envs.push_back({config.id, m});
                         }
 
                         pkg_index += pkg_num;
@@ -106,6 +114,8 @@ void config_helper_base::fill_queue_data(queue<Msg> *q) {
                     (1 << 16) - 1, (1 << M_D_TAG_ID) - 1, 0, d);
         m.source_ = HOST_ENDPOINT_ID;
         m.roofline_packets_ = 1;
-        q[index].push(m);
+        envs.push_back({config.id, m});
     }
+    // 统一落队：HostLaneOfCore + lane 范围校验（与 config/START 同一入口）
+    LegacyHostEnqueue(envs, q);
 }
