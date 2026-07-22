@@ -768,6 +768,58 @@ def main():
     record("V1-d2 message-size completion time strictly increases (1..32 packets)",
            monotonic, f"ns={[r['ns'] for r in d2_observed]}")
 
+    # 3s. V1-d3：生产端到端 latency=0/1/7/20 扫描。完整事务有三个严格因果串联的
+    #     跨链阶段（REQUEST 正向、ACK 反向、DATA 正向），CYCLE=2ns，因此：
+    #       T(L)-T(0) = 3 * L * CYCLE = 6L ns。
+    #     同时检查 Link 自身 DATA delivery-capture 增量恰为 L cycle，包间 span 不变。
+    latency_results = {}
+    base_hw = _jd1.load(open(os.path.join(
+        HERE, "hardware", "core_4x4_die2x1_c2c.json")))
+    for latency in (0, 1, 7, 20):
+        hw = _jd1.loads(_jd1.dumps(base_hw))
+        hw["die_ports"]["c2c"]["latency"] = latency
+        fdh, hpath = _tfd1.mkstemp(suffix=".json", prefix="d2d_d3_latency_")
+        with os.fdopen(fdh, "w") as f:
+            _jd1.dump(hw, f)
+        lruns = [integrity_run(C3_WL, hpath) for _ in range(2)]
+        os.remove(hpath)
+        ok = (all(integrity_ok(r, 4, 128) for r in lruns) and
+              lruns[0]["ns"] == lruns[1]["ns"] and
+              lruns[0]["typed"] == lruns[1]["typed"] and
+              lruns[0]["data"] == lruns[1]["data"])
+        latency_results[latency] = lruns[0]
+        record(f"V1-d3 latency={latency}: deterministic e2e + integrity (2x)",
+               ok, f"ns={lruns[0]['ns']}/{lruns[1]['ns']} "
+                   f"typed={lruns[0]['typed']} data={lruns[0]['data']}")
+
+    cycle_ns = 2  # llm/include/macros/macros.h:CYCLE
+    causal_phases = 3  # REQUEST + ACK + DATA
+    latency_law = all(r["ns"] is not None and r["data"] is not None
+                      for r in latency_results.values())
+    if latency_law:
+        base = latency_results[0]
+        base_data = base["data"]
+        base_link_delay = base_data[14] - base_data[12]
+        base_in_span = base_data[13] - base_data[12]
+        base_out_span = base_data[15] - base_data[14]
+        for latency, obs in latency_results.items():
+            d = obs["data"]
+            latency_law = latency_law and (
+                obs["ns"] - base["ns"] ==
+                causal_phases * latency * cycle_ns and
+                (d[14] - d[12]) - base_link_delay == latency and
+                d[13] - d[12] == base_in_span and
+                d[15] - d[14] == base_out_span and
+                d[:12] == base_data[:12])
+    else:
+        base_link_delay = None
+        base_out_span = None
+    latency_times = {latency: obs["ns"]
+                     for latency, obs in latency_results.items()}
+    record("V1-d3 latency law: link delta=L cycles, transaction delta=3*L*CYCLE, span fixed",
+           latency_law, f"ns={latency_times} base_link_delay={base_link_delay} "
+                        f"data_span={base_out_span}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",
