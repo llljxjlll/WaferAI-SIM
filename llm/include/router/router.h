@@ -124,3 +124,7 @@ public:
     // host buffer 的总占用。仿真正常结束时应为 0（无未释放锁、无滞留包）。
     long residual() const;
 };
+
+// 全程观测到的 output_lock_ref 峰值。>=2 证明**同 tag 的多条流共享了同一把锁**（多发一聚合，
+// tag-only 语义的核心证据）；distinct-tag 流各自独占锁则峰值为 1。进程级累计（每次 run 从 0）。
+extern long g_max_output_lock_ref;

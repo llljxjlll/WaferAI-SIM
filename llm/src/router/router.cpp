@@ -2,6 +2,8 @@
 #include "die/port.h"
 #include "utils/print_utils.h"
 
+long g_max_output_lock_ref = 0;
+
 RouterMonitor::RouterMonitor(const sc_module_name &n,
                              Event_engine *event_engine)
     : sc_module(n), event_engine(event_engine) {
@@ -375,6 +377,11 @@ void RouterUnit::router_execute() {
                 continue;
 
 
+            // output_lock 按 tag 锁是**有意设计**（非缺陷）：tag == 接收核 recv_tag == 全局核
+            // id（唯一），即「接收端聚合槽」。同 tag 的包（多源发一个核=多发一）共享锁、交错通过，
+            // 接收端按包内地址重组。全局 tag 下无「不同接收核撞 tag」别名，故不加 source 维
+            // （加了会把多发一错误拆成串行）。跨 die 时 out 由 DataMsgNextHop 给出，锁在正确方向。
+            // 详见 common/flow.h。
             // FIX 上锁应该在第一个DATA 包
             if (m.msg_type_ == DATA && m.seq_id_ == 1 && !IsHostEndpoint(m.des_) &&
                 !IsHostEndpoint(m.source_)) {
@@ -383,6 +390,8 @@ void RouterUnit::router_execute() {
                     // 上锁
                     output_lock[out] = m.tag_id_;
                     output_lock_ref[out]++;
+                    if (output_lock_ref[out] > g_max_output_lock_ref)
+                        g_max_output_lock_ref = output_lock_ref[out];
 
                     LOG_DEBUG(NETWORK)
                         << "Router " << rid << " set lock direction "
@@ -395,6 +404,8 @@ void RouterUnit::router_execute() {
                     // Two Ack 多发一 DATA 包 乱序 接受核的接受地址由 Send
                     // 包中地址决定
                     output_lock_ref[out]++;
+                    if (output_lock_ref[out] > g_max_output_lock_ref)
+                        g_max_output_lock_ref = output_lock_ref[out];
 
                     LOG_DEBUG(NETWORK)
                         << "Router " << rid << " add lock reference "

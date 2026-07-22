@@ -538,6 +538,58 @@ def main():
     record("V1-c3 production guard: multi-hop die0->die2 rejected before sim",
            rejected, f"exit={rc} entered_sim={entered}")
 
+    # output_lock tag-only 语义的两个对照用例（共用解析器）。
+    def cross_flow_run(wl):
+        rc, out = run([NPUSIM, "--workload-config", wl, "--hardware-config", C2C21,
+                       "--simulation-config", SIM, "--mapping-config", MAP], timeout=90)
+        typed = last_groups(D2D_TYPE_RE, out)
+        done_sig, _ = parse_sig(out)
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        lk = re.search(r"\[LOCK\] max_output_ref=(\d+)", out)
+        return dict(rc=rc, ns=finish_ns(out), typed=typed,
+                    done=sig_to_dict(done_sig),
+                    drain=int(dr.group(1)) if dr else None,
+                    maxref=int(lk.group(1)) if lk else None,
+                    bind_ok=not any(k in out.lower()
+                                    for k in ("unbound", "multi-writer", "multi-bind")))
+
+    # 3n. distinct-tag：两条**不同 tag** 跨 die 流（core0->16 tag16, core1->17 tag17）汇入同一个
+    #     E C2C 端口。各自独占锁（max_output_ref==1）、按接收槽正确串行、两核各 DONE、数据不串、归零。
+    f2 = [cross_flow_run("../llm/test/d2d_link/workload/cross_die_2flow.json")
+          for _ in range(2)]
+
+    def f2_ok(r):
+        if r["rc"] != 0 or r["typed"] is None or not r["bind_ok"]:
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        return (rin == rout == 2 and ain == aout == 2 and din == dout and din > 2 and
+                r["done"] == {16: 1, 17: 1} and r["drain"] == 0 and r["maxref"] == 1)
+
+    record("V1-c distinct-tag: two flows on one C2C port serialize (maxref=1, no mix, drain=0)",
+           all(f2_ok(r) for r in f2) and f2[0]["ns"] == f2[1]["ns"] and
+           f2[0]["typed"] == f2[1]["typed"],
+           f"ns={f2[0]['ns']}/{f2[1]['ns']} typed={f2[0]['typed']} done={f2[0]['done']} "
+           f"maxref={f2[0]['maxref']} drain={f2[0]['drain']}")
+
+    # 3o. many-to-one（tag-only 核心语义）：两个源 core0/core1 用**同一个 tag16** 都发 core16
+    #     （recv_cnt=2）。同 tag 共享同一把锁聚合 → **max_output_ref>=2**（若误改成 (source,tag)
+    #     会退化为 1）；core16 收齐两源后 DONE 一次、数据不串、归零。
+    m1 = [cross_flow_run("../llm/test/d2d_link/workload/cross_die_many2one.json")
+          for _ in range(2)]
+
+    def m1_ok(r):
+        if r["rc"] != 0 or r["typed"] is None or not r["bind_ok"]:
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        return (rin == rout == 2 and ain == aout == 2 and din == dout and din > 2 and
+                r["done"] == {16: 1} and r["drain"] == 0 and r["maxref"] >= 2)
+
+    record("V1-c many-to-one: same-tag 2 sources share one lock (maxref>=2, agg to 1 recv, drain=0)",
+           all(m1_ok(r) for r in m1) and m1[0]["ns"] == m1[1]["ns"] and
+           m1[0]["typed"] == m1[1]["typed"],
+           f"ns={m1[0]['ns']}/{m1[1]['ns']} typed={m1[0]['typed']} done={m1[0]['done']} "
+           f"maxref={m1[0]['maxref']} drain={m1[0]['drain']}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",

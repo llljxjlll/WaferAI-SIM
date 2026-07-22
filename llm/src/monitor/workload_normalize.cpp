@@ -2,6 +2,7 @@
 #include "defs/spec.h"
 #include "die/port.h"
 #include "utils/router_utils.h"
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -65,6 +66,10 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                 "\"id_space\":\"global\"");
     };
 
+    // tag → dest 唯一性：output_lock 按 tag 锁 = 接收端聚合槽。同一 tag 必须只指向一个接收核，
+    // 否则两个接收核共享 tag 会在 output_lock 别名（见 common/flow.h）。cast.tag 缺省=cast.dest。
+    std::map<int, int> tag2dest;
+
     if (!j.contains("chips") || chip_id >= (int)j.at("chips").size())
         return;
     const WLJson &cores = j.at("chips").at(chip_id).at("cores");
@@ -94,6 +99,21 @@ void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                 if (dest < 0)
                     continue;
                 check_bounds(dest, "cast.dest");
+                // tag → dest 唯一性（cast.tag 缺省=dest）
+                int tag = (cast.contains("tag") &&
+                           cast.at("tag").is_number_integer())
+                              ? cast.at("tag").get<int>()
+                              : dest;
+                auto it = tag2dest.find(tag);
+                if (it != tag2dest.end() && it->second != dest)
+                    throw std::runtime_error(
+                        "tag " + std::to_string(tag) +
+                        " maps to multiple receiver cores (" +
+                        std::to_string(it->second) + " and " +
+                        std::to_string(dest) +
+                        "); tag must uniquely identify a receiver "
+                        "(output_lock aggregation slot)");
+                tag2dest[tag] = dest;
                 int dest_die = dest / CORES_PER_DIE;
                 if (dest_die != src_die) {
                     // V1-c3：精确验证相邻 die 的实际双向 link；生产 dataflow 路径在

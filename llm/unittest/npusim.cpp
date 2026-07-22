@@ -143,6 +143,9 @@ int sc_main(int argc, char *argv[]) {
                          << resid(sc_get_top_level_objects());
     }
 
+    // output_lock_ref 峰值：>=2 证明同 tag 多流共享同一把锁（多发一聚合，tag-only 核心语义）。
+    LOG_INFO(SYSTEM) << "[LOCK] max_output_ref=" << g_max_output_lock_ref;
+
     // HOST lane 接收统计（V1-pre 3b-2b）：每 lane DONE/ACK 数 + 错配数
     // （消息应到 HostLaneOfCore(source_)；mismatch>0 说明路由送错 lane）。
     {

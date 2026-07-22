@@ -1172,7 +1172,9 @@ int RunD2DV0SelfTest() {
         }
     }
 
-    // ---- 17. FlowKey (V1-c0)：(source,tag[,subflow]) 防别名 ----
+    // ---- 17. FlowKey (source,tag,subflow) 三元组语义 ----
+    // 注：output_lock **不用** FlowKey（tag 已=全局接收槽，多发一需 tag-only 聚合，见 flow.h）。
+    // FlowKey 预留给 V5 subflow striping：同 (source,tag) 拆多条 subflow 时用三元组区分。
     {
         FlowKey a{5, 3, 0}, b{21, 3, 0}, c{5, 3, 0}, d{5, 7, 0}, e{5, 3, 1};
         // 同 tag 不同 source → 不同 key（跨 die 同 local-id/同 tag 不别名）
@@ -1238,9 +1240,9 @@ int RunD2DV0SelfTest() {
                   "preflight: exact bidirectional die0<->die1 links exist");
             check(wsErr(mkwl(0, CORES_PER_DIE), true).empty(),
                   "preflight helper: adjacent cross-die with peer link -> valid");
-            check(wsErr(mkwl(0, CORES_PER_DIE)).find("not enabled before V1-c3") !=
+            check(wsErr(mkwl(0, CORES_PER_DIE)).find("disabled for this validation path") !=
                       std::string::npos,
-                  "preflight production gate: adjacent workload rejected until c3");
+                  "preflight default-closed path: adjacent workload requires explicit opt-in");
         }
         // (c) 多跳（3×1，die0 -> die2，距离 2）：拒绝，报 "multi-hop"
         {
@@ -1257,6 +1259,43 @@ int RunD2DV0SelfTest() {
                 wsErr(mkwl(0, 2 * CORES_PER_DIE), true); // die0 -> die2
             check(e.find("multi-hop") != std::string::npos,
                   "preflight: multi-hop cross-die (die0->die2) -> rejected");
+        }
+
+        // (d) tag -> dest 唯一性（output_lock 按接收槽=tag）：同 tag 指向不同接收核 → 拒绝；
+        //     同 tag 同接收核（多发一）/ 不同 tag → 允许。
+        setTopo(4, 4, 1, 1);
+        {
+            auto mk2 = [&](int t0, int d0, int t1, int d1) {
+                auto mkcore = [&](int id, int dest, int tag) {
+                    D2DJson cast;
+                    cast["dest"] = dest;
+                    cast["tag"] = tag;
+                    D2DJson job;
+                    job["cast"] = D2DJson::array();
+                    job["cast"].push_back(cast);
+                    D2DJson core;
+                    core["id"] = id;
+                    core["worklist"] = D2DJson::array();
+                    core["worklist"].push_back(job);
+                    return core;
+                };
+                D2DJson wl;
+                wl["id_space"] = "global";
+                D2DJson chip;
+                chip["cores"] = D2DJson::array();
+                chip["cores"].push_back(mkcore(0, d0, t0));
+                chip["cores"].push_back(mkcore(1, d1, t1));
+                wl["chips"] = D2DJson::array();
+                wl["chips"].push_back(chip);
+                return wl;
+            };
+            check(wsErr(mk2(5, 10, 5, 11)).find("multiple receiver cores") !=
+                      std::string::npos,
+                  "tag->dest: same tag to different receivers rejected");
+            check(wsErr(mk2(5, 10, 5, 10)).empty(),
+                  "tag->dest: same tag to same receiver (many-to-one) allowed");
+            check(wsErr(mk2(5, 10, 6, 11)).empty(),
+                  "tag->dest: distinct tags allowed");
         }
     }
 
