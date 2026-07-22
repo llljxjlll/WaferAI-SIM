@@ -453,6 +453,13 @@ def main():
     D2D_TYPE_RE = re.compile(
         r"\[D2D_TYPE\] request_in=(\d+) request_out=(\d+) "
         r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)")
+    D2D_DATA_RE = re.compile(
+        r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+) "
+        r"in_seqhash=(\d+) out_seqhash=(\d+) in_csum=(\d+) out_csum=(\d+) "
+        r"out_inorder=(\d+) out_minseq=(-?\d+) out_maxseq=(-?\d+) "
+        r"out_endseq=(-?\d+) out_end_count=(\d+) out_end_length=(-?\d+) "
+        r"in_first_cycle=(-?\d+) in_last_cycle=(-?\d+) "
+        r"out_first_cycle=(-?\d+) out_last_cycle=(-?\d+)")
 
     def last_groups(rx, text):
         m = None
@@ -673,6 +680,93 @@ def main():
                 "MVP requires C2C dir == side" in out and not entered)
     record("V1-d1 topology guard: c2c port side!=dir rejected before sim",
            rejected, f"exit={rc} entered_sim={entered}")
+
+    # 3r. V1-d2：逐包完整性与消息大小边界。当前 4x4 测例 B=1/T=4、int8、
+    #     noc_payload_per_cycle=4，因此 OC=16*N 精确产生 N 个链路 DATA 包；
+    #     OC=16*N-1 仍产生 N 包，但尾包 length=96，可覆盖非整包尾部。
+    def integrity_run(wl, hw):
+        rc, out = run([NPUSIM, "--workload-config", wl, "--hardware-config", hw,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=90)
+        mism, _ = parse_hl(out)
+        done_sig, _ = parse_sig(out)
+        phases_ok = all(s in out for s in (
+            "Core 0 start send primitive SEND_REQ",
+            "Core 0 end recv primitive RECV_ACK",
+            "Core 0 start send primitive SEND_DATA",
+            "Core 16 end recv primitive RECV_DATA",
+            "Core 16 start send primitive SEND_DONE"))
+        ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        return dict(
+            rc=rc, ns=finish_ns(out), agg=last_groups(D2D_RE, out),
+            typed=last_groups(D2D_TYPE_RE, out),
+            data=last_groups(D2D_DATA_RE, out), mism=mism,
+            done=sig_to_dict(done_sig), phases=phases_ok,
+            drain=int(dr.group(1)) if dr else None,
+            link_drain=int(ldr.group(1)) if ldr else None,
+            ls=_last(LS_RE, out), lu=_last(LU_RE, out),
+            bind_ok=not any(k in out.lower()
+                            for k in ("unbound", "multi-writer", "multi-bind")))
+
+    def probe_ok(d, packets, end_length):
+        if d is None:
+            return False
+        (pin, pout, seqin, seqout, csin, csout, inorder,
+         minseq, maxseq, endseq, end_count, end_len,
+         in_first, in_last, out_first, out_last) = d
+        return (pin == pout == packets and seqin == seqout and csin == csout and
+                inorder == 1 and maxseq - minseq + 1 == packets and
+                endseq == maxseq and end_count == 1 and end_len == end_length and
+                in_first >= 0 and in_last >= in_first and
+                out_first >= 0 and out_last >= out_first and
+                in_last - in_first == out_last - out_first)
+
+    def integrity_ok(r, packets, end_length):
+        if (r["rc"] != 0 or r["ns"] is None or r["agg"] is None or
+                r["typed"] is None or r["mism"] != 0 or not r["bind_ok"]):
+            return False
+        rin, rout, ain, aout, din, dout = r["typed"]
+        total_in, total_out, busy, stall = r["agg"]
+        return (r["ls"] == 2 and r["lu"] == 2 and r["phases"] and
+                r["done"] == {16: 1} and
+                r["drain"] == 0 and r["link_drain"] == 0 and
+                rin == rout == 1 and ain == aout == 1 and
+                din == dout == packets and
+                total_in == total_out == packets + 2 and
+                busy == 0 and stall == 0 and
+                probe_ok(r["data"], packets, end_length))
+
+    size_cases = (
+        ("1-full", 16, 1, 128),
+        ("2-full", 32, 2, 128),
+        ("5-partial-tail", 79, 5, 96),
+        ("7-before-depth", 112, 7, 128),
+        ("8-at-depth", 128, 8, 128),
+        ("9-after-depth", 144, 9, 128),
+        ("32-long", 512, 32, 128),
+    )
+    d2_observed = []
+    for name, oc, packets, end_length in size_cases:
+        sized = _jd1.load(open(os.path.join(
+            HERE, "workload", "cross_die_2core.json")))
+        sized["vars"]["OC"] = oc
+        fdw, wpath = _tfd1.mkstemp(suffix=".json", prefix="d2d_d2_size_")
+        with os.fdopen(fdw, "w") as f:
+            _jd1.dump(sized, f)
+        obs = integrity_run(wpath, C2C21)
+        os.remove(wpath)
+        ok = integrity_ok(obs, packets, end_length)
+        d2_observed.append(obs)
+        record(f"V1-d2 DATA integrity {name}: packets/seq/checksum/tail/drain",
+               ok, f"ns={obs['ns']} typed={obs['typed']} data={obs['data']} "
+                   f"done={obs['done']} drain={obs['drain']}")
+
+    monotonic = (all(r["ns"] is not None for r in d2_observed) and
+                 all(a["ns"] < b["ns"]
+                     for a, b in zip(d2_observed, d2_observed[1:])))
+    record("V1-d2 message-size completion time strictly increases (1..32 packets)",
+           monotonic, f"ns={[r['ns'] for r in d2_observed]}")
 
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
