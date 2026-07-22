@@ -87,6 +87,56 @@ void ParseDiePorts(const D2DJson &hw_json);
 // 供测试/外部单独触发的校验（ParseDiePorts 内部也会调用）。
 void ValidateDiePorts();
 
+// ---- V3-a：D2D 链路建模模式与容量契约 ----
+//
+// **模式**：
+//   functional_v2（默认，旧配置不写 mode 时即此）——V1/V2 语义：功能性无限 FIFO、
+//     每方向单端口、1 packet/cycle、固定 latency。**不**建模有限缓冲/背压。
+//   bounded_saf——V3：有限缓冲 + 有理数速率 + 背压，死锁安全策略必须显式选定。
+//
+// **死锁安全**：MVP 采用 **whole-flow store-and-forward**（建模计划已定，不摇摆到 escape VC）：
+//   每个 D2D 边界必须**完整收下整条 flow（F 个包）**后才向下一段发送，用边界 buffer 把源 die
+//   与远端 die 的锁依赖剪成两段，切断跨 die 的 hold-and-wait。
+//
+// **速率用整数有理数** `num/den`，避免浮点非确定性。物理约束：单个 `sc_bv<256>` 信道每拍最多
+// 载 1 个包，故 **0 < rate <= 1**；`rate > 1` 必须在启动期**明确拒绝**，不得静默按 1 建模
+// （真正的 >1 packet/cycle 需要多 lane，属后续版本）。
+//
+// **四类容量必须分开配置**，不可用一个 buffer_depth 混代：
+//   saf_buffer_depth      >= F        —— whole-flow SAF 的**正确性**要求（装得下整条 flow）
+//   link_inflight_depth   >= BDP      —— 在途 FIFO，维持流水利用率（带宽时延积）
+//   rx_buffer_depth                   —— 远端接收侧容量与背压
+//   ctrl_buffer_depth                 —— 独立控制子通道容量
+// 「buffer >= BDP」**不能**代替「buffer >= flow」，二者约束不同、不可互相顶替。
+enum D2DMode { MODE_FUNCTIONAL_V2 = 0, MODE_BOUNDED_SAF };
+enum D2DSafety { SAFETY_NONE = 0, SAFETY_WHOLE_FLOW_SAF };
+
+struct D2DRate {
+    int num = 1, den = 1;
+    bool Valid() const { return num > 0 && den > 0 && num <= den; } // 0 < r <= 1
+};
+
+struct D2DLinkConfig {
+    D2DMode mode = MODE_FUNCTIONAL_V2;
+    D2DSafety safety = SAFETY_NONE;
+    D2DRate port_rate; // 片上→端口注入速率
+    D2DRate link_rate; // 跨 die 链路速率（常为瓶颈）
+    int link_latency = 0;
+    int saf_buffer_depth = 0;
+    int link_inflight_depth = 0;
+    int rx_buffer_depth = 0;
+    int ctrl_buffer_depth = 0;
+};
+extern D2DLinkConfig g_d2d_cfg;
+
+// 解析 die_ports.c2c 的 V3 字段并做**启动期**校验（非法组合抛 std::runtime_error）。
+// 由 ParseDiePorts 调用；旧配置（无 mode）恒定解析为 functional_v2，行为与 V2 逐位一致。
+void ParseD2DLinkConfig(const D2DJson &c2c);
+
+// 版本感知的 D2D 拓扑/容量契约校验：functional_v2 沿用 V1/V2 MVP 契约（每方向 <=1 个
+// peer-connected C2C 端口、link_bw==1）；bounded_saf 额外要求四类容量与速率契约成立。
+void ValidateD2DTopology();
+
 // V1 MVP 拓扑契约校验（**V1 runtime 启用时**调用，V0/V1-a 结构阶段不强制）：
 //   - 任一 die 级方向的 C2C 端口数 <= 1（多端口留 V5）；
 //   - 存在邻 die 的方向（DIE_X>1→E/W，DIE_Y>1→N/S）必须**恰好一个** peer-connected C2C 端口。

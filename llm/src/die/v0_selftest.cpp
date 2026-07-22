@@ -1380,6 +1380,136 @@ int RunD2DV0SelfTest() {
         }
     }
 
+    // ---- 16b. V3-a：D2D 建模模式 / 有理数速率 / 四类容量的启动期契约 ----
+    // 本增量**不改生产数据路径**：旧配置（无 mode）必须恒定解析为 functional_v2 且行为不变；
+    // 非法模式、非法速率（尤其 rate>1）、bounded 缺安全策略/缺容量，一律启动期明确拒绝。
+    {
+        setTopo(4, 4, 2, 1);
+        // 构造一个合法 2×1 单端口底座，只替换 c2c 段来测各种组合
+        auto mk = [&](const D2DJson &c2c) {
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            hw["die_ports"]["c2c"] = c2c;
+            return hw;
+        };
+        D2DJson legacy = {{"link_bw", 1}, {"latency", 20}, {"buffer_depth", 8}};
+
+        // (a) 旧配置：无 mode → functional_v2，安全策略 none，行为与 V2 一致
+        ParseDiePorts(mk(legacy));
+        check(g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
+                  g_d2d_cfg.safety == SAFETY_NONE,
+              "V3-a legacy c2c (no mode) -> functional_v2 / safety none");
+        check(g_d2d_cfg.link_latency == 20,
+              "V3-a legacy 'latency' still parsed as link_latency");
+        bool v2ok = true;
+        try {
+            ValidateD2DTopology();
+        } catch (...) {
+            v2ok = false;
+        }
+        check(v2ok, "V3-a version-aware validate accepts legacy functional_v2");
+
+        // (b) 未知 mode / 未知 safety → 拒绝
+        D2DJson bad = legacy;
+        bad["mode"] = "wormhole";
+        check(throwsRuntime(mk(bad)), "V3-a unknown mode rejected");
+        bad = legacy;
+        bad["mode"] = "bounded_saf";
+        bad["safety"] = "escape_vc";
+        check(throwsRuntime(mk(bad)), "V3-a unknown safety policy rejected");
+
+        // (c) bounded_saf 缺安全策略 → 拒绝（有限 buffer 必须有明确死锁安全论证）
+        bad = legacy;
+        bad["mode"] = "bounded_saf";
+        bad.erase("buffer_depth");
+        check(throwsRuntime(mk(bad)),
+              "V3-a bounded_saf without safety policy rejected");
+
+        // (d) bounded_saf 缺任一类容量 → 拒绝（四类容量分工不同，不可混代）
+        auto bounded = [&](int saf, int inflight, int rx, int ctrl) {
+            D2DJson c = {{"mode", "bounded_saf"},
+                         {"safety", "whole_flow_saf"},
+                         {"port_rate", {{"num", 1}, {"den", 2}}},
+                         {"link_rate", {{"num", 1}, {"den", 4}}},
+                         {"link_latency", 20},
+                         {"link_bw", 1}};
+            if (saf)
+                c["saf_buffer_depth"] = saf;
+            if (inflight)
+                c["link_inflight_depth"] = inflight;
+            if (rx)
+                c["rx_buffer_depth"] = rx;
+            if (ctrl)
+                c["ctrl_buffer_depth"] = ctrl;
+            return c;
+        };
+        check(throwsRuntime(mk(bounded(0, 10, 8, 4))),
+              "V3-a bounded_saf without saf_buffer_depth rejected");
+        check(throwsRuntime(mk(bounded(64, 0, 8, 4))),
+              "V3-a bounded_saf without link_inflight_depth rejected");
+        check(throwsRuntime(mk(bounded(64, 10, 0, 4))),
+              "V3-a bounded_saf without rx_buffer_depth rejected");
+        check(throwsRuntime(mk(bounded(64, 10, 8, 0))),
+              "V3-a bounded_saf without ctrl_buffer_depth rejected");
+
+        // (e) 完整 bounded_saf 配置被接受，且四类容量与有理数速率被如实解析
+        ParseDiePorts(mk(bounded(64, 10, 8, 4)));
+        check(g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
+                  g_d2d_cfg.safety == SAFETY_WHOLE_FLOW_SAF,
+              "V3-a bounded_saf + whole_flow_saf accepted");
+        check(g_d2d_cfg.saf_buffer_depth == 64 &&
+                  g_d2d_cfg.link_inflight_depth == 10 &&
+                  g_d2d_cfg.rx_buffer_depth == 8 &&
+                  g_d2d_cfg.ctrl_buffer_depth == 4,
+              "V3-a four capacities parsed independently (no single buffer_depth)");
+        check(g_d2d_cfg.port_rate.num == 1 && g_d2d_cfg.port_rate.den == 2 &&
+                  g_d2d_cfg.link_rate.num == 1 && g_d2d_cfg.link_rate.den == 4,
+              "V3-a rational rates parsed exactly (1/2, 1/4; no float)");
+        bool bok = true;
+        try {
+            ValidateD2DTopology();
+        } catch (...) {
+            bok = false;
+        }
+        check(bok, "V3-a version-aware validate accepts complete bounded_saf");
+
+        // (f) rate>1 必须**明确拒绝**——单信道每拍只能载 1 包，不得静默按 1 建模
+        D2DJson r2 = bounded(64, 10, 8, 4);
+        r2["link_rate"] = {{"num", 4}, {"den", 1}};
+        check(throwsRuntime(mk(r2)),
+              "V3-a link_rate > 1 packet/cycle rejected (not silently clamped)");
+        r2 = bounded(64, 10, 8, 4);
+        r2["port_rate"] = 2; // 整数简写 2 == 2/1 > 1
+        check(throwsRuntime(mk(r2)), "V3-a port_rate > 1 rejected (integer form)");
+        r2 = bounded(64, 10, 8, 4);
+        r2["link_rate"] = {{"num", 1}, {"den", 0}};
+        check(throwsRuntime(mk(r2)), "V3-a rate with den=0 rejected");
+        r2 = bounded(64, 10, 8, 4);
+        r2["link_rate"] = {{"num", -1}, {"den", 4}};
+        check(throwsRuntime(mk(r2)), "V3-a negative rate rejected");
+        r2 = bounded(64, 10, 8, 4);
+        r2["saf_buffer_depth"] = 0;
+        check(throwsRuntime(mk(r2)), "V3-a zero depth rejected");
+
+        // (g) functional_v2 下出现 V3 专属字段 → 拒绝（避免配置意图与模式不符被静默忽略）
+        D2DJson mix = legacy;
+        mix["saf_buffer_depth"] = 64;
+        check(throwsRuntime(mk(mix)),
+              "V3-a V3-only capacity under functional_v2 rejected (mode mismatch)");
+        mix = legacy;
+        mix["safety"] = "whole_flow_saf";
+        check(throwsRuntime(mk(mix)),
+              "V3-a safety policy without bounded_saf rejected");
+
+        // 恢复默认，避免影响后续段落
+        ParseDiePorts(mk(legacy));
+    }
+
     // ---- 17. FlowKey (source,tag,subflow) 三元组语义 ----
     // 注：output_lock **不用** FlowKey（tag 已=全局接收槽，多发一需 tag-only 聚合，见 flow.h）。
     // FlowKey 预留给 V5 subflow striping：同 (source,tag) 拆多条 subflow 时用三元组区分。

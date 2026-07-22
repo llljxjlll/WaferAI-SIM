@@ -9,6 +9,7 @@
 #include <utility>
 
 D2DPortTable g_die_ports;
+D2DLinkConfig g_d2d_cfg;
 std::vector<D2DLink> g_d2d_links;
 HostAttachTable g_host_attach;
 
@@ -145,6 +146,9 @@ void ParseDiePorts(const D2DJson &hw_json) {
             c2c_lat = c.at("latency");
         if (c.contains("buffer_depth"))
             c2c_buf = c.at("buffer_depth");
+        ParseD2DLinkConfig(c); // V3-a：模式/速率/四类容量契约（旧配置恒为 functional_v2）
+    } else {
+        g_d2d_cfg = D2DLinkConfig{}; // 无 c2c 段：默认 functional_v2
     }
     if (c2c_bw < 1)
         throw std::runtime_error(
@@ -302,6 +306,140 @@ void ValidateDiePorts() {
         throw std::runtime_error(
             "die_ports: no HOST port (all margin ports taken by C2C/MEM) -> "
             "HOST unreachable");
+}
+
+
+// ---- V3-a：解析并校验 die_ports.c2c 的 V3 契约 ----
+static D2DRate ParseRate(const D2DJson &c, const char *key, const D2DRate &dflt,
+                         const char *what) {
+    if (!c.contains(key))
+        return dflt;
+    const D2DJson &r = c.at(key);
+    D2DRate out;
+    if (r.is_object()) {
+        if (!r.contains("num") || !r.contains("den"))
+            throw std::runtime_error(std::string("die_ports.c2c.") + what +
+                                     ": rate object needs both num and den");
+        out.num = r.at("num").get<int>();
+        out.den = r.at("den").get<int>();
+    } else if (r.is_number_integer()) {
+        out.num = r.get<int>(); // 整数速率简写：n 等价 n/1
+        out.den = 1;
+    } else {
+        throw std::runtime_error(std::string("die_ports.c2c.") + what +
+                                 ": rate must be an integer or {num,den}");
+    }
+    if (out.num <= 0 || out.den <= 0)
+        throw std::runtime_error(std::string("die_ports.c2c.") + what +
+                                 ": rate num/den must be positive integers");
+    if (out.num > out.den)
+        throw std::runtime_error(
+            std::string("die_ports.c2c.") + what +
+            ": rate > 1 packet/cycle is not representable (one sc_bv<256> per "
+            "cycle); use multiple lanes in a later version. Refusing to model "
+            "it silently as 1");
+    return out;
+}
+
+void ParseD2DLinkConfig(const D2DJson &c2c) {
+    g_d2d_cfg = D2DLinkConfig{}; // 默认 functional_v2（旧配置行为逐位不变）
+
+    if (c2c.contains("mode")) {
+        std::string m = c2c.at("mode").get<std::string>();
+        if (m == "functional_v2")
+            g_d2d_cfg.mode = MODE_FUNCTIONAL_V2;
+        else if (m == "bounded_saf")
+            g_d2d_cfg.mode = MODE_BOUNDED_SAF;
+        else
+            throw std::runtime_error(
+                "die_ports.c2c.mode: unknown mode '" + m +
+                "' (expected functional_v2 or bounded_saf)");
+    }
+    if (c2c.contains("safety")) {
+        std::string sf = c2c.at("safety").get<std::string>();
+        if (sf == "whole_flow_saf")
+            g_d2d_cfg.safety = SAFETY_WHOLE_FLOW_SAF;
+        else if (sf == "none")
+            g_d2d_cfg.safety = SAFETY_NONE;
+        else
+            throw std::runtime_error(
+                "die_ports.c2c.safety: unknown policy '" + sf +
+                "' (expected whole_flow_saf)");
+    }
+
+    g_d2d_cfg.port_rate = ParseRate(c2c, "port_rate", D2DRate{}, "port_rate");
+    g_d2d_cfg.link_rate = ParseRate(c2c, "link_rate", D2DRate{}, "link_rate");
+    // legacy link_bw/bw_per_cycle 仍被 functional_v2 使用（V1 契约要求 ==1）；
+    // 在 bounded_saf 下速率一律由 link_rate 表达，legacy 字段 >1 会被下面的契约校验拒绝。
+    if (c2c.contains("link_latency"))
+        g_d2d_cfg.link_latency = c2c.at("link_latency").get<int>();
+    else if (c2c.contains("latency"))
+        g_d2d_cfg.link_latency = c2c.at("latency").get<int>();
+    if (g_d2d_cfg.link_latency < 0)
+        throw std::runtime_error("die_ports.c2c: link_latency must be >= 0");
+
+    auto depth = [&](const char *k, int &dst) {
+        if (c2c.contains(k)) {
+            dst = c2c.at(k).get<int>();
+            if (dst < 1)
+                throw std::runtime_error(std::string("die_ports.c2c.") + k +
+                                         ": depth must be >= 1");
+        }
+    };
+    depth("saf_buffer_depth", g_d2d_cfg.saf_buffer_depth);
+    depth("link_inflight_depth", g_d2d_cfg.link_inflight_depth);
+    depth("rx_buffer_depth", g_d2d_cfg.rx_buffer_depth);
+    depth("ctrl_buffer_depth", g_d2d_cfg.ctrl_buffer_depth);
+
+    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
+        // 有限缓冲下必须显式选定死锁安全策略——不允许「有限 buffer 但无安全论证」。
+        if (g_d2d_cfg.safety != SAFETY_WHOLE_FLOW_SAF)
+            throw std::runtime_error(
+                "die_ports.c2c: mode=bounded_saf requires an explicit "
+                "safety policy (safety=whole_flow_saf)");
+        // 四类容量分工不同，必须逐项显式给出，禁止用单一 buffer_depth 混代。
+        struct { const char *n; int v; } need[] = {
+            {"saf_buffer_depth", g_d2d_cfg.saf_buffer_depth},
+            {"link_inflight_depth", g_d2d_cfg.link_inflight_depth},
+            {"rx_buffer_depth", g_d2d_cfg.rx_buffer_depth},
+            {"ctrl_buffer_depth", g_d2d_cfg.ctrl_buffer_depth}};
+        for (auto &e : need)
+            if (e.v < 1)
+                throw std::runtime_error(
+                    std::string("die_ports.c2c: mode=bounded_saf requires ") +
+                    e.n + " >= 1 (the four capacities are distinct: SAF holds a "
+                          "whole flow, inflight covers BDP, rx is remote "
+                          "receive, ctrl is the control sub-channel)");
+    } else {
+        // functional_v2：V3 专属字段出现即说明配置意图与模式不符，明确拒绝而非静默忽略。
+        const char *v3only[] = {"saf_buffer_depth", "link_inflight_depth",
+                                "rx_buffer_depth", "ctrl_buffer_depth"};
+        for (const char *k : v3only)
+            if (c2c.contains(k))
+                throw std::runtime_error(
+                    std::string("die_ports.c2c: '") + k +
+                    "' only applies to mode=bounded_saf; set mode explicitly");
+        if (g_d2d_cfg.safety != SAFETY_NONE)
+            throw std::runtime_error(
+                "die_ports.c2c: safety policy requires mode=bounded_saf");
+    }
+}
+
+void ValidateD2DTopology() {
+    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
+        if (!g_d2d_cfg.port_rate.Valid() || !g_d2d_cfg.link_rate.Valid())
+            throw std::runtime_error(
+                "die_ports.c2c: bounded_saf requires 0 < port_rate,link_rate <= 1");
+        // bounded 模式下每方向仍限单端口（多端口属 V5），但速率不再要求 ==1。
+        Directions dirs[4] = {EAST, WEST, NORTH, SOUTH};
+        for (Directions d : dirs)
+            if ((int)g_die_ports.PortsForDir(d).size() > 1)
+                throw std::runtime_error(
+                    "die_ports: more than one C2C port per direction is not "
+                    "supported yet (multi-port is V5)");
+        return;
+    }
+    ValidateV1MvpTopology(); // functional_v2：沿用 V1/V2 MVP 契约
 }
 
 void ValidateV1MvpTopology() {
