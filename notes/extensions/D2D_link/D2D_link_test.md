@@ -307,7 +307,7 @@ SEND_REQ → RECV/ACK → SEND_DATA
 
 本版只讨论协议级等待，例如双方都先发送再接收造成的 rendezvous 环形等待。有限 port/link buffer 的资源约束、背压和由此产生的 hold-and-wait 网络死锁尚未进入模型，因此不在 V2 声称或验证 buffer 死锁安全。
 
-#### 当前进展（V2-a / V2-b / V2-b2 / V2-c 已完成）
+#### 当前进展（V2-a / V2-b / V2-b2 / V2-c / V2-d 全部完成）
 
 - **V2-a ✔ 多跳路由纯函数**：源端只 pin 首跳，`exit_port` 只对当前 die 有效；`CrossDieStep` 现算
   `md` 并校验携带值（携带上一跳出口 → 抛错而非错误路由）。新增 `CrossDieIngressTile` 由
@@ -334,9 +334,14 @@ SEND_REQ → RECV/ACK → SEND_DATA
   == 路径长度、入口重写数 == 总跨链包数、中间 die `mesh_pkts>0`（`router_pkts>0` 不足以排除
   零片内 hop）、只有终点 DONE 且 ACK 源恰为首尾、mismatch=0、drain=0。覆盖 3×1 正/反向与
   2×2 对角；对角**正反路径不对称**（维序两向都先走 X，往返成矩形）已固化。
-- **当前门**：自测 241/241、Link 18/18、runner **54/54**、NoC 冻结值不变。
-- **待办**：V2-d（hop/latency 扫描分离 NoC 与每跳 D2D 延迟、watchdog 活性、多流）并冻结
-  `d2d-v2-baseline`。
+- **V2-d ✔ 延迟标定与活性验收**：多跳 latency 律推广为 **`T(L)-T(0)=3*H*L*CYCLE`**（两跳实测
+  增量 `0/12/84/240` == `3*2*L*2`，逐点精确）；**NoC 与 D2D 分离**——多出一跳的 NoC 开销
+  `T2(0)-T1(0)=54 ns`（与 L 无关），而 `(T2(L)-T1(L))-54 = 0/6/42/120` 精确等于 `3*L*CYCLE`；
+  latency 只平移固定延迟（各 L 下路径/包数/repin/mesh 不变）；watchdog 把超时哨兵判为失败
+  （16 次扫描 0 超时）；多流两条 2 跳流共享同一对 link，每条计数恰为单流两倍、均 drain=0。
+- **当前门 / V2 完成**：自测 241/241、Link 18/18、runner **58/58**、NoC 冻结值不变。
+  V2 范围（多跳接力、per-die 重新 pin、精确路径证据、延迟标定、协议级活性）已闭合；
+  **有限缓冲/带宽/背压与网络死锁安全属 V3，V2 不声称也未验证**。
 
 #### 实现内容
 
@@ -728,11 +733,11 @@ V3 网络级覆盖：
 | T01 | 地址/消息往返 | V0 | 基础数据正确 | 所有边界值逐字段一致 |
 | T02 | 非法 topology/config | V0 | 防止运行时挂死 | 启动阶段明确报错 |
 | T03 | 四方向相邻 die 单流 | V1 | 基本 D2D 功能 | REQ/ACK/DATA 正确闭环 |
-| T04 | 单跳 latency 扫描 | V1 | 固定延迟准确性 | Link：`Δdelivery=ΔL cycle`；完整三阶段事务：`ΔT=3ΔL·CYCLE` |
+| T04 | 单跳/多跳 latency 扫描 | V1/V2 | 固定延迟准确性 + 归因 | V1：Link `Δdelivery=ΔL cycle`、事务 `ΔT=3ΔL·CYCLE`；**V2-d**：多跳 `ΔT=3·H·ΔL·CYCLE`（两跳实测精确），且分离出「每多一跳的 NoC 开销 54 ns（与 L 无关）+ D2D 部分 3·L·CYCLE」 |
 | T05 | 消息大小边界 | V1 | 包化与尾包正确 | 1/2/5/7/8/9/32 包的 seq/hash/checksum/尾长正确，完成时间单调 |
 | T06 | 3-die 多跳 | V2 | 中间 die 接力 | **V2-b/V2-c 已覆盖**：3×1 正向 E,E 与反向 W,W；承载 DATA/REQUEST/ACK 的有向 link 集合恰好等于期望路径且每条 in==out；每包 hop 数==2；repin total==跨链包数且 same>0（排除同 port id 巧合）；中间 die mesh_pkts=18>0（真片内 hop）；仅终点 DONE、drain=0 |
 | T07 | 2×2 对角路径 | V2 | die 级 XY | **V2-b2/V2-c 已覆盖**：正向 die0-(E)->die1-(N)->die3，ACK die3-(W)->die2-(S)->die0——**正反不对称**（维序两向都先走 X，往返成矩形）已固化为期望；repin=(12,12,0)（每次入口重写都改方向）；mesh_pkts=[52,15,3,9] 示 die1 承载正向、die2 只承载 ACK；路径收敛无绕圈、仅 core48 DONE、drain=0 |
-| T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | 合法模式完成；已知协议环被正确诊断 |
+| T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | **V2-d 已覆盖合法模式**：多跳 latency 扫描 16 次运行 0 超时（超时哨兵=失败），多流两条 2 跳流均完成且 drain=0；「已知协议环被正确诊断」需要构造 rendezvous 环用例，仍待补 |
 | T09 | 三类瓶颈隔离 | V3 | 带宽准确性 | goodput 等于最小段速率 |
 | T10 | 同 link/独立 link | V3 | D2D 争用 | 共享受总容量限制，独立可并行 |
 | T11 | Local+D2D shared/disjoint | V3 | 混合 NoC 拥塞 | 仅 shared 出现显著 queue/stall |

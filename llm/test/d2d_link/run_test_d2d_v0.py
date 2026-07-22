@@ -1079,6 +1079,104 @@ def main():
                    f"repin={pr[0]['repin']} "
                    f"done={pr[0]['done']} drain={pr[0]['drain']}/{pr[0]['link_drain']}")
 
+    # 3x. V2-d：延迟标定与活性验收。
+    #     V1-d3 在**单跳**上标定了 T(L)-T(0)=3*L*CYCLE（REQUEST/ACK/DATA 三个因果串联跨链阶段）。
+    #     多跳时三个阶段各自跨 H 条 link，故推广为 **T(L)-T(0) = 3*H*L*CYCLE**。
+    #     并且把「NoC 路由开销」与「每跳 D2D 固定延迟」分离：
+    #       T(H,L) = T_noc(H) + 3*H*L*CYCLE
+    #     ⇒ (T2(L)-T1(L)) - (T2(0)-T1(0)) = 3*L*CYCLE —— 多出的那一跳里，NoC 部分与 L 无关，
+    #       D2D 部分严格正比于 L。这样「变慢」能被归因到具体来源，而不是笼统的总时间。
+    CYCLE_NS = 2      # llm/include/macros/macros.h: CYCLE
+    PHASES = 3        # REQUEST + ACK + DATA
+    HW21 = "../llm/test/d2d_link/hardware/core_4x4_die2x1_c2c.json"
+
+    def hw_with_latency(base_rel, latency):
+        cfg = _jd1.load(open(os.path.join(
+            HERE, "hardware", os.path.basename(base_rel))))
+        cfg["die_ports"]["c2c"]["latency"] = latency
+        fd, path = _tfd1.mkstemp(suffix=".json", prefix=f"d2d_v2d_L{latency}_")
+        with os.fdopen(fd, "w") as f:
+            _jd1.dump(cfg, f)
+        return path
+
+    LAT_SWEEP = (0, 1, 7, 20)
+    t2, t1, obs2 = {}, {}, {}
+    hang = []  # watchdog：任何一次运行超时（哨兵 124）都会被记录
+    for L in LAT_SWEEP:
+        p3, p2 = hw_with_latency(HW31, L), hw_with_latency(HW21, L)
+        r2 = [path_run(WL2HOP, p3) for _ in range(2)]   # 2 跳
+        r1 = [path_run(C3_WL, p2) for _ in range(2)]    # 1 跳
+        os.remove(p3)
+        os.remove(p2)
+        hang += [r["rc"] for r in r2 + r1 if r["rc"] == 124]
+        t2[L] = r2[0]["ns"] if r2[0]["ns"] == r2[1]["ns"] else None
+        t1[L] = r1[0]["ns"] if r1[0]["ns"] == r1[1]["ns"] else None
+        obs2[L] = r2[0]
+
+    # 3x-1：两跳 latency 律 T(L)-T(0) = 3*H*L*CYCLE（H=2 → 12L ns）
+    HOPS = 2
+    law2 = all(v is not None for v in t2.values()) and all(
+        t2[L] - t2[0] == PHASES * HOPS * L * CYCLE_NS for L in LAT_SWEEP)
+    # latency 只平移固定延迟：包数/路径/重写次数/完整性在各 L 下完全不变
+    inv = all(obs2[L]["links"] == obs2[0]["links"] and
+              obs2[L]["repin"] == obs2[0]["repin"] and
+              obs2[L]["die_mesh"] == obs2[0]["die_mesh"] and
+              obs2[L]["drain"] == 0 and obs2[L]["link_drain"] == 0
+              for L in LAT_SWEEP)
+    record("V2-d 2-hop latency law: T(L)-T(0)=3*H*L*CYCLE (H=2 -> 12L ns), "
+           "packets/path/repin latency-invariant",
+           law2 and inv,
+           f"T2={t2} "
+           f"delta={ {L: t2[L] - t2[0] for L in LAT_SWEEP} } "
+           f"expect={ {L: PHASES * HOPS * L * CYCLE_NS for L in LAT_SWEEP} } "
+           f"invariant={inv}")
+
+    # 3x-2：NoC 与 D2D 分离——多出的一跳里，NoC 开销与 L 无关，D2D 部分严格 = 3*L*CYCLE
+    noc_hop = (t2[0] - t1[0]) if (t2[0] and t1[0]) else None
+    sep_ok = all(v is not None for v in list(t2.values()) + list(t1.values())) and all(
+        (t2[L] - t1[L]) - noc_hop == PHASES * L * CYCLE_NS for L in LAT_SWEEP)
+    record("V2-d hop/latency decomposition: extra hop = constant NoC cost + 3*L*CYCLE D2D",
+           sep_ok,
+           f"T1={t1} T2={t2} noc_cost_per_extra_hop={noc_hop}ns "
+           f"d2d_part={ {L: (t2[L] - t1[L]) - noc_hop for L in LAT_SWEEP} } "
+           f"expect={ {L: PHASES * L * CYCLE_NS for L in LAT_SWEEP} }")
+
+    # 3x-3：watchdog / 活性——V2 用无限功能 FIFO，合法多跳模式必须始终推进到完成。
+    #       任何一次运行返回超时哨兵 124 都判失败（把「永久挂起」变成可见的失败而非卡住）。
+    record("V2-d watchdog: no run hit the timeout sentinel (no permanent hang)",
+           not hang, f"timeouts={len(hang)} runs={2 * 2 * len(LAT_SWEEP)}")
+
+    # 3x-4：多流（仍不引入有限缓冲/背压——那属 V3）。两条 2 跳流共享同一对 link：
+    #       每条 link 的计数应恰为单流的两倍，两个接收核各 DONE 一次，全部排空。
+    WLMF = "../llm/test/d2d_link/workload/cross_die_2hop_multiflow.json"
+    mf = [path_run(WLMF, HW31) for _ in range(2)]
+
+    def mf_ok(r):
+        if (r["rc"] != 0 or r["drain"] != 0 or r["link_drain"] != 0 or
+                r["mism"] != 0 or not r["bind_ok"]):
+            return False
+        exp = {(0, 1): ("E", (2, 2), (0, 0), (8, 8)),
+               (1, 2): ("E", (2, 2), (0, 0), (8, 8)),
+               (2, 1): ("W", (0, 0), (2, 2), (0, 0)),
+               (1, 0): ("W", (0, 0), (2, 2), (0, 0))}
+        if set(r["links"]) != set(exp):
+            return False
+        for k, (d, req, ack, data) in exp.items():
+            v = r["links"][k]
+            if (v["dir"], v["req"], v["ack"], v["data"]) != (d, req, ack, data):
+                return False
+        # 2 条流 × (1 REQ + 1 ACK + 4 DATA) × 2 跳 = 24 次入口重写
+        return (r["repin"] == (24, 12, 12) and r["done"] == {32: 1, 33: 1} and
+                r["die_mesh"][1] > 0)
+
+    record("V2-d multi-flow: two concurrent 2-hop flows share both links "
+           "(per-link counts exactly doubled), both DONE, drain=0",
+           all(mf_ok(r) for r in mf) and mf[0]["ns"] == mf[1]["ns"] and
+           mf[0]["links"] == mf[1]["links"],
+           f"ns={mf[0]['ns']}/{mf[1]['ns']} repin={mf[0]['repin']} "
+           f"done={mf[0]['done']} die_mesh={mf[0]['die_mesh']} "
+           f"drain={mf[0]['drain']}/{mf[0]['link_drain']}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",
