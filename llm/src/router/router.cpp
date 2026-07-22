@@ -124,6 +124,7 @@ void RouterUnit::router_execute() {
                 if (IsC2CEgressEdge(rid, Directions(i)))
                     temp = RepinOnC2CIngress(temp);
                 Msg tt = DeserializeMsg(temp);
+                CountDieRouterPkt(); // V2-c：本 die NoC 活动（中间 die >0 = 真穿过其 NoC）
 
                 buffer_i[i].emplace(temp);
 
@@ -142,6 +143,7 @@ void RouterUnit::router_execute() {
                 if (IsC2CEgressEdge(rid, Directions(i)))
                     temp = RepinOnC2CIngress(temp);
                 Msg tt = DeserializeMsg(temp);
+                CountDieRouterPkt(); // V2-c：本 die NoC 活动
 
                 ctrl_buffer_i[i].emplace(temp);
 
@@ -507,6 +509,12 @@ void RouterUnit::trans_next_trigger() {
         need_next_trigger.notify(CYCLE, SC_NS);
         wait();
     }
+}
+
+void RouterUnit::CountDieRouterPkt() const {
+    int d = DieOfGlobal(rid);
+    if (d >= 0 && d < (int)g_die_router_pkts.size())
+        g_die_router_pkts[d]++;
 }
 
 sc_bv<256> RouterUnit::RepinOnC2CIngress(const sc_bv<256> &payload) const {

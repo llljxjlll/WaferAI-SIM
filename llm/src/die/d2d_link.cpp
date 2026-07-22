@@ -9,6 +9,19 @@ void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
         counts[type]++;
 }
 
+// V2-c：按有向 link 下标分类计数（下标越界/未归因则跳过）。
+void CountLink(int idx, bool is_in, const sc_bv<256> &payload) {
+    if (idx < 0 || idx >= (int)g_d2d_link_stats.size())
+        return;
+    int type = static_cast<int>(DeserializeMsg(payload).msg_type_);
+    if (type < 0 || type >= MSG_TYPE_NUM)
+        return;
+    if (is_in)
+        g_d2d_link_stats[idx].in_by_type[type]++;
+    else
+        g_d2d_link_stats[idx].out_by_type[type]++;
+}
+
 // FNV-1a 风格顺序敏感混合：h 依次吸收一个 64-bit 字。乱序/改值都会改变结果。
 inline void MixWord(unsigned long long &h, unsigned long long w) {
     h = (h ^ w) * 1099511628211ULL;
@@ -43,8 +56,8 @@ void ProbeData(D2DDataProbe &p, const sc_bv<256> &payload, long long cycle) {
 }
 } // namespace
 
-D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_)
-    : sc_module(n), latency(latency_) {
+D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_)
+    : sc_module(n), latency(latency_), link_idx(link_idx_) {
     SC_THREAD(forward);
 }
 
@@ -68,12 +81,14 @@ void D2DLinkUnit::forward() {
             fifo_.push_back({cyc + latency, payload});
             g_d2d_link_in_pkts++;
             CountType(g_d2d_link_in_by_type, payload);
+            CountLink(link_idx, true, payload);
             ProbeData(g_d2d_data_in, payload, cyc);
         }
         if (in_ctrl_sent.read()) {
             cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
             g_d2d_link_in_pkts++;
             CountType(g_d2d_link_in_by_type, in_ctrl_channel.read());
+            CountLink(link_idx, true, in_ctrl_channel.read());
         }
 
         // 交付数据：队首成熟且下游 ready
@@ -81,6 +96,7 @@ void D2DLinkUnit::forward() {
             out_channel.write(fifo_.front().second);
             out_sent.write(true);
             CountType(g_d2d_link_out_by_type, fifo_.front().second);
+            CountLink(link_idx, false, fifo_.front().second);
             ProbeData(g_d2d_data_out, fifo_.front().second, cyc);
             fifo_.pop_front();
             g_d2d_link_out_pkts++;
@@ -93,6 +109,7 @@ void D2DLinkUnit::forward() {
             out_ctrl_channel.write(cfifo_.front().second);
             out_ctrl_sent.write(true);
             CountType(g_d2d_link_out_by_type, cfifo_.front().second);
+            CountLink(link_idx, false, cfifo_.front().second);
             cfifo_.pop_front();
             g_d2d_link_out_pkts++;
         } else {

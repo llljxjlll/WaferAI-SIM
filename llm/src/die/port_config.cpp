@@ -23,10 +23,23 @@ long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
 long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
 D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
+std::vector<D2DLinkStat> g_d2d_link_stats;
+std::vector<long> g_die_router_pkts;
+void ResetDieActivityStats() {
+    g_die_router_pkts.assign(DIE_COUNT > 0 ? DIE_COUNT : 1, 0);
+}
 void ResetD2DLinkStats() {
     g_d2d_repin_total = 0;
     g_d2d_repin_changed = 0;
     g_d2d_repin_same = 0;
+    // 每条有向 link 一份统计，下标与 g_d2d_links 对齐（D2DLinkUnit 按同一顺序创建）
+    g_d2d_link_stats.assign(g_d2d_links.size(), D2DLinkStat{});
+    for (size_t i = 0; i < g_d2d_links.size(); i++) {
+        g_d2d_link_stats[i].local_die = g_d2d_links[i].local_die;
+        g_d2d_link_stats[i].remote_die = g_d2d_links[i].remote_die;
+        g_d2d_link_stats[i].dir = g_die_ports.ports[g_d2d_links[i].local_port].dir;
+    }
+    ResetDieActivityStats();
     g_d2d_link_in_pkts = 0;
     g_d2d_link_out_pkts = 0;
     for (int i = 0; i < MSG_TYPE_NUM; i++) {

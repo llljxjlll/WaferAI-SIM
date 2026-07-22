@@ -33,9 +33,11 @@ public:
     sc_in<bool> out_ctrl_avail;
 
     int latency; // 固定链路延迟（cycle）
+    // V2-c：本单元对应的有向 link 在 g_d2d_links / g_d2d_link_stats 中的下标（-1=未归因）。
+    int link_idx;
 
     SC_HAS_PROCESS(D2DLinkUnit);
-    D2DLinkUnit(const sc_module_name &n, int latency_);
+    D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1);
     void forward();
 
     // V1 drain 不变量：仿真正常完成后数据/控制 FIFO 均须为空。

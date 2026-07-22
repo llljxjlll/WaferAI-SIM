@@ -128,6 +128,10 @@ public:
     // 必须在此清除并按本 die 重新 pin（每进入一个 die 选一次；die 内不再重选）。目的已在本 die
     // 则清为 -1（转片内 XY）。非 core 端点（HOST/MEM）原样返回。同时累加 g_d2d_repin_* 计数。
     sc_bv<256> RepinOnC2CIngress(const sc_bv<256> &payload) const;
+
+    // V2-c：记一次本 die 的 router 入口包（每方向、含片内跳）。中间 die 计数 >0
+    // 证明包真的穿过了该 die 的 NoC，而不是从一条 link 直接跳到下一条。
+    void CountDieRouterPkt() const;
 };
 
 // 全程观测到的 output_lock_ref 峰值。>=2 证明**同 tag 的多条流共享了同一把锁**（多发一聚合，

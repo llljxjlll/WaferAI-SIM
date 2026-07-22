@@ -206,3 +206,21 @@ extern D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 // **same 是本计数器存在的理由**：该情形下「已重新 pin」与「沿用旧值」路由结果完全相同，
 // 只能靠计数证明入口重写确实执行了，不能靠端到端是否送达来推断。
 extern long g_d2d_repin_total, g_d2d_repin_changed, g_d2d_repin_same;
+
+// ---- V2-c：逐条有向 link 归因 + 每 die NoC 活动 ----
+// 全局 [D2D_TYPE] 只有总数，无法回答「究竟经过了哪几条 link、方向序列是什么、每个包跳了几跳」。
+// 这里按 g_d2d_links 的下标为每条**有向** link 单独计数（D2DLinkUnit 一一对应），于是可以精确
+// 断言：DATA 只经过路径上应经过的那些 link、每条计数相等（⇒ 每个包都走满全程、无跳过/重复）、
+// 方向序列（如 3×1 的 E,E 与反向 W,W；2×2 对角的 E,N 与反向 W,S）。
+struct D2DLinkStat {
+    int local_die = -1, remote_die = -1;
+    Directions dir = CENTER; // 该有向 link 的 die 级方向
+    long in_by_type[MSG_TYPE_NUM] = {};
+    long out_by_type[MSG_TYPE_NUM] = {};
+};
+extern std::vector<D2DLinkStat> g_d2d_link_stats;
+
+// 每个 die 的 router 入口包数（所有方向，含片内跳）。中间 die 计数 >0 证明包**真的穿过了
+// 该 die 的 NoC**（而非凭空从一条 link 跳到下一条 link）。
+extern std::vector<long> g_die_router_pkts;
+void ResetDieActivityStats();

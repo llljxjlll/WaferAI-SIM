@@ -964,6 +964,100 @@ def main():
            f"ack_srcs={sorted(dg[0]['ack_srcs'])} "
            f"drain={dg[0]['drain']}/{dg[0]['link_drain']}")
 
+    # 3w. V2-c：多跳端到端闭环——精确到「经过哪几条有向 link、方向序列、每条各多少包、
+    #     每包跳了几跳、中间 die 的 NoC 是否真有活动」。全局 [D2D_TYPE] 只有总数，无法区分
+    #     路径；这里用逐条 link 归因 [D2D_LINK] + 每 die 活动 [DIE_ACT] 做精确断言。
+    LINK_RE = re.compile(
+        r"\[D2D_LINK\] idx=(\d+) die(\d+)->die(\d+) dir=(\w+) "
+        r"req_in=(\d+) req_out=(\d+) ack_in=(\d+) ack_out=(\d+) "
+        r"data_in=(\d+) data_out=(\d+)")
+    DIEACT_RE = re.compile(r"\[DIE_ACT\] router_pkts=([0-9,]+)")
+
+    def path_run(wl, hw):
+        rc, out = run([NPUSIM, "--workload-config", wl, "--hardware-config", hw,
+                       "--simulation-config", SIM, "--mapping-config", MAP],
+                      timeout=200)
+        links = {}
+        for m in LINK_RE.finditer(out):
+            (idx, a, b, d, rin, rout, ain, aout, din, dout) = m.groups()
+            links[(int(a), int(b))] = dict(
+                dir=d, req=(int(rin), int(rout)), ack=(int(ain), int(aout)),
+                data=(int(din), int(dout)))
+        da = DIEACT_RE.findall(out)
+        die_act = [int(x) for x in da[-1].split(",")] if da else []
+        done_sig, ack_sig = parse_sig(out)
+        dr = re.search(r"\[DRAIN\] router_residual=(-?\d+)", out)
+        ldr = re.search(r"\[DRAIN\] d2d_link_residual=(-?\d+)", out)
+        return dict(rc=rc, ns=finish_ns(out), links=links, die_act=die_act,
+                    done=sig_to_dict(done_sig),
+                    ack_srcs={int(t.split(":")[0])
+                              for t in (ack_sig or "").split(",") if t},
+                    drain=int(dr.group(1)) if dr else None,
+                    link_drain=int(ldr.group(1)) if ldr else None,
+                    repin=last_groups(REPIN_RE, out))
+
+    def path_ok(r, fwd, ack, npkt, src, dest, busy_dies):
+        """fwd/ack: [(src_die, dst_die, dir), ...] 期望的**精确**有向 link 序列。"""
+        if r["rc"] != 0 or r["drain"] != 0 or r["link_drain"] != 0:
+            return False
+        # 1) 承载 DATA 的有向 link 集合必须**恰好**等于期望正向路径，且方向、每条包数精确
+        data_links = {k for k, v in r["links"].items() if v["data"][0] > 0}
+        if data_links != {(a, b) for a, b, _ in fwd}:
+            return False
+        for a, b, d in fwd:
+            v = r["links"][(a, b)]
+            # REQUEST 与 DATA 同路；每条 link 的 in==out（link 内部不丢包）
+            if (v["dir"] != d or v["data"] != (npkt, npkt) or
+                    v["req"] != (1, 1) or v["ack"] != (0, 0)):
+                return False
+        # 2) 承载 ACK 的有向 link 集合必须恰好等于期望反向路径（维序 X-first，可能与正向不对称）
+        ack_links = {k for k, v in r["links"].items() if v["ack"][0] > 0}
+        if ack_links != {(a, b) for a, b, _ in ack}:
+            return False
+        for a, b, d in ack:
+            v = r["links"][(a, b)]
+            if v["dir"] != d or v["ack"] != (1, 1) or v["data"] != (0, 0):
+                return False
+        # 3) 每包 hop 数 == 路径长度：DATA 总跨链次数 == 包数 × hop 数
+        hops = len(fwd)
+        if sum(r["links"][(a, b)]["data"][0] for a, b, _ in fwd) != npkt * hops:
+            return False
+        # 4) 入口重写次数 == 总跨链包数（REQ+ACK+DATA 各自跨满全程）
+        if r["repin"] is None or r["repin"][0] != (1 + npkt) * hops + 1 * len(ack):
+            return False
+        # 5) 中间 die 的 NoC 必须真有活动（包确实穿过其 mesh，而非 link 直连 link）
+        for d in busy_dies:
+            if d >= len(r["die_act"]) or r["die_act"][d] <= 0:
+                return False
+        # 6) 中间 die 不消费、不产生 ACK/DONE：只有终点 DONE，ACK 源只含首尾
+        return r["done"] == {dest: 1} and r["ack_srcs"] <= {src, dest}
+
+    HW31 = "../llm/test/d2d_link/hardware/core_4x4_die3x1_c2c.json"
+    v2c_cases = (
+        # (名称, workload, hw, 正向 link 序列, ACK link 序列, 源核, 目的核, 中间 die)
+        ("3x1 fwd die0->die2 (E,E / ACK W,W)", WL2HOP, HW31,
+         [(0, 1, "E"), (1, 2, "E")], [(2, 1, "W"), (1, 0, "W")], 0, 32, [1]),
+        ("3x1 rev die2->die0 (W,W / ACK E,E)",
+         "../llm/test/d2d_link/workload/cross_die_2hop_rev.json", HW31,
+         [(2, 1, "W"), (1, 0, "W")], [(0, 1, "E"), (1, 2, "E")], 32, 0, [1]),
+        # 2×2 对角：die 级维序 X-first ⇒ 正向 die0-E->die1-N->die3，而 ACK 从 die3 出发也先走 X
+        # ⇒ die3-W->die2-S->die0。**正反路径不对称**（构成一个矩形），这里精确固化该行为。
+        ("2x2 diag die0->die3 (E,N / ACK W,S; asymmetric)", WLDIAG, HW22,
+         [(0, 1, "E"), (1, 3, "N")], [(3, 2, "W"), (2, 0, "S")], 0, 48, [1, 2]),
+    )
+    for name, wl, hw, fwd, ack, src, dest, busy in v2c_cases:
+        pr = [path_run(wl, hw) for _ in range(2)]
+        ok = (all(path_ok(r, fwd, ack, 4, src, dest, busy) for r in pr) and
+              pr[0]["ns"] == pr[1]["ns"] and pr[0]["links"] == pr[1]["links"] and
+              pr[0]["die_act"] == pr[1]["die_act"])
+        record(f"V2-c {name}: exact per-link counts + direction sequence + hops + "
+               f"intermediate-die NoC activity",
+               ok, f"ns={pr[0]['ns']}/{pr[1]['ns']} "
+                   f"data_links={sorted(k for k, v in pr[0]['links'].items() if v['data'][0])} "
+                   f"ack_links={sorted(k for k, v in pr[0]['links'].items() if v['ack'][0])} "
+                   f"die_act={pr[0]['die_act']} repin={pr[0]['repin']} "
+                   f"done={pr[0]['done']} drain={pr[0]['drain']}/{pr[0]['link_drain']}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",

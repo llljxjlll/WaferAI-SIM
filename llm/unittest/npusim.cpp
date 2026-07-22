@@ -149,6 +149,36 @@ int sc_main(int argc, char *argv[]) {
         LOG_INFO(SYSTEM) << "[D2D_REPIN] total=" << g_d2d_repin_total
                          << " changed=" << g_d2d_repin_changed
                          << " same=" << g_d2d_repin_same;
+        // V2-c：逐条**有向** link 的分类型计数。据此可精确断言「经过了哪几条 link、方向序列
+        // 是什么、每条各多少包」——全局 [D2D_TYPE] 只有总数，无法区分路径。只打印有流量的 link。
+        // 顺序必须与 enums.h 的 Directions 一致：WEST=0, EAST=1, NORTH=2, SOUTH=3, CENTER=4
+        static const char *DIRNAME[] = {"W", "E", "N", "S", "C"};
+        for (size_t i = 0; i < g_d2d_link_stats.size(); i++) {
+            const D2DLinkStat &st = g_d2d_link_stats[i];
+            long tot = 0;
+            for (int t = 0; t < MSG_TYPE_NUM; t++)
+                tot += st.in_by_type[t] + st.out_by_type[t];
+            if (tot == 0)
+                continue; // 未被使用的 link 不打印，保持输出简洁
+            int d = (int)st.dir;
+            LOG_INFO(SYSTEM)
+                << "[D2D_LINK] idx=" << i << " die" << st.local_die << "->die"
+                << st.remote_die << " dir="
+                << ((d >= 0 && d < 5) ? DIRNAME[d] : "?")
+                << " req_in=" << st.in_by_type[REQUEST]
+                << " req_out=" << st.out_by_type[REQUEST]
+                << " ack_in=" << st.in_by_type[ACK]
+                << " ack_out=" << st.out_by_type[ACK]
+                << " data_in=" << st.in_by_type[DATA]
+                << " data_out=" << st.out_by_type[DATA];
+        }
+        // V2-c：每 die 的 router 入口包数。中间 die >0 证明包确实穿越了该 die 的 NoC。
+        {
+            std::string per_die;
+            for (size_t i = 0; i < g_die_router_pkts.size(); i++)
+                per_die += (i ? "," : "") + std::to_string(g_die_router_pkts[i]);
+            LOG_INFO(SYSTEM) << "[DIE_ACT] router_pkts=" << per_die;
+        }
     }
 
     // 结束态 drain 不变量（V1 验收）：遍历 SystemC 层级，累加所有 RouterUnit 的残留

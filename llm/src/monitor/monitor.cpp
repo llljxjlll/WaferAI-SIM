@@ -337,6 +337,7 @@ void Monitor::init() {
     // 取代 C2C 出口边的终结：link 读上游 A 的边缘输出、延迟后驱动下游 B 的边缘输入。
     // 两条有向 link 一起覆盖两端所有被延后的输入端口（每个恰绑定一次）。
     ResetD2DLinkStats();
+    int link_seq = 0; // V2-c：与 g_d2d_link_stats 下标一一对应（按 g_d2d_links 顺序创建）
     for (const auto &l : g_d2d_links) {
         const D2DPort &pa = g_die_ports.ports[l.local_port];
         const D2DPort &pb = g_die_ports.ports[l.remote_port];
@@ -354,7 +355,8 @@ void Monitor::init() {
         auto *sB_ctrl_channel = new sc_signal<sc_bv<256>>;
         auto *sB_ctrl_sent = new sc_signal<bool>;
 
-        auto *link = new D2DLinkUnit(sc_gen_unique_name("d2d_link"), pa.latency);
+        auto *link = new D2DLinkUnit(sc_gen_unique_name("d2d_link"), pa.latency,
+                                     link_seq++);
         // 上游 A：读其边缘输出（channel/sent = channel[SA][Ta]），驱动其 avail 输入
         link->in_channel(channel[SA][Ta]);
         link->in_sent(data_sent[SA][Ta]);
