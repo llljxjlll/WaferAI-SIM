@@ -981,3 +981,17 @@ completed
   V4 runner **13/13**。
 
 下一步 V4-f：聚合冻结门、最终文档与 V4 baseline commit/tag。
+
+- **V4-f 已完成**：新增 `llm/test/run_v4_exit.py`，聚合历史 D2D、V3 production、
+  独立 oracle、V4 runner 与冻结 NoC 四值。
+- 最终门：历史 **67/67**（pure **300/300**、Link **37/37**）、V3 **16/16**、
+  oracle **8/8**、V4 **13/13**、NoC **14781/29109、14833/45441**，
+  `AGGREGATE EXIT=0`。
+- 冻结 tag：`d2d-v4-baseline`。V4-a/V4-b 段落里的“下一步/未接线”保留为阶段快照，
+  当前有效状态以本段和 V4-c/d/e 完成记录为准。
+
+**V4 冻结范围**：单端口/单 lane、rate≤1、无跨-flow争用的 Behavioral 单/多跳，
+代表消息、逻辑 bulk、fixed latency、oracle 与 cycle 无争用校准。Behavioral 不承诺有限
+FIFO、credit、backpressure、资源争用或网络死锁；这些语义使用 V3 cycle backend。
+
+V4 开发完成。

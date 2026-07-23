@@ -777,3 +777,19 @@ V4 runner：**9/9**。
 - 同一 D2D link 上两条 Behavioral flow 与单 flow 同时完成，证明 V4 不建模跨-flow争用。
 
 V4 runner：**13/13**。需要资源争用、背压和死锁安全时必须使用 cycle backend。
+
+### V4-f：冻结门（完成）
+
+```bash
+python3 llm/test/run_v4_exit.py
+```
+
+- 历史 D2D **67/67**（pure **300/300**、Link **37/37**）；
+- V3 production **16/16**；
+- Python oracle **8/8**；V4 **13/13**；
+- NoC 精确 **14781/29109、14833/45441**；
+- 聚合 `AGGREGATE EXIT=0`。
+
+冻结 tag：`d2d-v4-baseline`。V4 保证的是无跨-flow争用的快速解析 D2D；有限资源、
+背压、拥塞和死锁安全仍必须选 cycle backend。V4-a 段中的“尚未接运行时”是当时的阶段
+快照，已由 V4-c 完成状态取代。

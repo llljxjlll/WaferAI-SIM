@@ -129,3 +129,30 @@ V4 门由 **9/9→13/13**。
 自审修正：最初把 Behavioral shared/disjoint 总时长要求为字面相等，实测暴露一个 cycle
 的代表路由固定差；门收紧为“service/fixed 完全相等、stall=0、总时长差≤1 cycle”。另补
 同 D2D link 双 flow，直接证明无跨-flow link busy state，而不只依赖 Local+D2D 场景推断。
+
+## 8. V4-f：聚合门与冻结（完成）
+
+统一入口：
+
+```bash
+python3 llm/test/run_v4_exit.py
+```
+
+阻塞门：
+
+| 门 | 结果 |
+|---|---:|
+| V0–V2 历史 D2D（含 pure/link） | 67/67；pure 300/300；Link 37/37 |
+| V3 production bounded SAF | 16/16 |
+| 独立 Python oracle | 8/8 |
+| V4 production/calibration | 13/13 |
+| NoC 冻结四场景 | 14781/29109、14833/45441 |
+
+聚合结果：`AGGREGATE EXIT=0`。最终冻结 tag：`d2d-v4-baseline`。
+
+V4 冻结范围：单端口、单 lane、`0<rate<=1`、无跨-flow争用的 Behavioral D2D；
+X-first 单/多跳、代表 REQUEST/ACK/DATA、逻辑 bulk service、固定 latency、独立 oracle 和
+cycle 无争用校准均受保证。有限资源/背压/拥塞/死锁安全仍由 V3 cycle backend 保证。
+
+不在 V4：Behavioral 跨-flow争用近似、多端口/striping/>1 packet/cycle（V5），以及用
+Behavioral 替代周期精确拥塞分析。
