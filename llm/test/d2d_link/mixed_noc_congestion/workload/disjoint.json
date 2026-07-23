@@ -1,0 +1,124 @@
+{
+  "id_space": "global",
+  "vars": {
+    "B": 1,
+    "T": 4,
+    "C": 64,
+    "OC": 512,
+    "BTP": 256,
+    "loop": 1,
+    "matmul_data": 0
+  },
+  "pipeline": 1,
+  "source": [
+    {
+      "dest": 8,
+      "size": "BTP"
+    },
+    {
+      "dest": 5,
+      "size": "BTP"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 8,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "prims": [
+                {
+                  "type": "Matmul_f",
+                  "B": "B",
+                  "T": "T",
+                  "C": "C",
+                  "OC": "OC",
+                  "sram_address": {
+                    "indata": "_input_label",
+                    "outdata": "mm_out"
+                  },
+                  "dram_address": {
+                    "data": "matmul_data"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": 24,
+                  "tag": 24
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 24,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "recv_tag": 24,
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "prims": [
+                {
+                  "type": "Matmul_f",
+                  "B": "B",
+                  "T": "T",
+                  "C": "C",
+                  "OC": "OC",
+                  "sram_address": {
+                    "indata": "_input_label",
+                    "outdata": "mm_out"
+                  },
+                  "dram_address": {
+                    "data": "matmul_data"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": 7,
+                  "tag": 7
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "recv_tag": 7,
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -668,6 +668,8 @@ source router
 - **共享与独立资源**：两流共享 link 时总包数守恒且都完成；独立 link 并行；相反方向全双工独立。
 - **Local+D2D 混合拥塞**：源 die shared/disjoint 对照为 stall `11/0`；中间 die 对照为
   stall `7/0`，且 shared 的两跳 D2D 完成 cycle `397 > 380`，证明拥塞出现在实际共享的片内路径。
+  固定配置、双次重复运行和自动报告见
+  [`mixed_noc_congestion/`](mixed_noc_congestion/README.md)。
 - **真实生产背压链**：中间 die 热点在 `rx=1、inflight=4` 下稳定触发
   `inflight_full=85、rx_full=95、inflight_stall=60、rx_stall=63、downstream_stall=63`，
   全部 flow 完成并排空；`source_stalls=0` 是 whole-flow SAF 已切断源侧依赖的预期，不是漏接背压。
