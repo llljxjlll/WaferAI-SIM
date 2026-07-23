@@ -9,7 +9,7 @@
 数值**精确不变**；随 V1+ 增量测试总数可以增长，但既有 V0 契约不得回归。
 任一门失败（非零退出）即整体非零退出，可直接用于 CI / pre-commit 阻塞。
 
-当前包含 V4 的 superset gate：python3 llm/test/run_v4_exit.py
+当前包含 V5 的 superset gate：python3 llm/test/run_v5_exit.py
 本脚本保留原文件名，供旧 CI/命令兼容，不应再被描述为“全版本准入门”。
 用法（任意目录）：python3 llm/test/run_v0_exit.py
 """

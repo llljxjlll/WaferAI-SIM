@@ -854,7 +854,8 @@ python3 llm/test/run_v4_exit.py
 背压、拥塞和死锁安全仍必须选 cycle backend。V4-a 段中的“尚未接运行时”是当时的阶段
 快照，已由 V4-c 完成状态取代。
 
-冻结后评审收口：`run_v0_exit.py` 仅是保留旧 CI 的 V0–V3 兼容门；当前全量门是
-`run_v4_exit.py`。Behavioral C++/Python 的单 lane NoC cut=`1/1` 均标记 `TODO(V5)`：
+V4 冻结后评审收口：`run_v0_exit.py` 仅是保留旧 CI 的 V0–V3 兼容门；当时全量门为
+`run_v4_exit.py`，V5 完成后当前全量门已升级为 `run_v5_exit.py`。
+Behavioral C++/Python 的单 lane NoC cut=`1/1` 均标记 `TODO(V5)`：
 未来多 lane/striping 必须按真实共享 cut 建模，不能简单按 lane 数放大单 lane 最小速率。
 该收口不移动 `d2d-v4-baseline` tag。

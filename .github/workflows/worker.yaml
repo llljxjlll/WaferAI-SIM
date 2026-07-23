@@ -120,6 +120,14 @@ jobs:
             echo "All tests passed."
           fi
 
+      - name: Run D2D V5 aggregate regression gate
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH=$SYSTEMC_HOME/lib-linux64:$LD_LIBRARY_PATH
+          export CPLUS_INCLUDE_PATH=$SYSTEMC_HOME/include:$CPLUS_INCLUDE_PATH
+          python3 llm/test/run_v5_exit.py
+
       - name: Upload npusim logs
         if: failure()
         uses: actions/upload-artifact@v4
