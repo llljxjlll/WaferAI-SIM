@@ -1046,4 +1046,17 @@ V4 开发完成。
   repin=`78/78/0`。所有负载/残留归零，两次运行路径、统计和 sim-time 一致。纯函数 **307/307**、
   Link **37/37**、V5 runner **21/21**。
 
-下一步 V5-g：规模/资源增长回归、全版本聚合门、开发日志与冻结。
+- **V5-g 已完成**：1/2/4/8 dies 真实生产运行分别实例化 16/32/64/128 个 core/router/worker
+  与 0/8/24/56 个有向 link unit；多 die 均把 `F=7,k=4` 发到最远 die，逐 hop 数据完整、
+  selection==release、所有账本和 pipeline 排空。冻结运行 wall time 为
+  `0.138/0.190/0.402/0.929 s`，峰值 RSS 为 `135256/247808/467328/906624 KiB`。资源门是
+  当前容器的 smoke bound（绝对上限 30 s/1.5 GiB，加宽松相对增长护栏），不是跨机器 benchmark。
+- 统一冻结入口：`python3 llm/test/run_v5_exit.py`。它先执行 V0–V4 聚合门，再执行 V5 **23/23**；
+  纯函数 **307/307**、Link **37/37**、V3 **16/16**、V4 oracle **8/8**、V4 **13/13**、
+  NoC **14781/29109、14833/45441**，最终 `AGGREGATE EXIT=0`。
+
+**V5 冻结范围**：cycle/Behavioral 多端口，1/2/4 subflow striping 与非整除配额，静态
+nearest/banded/hash/hybrid，active-flow dynamic，独立 link 与共享 link_group，条带化原子 SAF，
+逐 die 多跳 pin/re-pin、统一完成、完整性/活性/排空、1/2/4/8 die smoke scale。
+
+V5 开发完成；冻结 tag：`d2d-v5-baseline`。

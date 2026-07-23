@@ -62,6 +62,15 @@ cd build && ./npusim --d2d-v0-selftest
   DATA link 均按序完整，`typed=(8,8,8,8,62,62)`、repin=`78/78/0`。所有场景连续两次
   选择、统计和 sim-time 一致且无 watchdog。纯函数 **307/307**，V5 runner **21/21**，Link **37/37**。
 
+- **V5-g ✔ 规模门与聚合门**：真实生产配置覆盖 1/2/4/8 dies，核层级为 16/32/64/128，
+  有向 link units 为 0/8/24/56；多 die workload 均从 die0 发送到最远 die，逐 subflow-hop
+  完整且 dynamic selection==release、全部 residual=0。冻结运行峰值 RSS 为
+  135256/247808/467328/906624 KiB，wall time 为 0.138/0.190/0.402/0.929 s；门同时保留
+  1.5 GiB、30 s 绝对上限和相对增长护栏。它是当前容器的回归 smoke bound，不是跨机器性能承诺。
+- 统一入口 `python3 llm/test/run_v5_exit.py`：嵌套执行 V0–V4 冻结聚合门及 V5 **23/23**；
+  纯函数 **307/307**、Link **37/37**、V3 **16/16**、V4 oracle **8/8**、V4 **13/13**，
+  NoC 冻结值 **14781/29109、14833/45441**，最终 `AGGREGATE EXIT=0`。
+
 ## 当前状态（逐增量推进）
 
 - **V0a 完成**：基础设施 + 纯函数 + 配置校验 + 统计接口。
