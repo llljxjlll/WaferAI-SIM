@@ -106,3 +106,26 @@ Python/C++ 保持独立实现，防止测试只是复述生产函数。
 
 自审补强：最初只有 `[D2D_BEHA]` 账本与 oracle 对比，无法排除“统计正确但生产等待未生效”。
 因此增加完成时间斜率门，直接证明事件调度确实消费了 service/fixed delay。
+
+## 7. V4-e：Behavioral/cycle 校准与争用边界（完成）
+
+无争用校准（`F=128,L=7,R=1,1/2,1/4`）：
+
+- cycle 后端实际发送 128 包，稳态 goodput 为 `1.0000/0.5020/0.2505`，距
+  min-cut oracle 均小于 1%；
+- Behavioral 只发送一个代表包，显式 `S(F)=128/256/512`，与同一 oracle 精确一致；
+- 不用代表包的 span 冒充 128 包 goodput，两种后端按各自可观测量校准。
+
+争用语义对照复用 `mixed_noc_congestion` 的相同双 GEMM：
+
+- cycle shared/disjoint：die0 stall `11/0`，跨 die flow 完成 cycle `347/311`；
+- Behavioral shared/disjoint：stall 均为 0，账本同为 `service=32,fixed=3,total=35`，
+  总时长 `482/484 ns`，差一个 cycle 来自代表消息不同 tile/host 路径，而非逻辑 bulk 争用；
+- 两条 D2D flow 共用同一有向 link 时，单/双 flow 都为 `460 ns`；双 flow 各自完成于
+  cycle 223，账本按 flow 相加为 `(flows=2,F=64,service=64,fixed=6,total=70)`。
+
+V4 门由 **9/9→13/13**。
+
+自审修正：最初把 Behavioral shared/disjoint 总时长要求为字面相等，实测暴露一个 cycle
+的代表路由固定差；门收紧为“service/fixed 完全相等、stall=0、总时长差≤1 cycle”。另补
+同 D2D link 双 flow，直接证明无跨-flow link busy state，而不只依赖 Local+D2D 场景推断。

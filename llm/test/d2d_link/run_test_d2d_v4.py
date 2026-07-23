@@ -18,9 +18,15 @@ SIM_BEHA = "../llm/test/noc_congestion/sim/sim_beha.json"
 SIM_CYCLE = "../llm/test/noc_congestion/sim/sim_cycle.json"
 MAP = "../llm/test/noc_congestion/mapping/identity.spec"
 WL = os.path.join(HERE, "workload", "cross_die_2core.json")
+WL2 = os.path.join(HERE, "workload", "cross_die_2flow.json")
 HW21 = os.path.join(HERE, "hardware", "core_4x4_die2x1_c2c.json")
 HW31 = os.path.join(HERE, "hardware", "core_4x4_die3x1_c2c.json")
 HW22 = os.path.join(HERE, "hardware", "core_4x4_die2x2_c2c.json")
+MIXED = os.path.join(HERE, "mixed_noc_congestion")
+MIXED_SHARED_HW = os.path.join(MIXED, "hardware", "shared.json")
+MIXED_DISJOINT_HW = os.path.join(MIXED, "hardware", "disjoint.json")
+MIXED_SHARED_WL = os.path.join(MIXED, "workload", "shared.json")
+MIXED_DISJOINT_WL = os.path.join(MIXED, "workload", "disjoint.json")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 sys.path.insert(0, os.path.join(HERE, "behavioral"))
@@ -44,6 +50,26 @@ def behavioral_hw(path=HW21, port=(1, 1), link=(1, 1), latency=7):
         "link_latency": latency,
     }
     return hw
+
+
+def bounded_hw(path=HW21, port=(1, 1), link=(1, 1), latency=7, saf=256):
+    with open(path) as f:
+        hw = json.load(f)
+    hw["die_ports"]["c2c"] = {
+        "mode": "bounded_saf", "safety": "whole_flow_saf",
+        "port_rate": {"num": port[0], "den": port[1]},
+        "link_rate": {"num": link[0], "den": link[1]},
+        "link_latency": latency, "saf_buffer_depth": saf,
+        "link_inflight_depth": 64, "rx_buffer_depth": 4,
+        "ctrl_buffer_depth": 4,
+    }
+    return hw
+
+
+def load_json(path):
+    with open(path) as f:
+        return json.load(f)
+
 
 
 def workload(packets=4, source=0, dest=16, tag=None):
@@ -101,10 +127,19 @@ def parse(rc, out):
     typed = fields(r"\[D2D_TYPE\] request_in=(\d+) request_out=(\d+) "
                    r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)", out)
     data = fields(r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", out)
+    data_cycles = fields(r"\[D2D_DATA\].*in_first_cycle=(-?\d+) "
+                         r"in_last_cycle=(-?\d+) out_first_cycle=(-?\d+) "
+                         r"out_last_cycle=(-?\d+)", out)
     repin = fields(r"\[D2D_REPIN\] total=(\d+) changed=(\d+) same=(\d+)", out)
+    noc = re.search(r"\[NOC_ACT\] sends=([0-9,]*) stalls=([0-9,]*) "
+                    r"d2d_source_stalls=(\d+)", out)
+    flows = {(int(s), int(t), int(d)): int(c)
+             for s, t, d, c in re.findall(r"(\d+):(\d+):(\d+)@(\d+)", out)}
     return {
         "rc": rc, "out": out, "ns": ns, "beha": beha, "typed": typed,
-        "data": data, "repin": repin,
+        "data": data, "data_cycles": data_cycles, "repin": repin, "flows": flows,
+        "noc_sends": [int(x) for x in noc.group(1).split(",")] if noc else None,
+        "noc_stalls": [int(x) for x in noc.group(2).split(",")] if noc else None,
         "drained": "[DRAIN] router_residual=0" in out and
                    "[DRAIN] d2d_link_residual=0" in out,
         "watchdog": "[PROTO_WAIT]" in out,
@@ -226,6 +261,75 @@ def main():
            " ".join(f"L={l}:H1={v[0]['ns']}ns,H2={v[1]['ns']}ns"
                     for l, v in latency_runs.items()))
 
+    # V4-e1: both backends are calibrated to the same no-contention min-cut oracle.
+    # Cycle emits F packets, so measured steady goodput is checked; Behavioral emits one
+    # representative, so its explicit S(F) ledger is checked instead of inventing a span.
+    calibration = {}
+    for den in (1, 2, 4):
+        pr, lr = (1, 1), (1, den)
+        ch = bounded_hw(port=pr, link=lr, latency=7)
+        bh = behavioral_hw(port=pr, link=lr, latency=7)
+        cycle = run_case(workload(128), ch, sim=SIM_CYCLE)
+        beha = run_case(workload(128), bh)
+        e = estimate(bh, 0, 16, 128)
+        span = cycle["data_cycles"][1] - cycle["data_cycles"][0]
+        goodput = 127 / span
+        calibration[den] = (cycle, beha, e, goodput)
+    calibration_ok = all(
+        c["rc"] == b["rc"] == 0 and c["drained"] and b["drained"] and
+        c["data"] == (128, 128) and b["data"] == (1, 1) and
+        abs(gp - 1 / den) / (1 / den) < 0.01 and
+        b["beha"] == (1, 128, e["bulk_service_cycles"],
+                       e["transaction_link_latency_cycles"],
+                       e["transaction_d2d_cycles"])
+        for den, (c, b, e, gp) in calibration.items())
+    record("V4-e no-contention calibration: cycle goodput and Behavioral S(F) share oracle",
+           calibration_ok,
+           " ".join(f"R=1/{d}:cycle_gp={v[3]:.4f},beha_S={v[1]['beha'][2]}"
+                    for d, v in calibration.items()))
+
+    # V4-e2: exact same-GEMM shared/disjoint experiment. Cycle must expose route sharing;
+    # Behavioral deliberately has no packet-level NoC/link contention and stays invariant.
+    sw, dw = load_json(MIXED_SHARED_WL), load_json(MIXED_DISJOINT_WL)
+    sh_cycle = load_json(MIXED_SHARED_HW)
+    dh_cycle = load_json(MIXED_DISJOINT_HW)
+    sh_beha = behavioral_hw(MIXED_SHARED_HW, latency=1)
+    dh_beha = behavioral_hw(MIXED_DISJOINT_HW, latency=1)
+    cs = run_case(sw, sh_cycle, sim=SIM_CYCLE)
+    cd = run_case(dw, dh_cycle, sim=SIM_CYCLE)
+    bs = run_case(sw, sh_beha)
+    bd = run_case(dw, dh_beha)
+    cycle_contention = (cs["rc"] == cd["rc"] == 0 and cs["drained"] and cd["drained"] and
+                        cs["noc_stalls"][0] > cd["noc_stalls"][0] == 0 and
+                        cs["flows"][(4, 20, 20)] > cd["flows"][(8, 24, 24)])
+    behavioral_invariant = (
+        bs["rc"] == bd["rc"] == 0 and bs["drained"] and bd["drained"] and
+        bs["noc_stalls"] == bd["noc_stalls"] and
+        bs["beha"] == bd["beha"] == (1, 32, 32, 3, 35) and
+        abs(bs["ns"] - bd["ns"]) <= 2)
+    record("V4-e cycle backend exposes shared mixed-NoC congestion",
+           cycle_contention,
+           f"stall={cs['noc_stalls']}/{cd['noc_stalls']} flows={cs['flows']}/{cd['flows']}")
+    record("V4-e Behavioral has equal service/no stalls; route-only delta <= one cycle",
+           behavioral_invariant,
+           f"ns={bs['ns']}/{bd['ns']} stall={bs['noc_stalls']}/{bd['noc_stalls']} "
+           f"ledger={bs['beha']}/{bd['beha']}")
+
+    # Two D2D flows on the same directed link retain independent bulk service. Their
+    # completion equals one flow because V4 deliberately has no cross-flow busy state.
+    two_wl = load_json(WL2)
+    two_wl["vars"]["OC"] = 512
+    one_beha = run_case(workload(32), behavioral_hw(latency=1))
+    two_beha = run_case(two_wl, behavioral_hw(latency=1))
+    record("V4-e shared D2D link has independent per-flow service (no contention)",
+           one_beha["rc"] == two_beha["rc"] == 0 and
+           one_beha["ns"] == two_beha["ns"] and
+           two_beha["beha"] == (2, 64, 64, 6, 70) and
+           two_beha["typed"] == (2, 2, 2, 2, 2, 2) and
+           len(two_beha["flows"]) == 2 and len(set(two_beha["flows"].values())) == 1 and
+           two_beha["noc_stalls"] == [0, 0] and two_beha["drained"],
+           f"one/two_ns={one_beha['ns']}/{two_beha['ns']} "
+           f"flows={two_beha['flows']} ledger={two_beha['beha']}")
 
     passed = sum(ok for _, ok, _ in results)
     print(f"V4 runner: {passed}/{len(results)}")

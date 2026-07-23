@@ -767,3 +767,13 @@ V4 从 `e1a8c02` 建立独立分支 `feat/d2d-v4`。V3 的 `d2d-v3-baseline` tag
   `ΔT=CYCLE·ΔS(F)`、`ΔT=CYCLE·3HΔL`。
 
 V4 runner：**9/9**。
+
+### V4-e：Behavioral/cycle 校准（完成）
+
+- 无争用 `F=128`：cycle goodput 对 `R=1,1/2,1/4` 在 oracle 1% 内；Behavioral
+  `S(F)` 精确等于相同 oracle；
+- mixed shared/disjoint：cycle stall=`11/0`、cross-flow 相差 36 cycle；Behavioral
+  stall=`0/0`、service/fixed 相同、总时长仅差一个固定路由 cycle；
+- 同一 D2D link 上两条 Behavioral flow 与单 flow 同时完成，证明 V4 不建模跨-flow争用。
+
+V4 runner：**13/13**。需要资源争用、背压和死锁安全时必须使用 cycle backend。

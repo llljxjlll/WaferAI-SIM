@@ -972,3 +972,12 @@ completed
   生产事件调度而不只是统计输出。V4 runner **9/9**。
 
 下一步 V4-e：Behavioral/cycle 无争用校准，以及 shared/disjoint 争用语义边界对照。
+
+- **V4-e 已完成**：`F=128,R=1/1,1/2,1/4` 下，cycle 稳态 goodput 在 min-cut
+  oracle 1% 内，Behavioral `S(F)` 与同一 oracle 精确一致。
+- mixed shared/disjoint 中 cycle 捕获 11/0 次 NoC stall 和 36-cycle 跨 die flow 差；
+  Behavioral 两者 stall=0、service/fixed 相同，只有≤1 cycle 的代表路由差。
+- 同 link 双 D2D flow 与单 flow 同时完成且账本逐 flow 相加，直接验证无跨-flow link争用。
+  V4 runner **13/13**。
+
+下一步 V4-f：聚合冻结门、最终文档与 V4 baseline commit/tag。
