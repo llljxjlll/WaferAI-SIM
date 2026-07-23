@@ -253,13 +253,16 @@ void ParseDiePorts(const D2DJson &hw_json) {
             c2c_buf = c.at("buffer_depth");
         // V3-a：模式/速率/四类容量契约（旧配置恒为 functional_v2；字段按模式严格分区）
         ParseD2DLinkConfig(c);
-        if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
+        if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL ||
+            g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
             // bounded 模式下 legacy 字段被拒，端口物理参数改由 V3 字段派生：
             // 速率语义由 g_d2d_cfg.link_rate 承载（端口 bw 保持 1 packet/cycle 的信道上限），
-            // 端口侧可见容量取远端接收深度。
+            // 端口侧可见容量取远端接收深度。Behavioral 同样从解析字段取得 latency/rate，
+            // 但不赋予有限缓冲语义，因此结构层只放一个非零占位深度。
             c2c_lat = g_d2d_cfg.link_latency;
             c2c_bw = 1;
-            c2c_buf = g_d2d_cfg.rx_buffer_depth;
+            c2c_buf = g_d2d_cfg.backend == BACKEND_BEHAVIORAL
+                          ? 1 : g_d2d_cfg.rx_buffer_depth;
         }
     }
     if (c2c_bw < 1)
@@ -454,7 +457,19 @@ static D2DRate ParseRate(const D2DJson &c, const char *key, const D2DRate &dflt,
 }
 
 void ParseD2DLinkConfig(const D2DJson &c2c) {
-    g_d2d_cfg = D2DLinkConfig{}; // 默认 functional_v2（旧配置行为逐位不变）
+    g_d2d_cfg = D2DLinkConfig{}; // 默认 cycle+functional_v2（旧配置行为精确不变）
+
+    if (c2c.contains("backend")) {
+        std::string b = c2c.at("backend").get<std::string>();
+        if (b == "cycle")
+            g_d2d_cfg.backend = BACKEND_CYCLE;
+        else if (b == "behavioral")
+            g_d2d_cfg.backend = BACKEND_BEHAVIORAL;
+        else
+            throw std::runtime_error(
+                "die_ports.c2c.backend: unknown backend '" + b +
+                "' (expected cycle or behavioral)");
+    }
 
     if (c2c.contains("mode")) {
         std::string m = c2c.at("mode").get<std::string>();
@@ -466,6 +481,40 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
             throw std::runtime_error(
                 "die_ports.c2c.mode: unknown mode '" + m +
                 "' (expected functional_v2 or bounded_saf)");
+    }
+
+    // V4 Behavioral 是与 cycle 内部 mode 正交的后端。为防止配置看似启用 bounded_saf、
+    // 实际却没有 FIFO/credit/死锁语义，behavioral 下禁止 mode/safety/depth/legacy 字段；
+    // 固定延迟与两类有理数速率必须显式给出，不能接受后静默使用默认值。
+    if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL) {
+        if (c2c.contains("mode"))
+            throw std::runtime_error(
+                "die_ports.c2c: backend=behavioral must not set cycle-only 'mode'");
+        static const char *FORBIDDEN[] = {
+            "safety", "saf_buffer_depth", "link_inflight_depth",
+            "rx_buffer_depth", "ctrl_buffer_depth", "latency", "link_bw",
+            "bw_per_cycle", "buffer_depth"};
+        for (const char *k : FORBIDDEN)
+            if (c2c.contains(k))
+                throw std::runtime_error(
+                    std::string("die_ports.c2c: '") + k +
+                    "' is not valid for backend=behavioral; Behavioral has no "
+                    "finite-buffer/credit/deadlock semantics and uses "
+                    "port_rate/link_rate/link_latency");
+        static const char *REQUIRED[] = {"port_rate", "link_rate", "link_latency"};
+        for (const char *k : REQUIRED)
+            if (!c2c.contains(k))
+                throw std::runtime_error(
+                    std::string("die_ports.c2c: backend=behavioral requires '") +
+                    k + "' explicitly");
+        g_d2d_cfg.port_rate =
+            ParseRate(c2c, "port_rate", D2DRate{}, "port_rate");
+        g_d2d_cfg.link_rate =
+            ParseRate(c2c, "link_rate", D2DRate{}, "link_rate");
+        g_d2d_cfg.link_latency = c2c.at("link_latency").get<int>();
+        if (g_d2d_cfg.link_latency < 0)
+            throw std::runtime_error("die_ports.c2c: link_latency must be >= 0");
+        return;
     }
 
     // **字段按模式严格分区**：不允许「接受后忽略」，也不允许新旧字段并存后靠优先级静默覆盖
@@ -572,6 +621,13 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
 }
 
 void ValidateD2DTopology() {
+    if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL) {
+        if (!SPEC_USE_BEHA_NOC)
+            throw std::runtime_error(
+                "V4 Behavioral D2D requires noc.use_beha_noc=true");
+        throw std::runtime_error(
+            "V4-a Behavioral D2D configuration is valid but runtime is not wired yet");
+    }
     if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
         if (!g_d2d_cfg.port_rate.Valid() || !g_d2d_cfg.link_rate.Valid())
             throw std::runtime_error(

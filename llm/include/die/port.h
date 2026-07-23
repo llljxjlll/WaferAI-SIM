@@ -89,9 +89,15 @@ void ParseDiePorts(const D2DJson &hw_json);
 // 供测试/外部单独触发的校验（ParseDiePorts 内部也会调用）。
 void ValidateDiePorts();
 
-// ---- V3-a：D2D 链路建模模式与容量契约 ----
+// ---- V3-a/V4-a：D2D 链路建模模式、backend 与容量契约 ----
 //
-// **模式**：
+// **backend（正交于 cycle 内部 mode）**：
+//   cycle（默认）——实例化 V1～V3 的逐拍 D2DLinkUnit；旧配置不写 backend 时精确保持。
+//   behavioral——V4 聚合单条 flow、按解析式补 D2D 固定延迟/序列化；不建模跨 flow
+//     端口/链路争用、有限 FIFO、credit 或网络死锁。V4-a 先建立并严格校验配置接缝，
+//     V4-c 才接入生产运行时。
+//
+// **cycle mode**：
 //   functional_v2（默认，旧配置不写 mode 时即此）——V1/V2 语义：功能性无限 FIFO、
 //     每方向单端口、1 packet/cycle、固定 latency。**不**建模有限缓冲/背压。
 //   bounded_saf——V3：有限缓冲 + 有理数速率 + 背压，死锁安全策略必须显式选定。
@@ -110,6 +116,7 @@ void ValidateDiePorts();
 //   rx_buffer_depth                   —— 远端接收侧容量与背压
 //   ctrl_buffer_depth                 —— 独立控制子通道容量
 // 「buffer >= BDP」**不能**代替「buffer >= flow」，二者约束不同、不可互相顶替。
+enum D2DBackend { BACKEND_CYCLE = 0, BACKEND_BEHAVIORAL };
 enum D2DMode { MODE_FUNCTIONAL_V2 = 0, MODE_BOUNDED_SAF };
 enum D2DSafety { SAFETY_NONE = 0, SAFETY_WHOLE_FLOW_SAF };
 
@@ -135,6 +142,7 @@ inline long long D2DBdpPackets(int link_latency, const D2DRate &rate) {
 }
 
 struct D2DLinkConfig {
+    D2DBackend backend = BACKEND_CYCLE;
     D2DMode mode = MODE_FUNCTIONAL_V2;
     D2DSafety safety = SAFETY_NONE;
     D2DRate port_rate; // 片上→端口注入速率
@@ -157,8 +165,9 @@ void ReleaseWholeFlowSafLink(int link_idx, const FlowKey &key,
                              int flow_packets);
 long WholeFlowSafReservedPackets();
 
-// 解析 die_ports.c2c 的 V3 字段并做**启动期**校验（非法组合抛 std::runtime_error）。
-// 由 ParseDiePorts 调用；旧配置（无 mode）恒定解析为 functional_v2，行为与 V2 逐位一致。
+// 解析 die_ports.c2c 的 V3/V4 字段并做**启动期**校验（非法组合抛 std::runtime_error）。
+// 由 ParseDiePorts 调用；旧配置（无 backend/mode）恒定解析为 cycle+functional_v2，
+// 行为与 V2 逐位一致。
 void ParseD2DLinkConfig(const D2DJson &c2c);
 
 // 版本感知的 D2D 拓扑/容量契约校验：functional_v2 沿用 V1/V2 MVP 契约（每方向 <=1 个

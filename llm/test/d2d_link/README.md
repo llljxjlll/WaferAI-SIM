@@ -722,3 +722,18 @@ python3 llm/test/run_v0_exit.py
 - V3 production runner **16/16**；
 - NoC 四场景精确保持 **14781/29109、14833/45441**；
 - `git diff --check` 干净。
+
+## V4 开发状态
+
+V4 从 `e1a8c02` 建立独立分支 `feat/d2d-v4`。V3 的 `d2d-v3-baseline` tag 保持不动；
+冻结后新增的 mixed-NoC 与 production-SAF probe 作为 V4 的 cycle 校准基线。
+
+### V4-a：Behavioral backend 配置接缝（完成）
+
+- 缺省 `backend=cycle`，历史配置和全部 cycle 门精确不变；
+- `backend=behavioral` 显式要求 `port_rate/link_rate/link_latency`；
+- Behavioral 禁止 cycle-only mode、有限 buffer/SAF 字段和 legacy 字段，不允许接受后忽略；
+- `rate>1` 仍拒绝；V4-a 尚未接运行时，合法配置在生产 topology gate 明确报错。
+
+当前门：纯函数 **293/293**、Link **37/37**、历史 D2D **67/67**、V3 production
+**16/16**，NoC **14781/29109、14833/45441**。

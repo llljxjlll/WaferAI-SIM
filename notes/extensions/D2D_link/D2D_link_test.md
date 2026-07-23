@@ -933,3 +933,15 @@ completed
 14. 所有非法端口、link 和 SAF 容量配置启动或 admission 失败。
 
 这组测试分别回答：D2D 能否工作、包是否真实经过各层网络、路径和延迟是否正确、拥塞是否由预期资源引起、背压是否能够传播，以及模型在压力下是否仍能完成。
+
+#### V4 开发进展
+
+- **V4-a 已完成**：新增 `backend=cycle|behavioral` 契约，默认 cycle；Behavioral 的
+  `port_rate/link_rate/link_latency` 显式必填，并拒绝 cycle mode、SAF/depth 与 legacy
+  字段，避免静默忽略。
+- V4-a 仅建立接缝，生产 Behavioral 尚未接线；合法配置会明确报 `runtime is not wired yet`。
+- V4-a 验证：纯函数 **293/293**、Link **37/37**、历史 D2D **67/67**、V3 production
+  **16/16**，NoC 冻结值 **14781/29109、14833/45441**。
+
+下一步 V4-b：独立 `oracle.py` 与 C++ 纯函数 estimate，先固定 min-cut、延迟唯一记账点
+和多跳 forwarding contract，再进入运行时。

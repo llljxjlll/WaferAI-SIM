@@ -1401,9 +1401,10 @@ int RunD2DV0SelfTest() {
 
         // (a) 旧配置：无 mode → functional_v2，安全策略 none，行为与 V2 一致
         ParseDiePorts(mk(legacy));
-        check(g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
+        check(g_d2d_cfg.backend == BACKEND_CYCLE &&
+                  g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
                   g_d2d_cfg.safety == SAFETY_NONE,
-              "V3-a legacy c2c (no mode) -> functional_v2 / safety none");
+              "V4-a legacy c2c (no backend/mode) -> cycle / functional_v2 / safety none");
         check(g_d2d_cfg.link_latency == 20,
               "V3-a legacy 'latency' still parsed as link_latency");
         bool v2ok = true;
@@ -1548,11 +1549,65 @@ int RunD2DV0SelfTest() {
         ParseDiePorts(mk(bounded(64, 11, 8, 4)));
         D2DJson none;
         ParseDiePorts(none);
-        check(g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
+        check(g_d2d_cfg.backend == BACKEND_CYCLE &&
+                  g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
                   g_d2d_cfg.saf_buffer_depth == 0 &&
                   g_d2d_cfg.safety == SAFETY_NONE,
               "V3-a re-parse without die_ports resets g_d2d_cfg (no stale bounded state)");
 
+
+        // (j) V4-a Behavioral backend：三项解析参数显式必填，与 cycle mode/有限资源字段严格分区。
+        auto behavioral = [&]() {
+            return D2DJson{{"backend", "behavioral"},
+                           {"port_rate", {{"num", 1}, {"den", 2}}},
+                           {"link_rate", {{"num", 1}, {"den", 4}}},
+                           {"link_latency", 7}};
+        };
+        ParseDiePorts(mk(behavioral()));
+        check(g_d2d_cfg.backend == BACKEND_BEHAVIORAL &&
+                  g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&
+                  g_d2d_cfg.port_rate.num == 1 &&
+                  g_d2d_cfg.port_rate.den == 2 &&
+                  g_d2d_cfg.link_rate.num == 1 &&
+                  g_d2d_cfg.link_rate.den == 4 &&
+                  g_d2d_cfg.link_latency == 7,
+              "V4-a behavioral backend parses explicit rates/latency without cycle capacities");
+
+        D2DJson vb = behavioral();
+        vb["backend"] = "magic";
+        check(throwsRuntime(mk(vb)), "V4-a unknown backend rejected");
+        for (const char *missing : {"port_rate", "link_rate", "link_latency"}) {
+            vb = behavioral();
+            vb.erase(missing);
+            check(throwsRuntime(mk(vb)),
+                  std::string("V4-a behavioral missing ") + missing + " rejected");
+        }
+        vb = behavioral();
+        vb["mode"] = "bounded_saf";
+        check(throwsRuntime(mk(vb)),
+              "V4-a behavioral cannot claim cycle bounded_saf semantics");
+        vb = behavioral();
+        vb["saf_buffer_depth"] = 64;
+        check(throwsRuntime(mk(vb)),
+              "V4-a behavioral rejects finite-buffer fields instead of ignoring them");
+        vb = behavioral();
+        vb["link_rate"] = {{"num", 2}, {"den", 1}};
+        check(throwsRuntime(mk(vb)),
+              "V4-a behavioral rate>1 rejected until V5 multi-lane support");
+
+        ParseDiePorts(mk(behavioral()));
+        bool old_beha = SPEC_USE_BEHA_NOC;
+        SPEC_USE_BEHA_NOC = true;
+        bool runtime_rejected = false;
+        try {
+            ValidateD2DTopology();
+        } catch (const std::runtime_error &e) {
+            runtime_rejected = std::string(e.what()).find("not wired yet") !=
+                               std::string::npos;
+        }
+        check(runtime_rejected,
+              "V4-a valid behavioral config is explicitly rejected until runtime wiring lands");
+        SPEC_USE_BEHA_NOC = old_beha;
         // 恢复默认，避免影响后续段落
         ParseDiePorts(mk(legacy));
     }
