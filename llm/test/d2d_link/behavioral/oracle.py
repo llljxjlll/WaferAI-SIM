@@ -141,6 +141,9 @@ def estimate(hw: dict, source: int, dest: int, packets: int) -> dict:
     require(c2c.get("backend") == "behavioral", "oracle requires backend=behavioral")
     port_rate = parse_rate(c2c["port_rate"], "port_rate")
     link_rate = parse_rate(c2c["link_rate"], "link_rate")
+    # TODO(V5): replace this single-lane 1/1 term with the rational rate of the
+    # actual shared NoC cut when multi-lane/striping is introduced; do not multiply
+    # a per-lane minimum by lane count when lanes share an upstream/downstream cut.
     rate = min(Fraction(1, 1), port_rate, link_rate)
     latency = int(c2c["link_latency"])
     require(latency >= 0, "link_latency must be >= 0")

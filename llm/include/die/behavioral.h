@@ -135,6 +135,8 @@ inline D2DBehavioralEstimate EstimateD2DBehavioral(
     if (e.d2d_hops == 0)
         return e; // 同 die 不产生 D2D 专属增量
     // 单 lane NoC source/destination cut 均为 1 packet/cycle；V4 MVP 无 striping。
+    // TODO(V5): 多 lane/striping 落地时必须把 1/1 替换为沿真实共享 NoC cut 聚合后的
+    // 有理数速率；不能使用 lane_count * min(single-lane rates) 这种会高估共享瓶颈的公式。
     e.effective_rate = D2DMinRate(D2DRate{1, 1}, D2DMinRate(port_rate, link_rate));
     e.per_phase_link_latency_cycles = (long long)e.d2d_hops * link_latency;
     e.transaction_link_latency_cycles = 3LL * e.per_phase_link_latency_cycles;

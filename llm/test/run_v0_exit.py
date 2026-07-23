@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""V0-exit 统一准入门（冻结基线）：依次执行三道阻塞门并汇总退出码。
+"""历史 V0–V3 兼容门：保留旧冻结契约，不是当前“全版本”聚合门。
 
-  门 1+2  D2D 纯函数自测 + 端到端 runner（全部通过）      -> run_test_d2d_v0.py
-  门 3     V3 production bounded SAF / congestion / backpressure -> run_test_d2d_v3.py
-  门 4     NoC 四场景精确数值 14781/29109/14833/45441      -> run_test_noc_congestion.py
+  门 1     D2D 纯函数/Link/历史端到端（全部通过）          -> run_test_d2d_v0.py
+  门 2     V3 production bounded SAF / congestion / backpressure -> run_test_d2d_v3.py
+  门 3     NoC 四场景精确数值 14781/29109/14833/45441      -> run_test_noc_congestion.py
 
 冻结契约：V0 的功能测试（自测 + 端到端，冻结时 165/23）必须**继续全部通过**、NoC 四场景
 数值**精确不变**；随 V1+ 增量测试总数可以增长，但既有 V0 契约不得回归。
 任一门失败（非零退出）即整体非零退出，可直接用于 CI / pre-commit 阻塞。
+
+当前包含 V4 的 superset gate：python3 llm/test/run_v4_exit.py
+本脚本保留原文件名，供旧 CI/命令兼容，不应再被描述为“全版本准入门”。
 用法（任意目录）：python3 llm/test/run_v0_exit.py
 """
 import os
@@ -36,7 +39,7 @@ def main():
         rc = subprocess.run(cmd).returncode
         results.append((name, rc))
 
-    print("\n==================== D2D 全版本准入门汇总 ====================")
+    print("\n================ D2D 历史 V0–V3 兼容门汇总 ================")
     all_ok = True
     for name, rc in results:
         print(f"  [{'PASS' if rc == 0 else 'FAIL'}] {name}  (exit={rc})")
