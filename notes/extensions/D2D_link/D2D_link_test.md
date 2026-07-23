@@ -403,40 +403,21 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 
 多跳传输功能正确、路径可解释；合法协议调度能够完成，已知协议依赖环能够被 watchdog 正确诊断。本版不对有限缓冲网络死锁作出保证。
 
-### 4.3b V3 当前进展（V3-a / V3-b / V3-c 已完成）
+### 4.3b V3 实现进展（V3-a～V3-e 已完成）
 
-> **边界**：V3-a～V3-c 已完成配置、独立有限 link、整流大小协议与原子 admission；生产数据路径
-> 仍是 V2 功能性无限 FIFO，`mode=bounded_saf` 继续在 Monitor **显式拒绝**（非零退出）。V3-b 的
-> 有限 FIFO 仅在独立 link self-test 启用；V3-d 把每跳共享端口/接收 buffer、credit 与 admission
-> 接入生产并完成 e2e 后，才允许移除 gate。
-
-- **V3-a ✔**：`functional_v2`（默认，旧配置逐位不变）/ `bounded_saf` 双模式；
-  `bounded_saf` 必须显式 `safety=whole_flow_saf`；速率为整数有理数且 `0 < rate <= 1`
-  （`rate>1` 明确拒绝，不静默按 1）；四类容量分别必填并校验
-  `link_inflight_depth >= BDP=ceil((2*max(L,1)+2)*rate)`（64-bit 整数运算），
-  `saf_buffer_depth >= F` 留待 V3-c；字段按模式严格分区，杜绝接受后忽略与静默覆盖；
-  `ValidateD2DTopology` 版本感知且**生产 Monitor 已切换**。
-- **V3-b ✔（仅独立 link，不接生产）**：`D2DLinkUnit` 增加 `D2DLinkBound.enabled` 门控的 bounded
-  模式（生产恒 disabled、走 functional 分支逐字节不变；e2e 仍 398ns、NoC 冻结值不变）。
-  有限 FIFO（`in_avail` 仅作空位诊断镜像、占用不越 depth）、**显式 DATA/CTRL 回程信用接口**作为
-  唯一无损 flow-control 真源（上游按 credit 发，真实 return pulse 归还；合法上游下 link 永不溢出）。
-  clocked link 的信用 RTT=`2*max(L,1)+2`，在 `L=0/1/7` 与 `rate=1、1/2、2/3、1/4` 上均验证
-  `BDP-1` 欠速、`BDP` 达到目标速率；
-  token-bucket 速率（发后 cap 至 den，支持任意 num/den：1/4→gap4、1/2→gap2、**2/3→gap 1、2 交替，
-  token 守恒 goodput≈2/3**）、统计命名严格区分（`full_cycles` 状态 ≠ `upstream_blocked` 需求被挡；
-  `rate_stall` ≠ `downstream_stall`，各类只在对应场景触发）、bounded 控制 FIFO + data/ctrl 并发
-  （DATA 限速不拖慢 CTRL）、构造期参数硬校验。结束时 FIFO、回程 credit queue/pulse 均为空且
-  DATA/CTRL 信用恢复初始 depth；`residual()` 包含在途信用。注意 standalone 的 `data_depth` 是 link
-  在途 FIFO，不等同于仍待 V3-d 实现的独立 `rx_buffer_depth`。link self-test **18 → 32**。
-- **V3-c ✔（协议/admission 层，生产 bounded 数据路径仍 gated）**：REQUEST 用 tagged union 复用
-  既有 roofline 24-bit 段携带 `flow_packets`（消息仍为 256 bit，旧语义隔离，范围越界拒绝）；
-  dataflow 配置把 `SEND_REQ` 与随后同 `(dest,tag)` 的 `SEND_DATA` 配对并写入整流包数，缺失/错配
-  启动期拒绝。`WholeFlowSafAdmission` 按 `FlowKey(source,tag,subflow)` 原子记账：只有
-  `available>=F` 才预留，失败不改变状态，DATA 尾包释放并校验计数，START 不参与 DATA 预留。
-  已覆盖 `capacity=F` 接受/释放归零、`F-1` 在 ACK/DATA 前拒绝、`BDP<F` 不误判、并发预留守恒、
-  duplicate/zero/unknown-release 防御；真实 4-packet workload 的 `saf=4/3` 启动边界也已验证。
-  V3-d 仍须把该账本归属到实际共享的每跳 C2C/接收 buffer 并接通 credit，才能声称生产 SAF 安全。
-- **当前门**：自测 **280/280**、Link self-test **32/32**、runner **67/67**、NoC 冻结值不变。
+- **V3-a 配置契约**：默认 `functional_v2` 与显式 `bounded_saf` 严格分区；whole-flow SAF、
+  四类独立容量、整数有理数速率、`rate<=1` 与保守 inflight 窗口均在启动期校验。
+- **V3-b 独立 Link**：有限 DATA/CTRL FIFO、token bucket、显式信用、BDP 边界和下游 stall
+  已由 Link SystemC self-test **32/32** 验证。
+- **V3-c 流大小与 admission**：REQUEST 携 `flow_packets`；`FlowKey(source,tag,subflow)` 原子预留；
+  `F/F-1/BDP<F`、重复 key、并发守恒与未知释放均覆盖。
+- **V3-d 生产接线**：Monitor 的 bounded gate 已移除；每条有向 link 实例化
+  `SAF -> port limiter -> link limiter/inflight -> RX` 有限流水线。REQUEST 前原子预留整条多跳路径；
+  DATA/CTRL 都用真实回程信用，结束时两类信用、SAF 预留、Router/Link residual 全归零。
+- **V3-e 定量与压力**：独立 runner **16/16** 覆盖三类瓶颈、共享/独立/full-duplex、源 die 与
+  中间 die 混合拥塞、生产背压链、多跳、双向对角、2×2 四流置换、overbook 拒绝、RX/CTRL 小缓冲。
+- **当前总门**：自测 **284/284**、Link self-test **32/32**、历史 runner **67/67**、
+  V3 runner **16/16**、NoC 冻结值 **14781/29109、14833/45441**。
 
 ### 4.4 V3：周期精确拥塞与背压版
 
@@ -458,7 +439,9 @@ buffer_depth
 ```
 
 - 明确 `>1 packet/cycle` 的实现方式：多 lane、flit 聚合或 token bucket。
-- 目的端拥塞能够逐级回压到源核。
+- 目的端拥塞能够逐级回压到 RX/inflight/SAF 边界；采用 whole-flow SAF 时，完整 flow 已落地后
+  必须在该边界切断源 NoC 锁依赖，后续 flow 容量不足则在 REQUEST 注入前 admission 拒绝，
+  **不**要求已完成整流的源 flow 继续持锁等待。
 - 明确全双工、半双工以及正反向是否共享容量。
 - 明确多个 endpoint 是否属于同一个物理 link group。
 - 实现端口仲裁和公平性统计。
@@ -521,7 +504,8 @@ buffer_depth
 验收：
 
 - D2D buffer 达到满状态；
-- stall 传播到源 port、源 NoC 和源核；
+- stall 传播到 RX、inflight 和 SAF drain；若采用 wormhole/VC 才继续传播到源 port/NoC/核；
+  whole-flow SAF 则应在完整整流后切断源侧依赖，容量不足的新 flow 在注入前拒绝；
 - 无丢包且最终排空；
 - 增大 buffer 改变瞬态行为，但不应改变长时间稳态瓶颈吞吐。
 
@@ -550,6 +534,22 @@ buffer_depth
 2. 检查阻塞流量最终进入 escape VC 并持续取得进展。
 3. 检查 VC 转换符合规定顺序，禁止从逃逸资源返回可能重新形成依赖环的普通 VC。
 4. 流量完成后所有 VC、credit、buffer 和 output lock 归零。
+
+#### 已完成的实现与验收（V3-d / V3-e）
+
+- 生产 DATA 路径：`whole-flow SAF -> port token -> link token/inflight -> finite RX`；CTRL 独立有限 FIFO。
+- DATA SAF 槽位与 CTRL FIFO 都由显式回程信用保护，信用 event 使用翻转位避免连续归还合并；
+  每个成功用例要求 `data_balanced=ctrl_balanced=1`。
+- 128 包长流 goodput：NoC/port/link 瓶颈实测约 `1 / 0.501976 / 0.250493`，相对理论值误差 <1%；
+  非瓶颈变化不改吞吐，stall 分类指向实际限制器。
+- 源 die shared/disjoint：NoC stall `11/0`；中间 die shared/disjoint：stall `7/0`，D2D 完成
+  cycle `397/380`，证明中间 die 混合拥塞真实发生。
+- 生产背压热点（`rx=1,inflight=4`）：`inflight_full=85、rx_full=95、inflight_stall=60、
+  rx_stall=63、downstream_stall=63`，最终全部排空。`source_stalls=0` 符合 whole-flow SAF
+  在完整整流后切断源锁依赖的安全设计。
+- 最小合法安全压力：`SAF=F=4、inflight=BDP=4、rx=1、ctrl=1` 的 2×2 四流固定置换覆盖
+  八条有向 link，均完成；`SAF=F-1` 与 concurrent overbook 在首包前明确拒绝。
+- 2×2 双向对角覆盖 E/N/W/S；3×1 两跳证明每个中间 SAF stage 都完整存 flow 后再排空。
 
 #### 完成标准
 
@@ -781,17 +781,17 @@ V3 网络级覆盖：
 | T06 | 3-die 多跳 | V2 | 中间 die 接力 | **V2-b/V2-c 已覆盖**：3×1 正向 E,E 与反向 W,W；承载 DATA/REQUEST/ACK 的有向 link 集合恰好等于期望路径且每条 in==out；每包 hop 数==2；repin total==跨链包数且 same>0（排除同 port id 巧合）；中间 die mesh_pkts=18>0（真片内 hop）；仅终点 DONE、drain=0 |
 | T07 | 2×2 对角路径 | V2 | die 级 XY | **V2-b2/V2-c 已覆盖**：正向 die0-(E)->die1-(N)->die3，ACK die3-(W)->die2-(S)->die0——**正反不对称**（维序两向都先走 X，往返成矩形）已固化为期望；repin=(12,12,0)（每次入口重写都改方向）；mesh_pkts=[52,15,3,9] 示 die1 承载正向、die2 只承载 ACK；路径收敛无绕圈、仅 core48 DONE、drain=0 |
 | T08 | 多跳协议活性与诊断 | V2 | 握手调度和 watchdog | **V2-d/V2-d2 已完整覆盖**：合法模式——latency 扫描 16 次 0 超时、多流两条 2 跳流均完成 drain=0；**已知协议环**——`cross_die_rendezvous_cycle.json` 由**仿真器内部** `ProtocolWatchdog` 主动诊断，dump `protocol_wait_cycle`/`stalled_for`/residual/output lock/`(source,tag,dest,phase,wait_reason)` 并以**退出码 3** 结束（非框架 124 超时），且明确判定「等待在原语/rendezvous 层而非网络层」；健康用例不误触发 |
-| T09 | 三类瓶颈隔离 | V3 | 带宽准确性 | goodput 等于最小段速率 |
-| T10 | 同 link/独立 link | V3 | D2D 争用 | 共享受总容量限制，独立可并行 |
-| T11 | Local+D2D shared/disjoint | V3 | 混合 NoC 拥塞 | 仅 shared 出现显著 queue/stall |
-| T12 | 中间 die 混合拥塞 | V3 | 诱发中间 NoC 流量 | 中间共享链路拥塞可观测 |
-| T13 | 小 buffer 背压 | V3 | 端到端回压 | stall 传播到源核且最终排空 |
+| T09 | 三类瓶颈隔离 | V3 | 带宽准确性 | **已覆盖**：128 包 goodput 在 1% 内等于 `min(NoC,port,link)`，非瓶颈不敏感，stall 精确归因 |
+| T10 | 同 link/独立 link | V3 | D2D 争用 | **已覆盖**：共享总量守恒且两 flow 完成；独立 link 并行；双向容量独立 |
+| T11 | Local+D2D shared/disjoint | V3 | 混合 NoC 拥塞 | **已覆盖**：源 die shared/disjoint stall=11/0，D2D completion 增加 |
+| T12 | 中间 die 混合拥塞 | V3 | 诱发中间 NoC 流量 | **已覆盖**：shared/disjoint stall=7/0、D2D cycle=397/380 |
+| T13 | 小 buffer 背压 | V3 | 有限流水线回压 | **已覆盖**：remote NoC→RX→inflight→SAF stall 全触发并排空；whole-flow SAF 按设计切断源锁依赖 |
 | T14 | Behavioral oracle | V4 | 快速模型准确性 | 理论值误差不超过 1 cycle |
 | T15 | Behavioral/cycle 对照 | V4 | 两档语义一致 | 无争用接近；仅 cycle 响应争用 |
 | T16 | Striping 非整除 | V5 | 子流正确性 | 数据守恒、一次逻辑完成 |
 | T17 | 多端口聚合与共享 cut | V5 | 防止虚假加速 | 聚合吞吐不超过所有共享瓶颈 |
 | T18 | Dynamic 可复现与活性 | V5 | 高级策略安全 | 固定 seed 可复现、无乱序和死锁 |
-| T19 | SAF 容量 admission 边界（采用 SAF 时） | V3 | 防止 SAF 保证静默失效 | `capacity=F` 完成；`capacity=F-1` 在注入前拒绝或显式安全降级 |
+| T19 | SAF 容量 admission 边界（采用 SAF 时） | V3 | 防止 SAF 保证静默失效 | **已覆盖**：`F` 完成、`F-1` 注入前拒绝、later-hop 失败原子回滚、并发预留守恒 |
 | T20 | Escape VC 有限缓冲压力（采用 escape VC 时） | V3 | 验证网络 buffer 死锁安全 | 最小合法 buffer/credit 下持续进展并最终排空 |
 | T21 | HOST 可达性与 endpoint 解码 | V0 | 统一端口框架校验（点 5） | 无 HOST 端口/全被 C2C override 时启动报错；`port_for_host` 每核有定义 |
 | T22 | tag=接收槽 语义 | V1 | tag→dest 唯一 + 多发一聚合（点 3，审查修正） | tag→dest 唯一性拒绝撞槽；同 tag 多源共享锁聚合（maxref≥2）；distinct-tag 串行不串 |

@@ -92,7 +92,7 @@ cd build && ./npusim --d2d-v0-selftest
 - **V1 完成（tag `d2d-v1-baseline`）**：V1 的相邻 die、单端口、1 packet/cycle、固定 latency、
   功能性无限 FIFO 范围已闭合；多跳进入 V2，有限缓冲/带宽/背压进入 V3。
 
-## V2（多跳跨 die）—— 进行中
+## V2（多跳跨 die）—— 完成并冻结
 
 V2 继续沿用 V1 的**功能性无限 FIFO**，**不**引入有限缓冲/背压（属 V3），因此 V2 **不**声称
 解决了 buffer deadlock。
@@ -598,89 +598,110 @@ runner **15 → 23 组**(4×4 W/S/E/N + 4×2 W/S/E/N);self-test 165/165。
 3. **非 dataflow 模式（pd/gpu/pds）多 die 化**：其 `config_helper` 仍按 `GRID_SIZE`——**V0 不要求**
    （D2D 走 dataflow 路径），若需再单独做。
 
-## V3（有限缓冲与背压）—— 进行中
+## V3（有限缓冲、背压与 whole-flow SAF）—— 完成
 
-> **当前边界（务必先读）**：V3-a～V3-c 已落地配置、独立有限 link、REQUEST 流大小协议和
-> whole-flow SAF 原子 admission 账本，但**生产数据路径仍是 V2 的功能性无限 FIFO**。
-> 因此 `mode=bounded_saf` 会在 Monitor **被显式拒绝**并非零退出——绝不允许「配置声称有限缓冲、
-> 实际按 functional_v2 跑完」这种静默错误语义。V3-d 把有限 link、每跳共享端口/接收 buffer、
-> credit 与 admission 接入生产路径并完成 e2e 后，才可移除该 gate。
+> **最终状态**：`mode=bounded_saf` 已接入生产周期精确路径，不再被 Monitor gate 拒绝。
+> `functional_v2` 仍是默认值并保持 V1/V2 冻结行为；有限缓冲模式采用明确的
+> `safety=whole_flow_saf`，不声称实现 escape VC、chunked SAF 或多 lane。
 
-- **V3-a ✔（配置契约与兼容模式）**
-  - **模式**：`functional_v2`（默认；旧配置不写 `mode` 即此，行为与 V2 逐位一致）与
-    `bounded_saf`（V3 有限缓冲模型）。`bounded_saf` 必须显式声明死锁安全策略
-    `safety=whole_flow_saf`——**有限 buffer 但无安全论证**的配置一律拒绝。
-  - **速率为整数有理数** `{num, den}`（避免浮点非确定性）。单个 `sc_bv<256>` 信道每拍最多
-    载 1 包，故 **`0 < rate <= 1`**；`link_bw=4` / `rate>1` **启动期明确拒绝**，
-    **不**静默按 1 建模（真正 >1 packet/cycle 需多 lane，属后续版本）。
-  - **四类容量必须分别给出**，不可用单一 `buffer_depth` 混代：
+### V3-a：配置与兼容契约
 
-    | 字段 | 约束 | 作用 |
-    | --- | --- | --- |
-    | `saf_buffer_depth` | `>= F`（整条 flow 包数） | whole-flow SAF 的**正确性**要求 |
-    | `link_inflight_depth` | `>= BDP = ceil((2*max(L,1)+2)*rate)` | 在途 FIFO，覆盖信用往返 |
-    | `rx_buffer_depth` | `>= 1` | 远端接收与背压 |
-    | `ctrl_buffer_depth` | `>= 1` | 独立控制子通道 |
+- 两种模式：默认 `functional_v2` 与显式 `bounded_saf`。两类字段严格分区，避免“配置被接受但忽略”。
+- `bounded_saf` 必须给出 `safety=whole_flow_saf`、整数有理数 `port_rate/link_rate`，且
+  `0 < rate <= 1 packet/cycle`。单信道无法表达 `rate>1`，因此明确拒绝；多 lane 留给 V5。
+- 四种容量独立：`saf_buffer_depth`、`link_inflight_depth`、`rx_buffer_depth`、
+  `ctrl_buffer_depth`。SAF 容量要求 `>= flow_packets(F)`；inflight 继续执行 V3-b credit 模型验证过的
+  保守窗口下界 `ceil((2*max(L,1)+2)*link_rate)`。二者不可互相替代。
+- `ValidateD2DTopology` 按模式校验；每方向仍限一个 C2C 端口。
 
-    「buffer >= BDP」**不能**代替「buffer >= flow」。BDP 用 64-bit 整数有理数运算校验；
-    `saf_buffer_depth >= F` 依赖 workload，留到 V3-c 的 admission 阶段校验。
-  - **字段按模式严格分区**，杜绝「接受后忽略」与「新旧并存靠优先级静默覆盖」：
-    `functional_v2` 只接受 `latency`/`link_bw`/`bw_per_cycle`/`buffer_depth`；
-    `bounded_saf` 只接受 V3 字段。故 `latency=20` 与 `link_latency=7` 并存、
-    或 `link_bw=4` 与 `link_rate=1/4` 并存，都会被拒绝而非静默取其一。
-  - `ValidateV1MvpTopology` 泛化为**版本感知**的 `ValidateD2DTopology`：`functional_v2` 沿用
-    V1/V2 MVP 契约；`bounded_saf` 校验速率/容量契约，且每方向仍限单端口（多端口属 V5）。
-    **生产 Monitor 已切换到该版本感知校验器**（不再调用旧的 V1 校验器）。
-  - 无 `die_ports` 时同样复位 `g_d2d_cfg`，防止重复解析残留上一次的 bounded 配置。
-  - **验证**：self-test **272/272**（含 31 项 V3-a 契约用例）；runner **65/65**，其中 3 组是
-    **真实启动路径**——合法 functional_v2 仍跑出 **398 ns**（V2 冻结值不变）、
-    `functional_v2 + link_rate` 启动期拒绝、合法 `bounded_saf` 因 runtime 未启用而明确拒绝。
+### V3-b：独立 Link 有限 FIFO 与速率模型
 
-- **V3-b ✔（独立 link 的有限 FIFO + token-bucket 速率）——仅 standalone，不接生产**
-  `D2DLinkUnit` 增加可选 bounded 模式，**全部由 `D2DLinkBound.enabled` 门控**：生产
-  （functional_v2）恒 disabled，走 `forward()` 的 functional 分支（逐字节保留 V2 逻辑），bounded
-  逻辑全在独立的 `forward_bounded()`；e2e 仍 **398 ns**、NoC 冻结值不变。生产 Monitor 仍拒绝
-  `bounded_saf`（接生产属 V3-d）。link self-test **18 → 32**（新增 14 项）。要点：
-  - **有限 FIFO**：`in_avail` 公布当前空位的**诊断镜像**；真正且唯一的流控契约是显式
-    `data_credit_return` / `ctrl_credit_return`。上游持初始信用、发送扣 1、收到真实回程 pulse 加 1；
-    FIFO 满时不接收，占用**从不越过 depth**。`in_avail` 因 `sc_signal` settle 可与信用短暂不同步，
-    因此只要求背压期间观测到拉低，不把它当第二套握手真源。
-  - **信用式 flow control（bounded link 标准无损模型）**：单个 `sc_bv<256>` 信道有 delta 延迟，
-    纯组合 valid/ready 会退化成跨拍环；显式回程信用消除歧义。合法信用上游下
-    `upstream_blocked=0`，全程按序、无丢/重。
-  - **先交付后接受 + BDP**：clocked link 即使 `L=0`，正向/回程仍各至少一个服务拍；模型信用 RTT
-    为 `2*max(L,1)+2`，BDP 为 `ceil(RTT*rate)`。`L=0/1/7`、`rate=1、1/2、2/3、1/4`
-    均实测 `depth=BDP` 达到目标速率、`BDP-1` 被信用往返限制；完整 `L=1,rate=1` 扫描为
-    depth 1/2/3/4 → goodput 0.25/0.50/0.75/1.0。
-  - **token-bucket 速率**：发包后再 cap 至 `den`（不在发前 cap，否则丢失 `num>1` 的速率）。故
-    支持任意 `num/den`：1/4→gap 4、1/2→gap 2、**2/3→gap 1、2 交替（token 守恒，goodput≈2/3）**，
-    不能用单一众数 gap 表达一般速率。
-  - **统计命名严格区分**：`full_cycles`（FIFO 满**状态**时长）≠ `upstream_blocked`
-    （`in_sent && 满`，确有发送需求被挡——well-behaved 信用上游恒为 0）；`rate_stall`
-    （成熟+下游 ready+token 不足）≠ `downstream_stall`（成熟+下游不 ready）。各类只在对应场景触发
-    （如速率场景 `rate_stall>0 & downstream_stall=0`，下游 stall 场景反之）。
-  - **bounded 控制 FIFO**：独立 `ctrl_depth` 与 `ctrl_credit_return`，下游控制长 stall 时控制包驻留、
-    `in_ctrl_avail` 诊断镜像拉低、占用 `<=ctrl_depth`、释放后按序全交付。**data+ctrl 并发**：
-    DATA 限速 1/4（gap 4）而 CTRL 不受 data token 限制（gap 1）——证明控制吞吐不被 DATA 限速拖慢。
-  - **完整排空/信用守恒**：结束时 DATA/CTRL FIFO、回程 credit queue、输出 credit pulse 全为空，
-    上游 DATA/CTRL 信用都精确恢复初始 depth；`residual()` 已包含在途信用，不会过早报告 drain。
-  - **容量边界**：当前 `D2DLinkBound::data_depth` 是 **link 在途 FIFO**，不等同于 V3-a 单独声明的
-    `rx_buffer_depth`；后者须由 V3-d 的接收端 PortUnit 独立实现和接线。
-  - **构造期硬校验**：`data_depth>=1`、`ctrl_depth>=1`、`0<rate<=1`，绕过解析器的非法构造直接抛。
+- `D2DLinkUnit::forward_bounded()` 在 standalone SystemC 测试中验证有限 DATA/CTRL FIFO、显式信用、
+  下游长 stall、FIFO 顺序、无丢/重、占用不越 depth 和最终信用恢复。
+- token bucket 使用整数 token，支持 `1、1/2、1/4、2/3`；`2/3` 以 1/2 拍间隔交替且 token 守恒，
+  不能用单一 modal gap 近似。
+- `L=0/1/7` 与多种速率验证 `BDP-1` 欠速、`BDP` 达到目标速率。
+- Link self-test 从 V2 的 18 项扩展到 **32/32**；该分支与生产 whole-flow SAF 分支彼此隔离。
 
-- **V3-c ✔（整流大小协议 + 原子 SAF admission；生产 bounded 数据路径仍 gated）**
-  - **256-bit 位宽收口**：消息原布局已占 255 bit，因此不扩宽消息。REQUEST 以 tagged union 复用
-    `roofline_packets` 的 24-bit 段携带 `flow_packets`，其余消息保持原 roofline 语义；范围为
-    `1..2^24-1`，越界明确拒绝。dataflow 配置阶段把每个 `SEND_REQ` 与随后同 `(dest,tag)` 的
-    `SEND_DATA` 配对，并把计算出的 DATA 网络包数写入 REQUEST；缺失/错配/不可编码均启动期报错。
-  - **原子预留账本**：`WholeFlowSafAdmission` 以 `FlowKey(source,tag,subflow)` 记账；只有
-    `available >= F` 才一次性预留，容量不足、重复 key、零包请求均不改变状态。DATA 尾包按同一 key
-    释放，并核对尾包序号与预留包数；未知释放/计数不符明确报错。START 不参与 DATA 预留。
-  - **边界契约已测**：`capacity=F` 接受并释放归零，`capacity=F-1` 在 ACK/DATA 前拒绝，
-    `BDP<F` 不会被误当作满足整流容量，并发 flow 的预留总量不越 capacity。真实启动路径使用
-    4-packet 跨 die flow 验证 `saf=4` 通过 workload preflight 后到达 runtime gate、`saf=3` 更早拒绝。
-  - **刻意边界**：V3-c 的账本是 admission/protocol 层；Monitor gate 尚未移除，因而不声称生产
-    有限缓冲已无死锁。V3-d 必须把账本归属收口到实际共享的每跳 C2C/接收 buffer，接通 credit，
-    验证并发争用、背压传播与 drain，再允许 bounded workload 进入仿真。
+### V3-c：REQUEST 流大小与原子 admission
 
-- **当前门**：自测 **280/280**、Link self-test **32/32**、runner **67/67**、NoC 冻结值不变。
+- 256-bit 消息不扩宽：REQUEST 以 tagged union 复用既有 24-bit roofline 字段携带
+  `flow_packets`，范围 `1..2^24-1`；非 REQUEST 的原语义不变。
+- dataflow 配置把 `SEND_REQ` 与后续同 `(dest,tag)` 的 `SEND_DATA` 配对，缺失、错配和不可编码均报错。
+- `WholeFlowSafAdmission` 按 `FlowKey(source,tag,subflow)` 原子记账；无效大小、重复 active key、
+  容量不足和未知释放均明确失败且不破坏账本。
+- 已验证 `capacity=F`、`F-1`、`BDP<F`、并发预留守恒和完整释放。
+
+### V3-d：生产 bounded SAF 数据路径
+
+生产每条**有向** D2D Link 的 DATA 流水线为：
+
+```text
+source router
+  -> whole-flow SAF stage
+  -> port token bucket
+  -> link token bucket + finite inflight/latency FIFO
+  -> finite RX stage
+  -> remote router / remote NoC
+```
+
+- REQUEST 注入前，沿确定性 die-level XY 路径对**每条有向 link**一次性预留 `F` 个 SAF 槽位。
+  任一跳不足会回滚此前所有预留并在 REQUEST/DATA 注入前报错；不会出现只占部分路径后等待。
+- 每跳 REQUEST 先记录 `F`；DATA 按 FlowKey 收齐并核对尾包/包数，只有完整 flow 才进入物理 link。
+  每条 link 的 SAF stage 排空该 flow 后释放该跳预留；多跳最终 `reserved_packets=0`。
+- DATA 与 CTRL 都使用真实回程信用。DATA 初始信用为 SAF 深度，包离开 SAF 时归还；CTRL 初始信用为
+  `ctrl_buffer_depth`，控制包交付时归还。信用事件采用**翻转位**而非单周期高电平，连续交付不会合并。
+  Router 对信用做 0/上界保护，结束时 `[CREDIT] data_balanced=1 ctrl_balanced=1`。
+- `saf/inflight/rx/ctrl` 均有独立有限容量；RX 满会依次阻塞 inflight 到达和 SAF drain。控制网络独立，
+  不消耗 DATA token。全双工由两个相反方向的 Link 单元提供，容量互不共享。
+- whole-flow SAF 的依赖切断点在 SAF stage：flow 完整落地后源 NoC 锁已释放。因此远端拥塞传播为
+  `remote NoC -> RX -> inflight -> SAF drain`，**不会要求已完成整流的源 flow 继续持锁等待**。
+  新 flow 容量不足时在源端 admission 阶段拒绝，而非进入网络后形成 hold-and-wait。
+
+### V3-e：拥塞、背压与安全证据
+
+独立 runner `run_test_d2d_v3.py` 提供 **16/16** 组生产级门禁：
+
+- **瓶颈解析基线**：128 包长流 goodput 在 1% 内等于
+  `min(NoC=1, port_rate, link_rate)`：实测 1、0.501976、0.250493；增大非瓶颈不改变吞吐，
+  改变当前瓶颈后瓶颈随之转移；port/link stall 分类只在对应限制器上触发。
+- **共享与独立资源**：两流共享 link 时总包数守恒且都完成；独立 link 并行；相反方向全双工独立。
+- **Local+D2D 混合拥塞**：源 die shared/disjoint 对照为 stall `11/0`；中间 die 对照为
+  stall `7/0`，且 shared 的两跳 D2D 完成 cycle `397 > 380`，证明拥塞出现在实际共享的片内路径。
+- **真实生产背压链**：中间 die 热点在 `rx=1、inflight=4` 下稳定触发
+  `inflight_full=85、rx_full=95、inflight_stall=60、rx_stall=63、downstream_stall=63`，
+  全部 flow 完成并排空；`source_stalls=0` 是 whole-flow SAF 已切断源侧依赖的预期，不是漏接背压。
+- **SAF/multi-hop**：3×1 两跳的两个 forward SAF stage 均完整存 32 包并释放；2×2 双向对角覆盖
+  E/N/W/S 与最小 `rx=1/ctrl=1`；四流固定置换在 `SAF=F=4` 下让 2×2 的八条有向 link
+  各承载 4 DATA 包并最终排空。
+- **容量边界**：`SAF=F` 完成，`F-1` 在 DATA 前拒绝；并发 overbook 明确拒绝且原子回滚。
+- **控制浅缓冲**：`ctrl_depth=1` 下 8 个并发 flow 的 8 REQUEST、8 ACK、32 DATA 全部按序完成，
+  DATA/CTRL 信用均恢复，避免 registered-ready 的一拍滞后造成越界。
+- **结束态**：每个成功用例要求 router residual、link residual、SAF reservation 全为 0，
+  DATA/CTRL 信用平衡，watchdog 不触发。
+
+### V3 完成范围与边界
+
+V3 已支持：dataflow 周期精确模式、每方向单 C2C 端口、`rate<=1`、多跳、全双工、有限
+SAF/inflight/RX/CTRL、whole-flow SAF 安全契约、端口/链路限速、Local+D2D 混合拥塞和可归因统计。
+
+不在 V3 范围：Behavioral 快速模型（V4）、多 lane/多端口聚合与 striping（V5）、escape VC、
+chunked SAF、`rate>1`、非 dataflow 多 die，以及完整逐事务 trace/oracle。对同一 `(source,tag,subflow)`
+的 active flow 重入会明确拒绝；当前协议不为 active key 分配额外 flow-instance 序号。
+
+### V3 冻结准入门
+
+统一命令：
+
+```bash
+python3 llm/test/run_v0_exit.py
+```
+
+必须同时满足：
+
+- 纯函数/路由自测 **284/284**；
+- Link SystemC 自测 **32/32**；
+- 历史 D2D runner **67/67**；
+- V3 production runner **16/16**；
+- NoC 四场景精确保持 **14781/29109、14833/45441**；
+- `git diff --check` 干净。

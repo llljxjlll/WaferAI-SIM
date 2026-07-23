@@ -1,5 +1,11 @@
 # D2D通信建模计划
 
+> **实现状态（2026-07-23）**：V0～V3 已完成；V3 已落地生产周期精确的有限
+> SAF/inflight/RX/CTRL 流水线、端口/链路限速、DATA/CTRL 信用、whole-flow SAF 全路径原子预留，
+> 并通过瓶颈、混合拥塞、背压与最小缓冲安全门禁。冻结标识为 `d2d-v3-baseline`。
+> V4 Behavioral 校准与 V5 多端口/striping 尚未实现。详细证据见 `D2D_link_test.md`、
+> `log/V3_development.md` 和 `llm/test/d2d_link/README.md`。
+
 # 主要思路
 
 在仿真器现在的core和chip层之间插入die层
