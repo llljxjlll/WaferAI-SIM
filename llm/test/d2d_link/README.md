@@ -737,3 +737,14 @@ V4 从 `e1a8c02` 建立独立分支 `feat/d2d-v4`。V3 的 `d2d-v3-baseline` tag
 
 当前门：纯函数 **293/293**、Link **37/37**、历史 D2D **67/67**、V3 production
 **16/16**，NoC **14781/29109、14833/45441**。
+
+### V4-b：Behavioral oracle 与解析式（完成）
+
+- C++ `die/behavioral.h` 与独立 Python `behavioral/oracle.py` 分别实现 topology/path 与
+  fixed/service 分解；
+- 单 flow `R=min(NoC cut=1,port_rate,link_rate)`；多跳采用 pipelined min-cut；
+- `T_D2D transaction=3*H*link_latency+ceil(F/R)`；Router hops 由代表包实际穿越，
+  estimate 不重复计费；
+- Behavioral 明确无跨-flow争用/有限 FIFO/credit/SAF 语义。
+
+门：C++ pure-function **300/300**，Python oracle **8/8**。详细公式见 `behavioral/README.md`。

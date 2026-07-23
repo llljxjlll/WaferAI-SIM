@@ -945,3 +945,12 @@ completed
 
 下一步 V4-b：独立 `oracle.py` 与 C++ 纯函数 estimate，先固定 min-cut、延迟唯一记账点
 和多跳 forwarding contract，再进入运行时。
+
+- **V4-b 已完成**：C++ 纯函数与独立 Python oracle 均实现 X-first 单/多跳路径、
+  `R=min(1,port,link)`、`S(F)=ceil(F/R)` 和 `T_D2D=3*H*L+S(F)`。
+- 多跳明确采用 pipelined min-cut；bulk service 只算一次。`intra_die_hops` 只作路径解释，
+  因代表包仍穿 Router 而不再写入 estimate。
+- 覆盖 2×1、3×1、2×2 diagonal、missing peer、同 die、非法 packet；C++ 总门
+  **300/300**、Python **8/8**。
+
+下一步 V4-c：让 REQUEST/ACK/DATA 代表包进入 Behavioral runtime，并使其可观测值逐项匹配 oracle。

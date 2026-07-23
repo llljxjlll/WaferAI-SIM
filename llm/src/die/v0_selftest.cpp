@@ -1,5 +1,6 @@
 // D2D V0 L0 自测：编址、端点解码、矩形拓扑、端口配置校验。
 // 不依赖 SystemC 运行；直接设置全局维度并调用纯函数。
+#include "die/behavioral.h"
 #include "die/port.h"
 #include "defs/spec.h"
 #include "common/flow.h"
@@ -1608,8 +1609,73 @@ int RunD2DV0SelfTest() {
         check(runtime_rejected,
               "V4-a valid behavioral config is explicitly rejected until runtime wiring lands");
         SPEC_USE_BEHA_NOC = old_beha;
+
         // 恢复默认，避免影响后续段落
         ParseDiePorts(mk(legacy));
+    }
+
+    // ---- 16b2. V4-b：Behavioral 路径与解析 estimate（无 SystemC、无跨-flow状态）----
+    {
+        auto mk_behavioral = [&]() {
+            D2DJson hw;
+            hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+            hw["die_ports"]["overrides"] = D2DJson::array();
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+            hw["die_ports"]["overrides"].push_back(
+                {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+            hw["die_ports"]["c2c"] = {
+                {"backend", "behavioral"},
+                {"port_rate", {{"num", 1}, {"den", 2}}},
+                {"link_rate", {{"num", 1}, {"den", 4}}},
+                {"link_latency", 7}};
+            return hw;
+        };
+
+        setTopo(4, 4, 2, 1);
+        ParseDiePorts(mk_behavioral());
+        D2DBehavioralRoute one = BuildD2DBehavioralRoute(0, 16);
+        check(one.dies == std::vector<int>({0, 1}) &&
+                  one.link_indices.size() == 1 && one.intra_die_hops == 3,
+              "V4-b route 2x1: dies=[0,1], one E link, representative router hops=3");
+        D2DBehavioralEstimate e = EstimateD2DBehavioral(
+            0, 16, 7, D2DRate{1, 2}, D2DRate{1, 4}, 7);
+        check(e.effective_rate.num == 1 && e.effective_rate.den == 4 &&
+                  e.first_packet_service_cycles == 4 &&
+                  e.bulk_service_cycles == 28,
+              "V4-b min-cut rate=min(NoC=1,port=1/2,link=1/4); service 1/7 packets=4/28");
+        check(e.per_phase_link_latency_cycles == 7 &&
+                  e.transaction_link_latency_cycles == 21 &&
+                  e.data_first_cycles == 11 && e.data_last_cycles == 35 &&
+                  e.transaction_d2d_cycles == 49,
+              "V4-b one-hop timing: fixed link latency and bulk service counted once");
+
+        setTopo(4, 4, 3, 1);
+        ParseDiePorts(mk_behavioral());
+        D2DBehavioralRoute two = BuildD2DBehavioralRoute(0, 32);
+        check(two.dies == std::vector<int>({0, 1, 2}) &&
+                  two.link_indices.size() == 2 && two.intra_die_hops == 6,
+              "V4-b route 3x1: two E links and intermediate-die Router traversal reported");
+        e = EstimateD2DBehavioral(0, 32, 7, D2DRate{1, 2},
+                                  D2DRate{1, 4}, 7);
+        check(e.transaction_link_latency_cycles == 42 &&
+                  e.bulk_service_cycles == 28 &&
+                  e.transaction_d2d_cycles == 70,
+              "V4-b pipelined multi-hop: 3*H*L fixed + one end-to-end bulk service");
+
+        bool bad_packets = false;
+        try {
+            (void)EstimateD2DBehavioral(0, 32, 0, D2DRate{1, 1},
+                                        D2DRate{1, 1}, 0);
+        } catch (const std::runtime_error &) {
+            bad_packets = true;
+        }
+        check(bad_packets, "V4-b zero-packet cross-die estimate rejected");
+
+        D2DBehavioralEstimate local = EstimateD2DBehavioral(
+            0, 1, 7, D2DRate{1, 2}, D2DRate{1, 4}, 7);
+        check(local.d2d_hops == 0 && local.transaction_d2d_cycles == 0,
+              "V4-b same-die flow has zero D2D-only estimate");
     }
 
     // ---- 16c. V3-c：REQUEST flow_packets tagged union + whole-flow SAF 原子 admission ----
