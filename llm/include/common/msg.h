@@ -23,6 +23,10 @@ public:
     // V3-c：仅 REQUEST 有效，声明随后 DATA flow 的总网络包数；wire 上与 roofline_packets_
     // tagged-union 复用同一 24-bit 段，0=未声明（bounded SAF admission 会拒绝）。
     int flow_packets_ = 0;
+    // V5：同一逻辑 (source,tag) flow 的条带子流号。MVP 支持 stripe=1/2/4，
+    // 故 2 bit 足够。wire 上对 REQUEST/ACK/DATA 与 refill_/config_end_ 做
+    // tagged-union；这些标志只对 CONFIG 生效，旧流量 subflow=0 的编码不变。
+    int subflow_ = 0;
     // V1-c0：跨 die pinned 出口端口（源 die CrossDieSelectExit 选一次并钉死，随包携带；
     // 离开源 die 前不重选）。-1=未 pin / 非跨 die 包。V1-c1+ 才填充与使用。
     int exit_port_ = -1;

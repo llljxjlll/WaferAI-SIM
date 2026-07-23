@@ -41,7 +41,8 @@ inline int DieManhattan(int a, int b) {
 // 校验携带的 exit_port 对「从 md 去 dd」仍合法——若携带的是上一跳（别的 die 首跳方向）的出口，
 // 会被 ValidatePinnedExit 拒绝而抛错（防止中间 die 用陈旧出口错误路由）。
 // 纯函数，不改运行时。非法 core id 抛错。
-int CrossDieSelectExit(int at_core, int des_global);
+int CrossDieSelectExit(int at_core, int des_global, int source_core = -1,
+                       int tag = 0, int subflow = 0);
 Directions CrossDieStep(int des_global, int pos, int exit_port);
 
 // 跨 link 落点：给定本 die 的出口 C2C 端口 id，返回跨 link 后邻 die 的**入口全局 tile**
@@ -53,7 +54,8 @@ int CrossDieIngressTile(int local_die, int exit_port_id);
 // core→core 消息的源端**第一跳**出口选择；same-die 返回 -1。V2：多跳允许——只 pin 首跳
 // （DieFirstHopDir 给出的方向），中间 die 由运行时重新 pin，不在此处判 die 距离。
 // DATA 原语调用一次并保存结果；控制包由 PinControlMsgExit 包装调用。
-int SelectCoreMsgExit(int source_core, int des_core);
+int SelectCoreMsgExit(int source_core, int des_core, int tag = 0,
+                      int subflow = 0);
 
 // V1-c1 控制包契约：源核对跨 die REQUEST/ACK 选一次出口并写入 msg.exit_port_；
 // router 每跳只消费该固定出口。相邻 die 之外明确拒绝。HOST 控制消息不需要 pin。

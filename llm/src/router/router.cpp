@@ -621,7 +621,8 @@ sc_bv<256> RouterUnit::RepinOnC2CIngress(const sc_bv<256> &payload) const {
     // 目的已在本 die → 清除 pin，转片内 XY；否则为**下一跳**重新选出口（锚点=本 die 入口 tile）。
     int repin = (DieOfGlobal(m.des_) == DieOfGlobal(rid))
                     ? -1
-                    : CrossDieSelectExit(rid, m.des_);
+                    : CrossDieSelectExit(rid, m.des_, m.source_, m.tag_id_,
+                                         m.subflow_);
     g_d2d_repin_total++;
     if (repin == old)
         g_d2d_repin_same++; // 数值巧合（如 3×1 直线两 die 同模板 port id）——仍是一次真实重写

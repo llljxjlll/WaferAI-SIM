@@ -3,6 +3,7 @@
 #include "macros/macros.h"
 #include "utils/print_utils.h"
 #include "utils/router_utils.h"
+#include <algorithm>
 #include <cstdlib>
 #include <map>
 #include <set>
@@ -33,6 +34,7 @@ std::vector<long> g_die_noc_sends, g_die_noc_stalls;
 long g_d2d_source_stalls = 0;
 std::map<std::tuple<int, int, int>, long long> g_flow_done_cycle;
 long g_saf_admission_successes = 0, g_saf_admission_rejects = 0;
+static std::vector<long> g_v5_port_selects;
 
 // V3-d：每条有向 link 一份 whole-flow SAF 容量账本。路径预留在单个函数调用内先逐边
 // 尝试，任一失败即回滚；SystemC cooperative 调度不会在该函数中途抢占，故对仿真是原子的。
@@ -138,6 +140,7 @@ void ResetDieActivityStats() {
 }
 void ResetD2DLinkStats() {
     ResetWholeFlowSafRuntime();
+    ResetV5PortSelectionStats();
     g_d2d_repin_total = 0;
     g_d2d_repin_changed = 0;
     g_d2d_repin_same = 0;
@@ -330,6 +333,16 @@ void ParseDiePorts(const D2DJson &hw_json) {
             p.side = side;
             p.role = role;
             p.dir = dir;
+            if (spec->contains("link_group")) {
+                if (role != ROLE_C2C)
+                    throw std::runtime_error(
+                        "die_ports: link_group only applies to role=c2c");
+                if (!spec->at("link_group").is_number_integer())
+                    throw std::runtime_error("die_ports: link_group must be an integer");
+                p.link_group = spec->at("link_group").get<int>();
+                if (p.link_group < 0)
+                    throw std::runtime_error("die_ports: link_group must be >= 0");
+            }
             p.bw = c2c_bw;
             p.latency = c2c_lat;
             p.buf = c2c_buf;
@@ -460,6 +473,43 @@ static D2DRate ParseRate(const D2DJson &c, const char *key, const D2DRate &dflt,
 
 void ParseD2DLinkConfig(const D2DJson &c2c) {
     g_d2d_cfg = D2DLinkConfig{}; // 默认 cycle+functional_v2（旧配置行为精确不变）
+
+    if (c2c.contains("multi_port")) {
+        if (!c2c.at("multi_port").is_boolean())
+            throw std::runtime_error("die_ports.c2c.multi_port must be boolean");
+        g_d2d_cfg.v5_multiport = c2c.at("multi_port").get<bool>();
+    }
+    if (c2c.contains("select_policy")) {
+        const std::string p = c2c.at("select_policy").get<std::string>();
+        g_d2d_cfg.select_policy_explicit = true;
+        if (p == "nearest")
+            g_d2d_cfg.select_policy = SELECT_NEAREST;
+        else if (p == "banded_nearest")
+            g_d2d_cfg.select_policy = SELECT_BANDED_NEAREST;
+        else if (p == "tag_hash")
+            g_d2d_cfg.select_policy = SELECT_TAG_HASH;
+        else if (p == "hybrid")
+            g_d2d_cfg.select_policy = SELECT_HYBRID;
+        else if (p == "dynamic")
+            g_d2d_cfg.select_policy = SELECT_DYNAMIC;
+        else
+            throw std::runtime_error("die_ports.c2c.select_policy: unknown policy '" + p + "'");
+    }
+    if (c2c.contains("select_seed")) {
+        if (!c2c.at("select_seed").is_number_unsigned() &&
+            !c2c.at("select_seed").is_number_integer())
+            throw std::runtime_error("die_ports.c2c.select_seed must be an integer");
+        long long seed = c2c.at("select_seed").get<long long>();
+        if (seed < 0)
+            throw std::runtime_error("die_ports.c2c.select_seed must be >= 0");
+        g_d2d_cfg.select_seed = (unsigned long long)seed;
+    }
+    if (g_d2d_cfg.v5_multiport && !g_d2d_cfg.select_policy_explicit)
+        throw std::runtime_error("V5 multi_port requires explicit select_policy");
+    if (!g_d2d_cfg.v5_multiport &&
+        (g_d2d_cfg.select_policy_explicit || c2c.contains("select_seed")))
+        throw std::runtime_error(
+            "V5 select_policy/select_seed require multi_port=true");
 
     if (c2c.contains("backend")) {
         std::string b = c2c.at("backend").get<std::string>();
@@ -623,6 +673,21 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
 }
 
 void ValidateD2DTopology() {
+    auto validate_v5 = []() {
+        if (!g_d2d_cfg.v5_multiport)
+            return false;
+        if (!g_die_ports.active || DIE_COUNT <= 1)
+            throw std::runtime_error("V5 multi_port requires an active multi-die topology");
+        const int max_encodable = (1 << M_D_EXIT_PORT) - 2;
+        for (const auto &p : g_die_ports.ports) {
+            if (p.role != ROLE_C2C)
+                continue;
+            if (p.port_id < 0 || p.port_id > max_encodable)
+                throw std::runtime_error("V5 C2C port_id exceeds exit_port wire capacity");
+        }
+        return true;
+    };
+    const bool v5 = validate_v5();
     if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL) {
         if (!SPEC_USE_BEHA_NOC)
             throw std::runtime_error(
@@ -633,23 +698,25 @@ void ValidateD2DTopology() {
                 "V4 Behavioral D2D requires valid rates and nonnegative latency");
         // Behavioral 复用 V1 的单端口、peer、pinned-exit 编码契约；只替换链路服务模型。
         // 端口 bw 在解析时规范化为 1，真实聚合速率由 port_rate/link_rate 表示。
-        ValidateV1MvpTopology();
+        if (!v5)
+            ValidateV1MvpTopology();
         return;
     }
     if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
         if (!g_d2d_cfg.port_rate.Valid() || !g_d2d_cfg.link_rate.Valid())
             throw std::runtime_error(
                 "die_ports.c2c: bounded_saf requires 0 < port_rate,link_rate <= 1");
-        // bounded 模式下每方向仍限单端口（多端口属 V5），但速率不再要求 ==1。
-        Directions dirs[4] = {EAST, WEST, NORTH, SOUTH};
-        for (Directions d : dirs)
-            if ((int)g_die_ports.PortsForDir(d).size() > 1)
-                throw std::runtime_error(
-                    "die_ports: more than one C2C port per direction is not "
-                    "supported yet (multi-port is V5)");
+        if (!v5) {
+            Directions dirs[4] = {EAST, WEST, NORTH, SOUTH};
+            for (Directions d : dirs)
+                if ((int)g_die_ports.PortsForDir(d).size() > 1)
+                    throw std::runtime_error(
+                        "die_ports: more than one C2C port per direction requires V5 multi_port");
+        }
         return;
     }
-    ValidateV1MvpTopology(); // functional_v2：沿用 V1/V2 MVP 契约
+    if (!v5)
+        ValidateV1MvpTopology(); // functional_v2：沿用 V1/V2 MVP 契约
 }
 
 void ValidateV1MvpTopology() {
@@ -752,9 +819,10 @@ void BuildD2DLinks() {
             // 带宽/延迟兼容。注：V0 所有 C2C 端口共享全局 die_ports.c2c 参数（同构模板），
             // 故该分支恒不触发——是「同构保证」而非已测的不兼容拒绝路径。保留此 check 以便
             // 将来支持 per-port/per-die override 时即时生效。
-            if (p.bw != mirror->bw || p.latency != mirror->latency)
+            if (p.bw != mirror->bw || p.latency != mirror->latency ||
+                p.link_group != mirror->link_group)
                 throw std::runtime_error(
-                    "d2d links: bw/latency mismatch between paired C2C ports");
+                    "d2d links: bw/latency/link_group mismatch between paired C2C ports");
             D2DLink l;
             l.local_die = d;
             l.local_port = p.port_id;
@@ -763,6 +831,7 @@ void BuildD2DLinks() {
             l.tx_bw = p.bw;
             l.rx_bw = mirror->bw;
             l.latency = p.latency;
+            l.link_group = p.link_group;
             g_d2d_links.push_back(l);
         }
     }
@@ -824,6 +893,73 @@ int PortForDir(int local_core, Directions dir) {
     if (dir < 0 || dir >= (int)g_die_ports.port_for[local_core].size())
         return -1;
     return g_die_ports.port_for[local_core][dir];
+}
+
+void ResetV5PortSelectionStats() {
+    g_v5_port_selects.assign(g_die_ports.ports.size(), 0);
+}
+
+static unsigned long long V5StableHash(int source, int tag) {
+    unsigned long long x = g_d2d_cfg.select_seed ^ 0x9e3779b97f4a7c15ULL;
+    auto mix = [&](unsigned long long v) {
+        x ^= v + 0x9e3779b97f4a7c15ULL + (x << 6) + (x >> 2);
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ULL;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebULL;
+        x ^= x >> 31;
+    };
+    mix((unsigned int)source);
+    mix((unsigned int)tag);
+    return x;
+}
+
+int SelectPortForFlow(int local_core, Directions dir, int source, int tag,
+                      int subflow) {
+    if (local_core < 0 || local_core >= CORES_PER_DIE || subflow < 0 ||
+        subflow > 3)
+        throw std::runtime_error("V5 port selection: illegal core/subflow");
+    std::vector<int> ports = g_die_ports.PortsForDir(dir);
+    if (ports.empty())
+        return -1;
+    std::sort(ports.begin(), ports.end(), [](int a, int b) {
+        const D2DPort &pa = g_die_ports.ports[a];
+        const D2DPort &pb = g_die_ports.ports[b];
+        int ca = PerpCoord(pa), cb = PerpCoord(pb);
+        return ca != cb ? ca < cb : a < b;
+    });
+    if (!g_d2d_cfg.v5_multiport || ports.size() == 1)
+        return PortForDir(local_core, dir);
+
+    size_t pick = 0;
+    const int coord = (dir == EAST || dir == WEST)
+                          ? local_core / GRID_X
+                          : local_core % GRID_X;
+    const int extent = (dir == EAST || dir == WEST) ? GRID_Y : GRID_X;
+    const size_t band = std::min(ports.size() - 1,
+                                 (size_t)(coord * (int)ports.size() / extent));
+    switch (g_d2d_cfg.select_policy) {
+    case SELECT_NEAREST:
+        return PortForDir(local_core, dir);
+    case SELECT_BANDED_NEAREST:
+        pick = band;
+        break;
+    case SELECT_TAG_HASH:
+        pick = (V5StableHash(source, tag) + (unsigned)subflow) % ports.size();
+        break;
+    case SELECT_HYBRID:
+        pick = (band + (size_t)subflow) % ports.size();
+        break;
+    case SELECT_DYNAMIC:
+        if (g_v5_port_selects.size() != g_die_ports.ports.size())
+            ResetV5PortSelectionStats();
+        for (size_t i = 1; i < ports.size(); ++i)
+            if (g_v5_port_selects[ports[i]] < g_v5_port_selects[ports[pick]])
+                pick = i;
+        g_v5_port_selects[ports[pick]]++;
+        break;
+    }
+    return ports[pick];
 }
 
 void BuildHostAttach() {

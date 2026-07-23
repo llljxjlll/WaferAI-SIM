@@ -36,6 +36,7 @@ public:
     RECV_TYPE type = RECV_CONF;
     int tag_id = 0;   // 和send原语对应的tag（RECV_CONF 默认 0 = CONFIG ACK tag 契约）
     int recv_cnt = 0; // 需要接收到的end包数量（用于多发一）
+    int stripe_count = 1; // V5 grouped-recv：每个逻辑 sender 的 subflow 数
 
     int taskCoreDefault(TaskCoreContext &context);
 
@@ -61,6 +62,7 @@ public:
     int max_packet = 0;
     int tag_id = 0;                    // send_tag，用于与recv原语对应
     int end_length = 0;                // 尾包长度，避免覆盖
+    int stripe_count = 1;              // V5：1/2/4 条 subflow
 
     // V1-c2 运行时路由状态（不进入 prim 配置序列化）：一条 SEND_DATA 原语只选一次
     // source-die C2C 出口，所有 DATA 包复制同一 pinned port。same-die 为 -1。

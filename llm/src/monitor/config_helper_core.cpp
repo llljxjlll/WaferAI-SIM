@@ -210,8 +210,10 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
                         target_work.cast[c].tag = prev_job.cast[c].tag;
                     target_work.cast[c].dest = prev_job.cast[c].dest;
                     target_work.cast[c].loopout = prev_job.cast[c].loopout;
+                    target_work.cast[c].stripe = prev_job.cast[c].stripe;
                 }
                 target_work.recv_cnt = prev_job.recv_cnt;
+                target_work.recv_stripe = prev_job.recv_stripe;
                 if (target_work.recv_tag == coreconfigs[i].prim_copy ||
                     prev_job.recv_tag != coreconfigs[i].id)
                     target_work.recv_tag = prev_job.recv_tag;
@@ -334,9 +336,11 @@ void config_helper_core::generate_prims(int i) {
                             [&](auto &src) { return src.first == c->id; });
 
     auto add_recv = [&](vector<PrimBase *> &prims, bool start, int tag,
-                        int cnt) {
-        prims.push_back(new Recv_prim(
-            start ? RECV_TYPE::RECV_START : RECV_TYPE::RECV_DATA, tag, cnt));
+                        int cnt, int stripe) {
+        auto *p = new Recv_prim(
+            start ? RECV_TYPE::RECV_START : RECV_TYPE::RECV_DATA, tag, cnt);
+        p->stripe_count = stripe;
+        prims.push_back(p);
     };
 
     auto add_comps = [&](vector<PrimBase *> &prims,
@@ -362,11 +366,15 @@ void config_helper_core::generate_prims(int i) {
             if ((loopout && ca.loopout == FALSE) ||
                 (!loopout && ca.loopout == TRUE))
                 continue;
-            prims.push_back(
-                new Send_prim(SEND_TYPE::SEND_REQ, ca.dest, ca.tag));
-            prims.push_back(new Recv_prim(RECV_TYPE::RECV_ACK));
-            prims.push_back(
-                new Send_prim(SEND_TYPE::SEND_DATA, ca.dest, ca.tag));
+            auto *req = new Send_prim(SEND_TYPE::SEND_REQ, ca.dest, ca.tag);
+            auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+            auto *data = new Send_prim(SEND_TYPE::SEND_DATA, ca.dest, ca.tag);
+            req->stripe_count = ca.stripe;
+            ack->stripe_count = ca.stripe;
+            data->stripe_count = ca.stripe;
+            prims.push_back(req);
+            prims.push_back(ack);
+            prims.push_back(data);
         }
     };
 
@@ -379,13 +387,13 @@ void config_helper_core::generate_prims(int i) {
         // 非最后循环
         // loop = 1 的 时候只有last_loop 循环
         add_recv(work.prims_in_loop, (is_source && w == 0), work.recv_tag,
-                 work.recv_cnt);
+                 work.recv_cnt, work.recv_stripe);
         add_comps(work.prims_in_loop, work.prims);
         add_sends(work.prims_in_loop, work.cast, false);
 
         // 最后循环
         add_recv(work.prims_last_loop, (is_source && w == 0 && c->loop == 1),
-                 work.recv_tag, work.recv_cnt);
+                 work.recv_tag, work.recv_cnt, work.recv_stripe);
         add_comps(work.prims_last_loop, work.prims);
 
         if (is_end) {
@@ -466,6 +474,9 @@ void config_helper_core::calculate_address(bool do_loop) {
                         pending_req->tag_id != temp->tag_id)
                         throw std::runtime_error(
                             "SEND_REQ/SEND_DATA pair mismatch while assigning flow_packets");
+                    if (pending_req->stripe_count != temp->stripe_count)
+                        throw std::runtime_error(
+                            "SEND_REQ/SEND_DATA stripe mismatch while assigning flow_packets");
                     if (temp->max_packet <= 0 ||
                         (unsigned)temp->max_packet > M_D_FLOW_PACKETS_MAX)
                         throw std::runtime_error(

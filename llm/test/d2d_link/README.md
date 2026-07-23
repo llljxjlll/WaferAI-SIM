@@ -9,6 +9,21 @@
 python3 llm/test/d2d_link/run_test_d2d_v0.py     # 需先 build 出 build/npusim
 # 或单独跑纯函数自测：
 cd build && ./npusim --d2d-v0-selftest
+
+## V5 开发进展（feat/d2d-v5）
+
+- **V5-a ✔ 配置/编码/选择接缝**：`die_ports.c2c.multi_port=true` 必须显式给出
+  `select_policy=nearest|banded_nearest|tag_hash|hybrid|dynamic`，`select_seed` 为固定非负整数；
+  端口可声明 `link_group`（缺省 `-1` 表示独立物理链路），对端镜像的 group 必须一致。
+- `Msg.subflow_` 使用 REQUEST/ACK/DATA 专属的 2-bit tagged-union，不加宽 256-bit wire；
+  支持本版 `stripe=1/2/4`，旧消息 `subflow=0` 的编码保持为零。`Send_prim.stripe_count` 与
+  `Recv_prim.stripe_count` 分别占原语 spare bits，旧配置的全零字段解码为 1。
+- workload 的 `cast.stripe` 与 `work.recv_stripe` 缺省均为 1，非法值启动期拒绝；配置生成器已把
+  stripe 同步到 REQUEST/RECV_ACK/SEND_DATA 和 grouped RECV。静态选择固定在
+  `(source,tag,subflow,seed)`，中间 die re-pin 保留同一 key。
+- V5-a 验证：纯函数 **305/305**，V4 聚合门 `AGGREGATE EXIT=0`，NoC 冻结值精确不变。
+  `dynamic` 当前只完成选择算法接缝；active-flow 记账、尾包释放与运行时验收属于 V5-f，不能把
+  本阶段的算法单测表述为 dynamic 端到端完成。
 ```
 
 ## 当前状态（逐增量推进）

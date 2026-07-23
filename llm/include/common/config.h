@@ -41,6 +41,7 @@ public:
     int weight;
     int addr;
     bool critical; // 用于绘制数据流图
+    int stripe = 1; // V5：同一逻辑 tag 拆成 1/2/4 条 subflow
     LOOP_TYPE loopout;
 
     Cast() {}
@@ -60,6 +61,7 @@ public:
 
     int recv_cnt;
     int recv_tag;
+    int recv_stripe = 1; // V5 grouped-recv 期望的 subflow 数
 
     vector<PrimBase *> prims;
     vector<PrimBase *> prims_last_loop;

@@ -209,7 +209,8 @@ static const D2DPort &ValidatePinnedExit(int exit_port, int md, int dd) {
     return p;
 }
 
-int CrossDieSelectExit(int at_core, int des_global) {
+int CrossDieSelectExit(int at_core, int des_global, int source_core, int tag,
+                       int subflow) {
     if (at_core < 0 || at_core >= TOTAL_CORES || des_global < 0 ||
         des_global >= TOTAL_CORES)
         throw std::runtime_error("cross-die: illegal core id");
@@ -217,7 +218,10 @@ int CrossDieSelectExit(int at_core, int des_global) {
     if (md == dd)
         return -1; // 同 die，无需出口端口
     Directions D = DieFirstHopDir(md, dd); // die 级首跳方向
-    int port = PortForDir(LocalOfGlobal(at_core), D);
+    if (source_core < 0)
+        source_core = at_core;
+    int port = SelectPortForFlow(LocalOfGlobal(at_core), D, source_core, tag,
+                                 subflow);
     if (port < 0)
         throw std::runtime_error(
             "cross-die routing: no C2C port toward die-direction (unreachable)");
@@ -253,7 +257,7 @@ int CrossDieIngressTile(int local_die, int exit_port_id) {
     return -1; // 边界方向端口无 peer
 }
 
-int SelectCoreMsgExit(int source_core, int des_core) {
+int SelectCoreMsgExit(int source_core, int des_core, int tag, int subflow) {
     if (source_core < 0 || source_core >= TOTAL_CORES || des_core < 0 ||
         des_core >= TOTAL_CORES)
         throw std::runtime_error(
@@ -263,7 +267,7 @@ int SelectCoreMsgExit(int source_core, int des_core) {
         return -1;
     // V2：多跳允许。源端只 pin **第一跳** 出口（CrossDieSelectExit 按 DieFirstHopDir 给出方向）；
     // 中间 die 到达后由运行时清除并对该 die 重新 pin（每个 die 选一次），不在此处判 die 距离。
-    return CrossDieSelectExit(source_core, des_core);
+    return CrossDieSelectExit(source_core, des_core, source_core, tag, subflow);
 }
 
 void PinControlMsgExit(Msg &msg) {
@@ -279,7 +283,8 @@ void PinControlMsgExit(Msg &msg) {
     if (des_type != EP_CORE)
         throw std::runtime_error(
             "control message destination is neither a core nor HOST endpoint");
-    msg.exit_port_ = SelectCoreMsgExit(msg.source_, msg.des_);
+    msg.exit_port_ = SelectCoreMsgExit(msg.source_, msg.des_, msg.tag_id_,
+                                       msg.subflow_);
 }
 
 Directions ControlMsgNextHop(const Msg &msg, int pos) {

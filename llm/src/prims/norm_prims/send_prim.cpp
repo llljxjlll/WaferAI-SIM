@@ -28,6 +28,11 @@ void Send_prim::deserialize(vector<sc_bv<128>> segments) {
     tag_id = buffer.range(111, 92).to_uint64();
     end_length = buffer.range(119, 112).to_uint64();
     datatype = DATATYPE(buffer.range(121, 120).to_uint64());
+    stripe_count = buffer.range(124, 122).to_uint64();
+    if (stripe_count == 0)
+        stripe_count = 1;
+    if (stripe_count != 1 && stripe_count != 2 && stripe_count != 4)
+        throw std::runtime_error("Send_prim stripe_count must be 1, 2, or 4");
 }
 
 vector<sc_bv<128>> Send_prim::serialize() {
@@ -51,6 +56,9 @@ vector<sc_bv<128>> Send_prim::serialize() {
     d.range(111, 92) = sc_bv<20>(tag_id);
     d.range(119, 112) = sc_bv<8>(end_length);
     d.range(121, 120) = sc_bv<2>(datatype);
+    if (stripe_count != 1 && stripe_count != 2 && stripe_count != 4)
+        throw std::runtime_error("Send_prim stripe_count must be 1, 2, or 4");
+    d.range(124, 122) = sc_bv<3>(stripe_count);
     segments.push_back(d);
 
     return segments;

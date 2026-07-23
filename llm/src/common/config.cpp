@@ -15,6 +15,9 @@ void from_json(const json &j, Cast &c) {
     SetParamFromJson<int>(j, "weight", &(c.weight), 1);
     SetParamFromJson<int>(j, "addr", &(c.addr), -1);
     SetParamFromJson<bool>(j, "critical", &(c.critical), false);
+    SetParamFromJson<int>(j, "stripe", &(c.stripe), 1);
+    if (c.stripe != 1 && c.stripe != 2 && c.stripe != 4)
+        throw std::runtime_error("cast.stripe must be one of 1, 2, or 4");
 
     if (!j.contains("loopout"))
         c.loopout = BOTH;
@@ -40,6 +43,9 @@ void from_json(const json &j, CoreJob &c) {
 
     SetParamFromJson<int>(j, "recv_cnt", &(c.recv_cnt));
     SetParamFromJson<int>(j, "recv_tag", &(c.recv_tag), 0);
+    SetParamFromJson<int>(j, "recv_stripe", &(c.recv_stripe), 1);
+    if (c.recv_stripe != 1 && c.recv_stripe != 2 && c.recv_stripe != 4)
+        throw std::runtime_error("work.recv_stripe must be one of 1, 2, or 4");
 
     if (j.contains("prims")) {
         auto prims = j["prims"];

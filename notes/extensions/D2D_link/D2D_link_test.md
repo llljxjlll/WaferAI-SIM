@@ -995,3 +995,19 @@ completed
 FIFO、credit、backpressure、资源争用或网络死锁；这些语义使用 V3 cycle backend。
 
 V4 开发完成。
+
+#### V5 开发进展
+
+- **V5-a 已完成**：建立多端口显式启用与选择策略/固定 seed 配置契约；端口/link 增加
+  `link_group` 元数据和镜像一致性检查；默认未启用时继续执行 V1–V4 单端口拓扑门。
+- wire 不扩宽：REQUEST/ACK/DATA 将 CONFIG 专用的 `refill/config_end` 两位 tagged-union 为
+  `subflow=0..3`，覆盖 stripe 1/2/4；CONFIG 仍保留原两标志。原语 spare bits 承载 stripe，
+  workload 增加 `cast.stripe`/`recv_stripe`，缺省 1。
+- `nearest/banded_nearest/tag_hash/hybrid` 的选择入口已经建立；hash 使用固定 seed，subflow 在
+  多端口集合上确定性展开；每进入一个 die 的 re-pin 使用原始 `(source,tag,subflow)`，不逐包改变。
+- `dynamic` 仅有算法接缝，生产完成必须等 V5-f 的 active-flow pin、负载释放、活性和确定性测试；
+  不得提前声明完成。
+- 本阶段门：纯函数 **305/305**；`run_v4_exit.py` 全绿，NoC 冻结值
+  **14781/29109、14833/45441** 精确不变。
+
+下一步 V5-b/V5-c：多端口生产接线与 sender striping + receiver grouped join 必须同批闭环。

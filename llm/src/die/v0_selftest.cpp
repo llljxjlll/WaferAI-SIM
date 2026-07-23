@@ -7,6 +7,7 @@
 #include "common/msg.h"
 #include "monitor/host_envelope.h"
 #include "monitor/workload_normalize.h"
+#include "prims/norm_prims.h"
 #include "utils/msg_utils.h"
 #include "utils/router_utils.h"
 #include <iostream>
@@ -469,9 +470,10 @@ int RunD2DV0SelfTest() {
         m.tag_id_ = 42;               // 16-bit
         m.source_ = 5;                // 16-bit（全局 source）
         m.length_ = 99;               // 8-bit
-        m.refill_ = true;             // 1-bit -> 显式比较
-        m.config_end_ = true;         // 1-bit -> 显式比较
+        m.refill_ = true;             // REQUEST 中由 V5 subflow tagged-union 覆盖
+        m.config_end_ = true;
         m.flow_packets_ = 7;          // REQUEST tagged-union 24-bit flow count
+        m.subflow_ = 3;               // V5 2-bit subflow tagged-union
         m.exit_port_ = 42;            // 16-bit（V1-c0 pinned 出口端口）
         m.data_ = sc_bv<128>(0xABCD);
         Msg r = DeserializeMsg(SerializeMsg(m));
@@ -484,13 +486,19 @@ int RunD2DV0SelfTest() {
         check(r.tag_id_ == m.tag_id_, "round-trip: tag_id_");
         check(r.source_ == m.source_, "round-trip: source_");
         check(r.length_ == m.length_, "round-trip: length_");
-        check(r.refill_ == m.refill_, "round-trip: refill_ (true)");
-        check(r.config_end_ == m.config_end_, "round-trip: config_end_ (true)");
+        check(r.subflow_ == 3 && !r.refill_ && !r.config_end_, "round-trip: V5 flow subflow tagged union");
         check(r.flow_packets_ == m.flow_packets_,
               "round-trip: REQUEST flow_packets_ tagged union");
         check(r.exit_port_ == m.exit_port_, "round-trip: exit_port_ (42)");
         check(r.data_ == m.data_, "round-trip: data_");
         // exit_port_ 编码边界（0=未 pin，port=port_id+1）：-1/0/254/255 均正确 round-trip
+        Msg cfg;
+        cfg.msg_type_ = CONFIG;
+        cfg.refill_ = true;
+        cfg.config_end_ = true;
+        Msg cfg_wire = DeserializeMsg(SerializeMsg(cfg));
+        check(cfg_wire.refill_ && cfg_wire.config_end_ && cfg_wire.subflow_ == 0,
+              "round-trip: CONFIG retains refill/config_end outside flow union");
         bool ep_ok = true;
         for (int v : {-1, 0, 254, 255, 4096}) {
             Msg mp;
@@ -2102,6 +2110,64 @@ int RunD2DV0SelfTest() {
         }
         check(config_threw,
               "c2 data channel: non-DATA message cannot borrow cross-die route");
+    }
+
+    // ---- 21. V5-a：subflow/primitive 编码与多端口选择契约 ----
+    {
+        Send_prim sp(SEND_TYPE::SEND_REQ, 16, 9);
+        sp.max_packet = 7;
+        sp.stripe_count = 4;
+        Send_prim spw;
+        spw.deserialize(sp.serialize());
+        Recv_prim rp(RECV_TYPE::RECV_DATA, 9, 1);
+        rp.stripe_count = 4;
+        Recv_prim rpw;
+        rpw.deserialize(rp.serialize());
+        check(spw.stripe_count == 4 && rpw.stripe_count == 4,
+              "V5-a primitive stripe=4 survives CONFIG serialization");
+
+        setTopo(4, 4, 2, 1);
+        D2DJson c2c = {{"multi_port", true}, {"select_policy", "tag_hash"},
+                       {"select_seed", 17}, {"latency", 1}, {"link_bw", 1},
+                       {"buffer_depth", 8}};
+        D2DJson ovs = D2DJson::array();
+        ovs.push_back({{"side", "E"}, {"idx", D2DJson::array({0, 2})},
+                       {"role", "c2c"}});
+        ovs.push_back({{"side", "W"}, {"idx", D2DJson::array({0, 2})},
+                       {"role", "c2c"}});
+        D2DJson hw = {{"die_ports",
+                       {{"c2c", c2c},
+                        {"edges", {{"S", {{"role", "host"}}}}},
+                        {"overrides", ovs}}}};
+        ParseDiePorts(hw);
+        ValidateD2DTopology();
+        ResetV5PortSelectionStats();
+        int p0 = SelectPortForFlow(1, EAST, 1, 23, 0);
+        int p1 = SelectPortForFlow(1, EAST, 1, 23, 1);
+        int p0_again = SelectPortForFlow(1, EAST, 1, 23, 0);
+        check(p0 >= 0 && p1 >= 0 && p0 != p1 && p0 == p0_again,
+              "V5-a tag_hash: subflows spread and fixed seed is deterministic");
+
+        g_d2d_cfg.select_policy = SELECT_NEAREST;
+        check(SelectPortForFlow(1, EAST, 1, 23, 0) ==
+                  SelectPortForFlow(1, EAST, 1, 23, 1),
+              "V5-a nearest: non-striped policy pins one physical port");
+        g_d2d_cfg.select_policy = SELECT_DYNAMIC;
+        ResetV5PortSelectionStats();
+        int d0 = SelectPortForFlow(1, EAST, 1, 23, 0);
+        int d1 = SelectPortForFlow(1, EAST, 1, 24, 0);
+        check(d0 != d1,
+              "V5-a dynamic: selection happens per flow and balances least-used ports");
+
+        bool no_policy_threw = false;
+        try {
+            hw["die_ports"]["c2c"].erase("select_policy");
+            ParseDiePorts(hw);
+        } catch (const std::runtime_error &) {
+            no_policy_threw = true;
+        }
+        check(no_policy_threw,
+              "V5-a config: multi_port without explicit policy is rejected");
     }
 
     std::cout << "==== D2D V0 self-test: " << (g_total - g_fail) << "/" << g_total

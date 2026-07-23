@@ -33,6 +33,7 @@ struct D2DPort {
     int bw;          // link_bw（包/cycle），role==C2C 有效
     int latency;     // link latency（cycle）
     int buf;         // buffer_depth
+    int link_group = -1; // V5：>=0 表示多个端口共享同一物理 link 容量；-1=独立
     D2DPortStats stats;
 };
 
@@ -41,6 +42,7 @@ struct D2DLink {
     int local_die, local_port;
     int remote_die, remote_port;
     int tx_bw, rx_bw, latency;
+    int link_group = -1;
 };
 
 // 每个 die（同构模板）的端口表
@@ -141,6 +143,14 @@ inline long long D2DBdpPackets(int link_latency, const D2DRate &rate) {
     return (n + rate.den - 1) / rate.den;
 }
 
+enum D2DSelectPolicy {
+    SELECT_NEAREST = 0,
+    SELECT_BANDED_NEAREST,
+    SELECT_TAG_HASH,
+    SELECT_HYBRID,
+    SELECT_DYNAMIC
+};
+
 struct D2DLinkConfig {
     D2DBackend backend = BACKEND_CYCLE;
     D2DMode mode = MODE_FUNCTIONAL_V2;
@@ -152,6 +162,10 @@ struct D2DLinkConfig {
     int link_inflight_depth = 0;
     int rx_buffer_depth = 0;
     int ctrl_buffer_depth = 0;
+    bool v5_multiport = false;
+    bool select_policy_explicit = false;
+    D2DSelectPolicy select_policy = SELECT_NEAREST;
+    unsigned long long select_seed = 0;
 };
 extern D2DLinkConfig g_d2d_cfg;
 
@@ -189,6 +203,11 @@ void ValidateAddressSpace();
 int PortForHost(int local_core);
 // 局部核在 die 级方向 dir(N/S/E/W) 的 C2C 出口 port_id（-1=该方向无 C2C 端口）。
 int PortForDir(int local_core, Directions dir);
+// V5：按一次 flow/subflow 选择并固定一个出口。静态策略由
+// (source,tag,subflow,seed) 决定；dynamic 只在此 flow 选择点更新负载，绝不逐包重选。
+int SelectPortForFlow(int local_core, Directions dir, int source, int tag,
+                      int subflow);
+void ResetV5PortSelectionStats();
 
 // 全局 tile 在方向 dir 上是否是「peer-connected C2C 出口边」——即该 tile 的局部位置有一个
 // side==dir 的 C2C 端口，且该 die 在 dir 方向存在邻 die。V1-b 拓扑接线据此把该边接到 D2D Link

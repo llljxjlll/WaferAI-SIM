@@ -37,8 +37,13 @@ sc_bv<256> SerializeMsg(Msg msg) {
     serialized_msg.range(pos + M_D_LENGTH - 1, pos) =
         sc_bv<M_D_LENGTH>(msg.length_);
     pos += M_D_LENGTH;
+    const bool flow_msg = msg.msg_type_ == MSG_TYPE::REQUEST ||
+                          msg.msg_type_ == MSG_TYPE::ACK ||
+                          msg.msg_type_ == MSG_TYPE::DATA;
+    if (flow_msg && (msg.subflow_ < 0 || msg.subflow_ > 3))
+        throw std::runtime_error("V5 subflow exceeds 2-bit wire capacity");
     serialized_msg.range(pos + M_D_REFILL - 1, pos) =
-        sc_bv<M_D_REFILL>(msg.refill_);
+        sc_bv<M_D_REFILL>(flow_msg ? (msg.subflow_ & 1) : msg.refill_);
     pos += M_D_REFILL;
     // Tagged union：REQUEST 携 whole-flow SAF 包数；其它消息保持 roofline 语义。
     if (msg.msg_type_ == MSG_TYPE::REQUEST) {
@@ -52,7 +57,8 @@ sc_bv<256> SerializeMsg(Msg msg) {
             sc_bv<M_D_ROOFLINE>(msg.roofline_packets_);
     }
     pos += M_D_ROOFLINE;
-    serialized_msg.range(pos + M_D_CONF_END - 1, pos) = msg.config_end_;
+    serialized_msg.range(pos + M_D_CONF_END - 1, pos) =
+        flow_msg ? ((msg.subflow_ >> 1) & 1) : msg.config_end_;
     pos += M_D_CONF_END;
     serialized_msg.range(pos + M_D_DATA - 1, pos) = msg.data_;
     pos += M_D_DATA;
@@ -96,6 +102,12 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
     pos += M_D_ROOFLINE;
     msg.config_end_ = buffer.range(pos + M_D_CONF_END - 1, pos).to_uint64(),
     pos += M_D_CONF_END;
+    if (msg.msg_type_ == MSG_TYPE::REQUEST || msg.msg_type_ == MSG_TYPE::ACK ||
+        msg.msg_type_ == MSG_TYPE::DATA) {
+        msg.subflow_ = (msg.refill_ ? 1 : 0) | (msg.config_end_ ? 2 : 0);
+        msg.refill_ = false;
+        msg.config_end_ = false;
+    }
     msg.data_ = buffer.range(pos + M_D_DATA - 1, pos);
     pos += M_D_DATA;
     // exit_port_ 解码：0=未 pin(-1)，否则 port_id = enc-1。
