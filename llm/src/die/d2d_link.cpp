@@ -2,6 +2,7 @@
 #include "die/port.h"
 #include "monitor/watchdog.h"
 #include "utils/msg_utils.h"
+#include <stdexcept>
 
 namespace {
 void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
@@ -60,6 +61,19 @@ void ProbeData(D2DDataProbe &p, const sc_bv<256> &payload, long long cycle) {
 D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_,
                          D2DLinkBound bound_)
     : sc_module(n), latency(latency_), link_idx(link_idx_), bound(bound_) {
+    // V3-b：构造期硬校验 bounded 参数（生产解析器已保证，但 standalone/其它调用者可能绕过）。
+    if (bound.enabled) {
+        if (bound.data_depth < 1)
+            throw std::runtime_error(
+                "D2DLinkUnit: bounded data_depth must be >= 1 (a depth-0 link "
+                "would never accept)");
+        if (bound.ctrl_depth < 1)
+            throw std::runtime_error(
+                "D2DLinkUnit: bounded ctrl_depth must be >= 1");
+        if (!bound.rate.Valid())
+            throw std::runtime_error(
+                "D2DLinkUnit: bounded rate must satisfy 0 < num/den <= 1");
+    }
     SC_THREAD(forward);
 }
 
@@ -73,51 +87,30 @@ void D2DLinkUnit::forward() {
     while (true) {
         wait(CYCLE, SC_NS);
         cyc++;
-
-        // in_avail：functional 恒 true（不施背压）；bounded 则 = FIFO 尚有容量。
-        bool data_room = !bound.enabled || (int)fifo_.size() < bound.data_depth;
-        bool ctrl_room = !bound.enabled || (int)cfifo_.size() < bound.ctrl_depth;
-        in_avail.write(data_room);
-        in_ctrl_avail.write(ctrl_room);
-        if (bound.enabled && !data_room)
-            full_cycles++; // 对上游施背压这一拍
-
-        // token bucket（bounded 数据交付速率）：每拍累加 rate.num，发一包扣 rate.den；
-        // 桶深 = rate.den（至多攒 1 个包的信用，避免空闲后突发超过 1 包/cycle——单信号也做不到）。
         if (bound.enabled) {
-            tokens += bound.rate.num;
-            if (tokens > bound.rate.den)
-                tokens = bound.rate.den;
+            forward_bounded(cyc);
+            continue;
         }
+        // ---- functional_v2（V2 冻结路径，逐字节不变；恒 avail=true、无速率/背压）----
+        in_avail.write(true);
+        in_ctrl_avail.write(true);
 
-        // 采集（capture 在交付前 → latency==0 可当拍交付）。bounded 时只在有容量时收，
-        // 保证占用不越过 depth（正确的上游会遵守 in_avail，此处兼作硬护栏）。
-        if (in_sent.read() && data_room) {
+        if (in_sent.read()) {
             sc_bv<256> payload = in_channel.read();
             fifo_.push_back({cyc + latency, payload});
-            data_captured++;
             g_d2d_link_in_pkts++;
             CountType(g_d2d_link_in_by_type, payload);
             CountLink(link_idx, true, payload);
             ProbeData(g_d2d_data_in, payload, cyc);
         }
-        if (in_ctrl_sent.read() && ctrl_room) {
+        if (in_ctrl_sent.read()) {
             cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
             g_d2d_link_in_pkts++;
             CountType(g_d2d_link_in_by_type, in_ctrl_channel.read());
             CountLink(link_idx, true, in_ctrl_channel.read());
         }
-        if (bound.enabled) { // 占用峰值在 capture 之后测（交付前的瞬时峰值）
-            if ((long)fifo_.size() > occ_max)
-                occ_max = (long)fifo_.size();
-            if ((long)cfifo_.size() > occ_ctrl_max)
-                occ_ctrl_max = (long)cfifo_.size();
-        }
 
-        // 交付数据：队首成熟。functional 只看下游 ready；bounded 另需 token。
-        bool data_mature = !fifo_.empty() && fifo_.front().first <= cyc;
-        bool has_token = !bound.enabled || tokens >= bound.rate.den;
-        if (data_mature && out_avail.read() && has_token) {
+        if (!fifo_.empty() && fifo_.front().first <= cyc && out_avail.read()) {
             out_channel.write(fifo_.front().second);
             out_sent.write(true);
             CountType(g_d2d_link_out_by_type, fifo_.front().second);
@@ -126,18 +119,9 @@ void D2DLinkUnit::forward() {
             fifo_.pop_front();
             g_d2d_link_out_pkts++;
             g_protocol_progress++;
-            if (bound.enabled)
-                tokens -= bound.rate.den;
         } else {
             out_sent.write(false);
-            if (bound.enabled && data_mature) {
-                if (!out_avail.read())
-                    ds_stall++; // 下游不 ready
-                else if (!has_token)
-                    rate_stall++; // token 不足（速率限制）
-            }
         }
-        // 交付控制
         if (!cfifo_.empty() && cfifo_.front().first <= cyc &&
             out_ctrl_avail.read()) {
             out_ctrl_channel.write(cfifo_.front().second);
@@ -151,4 +135,103 @@ void D2DLinkUnit::forward() {
             out_ctrl_sent.write(false);
         }
     }
+}
+
+// V3-b bounded 路径：有限 FIFO + token-bucket 速率 + 信用式 flow control。
+// 关键顺序 **先交付、后接受**：本拍先出队队首（腾出空位），再接受上游包填入——使 depth>=BDP
+// 时能维持每拍 1 包（否则「先判满再出队」会多一个 bubble、吞吐减半）。
+// flow control：in_avail 公布空位（背压信号）；上游持信用 = 下游空位，交付一包归还一信用，
+// 据此不过量发送 → link 接受时必有空位、永不丢包。占用峰值不越 data_depth。
+void D2DLinkUnit::forward_bounded(long cyc) {
+    tokens += bound.rate.num;
+
+    // 1a. 交付 DATA（先出队腾空位）：成熟 + 下游 ready + token 足
+    bool data_mature = !fifo_.empty() && fifo_.front().first <= cyc;
+    bool has_token = tokens >= bound.rate.den;
+    if (data_mature && out_avail.read() && has_token) {
+        out_channel.write(fifo_.front().second);
+        out_sent.write(true);
+        CountType(g_d2d_link_out_by_type, fifo_.front().second);
+        CountLink(link_idx, false, fifo_.front().second);
+        ProbeData(g_d2d_data_out, fifo_.front().second, cyc);
+        fifo_.pop_front();
+        g_d2d_link_out_pkts++;
+        g_protocol_progress++;
+        tokens -= bound.rate.den;
+    } else {
+        out_sent.write(false);
+        if (data_mature) {
+            if (!out_avail.read())
+                downstream_stall++;
+            else if (!has_token)
+                rate_stall++;
+        }
+    }
+    // token 在发之后 cap 至 den（限突发 <=1 包；不在发之前 cap，否则会丢失 num>1 的速率）
+    if (tokens > bound.rate.den)
+        tokens = bound.rate.den;
+
+    // 1b. 交付 CTRL（独立子通道，不受 data token 限制——控制不占 DATA 带宽）
+    bool ctrl_mature = !cfifo_.empty() && cfifo_.front().first <= cyc;
+    if (ctrl_mature && out_ctrl_avail.read()) {
+        out_ctrl_channel.write(cfifo_.front().second);
+        out_ctrl_sent.write(true);
+        CountType(g_d2d_link_out_by_type, cfifo_.front().second);
+        CountLink(link_idx, false, cfifo_.front().second);
+        cfifo_.pop_front();
+        g_d2d_link_out_pkts++;
+        g_protocol_progress++;
+    } else {
+        out_ctrl_sent.write(false);
+        if (ctrl_mature && !out_ctrl_avail.read())
+            ctrl_downstream_stall++;
+    }
+
+    // 2. 接受上游 DATA。flow control 采用**信用式**（bounded link 的标准模型；见 forward_bounded
+    //    注释）：上游持有的信用 = 下游空位，link 交付一包即归还一信用，上游据此不过量发送 →
+    //    link 接受时必然有空位（occ < depth），**永不溢出、永不丢包**。in_avail 是可观测的
+    //    背压信号（下方 step 4 公布，供上游/测试验证），accept 判据用当前真实空位。
+    //    单个 sc_bv<256> 信道有 1 拍 delta 延迟，纯组合 valid/ready 会退化成 2 拍环
+    //    （要么滞留重收、要么填充边沿丢包）；信用式流控是无此歧义的正确硬件模型。
+    bool has_room = (int)fifo_.size() < bound.data_depth;
+    if (in_sent.read()) {
+        if (has_room) {
+            sc_bv<256> payload = in_channel.read();
+            fifo_.push_back({cyc + latency, payload});
+            g_d2d_link_in_pkts++;
+            CountType(g_d2d_link_in_by_type, payload);
+            CountLink(link_idx, true, payload);
+            ProbeData(g_d2d_data_in, payload, cyc);
+        } else {
+            upstream_blocked++; // 想发但已满（下方 in_avail 已公布 false）
+        }
+    }
+    // 2b. 接受上游 CTRL（同上信用式）
+    bool has_croom = (int)cfifo_.size() < bound.ctrl_depth;
+    if (in_ctrl_sent.read()) {
+        if (has_croom) {
+            cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
+            g_d2d_link_in_pkts++;
+            CountType(g_d2d_link_in_by_type, in_ctrl_channel.read());
+            CountLink(link_idx, true, in_ctrl_channel.read());
+        } else {
+            ctrl_upstream_blocked++;
+        }
+    }
+
+    // 3. 占用峰值（交付+接受之后的真实占用）
+    if ((long)fifo_.size() > occ_max)
+        occ_max = (long)fifo_.size();
+    if ((long)cfifo_.size() > occ_ctrl_max)
+        occ_ctrl_max = (long)cfifo_.size();
+
+    // 4. 公布下一拍 ready = 当前（交付+接受后）是否仍有容量；记满状态
+    bool room = (int)fifo_.size() < bound.data_depth;
+    bool croom = (int)cfifo_.size() < bound.ctrl_depth;
+    in_avail.write(room);
+    in_ctrl_avail.write(croom);
+    if (!room)
+        full_cycles++;
+    if (!croom)
+        ctrl_full_cycles++;
 }

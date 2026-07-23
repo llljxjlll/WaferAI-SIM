@@ -16,9 +16,9 @@
 #include <deque>
 #include <utility>
 
-// V3-b：有限缓冲 + token-bucket 速率的可选配置。**默认 disabled**——生产路径（functional_v2）
-// 恒为 disabled，forward() 行为与 V2 逐字节一致；仅独立 link self-test 显式开启，验证有限 FIFO
-// 与速率语义。真正接入生产 router↔port↔link 属 V3-d。
+// V3-b：有限缓冲 + token-bucket 速率的可选配置。**默认 disabled**——生产路径（functional_v2）恒为
+// disabled，走 forward() 的 functional 分支（该分支逐字节保留 V2 逻辑，冻结时序/计数精确不变）；
+// bounded 逻辑全在独立的 forward_bounded()，仅 link self-test 显式开启。接入生产属 V3-d。
 struct D2DLinkBound {
     bool enabled = false;
     int data_depth = 0; // 数据 FIFO 容量（enabled 时必须 >=1）
@@ -47,35 +47,41 @@ public:
     // V2-c：本单元对应的有向 link 在 g_d2d_links / g_d2d_link_stats 中的下标（-1=未归因）。
     int link_idx;
 
-    D2DLinkBound bound; // V3-b：有限缓冲 + 速率（默认 disabled = V2 行为）
+    D2DLinkBound bound; // V3-b：有限缓冲 + 速率（默认 disabled = V2 行为，不改冻结时序/计数）
 
-    // V3-b 统计（仅 bounded 时有意义）：占用峰值、满拍数、速率停顿、下游停顿。
-    long occ_max = 0;      // 数据 FIFO 观测到的最大占用（不变量：<= data_depth）
-    long occ_ctrl_max = 0; // 控制 FIFO 最大占用
-    long full_cycles = 0;  // in_avail=false（数据 FIFO 满、对上游施背压）的拍数
-    long rate_stall = 0;   // 有成熟包且下游 ready，但 token 不足未发的拍数
-    long ds_stall = 0;     // 有成熟包但下游 out_avail=false 的拍数
-    long tokens = 0;       // token 累加器（信用；发一包扣 rate.den）
-    long data_captured = 0; // 本单元实际采集(入 FIFO)的数据包数（供 self-test 做无丢 handshake）
+    // V3-b 统计（仅 bounded 时有意义）。命名严格区分「状态」与「阻塞事件」：
+    long occ_max = 0;       // 数据 FIFO 观测到的最大占用（不变量：<= data_depth）
+    long occ_ctrl_max = 0;  // 控制 FIFO 最大占用（<= ctrl_depth）
+    long full_cycles = 0;   // 数据 FIFO **处于满状态** 的拍数（纯状态，与上游是否想发无关）
+    long ctrl_full_cycles = 0;       // 控制 FIFO 满状态拍数
+    long upstream_blocked = 0;       // 数据：in_sent 想发 **且** 已公布 ready=false（确有发送需求被挡）
+    long ctrl_upstream_blocked = 0;  // 控制：同上
+    long rate_stall = 0;    // 有成熟 DATA、下游 ready、但 token 不足未发的拍数
+    long downstream_stall = 0;       // 有成熟 DATA、但下游 out_avail=false 的拍数
+    long ctrl_downstream_stall = 0;  // 有成熟 CTRL、但下游 out_ctrl_avail=false 的拍数
+    long tokens = 0;        // token 累加器（信用；发一包扣 rate.den；发后 cap 至 den，限突发≤1 包）
 
     SC_HAS_PROCESS(D2DLinkUnit);
     D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
                 D2DLinkBound bound_ = D2DLinkBound{});
     void forward();
+    void forward_bounded(long cyc); // V3-b：有限缓冲 + 速率的每拍逻辑（bound.enabled 时）
 
     // V1 drain 不变量：仿真正常完成后数据/控制 FIFO 均须为空。
     long residual() const { return (long)fifo_.size() + (long)cfifo_.size(); }
 
-    // V3-b 只读观测（供 self-test 断言）
+    // V3-b 只读观测（仅供仿真结束后断言，禁止当同步信号跨线程读）
     long OccMax() const { return occ_max; }
     long OccCtrlMax() const { return occ_ctrl_max; }
     long FullCycles() const { return full_cycles; }
+    long CtrlFullCycles() const { return ctrl_full_cycles; }
+    long UpstreamBlocked() const { return upstream_blocked; }
+    long CtrlUpstreamBlocked() const { return ctrl_upstream_blocked; }
     long RateStall() const { return rate_stall; }
-    long DsStall() const { return ds_stall; }
+    long DownstreamStall() const { return downstream_stall; }
+    long CtrlDownstreamStall() const { return ctrl_downstream_stall; }
     long DataOcc() const { return (long)fifo_.size(); }
     long CtrlOcc() const { return (long)cfifo_.size(); }
-    long Tokens() const { return tokens; }
-    long DataCaptured() const { return data_captured; }
 
 private:
     // 只存真实包 {ready_cycle, payload}（不每周期存 bubble）。ready_cycle=capture_cycle+latency；

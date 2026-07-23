@@ -634,3 +634,27 @@ runner **15 → 23 组**(4×4 W/S/E/N + 4×2 W/S/E/N);self-test 165/165。
   - **验证**：self-test **271/271**（含 30 项 V3-a 契约用例）；runner **65/65**，其中 3 组是
     **真实启动路径**——合法 functional_v2 仍跑出 **398 ns**（V2 冻结值不变）、
     `functional_v2 + link_rate` 启动期拒绝、合法 `bounded_saf` 因 runtime 未启用而明确拒绝。
+
+- **V3-b ✔（独立 link 的有限 FIFO + token-bucket 速率）——仅 standalone，不接生产**
+  `D2DLinkUnit` 增加可选 bounded 模式，**全部由 `D2DLinkBound.enabled` 门控**：生产
+  （functional_v2）恒 disabled，走 `forward()` 的 functional 分支（逐字节保留 V2 逻辑），bounded
+  逻辑全在独立的 `forward_bounded()`；e2e 仍 **398 ns**、NoC 冻结值不变。生产 Monitor 仍拒绝
+  `bounded_saf`（接生产属 V3-d）。link self-test **18 → 31**（新增 13 项）。要点：
+  - **有限 FIFO**：`in_avail` 公布真实空位（背压信号）；FIFO 满时不接收，占用**从不越过 depth**。
+  - **flow control 用信用式（bounded link 标准无损模型）**：单个 `sc_bv<256>` 信道有 1 拍 delta
+    延迟，纯组合 valid/ready 会退化成 2 拍环（要么滞留重收、要么填充边沿丢包）；信用式（上游持
+    信用=下游空位，交付归还）无此歧义。测试仍**读真实 `in_avail`** 并断言其正确性：背压时确实
+    观测到 `ready` 拉低，且 link **永不溢出**（`upstream_blocked=0`、全程无丢/重）。
+  - **先交付后接受**：depth 充裕时维持每拍 1 包；depth 过浅时吞吐被**信用往返**限制
+    （实测 depth=1 goodput≈0.33、depth=8 goodput≈1）——即 `link_inflight_depth>=BDP` 的动机。
+  - **token-bucket 速率**：发包后再 cap 至 `den`（不在发前 cap，否则丢失 `num>1` 的速率）。故
+    支持任意 `num/den`：1/4→gap 4、1/2→gap 2、**2/3→gap 1、2 交替（token 守恒，goodput≈2/3）**，
+    不能用单一众数 gap 表达一般速率。
+  - **统计命名严格区分**：`full_cycles`（FIFO 满**状态**时长）≠ `upstream_blocked`
+    （`in_sent && 满`，确有发送需求被挡——well-behaved 信用上游恒为 0）；`rate_stall`
+    （成熟+下游 ready+token 不足）≠ `downstream_stall`（成熟+下游不 ready）。各类只在对应场景触发
+    （如速率场景 `rate_stall>0 & downstream_stall=0`，下游 stall 场景反之）。
+  - **bounded 控制 FIFO**：独立 `ctrl_depth`，下游控制长 stall 时控制包驻留、`in_ctrl_avail` 拉低、
+    占用 `<=ctrl_depth`、释放后按序全交付。**data+ctrl 并发**：DATA 限速 1/4（gap 4）而 CTRL 不受
+    data token 限制（gap 1）——证明控制吞吐不被 DATA 限速拖慢。
+  - **构造期硬校验**：`data_depth>=1`、`ctrl_depth>=1`、`0<rate<=1`，绕过解析器的非法构造直接抛。

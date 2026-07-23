@@ -403,11 +403,11 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 
 多跳传输功能正确、路径可解释；合法协议调度能够完成，已知协议依赖环能够被 watchdog 正确诊断。本版不对有限缓冲网络死锁作出保证。
 
-### 4.3b V3 当前进展（V3-a 已完成）
+### 4.3b V3 当前进展（V3-a / V3-b 已完成）
 
-> **边界**：V3-a **只落地配置契约**，生产数据路径仍是 V2 的功能性无限 FIFO；
-> `mode=bounded_saf` 会在 Monitor 被**显式拒绝**（非零退出），杜绝「配置声称有限缓冲、
-> 实际按 functional_v2 运行」。该 gate 待 V3-b/V3-c 接通生产路径后移除。
+> **边界**：V3-a/V3-b 均**不改生产数据路径**（仍是 V2 功能性无限 FIFO）；`mode=bounded_saf`
+> 会在 Monitor 被**显式拒绝**（非零退出），杜绝「配置声称有限缓冲、实际按 functional_v2 运行」。
+> V3-b 的有限 FIFO 仅在**独立 link self-test** 启用。该 gate 待 V3-c/V3-d 接通生产路径后移除。
 
 - **V3-a ✔**：`functional_v2`（默认，旧配置逐位不变）/ `bounded_saf` 双模式；
   `bounded_saf` 必须显式 `safety=whole_flow_saf`；速率为整数有理数且 `0 < rate <= 1`
@@ -415,7 +415,16 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
   `link_inflight_depth >= BDP=ceil(2*L*rate)`（64-bit 整数运算），
   `saf_buffer_depth >= F` 留待 V3-c；字段按模式严格分区，杜绝接受后忽略与静默覆盖；
   `ValidateD2DTopology` 版本感知且**生产 Monitor 已切换**。
-  self-test **271/271**、runner **65/65**（含 3 组真实启动路径用例）。
+- **V3-b ✔（仅独立 link，不接生产）**：`D2DLinkUnit` 增加 `D2DLinkBound.enabled` 门控的 bounded
+  模式（生产恒 disabled、走 functional 分支逐字节不变；e2e 仍 398ns、NoC 冻结值不变）。
+  有限 FIFO（`in_avail` 公布真实空位、占用不越 depth）、**信用式无损 flow control**（单信道 1 拍
+  delta 延迟使纯组合 valid/ready 退化成 2 拍环，信用式无歧义；仍读真实 `in_avail` 断言背压正确、
+  link 永不溢出）、先交付后接受（depth 过浅时吞吐被信用往返限制：depth=1 goodput≈0.33、depth=8≈1）、
+  token-bucket 速率（发后 cap 至 den，支持任意 num/den：1/4→gap4、1/2→gap2、**2/3→gap 1、2 交替，
+  token 守恒 goodput≈2/3**）、统计命名严格区分（`full_cycles` 状态 ≠ `upstream_blocked` 需求被挡；
+  `rate_stall` ≠ `downstream_stall`，各类只在对应场景触发）、bounded 控制 FIFO + data/ctrl 并发
+  （DATA 限速不拖慢 CTRL）、构造期参数硬校验。link self-test **18 → 31**。
+- **当前门**：自测 **271/271**、Link self-test **31/31**、runner **65/65**、NoC 冻结值不变。
 
 ### 4.4 V3：周期精确拥塞与背压版
 
