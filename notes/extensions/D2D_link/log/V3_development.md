@@ -115,7 +115,21 @@ Router -> whole-flow SAF -> port limiter -> link limiter/inflight -> RX -> Route
 冻结分支：`feat/d2d-v3`；冻结 tag：`d2d-v3-baseline`。tag 指向包含实现、测试和本日志的
 V3 freeze 提交；`main` 只通过 fast-forward 合并，不重写 V0/V1/V2 tag。
 
-## 7. 明确留待后续
+## 7. Post-freeze 评审闭环：生产 SAF 单元证据
+
+评审确认功能正确，但指出 V3-b 的细粒度 credit/BDP 扫描只执行 standalone `forward_bounded()`，
+生产 `forward_bounded_saf()` 原先主要依赖 V3-e 端到端间接覆盖。修复不改变生产算法，仅增加直接探针：
+
+- `F=64` 的真实 REQUEST/DATA 验证完整 flow 前零输出；
+- `L=3,rate=1,BDP=8` 在生产流水中输出 64 包跨度 63 cycle，证明保守公式深度足够达到满速；
+- DATA/CTRL toggle credit 逐边沿计数，连续归还不合并且最终恢复初始容量；
+- `SAF/inflight/RX=64/2/1` 与长下游停顿触发全背压链，占用不越界、释放后有序排空；
+- 使用真实 2×1 admission/release，最终 reservation、expectation 与 FIFO 全为 0。
+
+Link SystemC self-test 从冻结时 **32/32** 增至当前 **37/37**。BDP 口径保持保守：standalone
+扫描证明其 RTT 模型的边界；production probe 证明公式推荐深度充分，不宣称它是生产流水线最小值。
+
+## 8. 明确留待后续
 
 - V4：Behavioral D2D 与更一般的解析 oracle/校准。
 - V5：多 lane、多端口聚合、striping 与 subflow。

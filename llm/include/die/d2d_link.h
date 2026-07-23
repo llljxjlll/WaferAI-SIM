@@ -16,9 +16,9 @@
 #include <deque>
 #include <utility>
 
-// V3-b：有限缓冲 + token-bucket 速率的可选配置。**默认 disabled**——生产路径（functional_v2）恒为
-// disabled，走 forward() 的 functional 分支（该分支逐字节保留 V2 逻辑，冻结时序/计数精确不变）；
-// bounded 逻辑全在独立的 forward_bounded()，仅 link self-test 显式开启。接入生产属 V3-d。
+// 有限缓冲 + token-bucket 速率的可选配置。默认 disabled：functional_v2 走 forward() 的冻结分支。
+// enabled 时由 whole_flow_saf 分流：false 是 V3-b standalone 单级 credit 模型；true 是 V3-d 生产
+// SAF→inflight→RX 模型。两种有限模型有意独立，分别由 Link self-test 的对应探针验证。
 struct D2DLinkBound {
     bool enabled = false;
     // whole_flow_saf=false：V3-b standalone 的单级有限 FIFO（保持既有测试语义）。

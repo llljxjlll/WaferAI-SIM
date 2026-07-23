@@ -407,16 +407,18 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 
 - **V3-a 配置契约**：默认 `functional_v2` 与显式 `bounded_saf` 严格分区；whole-flow SAF、
   四类独立容量、整数有理数速率、`rate<=1` 与保守 inflight 窗口均在启动期校验。
-- **V3-b 独立 Link**：有限 DATA/CTRL FIFO、token bucket、显式信用、BDP 边界和下游 stall
-  已由 Link SystemC self-test **32/32** 验证。
+- **V3-b 独立 Link**：有限 DATA/CTRL FIFO、token bucket、显式 pulse credit、BDP 边界和下游 stall
+  在冻结 tag 由 Link SystemC self-test **32/32** 验证；该 BDP-1/BDP 扫描针对 standalone 模型。
 - **V3-c 流大小与 admission**：REQUEST 携 `flow_packets`；`FlowKey(source,tag,subflow)` 原子预留；
   `F/F-1/BDP<F`、重复 key、并发守恒与未知释放均覆盖。
 - **V3-d 生产接线**：Monitor 的 bounded gate 已移除；每条有向 link 实例化
   `SAF -> port limiter -> link limiter/inflight -> RX` 有限流水线。REQUEST 前原子预留整条多跳路径；
   DATA/CTRL 都用真实回程信用，结束时两类信用、SAF 预留、Router/Link residual 全归零。
+  Post-freeze 新增 5 项直接 production probe：完整 flow gate、公式深度充分性、toggle credit 连续边沿、
+  `SAF/inflight/RX=64/2/1` 背压和真实 reservation drain；当前 Link self-test **37/37**。
 - **V3-e 定量与压力**：独立 runner **16/16** 覆盖三类瓶颈、共享/独立/full-duplex、源 die 与
   中间 die 混合拥塞、生产背压链、多跳、双向对角、2×2 四流置换、overbook 拒绝、RX/CTRL 小缓冲。
-- **当前总门**：自测 **284/284**、Link self-test **32/32**、历史 runner **67/67**、
+- **当前总门**：自测 **284/284**、Link self-test **37/37**（冻结 tag 为 32/32）、历史 runner **67/67**、
   V3 runner **16/16**、NoC 冻结值 **14781/29109、14833/45441**。
 
 ### 4.4 V3：周期精确拥塞与背压版

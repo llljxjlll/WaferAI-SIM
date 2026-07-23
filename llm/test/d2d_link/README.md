@@ -621,7 +621,8 @@ runner **15 → 23 组**(4×4 W/S/E/N + 4×2 W/S/E/N);self-test 165/165。
 - token bucket 使用整数 token，支持 `1、1/2、1/4、2/3`；`2/3` 以 1/2 拍间隔交替且 token 守恒，
   不能用单一 modal gap 近似。
 - `L=0/1/7` 与多种速率验证 `BDP-1` 欠速、`BDP` 达到目标速率。
-- Link self-test 从 V2 的 18 项扩展到 **32/32**；该分支与生产 whole-flow SAF 分支彼此隔离。
+- V3 冻结时 Link self-test 从 V2 的 18 项扩展到 **32/32**；这些细粒度 credit/BDP 扫描验证
+  standalone `forward_bounded()`，与生产 whole-flow SAF 分支彼此隔离。
 
 ### V3-c：REQUEST 流大小与原子 admission
 
@@ -657,6 +658,20 @@ source router
 - whole-flow SAF 的依赖切断点在 SAF stage：flow 完整落地后源 NoC 锁已释放。因此远端拥塞传播为
   `remote NoC -> RX -> inflight -> SAF drain`，**不会要求已完成整流的源 flow 继续持锁等待**。
   新 flow 容量不足时在源端 admission 阶段拒绝，而非进入网络后形成 hold-and-wait。
+
+#### Post-freeze 生产路径证据加固
+
+评审指出 V3-b 的 BDP/credit 细粒度证据原本只执行 standalone `forward_bounded()`。当前 Link self-test
+新增 5 项、达到 **37/37**，直接实例化 `whole_flow_saf=true` 的生产 `forward_bounded_saf()`：
+
+- 真实 REQUEST 声明 `F=64`，完整 flow 到齐前不允许任何 DATA 离开 SAF；
+- `L=3,rate=1` 时按保守公式得到 `inflight=8`，生产流水连续交付 64 包，输出跨度 63 cycle；
+- toggle DATA/CTRL credit 对连续归还逐次边沿计数，两个方向均精确恢复 64 次 DATA / 1 次 CTRL；
+- `SAF=F=64,inflight=2,RX=1` 加长下游停顿，峰值严格为 `64/2/1`，各级背压计数触发后按序排空；
+- 使用真实 2×1 admission 账本，最终 FIFO、SAF expectation 与 `reserved_packets` 全为 0。
+
+边界口径：standalone 的 `BDP-1/BDP` 扫描证明其 pulse-credit RTT 模型中的最小窗口；生产探针证明
+同一公式给出的深度在生产编码上**足够维持配置速率**，不声称该保守深度是生产流水线的最小值。
 
 ### V3-e：拥塞、背压与安全证据
 
@@ -702,7 +717,7 @@ python3 llm/test/run_v0_exit.py
 必须同时满足：
 
 - 纯函数/路由自测 **284/284**；
-- Link SystemC 自测 **32/32**；
+- Link SystemC 自测：冻结 tag 为 **32/32**；当前 post-freeze hardening 为 **37/37**；
 - 历史 D2D runner **67/67**；
 - V3 production runner **16/16**；
 - NoC 四场景精确保持 **14781/29109、14833/45441**；

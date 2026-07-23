@@ -1,12 +1,13 @@
 // 独立 SystemC link 测试：用 testbench 驱动真实包穿过 D2DLinkUnit。
 // V1-b2：latency 语义、FIFO 序、无丢/重、out_avail 停顿、drain 后 in==out、data/ctrl 独立、idle=0。
-// V3-b：**有限 FIFO + token-bucket 速率**（仅此独立测试开启；生产路径仍 functional_v2 无限 FIFO）——
-//   in_avail 背压正确性、占用不越 depth、full/rate_stall/downstream_stall 分类正确触发、稳态间隔
-//   ==den/num（含 2/3 的 token 守恒）、缓冲深度 vs 吞吐（信用往返）、bounded 控制 FIFO、data+ctrl
-//   并发不互相拖慢、构造期参数校验、按序无丢/重、结束排空。driver 用信用式 flow control（无损）。
+// V3-b standalone：单级有限 FIFO + pulse-credit RTT + token bucket，验证 BDP-1/BDP 边界。
+// V3-d production：直接驱动 whole-flow SAF→inflight→RX、toggle credit 与真实 reservation release，
+// 验证公式深度充分性、背压链、按序无丢重和结束排空。两条实现路径均在本 self-test 中独立覆盖。
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "defs/spec.h"
 #include "systemc.h"
+#include "utils/msg_utils.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -131,6 +132,114 @@ struct LinkProbe : sc_module {
             in_cs.write(cs);
             if (cs)
                 in_cch.write((sc_bv<256>)cid);
+            wait(CYCLE, SC_NS);
+        }
+    }
+};
+
+// 直接驱动 V3-d 生产 whole-flow SAF 分支。与 LinkProbe 的 standalone bounded
+// pulse-credit 模型不同，本探针发送真实 REQUEST/DATA，并按生产 Router 相同的
+// toggle-edge 语义接收 credit。
+struct ProductionSafProbe : sc_module {
+    D2DLinkUnit *link;
+    sc_signal<sc_bv<256>> in_ch, out_ch, in_cch, out_cch;
+    sc_signal<bool> in_s, in_av, out_s, out_av, in_cs, in_cav, out_cs, out_cav;
+    sc_signal<bool> data_cret, ctrl_cret;
+
+    int source, dest, tag, flow_packets;
+    int run_cycles = 400;
+    int data_stall_lo = -1, data_stall_hi = -1;
+    int data_credit, ctrl_credit;
+    bool data_credit_seen = false, ctrl_credit_seen = false;
+    bool request_sent = false;
+    int sent = 0, data_returns = 0, ctrl_returns = 0;
+    int tail_sent_cycle = -1, first_out_cycle = -1, last_out_cycle = -1;
+    int notready_seen = 0;
+    std::vector<int> out_seq;
+    std::vector<MSG_TYPE> out_ctrl_types;
+
+    SC_HAS_PROCESS(ProductionSafProbe);
+    ProductionSafProbe(sc_module_name n, int latency, int link_idx,
+                       const D2DLinkBound &bound, int source_, int dest_,
+                       int tag_, int flow_packets_)
+        : sc_module(n), source(source_), dest(dest_), tag(tag_),
+          flow_packets(flow_packets_), data_credit(bound.saf_depth),
+          ctrl_credit(bound.ctrl_depth) {
+        link = new D2DLinkUnit("link", latency, link_idx, bound);
+        link->in_channel(in_ch);
+        link->in_sent(in_s);
+        link->in_avail(in_av);
+        link->in_ctrl_channel(in_cch);
+        link->in_ctrl_sent(in_cs);
+        link->in_ctrl_avail(in_cav);
+        link->out_channel(out_ch);
+        link->out_sent(out_s);
+        link->out_avail(out_av);
+        link->out_ctrl_channel(out_cch);
+        link->out_ctrl_sent(out_cs);
+        link->out_ctrl_avail(out_cav);
+        link->data_credit_return(data_cret);
+        link->ctrl_credit_return(ctrl_cret);
+        SC_THREAD(drive);
+    }
+
+    void drive() {
+        for (int c = 0; c <= run_cycles; ++c) {
+            if (out_s.read()) {
+                Msg m = DeserializeMsg(out_ch.read());
+                if (first_out_cycle < 0)
+                    first_out_cycle = c;
+                last_out_cycle = c;
+                out_seq.push_back(m.seq_id_);
+            }
+            if (out_cs.read())
+                out_ctrl_types.push_back(DeserializeMsg(out_cch.read()).msg_type_);
+
+            bool data_event = data_cret.read();
+            if (data_event != data_credit_seen) {
+                data_credit_seen = data_event;
+                data_credit++;
+                data_returns++;
+            }
+            bool ctrl_event = ctrl_cret.read();
+            if (ctrl_event != ctrl_credit_seen) {
+                ctrl_credit_seen = ctrl_event;
+                ctrl_credit++;
+                ctrl_returns++;
+            }
+
+            bool data_ready = !(c >= data_stall_lo && c < data_stall_hi);
+            out_av.write(data_ready);
+            out_cav.write(true);
+
+            bool send_ctrl = false;
+            if (!request_sent && c >= 2 && ctrl_credit > 0) {
+                Msg req(REQUEST, dest, tag, source);
+                req.flow_packets_ = flow_packets;
+                in_cch.write(SerializeMsg(req));
+                send_ctrl = true;
+                request_sent = true;
+                ctrl_credit--;
+            }
+            in_cs.write(send_ctrl);
+
+            bool send_data = false;
+            if (request_sent && c >= 4 && sent < flow_packets && data_credit > 0) {
+                int seq = sent + 1;
+                bool tail = seq == flow_packets;
+                Msg data(tail, DATA, seq, dest, 0, tag, 128,
+                         sc_bv<128>((unsigned long long)seq));
+                data.source_ = source;
+                in_ch.write(SerializeMsg(data));
+                send_data = true;
+                sent++;
+                data_credit--;
+                if (tail)
+                    tail_sent_cycle = c;
+            }
+            in_s.write(send_data);
+            if (!in_av.read())
+                notready_seen++;
             wait(CYCLE, SC_NS);
         }
     }
@@ -283,6 +392,58 @@ int RunD2DLinkSelfTest() {
         bdp_cases.push_back({spec[0], spec[1], spec[2], rtt, bdp, under, exact});
     }
 
+    // ---- V3 post-freeze hardening：直接执行生产 forward_bounded_saf ----
+    // 保存并建立最小 2x1 拓扑，使生产 Link 的 SAF 排空走真实全局 reservation release，
+    // 不用 test-only bypass。两个探针共享一条有向 link 的 admission 账本但使用不同 FlowKey。
+    const int old_grid_x = GRID_X, old_grid_y = GRID_Y, old_grid_size = GRID_SIZE;
+    const int old_die_x = DIE_X, old_die_y = DIE_Y, old_die_count = DIE_COUNT;
+    const int old_cores_per_die = CORES_PER_DIE, old_total_cores = TOTAL_CORES;
+    const int old_host_endpoint = HOST_ENDPOINT_ID;
+    D2DLinkConfig old_d2d_cfg = g_d2d_cfg;
+    std::vector<D2DLink> old_d2d_links = g_d2d_links;
+    GRID_X = GRID_Y = GRID_SIZE = CORES_PER_DIE = 1;
+    DIE_X = DIE_COUNT = TOTAL_CORES = HOST_ENDPOINT_ID = 2;
+    DIE_Y = 1;
+    g_d2d_links = {{0, 0, 1, 0, 1, 1, 3},
+                   {1, 0, 0, 0, 1, 1, 1}};
+    g_d2d_cfg.mode = MODE_BOUNDED_SAF;
+    g_d2d_cfg.safety = SAFETY_WHOLE_FLOW_SAF;
+    g_d2d_cfg.saf_buffer_depth = 64;
+    ResetWholeFlowSafRuntime();
+
+    auto mkprod = [](int saf, int inflight, int rx, int ctrl,
+                     int port_num, int port_den, int link_num, int link_den) {
+        D2DLinkBound b;
+        b.enabled = true;
+        b.whole_flow_saf = true;
+        b.saf_depth = saf;
+        b.data_depth = inflight;
+        b.rx_depth = rx;
+        b.ctrl_depth = ctrl;
+        b.port_rate = {port_num, port_den};
+        b.rate = {link_num, link_den};
+        return b;
+    };
+
+    // 生产 BDP 充分性：L=3,rate=1 的保守配置公式给出 depth=8。64 包整流后应连续
+    // 1 pkt/cycle 交付；这验证“公式推荐深度在生产编码上足够”，不声称它是生产路径的最小值。
+    D2DRate prod_full_rate{1, 1};
+    int prod_bdp_depth = (int)D2DBdpPackets(3, prod_full_rate);
+    auto *prod_bdp = new ProductionSafProbe(
+        "prod_saf_bdp", 3, 0,
+        mkprod(64, prod_bdp_depth, 8, 2, 1, 1, 1, 1), 0, 1, 101, 64);
+
+    // 生产背压链：RX=1、inflight=2，下游长停顿；必须填满有限 stage、逐级反压，
+    // 释放后仍按序排空。credit 必须按 toggle edge 逐包返回，连续翻转不可合并。
+    auto *prod_bp = new ProductionSafProbe(
+        "prod_saf_backpressure", 1, 1,
+        mkprod(64, 2, 1, 2, 1, 1, 1, 1), 1, 0, 202, 64);
+    prod_bp->data_stall_lo = 0;
+    prod_bp->data_stall_hi = 200;
+
+    ReserveWholeFlowSafPath(0, 1, 101, 0, 64);
+    ReserveWholeFlowSafPath(1, 0, 202, 0, 64);
+
     // 构造期参数校验负例——**必须在 sc_start 之前**（elaboration 期才能构造 sc_module）。
     // 只接受**预期的 std::runtime_error 且错误文本含关键字**：避免把 SystemC 的其它异常（如
     // 「运行期插入模块失败」）误判为「参数校验成功」——这正是旧 catch(...) 掩盖的坑。
@@ -377,6 +538,63 @@ int RunD2DLinkSelfTest() {
                   << ",under=" << goodput(c.under->data_out)
                   << ",exact=" << goodput(c.exact->data_out) << ")";
     std::cout << std::endl;
+
+    auto seq_1_to_n = [](const std::vector<int> &v, int n) {
+        if ((int)v.size() != n)
+            return false;
+        for (int i = 0; i < n; ++i)
+            if (v[i] != i + 1)
+                return false;
+        return true;
+    };
+    std::cout << "  [info] production SAF: bdp_depth=" << prod_bdp_depth
+              << " bdp_span=" << (prod_bdp->last_out_cycle - prod_bdp->first_out_cycle)
+              << " bp_occ=" << prod_bp->link->SafOccMax() << "/"
+              << prod_bp->link->InflightOccMax() << "/"
+              << prod_bp->link->RxOccMax()
+              << " bp_stall=" << prod_bp->link->InflightFullCycles() << "/"
+              << prod_bp->link->RxBackpressureStall() << "/"
+              << prod_bp->link->DownstreamStall()
+              << " credit_returns=" << prod_bdp->data_returns << "/"
+              << prod_bp->data_returns << std::endl;
+
+    check(seq_1_to_n(prod_bdp->out_seq, 64) &&
+              prod_bdp->first_out_cycle > prod_bdp->tail_sent_cycle &&
+              prod_bdp->link->SafOccMax() == 64,
+          "V3-d production SAF gate: REQUEST declares F, no DATA leaves before complete 64-packet flow");
+    check(prod_bdp_depth == 8 &&
+              prod_bdp->last_out_cycle - prod_bdp->first_out_cycle == 63 &&
+              prod_bdp->link->InflightOccMax() <= prod_bdp_depth &&
+              prod_bdp->link->RxOccMax() <= 8 &&
+              prod_bdp->link->PortRateStall() == 0 &&
+              prod_bdp->link->LinkRateStall() == 0,
+          "V3-d production BDP adequacy: configured depth=ceil((2L+PIPE)*rate)=8 sustains 1 pkt/cycle");
+    check(prod_bdp->data_returns == 64 && prod_bdp->ctrl_returns == 1 &&
+              prod_bdp->data_credit == 64 && prod_bdp->ctrl_credit == 2 &&
+              prod_bp->data_returns == 64 && prod_bp->ctrl_returns == 1 &&
+              prod_bp->data_credit == 64 && prod_bp->ctrl_credit == 2,
+          "V3-d production toggle credit: every consecutive DATA/CTRL return observed once, credits restored");
+    check(seq_1_to_n(prod_bp->out_seq, 64) &&
+              prod_bp->first_out_cycle >= prod_bp->data_stall_hi &&
+              prod_bp->link->SafOccMax() == 64 &&
+              prod_bp->link->InflightOccMax() <= 2 &&
+              prod_bp->link->RxOccMax() <= 1 &&
+              prod_bp->link->SafFullCycles() > 0 &&
+              prod_bp->link->InflightFullCycles() > 0 &&
+              prod_bp->link->RxFullCycles() > 0 &&
+              prod_bp->link->RxBackpressureStall() > 0 &&
+              prod_bp->link->DownstreamStall() > 0 &&
+              prod_bp->link->PortRateStall() == 0 &&
+              prod_bp->link->LinkRateStall() == 0 &&
+              prod_bp->link->UpstreamBlocked() == 0 &&
+              prod_bp->link->CtrlUpstreamBlocked() == 0 &&
+              prod_bp->notready_seen > 0,
+          "V3-d production backpressure: finite SAF/inflight/RX fill without overflow, hold, then ordered drain");
+    check(prod_bdp->link->residual() == 0 && prod_bp->link->residual() == 0 &&
+              WholeFlowSafReservedPackets() == 0 &&
+              prod_bdp->out_ctrl_types == std::vector<MSG_TYPE>{REQUEST} &&
+              prod_bp->out_ctrl_types == std::vector<MSG_TYPE>{REQUEST},
+          "V3-d production drain: FIFOs/SAF expectations/reservation ledger zero; REQUEST control preserved");
 
     // 流控 = 信用式（唯一真源）：上游只据信用发送，link 永不溢出（upstream_blocked==0）、全程无丢/重。
     // in_avail 仅作**诊断镜像**：背压时应观测到它拉低（notready>0）。inconsistent（有信用但 in_avail
@@ -539,6 +757,20 @@ int RunD2DLinkSelfTest() {
     check(g_d2d_link_in_pkts == g_d2d_link_out_pkts && g_d2d_link_in_pkts > 0,
           "drain: total in_pkts == out_pkts (" +
               std::to_string(g_d2d_link_in_pkts) + ")");
+
+    // 恢复调用者的全局拓扑/模式；self-test 不污染同进程的其它入口。
+    GRID_X = old_grid_x;
+    GRID_Y = old_grid_y;
+    GRID_SIZE = old_grid_size;
+    DIE_X = old_die_x;
+    DIE_Y = old_die_y;
+    DIE_COUNT = old_die_count;
+    CORES_PER_DIE = old_cores_per_die;
+    TOTAL_CORES = old_total_cores;
+    HOST_ENDPOINT_ID = old_host_endpoint;
+    g_d2d_cfg = old_d2d_cfg;
+    g_d2d_links = old_d2d_links;
+    ResetWholeFlowSafRuntime();
 
     std::cout << "==== D2D V1 link self-test: " << (g_total - g_fail) << "/"
               << g_total << (g_fail ? "  <<< FAILURES" : "") << " ===="
