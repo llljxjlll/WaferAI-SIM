@@ -45,6 +45,16 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
         input_lock_ref[i] = 0;
         output_lock[i] = -1;
         output_lock_ref[i] = 0;
+        if (i < DIRECTIONS - 1) {
+            d2d_data_credit_enabled[i] = false;
+            d2d_data_credit_seen[i] = false;
+            d2d_data_credits[i] = 0;
+            d2d_data_credit_capacity[i] = 0;
+            d2d_ctrl_credit_enabled[i] = false;
+            d2d_ctrl_credit_seen[i] = false;
+            d2d_ctrl_credits[i] = 0;
+            d2d_ctrl_credit_capacity[i] = 0;
+        }
     }
 
 
@@ -78,12 +88,48 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
               << ctrl_sent_i[NORTH].pos();
     sensitive << ctrl_channel_avail_i[WEST].pos() << ctrl_channel_avail_i[EAST].pos()
               << ctrl_channel_avail_i[SOUTH].pos() << ctrl_channel_avail_i[NORTH].pos();
+    sensitive << d2d_data_credit_i[WEST] << d2d_data_credit_i[EAST]
+              << d2d_data_credit_i[SOUTH] << d2d_data_credit_i[NORTH]
+              << d2d_ctrl_credit_i[WEST] << d2d_ctrl_credit_i[EAST]
+              << d2d_ctrl_credit_i[SOUTH] << d2d_ctrl_credit_i[NORTH];
     sensitive << ctrl_core_busy_i.neg();
     dont_initialize();
 
     SC_THREAD(router_execute);
     sensitive << need_next_trigger;
     dont_initialize();
+}
+
+void RouterUnit::EnableD2DDataCredit(Directions dir, int initial_credit) {
+    if (dir < WEST || dir >= CENTER || initial_credit < 1)
+        throw std::runtime_error("invalid D2D data credit configuration");
+    d2d_data_credit_enabled[(int)dir] = true;
+    d2d_data_credits[(int)dir] = initial_credit;
+    d2d_data_credit_capacity[(int)dir] = initial_credit;
+}
+
+void RouterUnit::EnableD2DCtrlCredit(Directions dir, int initial_credit) {
+    if (dir < WEST || dir >= CENTER || initial_credit < 1)
+        throw std::runtime_error("invalid D2D control credit configuration");
+    d2d_ctrl_credit_enabled[(int)dir] = true;
+    d2d_ctrl_credits[(int)dir] = initial_credit;
+    d2d_ctrl_credit_capacity[(int)dir] = initial_credit;
+}
+
+bool RouterUnit::D2DDataCreditsBalanced() const {
+    for (int i = 0; i < DIRECTIONS - 1; ++i)
+        if (d2d_data_credit_enabled[i] &&
+            d2d_data_credits[i] != d2d_data_credit_capacity[i])
+            return false;
+    return true;
+}
+
+bool RouterUnit::D2DCtrlCreditsBalanced() const {
+    for (int i = 0; i < DIRECTIONS - 1; ++i)
+        if (d2d_ctrl_credit_enabled[i] &&
+            d2d_ctrl_credits[i] != d2d_ctrl_credit_capacity[i])
+            return false;
+    return true;
 }
 
 void RouterUnit::end_of_elaboration() {
@@ -105,6 +151,26 @@ void RouterUnit::end_of_elaboration() {
 void RouterUnit::router_execute() {
     while (true) {
         bool flag_trigger = false;
+
+        for (int i = 0; i < DIRECTIONS - 1; ++i) {
+            bool data_event = d2d_data_credit_i[i].read();
+            if (d2d_data_credit_enabled[i] &&
+                data_event != d2d_data_credit_seen[i]) {
+                if (d2d_data_credits[i] >= d2d_data_credit_capacity[i])
+                    throw std::runtime_error("D2D data credit overflow");
+                d2d_data_credits[i]++;
+                flag_trigger = true;
+            }
+            d2d_data_credit_seen[i] = data_event;
+            bool pulse = d2d_ctrl_credit_i[i].read();
+            if (d2d_ctrl_credit_enabled[i] && pulse != d2d_ctrl_credit_seen[i]) {
+                if (d2d_ctrl_credits[i] >= d2d_ctrl_credit_capacity[i])
+                    throw std::runtime_error("D2D control credit overflow");
+                d2d_ctrl_credits[i]++;
+                flag_trigger = true;
+            }
+            d2d_ctrl_credit_seen[i] = pulse;
+        }
 
         // 将输出信号都设置为初始值false
         for (int i = 0; i < DIRECTIONS; i++) {
@@ -177,12 +243,21 @@ void RouterUnit::router_execute() {
         for (int i = 0; i < DIRECTIONS - 1; i++) {
             // global update once
             data_sent_o[i].write(false);
-            // 输出方向的buffer是否为满
-            if (channel_avail_i[i].read() == false)
+            // bounded C2C DATA 以 SAF 空位 credit 为唯一流控真源；其它输出保持 ready。
+            bool blocked = d2d_data_credit_enabled[i]
+                               ? d2d_data_credits[i] <= 0
+                               : channel_avail_i[i].read() == false;
+            if (blocked) {
+                if (buffer_o[i].size()) {
+                    int d = DieOfGlobal(rid);
+                    if (IsC2CEgressEdge(rid, Directions(i)))
+                        g_d2d_source_stalls++;
+                    else if (d >= 0 && d < (int)g_die_noc_stalls.size())
+                        g_die_noc_stalls[d]++;
+                }
                 continue;
+            }
 
-            // shall not check when output buffer is empty
-            // 对应输出的buffer非空
             if (!buffer_o[i].size())
                 continue;
 
@@ -193,6 +268,12 @@ void RouterUnit::router_execute() {
 
             channel_o[i].write(temp);
             data_sent_o[i].write(true);
+            if (d2d_data_credit_enabled[i])
+                d2d_data_credits[i]--;
+            int d = DieOfGlobal(rid);
+            if (!IsC2CEgressEdge(rid, Directions(i)) && d >= 0 &&
+                d < (int)g_die_noc_sends.size())
+                g_die_noc_sends[d]++;
 
             // need trigger again
             flag_trigger = true;
@@ -203,11 +284,14 @@ void RouterUnit::router_execute() {
         for (int i = 0; i < DIRECTIONS - 1; i++) {
             // global update once
             ctrl_sent_o[i].write(false);
-            // 控制信道输出方向的buffer是否为满
-            if (ctrl_channel_avail_i[i].read() == false)
+            // bounded C2C 使用真实 credit；其它输出保持 legacy ready 信号。
+            if (d2d_ctrl_credit_enabled[i]) {
+                if (d2d_ctrl_credits[i] <= 0)
+                    continue;
+            } else if (ctrl_channel_avail_i[i].read() == false) {
                 continue;
+            }
 
-            // 对应控制信道输出的buffer非空
             if (!ctrl_buffer_o[i].size())
                 continue;
 
@@ -218,6 +302,8 @@ void RouterUnit::router_execute() {
 
             ctrl_channel_o[i].write(temp);
             ctrl_sent_o[i].write(true);
+            if (d2d_ctrl_credit_enabled[i])
+                d2d_ctrl_credits[i]--;
 
             // need trigger again
             flag_trigger = true;

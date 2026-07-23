@@ -93,6 +93,19 @@ public:
     // 控制信道空闲信号
     sc_out<bool> ctrl_channel_avail_o[DIRECTIONS];
     sc_in<bool> ctrl_channel_avail_i[DIRECTIONS - 1];
+    // V3-d：bounded C2C 的真实 credit 回程。DATA credit 对应 whole-flow SAF stage 空位，
+    // 包从 SAF 进入 inflight 时归还；CTRL credit 在控制包交付远端时归还。两者均以每次归还
+    // 翻转 event bit 表达，避免 ready delta 延迟溢出及连续 level pulse 合并。
+    sc_in<bool> d2d_data_credit_i[DIRECTIONS - 1];
+    bool d2d_data_credit_enabled[DIRECTIONS - 1];
+    bool d2d_data_credit_seen[DIRECTIONS - 1];
+    int d2d_data_credits[DIRECTIONS - 1];
+    int d2d_data_credit_capacity[DIRECTIONS - 1];
+    sc_in<bool> d2d_ctrl_credit_i[DIRECTIONS - 1];
+    bool d2d_ctrl_credit_enabled[DIRECTIONS - 1];
+    bool d2d_ctrl_credit_seen[DIRECTIONS - 1];
+    int d2d_ctrl_credits[DIRECTIONS - 1];
+    int d2d_ctrl_credit_capacity[DIRECTIONS - 1];
 
     // 控制信道发送使能信号
     sc_out<bool> ctrl_sent_o[DIRECTIONS];
@@ -119,6 +132,10 @@ public:
     void trans_next_trigger();
 
     void end_of_elaboration();
+    void EnableD2DDataCredit(Directions dir, int initial_credit);
+    void EnableD2DCtrlCredit(Directions dir, int initial_credit);
+    bool D2DDataCreditsBalanced() const;
+    bool D2DCtrlCreditsBalanced() const;
 
     // 结束态残留量（drain 不变量）：所有 in/out lock ref + 各方向 data/ctrl buffer +
     // host buffer 的总占用。仿真正常结束时应为 0（无未释放锁、无滞留包）。

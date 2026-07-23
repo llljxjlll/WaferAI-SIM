@@ -173,6 +173,34 @@ int sc_main(int argc, char *argv[]) {
                 << " data_in=" << st.in_by_type[DATA]
                 << " data_out=" << st.out_by_type[DATA];
         }
+        // V3-d：生产 bounded_saf 的每条有向 link 多级流水线证据。峰值分别对应
+        // whole-flow SAF / link inflight / 远端 RX；stall 分类用于瓶颈和背压归因。
+        std::function<void(const std::vector<sc_object *> &)> bounded_dump =
+            [&](const std::vector<sc_object *> &objs) {
+                for (auto *o : objs) {
+                    if (auto *link = dynamic_cast<D2DLinkUnit *>(o);
+                        link && link->bound.enabled && link->bound.whole_flow_saf) {
+                        LOG_INFO(SYSTEM)
+                            << "[D2D_BOUND] idx=" << link->link_idx
+                            << " saf_peak=" << link->SafOccMax()
+                            << " inflight_peak=" << link->InflightOccMax()
+                            << " rx_peak=" << link->RxOccMax()
+                            << " saf_full=" << link->SafFullCycles()
+                            << " inflight_full=" << link->InflightFullCycles()
+                            << " rx_full=" << link->RxFullCycles()
+                            << " port_stall=" << link->PortRateStall()
+                            << " link_stall=" << link->LinkRateStall()
+                            << " inflight_stall=" << link->RateStall()
+                            << " rx_stall=" << link->RxBackpressureStall()
+                            << " downstream_stall=" << link->DownstreamStall();
+                    }
+                    bounded_dump(o->get_child_objects());
+                }
+            };
+        bounded_dump(sc_get_top_level_objects());
+        LOG_INFO(SYSTEM) << "[SAF] reserved_packets="
+                         << WholeFlowSafReservedPackets();
+
         // V2-c：每 die 的 router 入口包数。中间 die >0 证明包确实穿越了该 die 的 NoC。
         {
             std::string per_die, per_mesh;
@@ -182,6 +210,27 @@ int sc_main(int argc, char *argv[]) {
                 per_mesh += (i ? "," : "") + std::to_string(g_die_mesh_pkts[i]);
             LOG_INFO(SYSTEM) << "[DIE_ACT] router_pkts=" << per_die
                              << " mesh_pkts=" << per_mesh;
+            std::string noc_send, noc_stall;
+            for (size_t i = 0; i < g_die_noc_sends.size(); ++i)
+                noc_send += (i ? "," : "") + std::to_string(g_die_noc_sends[i]);
+            for (size_t i = 0; i < g_die_noc_stalls.size(); ++i)
+                noc_stall += (i ? "," : "") + std::to_string(g_die_noc_stalls[i]);
+            LOG_INFO(SYSTEM) << "[NOC_ACT] sends=" << noc_send
+                             << " stalls=" << noc_stall
+                             << " d2d_source_stalls=" << g_d2d_source_stalls;
+        }
+        {
+            std::string sig;
+            for (const auto &kv : g_flow_done_cycle)
+                sig += (sig.empty() ? "" : ",") +
+                       std::to_string(std::get<0>(kv.first)) + ":" +
+                       std::to_string(std::get<1>(kv.first)) + ":" +
+                       std::to_string(std::get<2>(kv.first)) + "@" +
+                       std::to_string(kv.second);
+            LOG_INFO(SYSTEM) << "[FLOW_DONE] " << sig;
+            LOG_INFO(SYSTEM) << "[SAF_ADMIT] success="
+                             << g_saf_admission_successes
+                             << " reject=" << g_saf_admission_rejects;
         }
     }
 
@@ -201,6 +250,24 @@ int sc_main(int argc, char *argv[]) {
         };
         LOG_INFO(SYSTEM) << "[DRAIN] router_residual="
                          << resid(sc_get_top_level_objects());
+        std::function<bool(const std::vector<sc_object *> &, bool)> credit_ok =
+            [&](const std::vector<sc_object *> &objs, bool data) -> bool {
+            for (auto *o : objs) {
+                if (auto *ru = dynamic_cast<RouterUnit *>(o)) {
+                    bool ok = data ? ru->D2DDataCreditsBalanced()
+                                   : ru->D2DCtrlCreditsBalanced();
+                    if (!ok)
+                        return false;
+                }
+                if (!credit_ok(o->get_child_objects(), data))
+                    return false;
+            }
+            return true;
+        };
+        LOG_INFO(SYSTEM) << "[CREDIT] data_balanced="
+                         << (credit_ok(sc_get_top_level_objects(), true) ? 1 : 0)
+                         << " ctrl_balanced="
+                         << (credit_ok(sc_get_top_level_objects(), false) ? 1 : 0);
     }
     {
         std::function<long(const std::vector<sc_object *> &)> resid =

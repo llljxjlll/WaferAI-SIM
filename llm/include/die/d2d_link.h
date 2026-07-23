@@ -21,9 +21,15 @@
 // bounded 逻辑全在独立的 forward_bounded()，仅 link self-test 显式开启。接入生产属 V3-d。
 struct D2DLinkBound {
     bool enabled = false;
-    int data_depth = 0; // link 在途 DATA FIFO 容量（enabled 时必须 >=1；不是远端 rx_buffer_depth）
-    int ctrl_depth = 0; // 控制 FIFO 容量
-    D2DRate rate;       // 链路交付速率（包/cycle，0<r<=1）；token bucket 表达 <1
+    // whole_flow_saf=false：V3-b standalone 的单级有限 FIFO（保持既有测试语义）。
+    // whole_flow_saf=true：V3-d 生产流水线：SAF stage → port/link 限速 → inflight → RX stage。
+    bool whole_flow_saf = false;
+    int data_depth = 0; // link 在途 DATA FIFO 容量（生产取 link_inflight_depth）
+    int ctrl_depth = 0; // 独立控制 FIFO 容量
+    int saf_depth = 0;  // 整流 stage 容量；必须能容纳完整 flow
+    int rx_depth = 0;   // 远端接收 stage 容量
+    D2DRate port_rate;  // SAF stage → link 的端口注入速率
+    D2DRate rate;       // 链路速率（包/cycle，0<r<=1）；token bucket 表达 <1
 };
 
 class D2DLinkUnit : public sc_module {
@@ -66,17 +72,27 @@ public:
     long rate_stall = 0;    // 有成熟 DATA、下游 ready、但 token 不足未发的拍数
     long downstream_stall = 0;       // 有成熟 DATA、但下游 out_avail=false 的拍数
     long ctrl_downstream_stall = 0;  // 有成熟 CTRL、但下游 out_ctrl_avail=false 的拍数
-    long tokens = 0;        // 速率 token 累加器（非流控信用；发一包扣 den，发后 cap 至 den）
+    long tokens = 0;        // link-rate token
+    long port_tokens = 0;   // V3-d port-rate token
+    long saf_occ_max = 0, inflight_occ_max = 0, rx_occ_max = 0;
+    long saf_full_cycles = 0, inflight_full_cycles = 0, rx_full_cycles = 0;
+    long port_rate_stall = 0, link_rate_stall = 0, rx_backpressure_stall = 0;
 
     SC_HAS_PROCESS(D2DLinkUnit);
     D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
                 D2DLinkBound bound_ = D2DLinkBound{});
     void forward();
-    void forward_bounded(long cyc); // V3-b：有限缓冲 + 速率的每拍逻辑（bound.enabled 时）
+    void forward_bounded(long cyc); // V3-b standalone 单级有限 FIFO
+    void forward_bounded_saf(long cyc); // V3-d 生产 whole-flow SAF 多级流水线
 
     // drain 不变量：bounded 模式除数据/控制 FIFO 外，回程中的信用及当前输出 pulse 也必须清空。
     long residual() const {
-        return (long)fifo_.size() + (long)cfifo_.size() + CreditResidual();
+        long saf_packets = 0;
+        for (const auto &kv : saf_flows_)
+            saf_packets += (long)kv.second.packets.size();
+        return (long)fifo_.size() + (long)cfifo_.size() +
+               (long)rx_fifo_.size() + saf_packets +
+               (long)saf_expected_.size() + CreditResidual();
     }
     long CreditResidual() const {
         return (long)data_credit_due_.size() + (long)ctrl_credit_due_.size() +
@@ -96,8 +112,29 @@ public:
     long CtrlDownstreamStall() const { return ctrl_downstream_stall; }
     long DataOcc() const { return (long)fifo_.size(); }
     long CtrlOcc() const { return (long)cfifo_.size(); }
+    long SafOccMax() const { return saf_occ_max; }
+    long InflightOccMax() const { return inflight_occ_max; }
+    long RxOccMax() const { return rx_occ_max; }
+    long SafFullCycles() const { return saf_full_cycles; }
+    long InflightFullCycles() const { return inflight_full_cycles; }
+    long RxFullCycles() const { return rx_full_cycles; }
+    long PortRateStall() const { return port_rate_stall; }
+    long LinkRateStall() const { return link_rate_stall; }
+    long RxBackpressureStall() const { return rx_backpressure_stall; }
 
 private:
+    struct SafFlowBuffer {
+        int expected = 0;
+        bool complete = false;
+        std::deque<sc_bv<256>> packets;
+    };
+    // REQUEST 先于 DATA 穿过同一路径：每条 link 记住该 flow 的 F。DATA 按 FlowKey 整流，
+    // 只有见到尾包且 count==F 后才进入 saf_ready_，随后才允许注入物理 link。
+    std::map<FlowKey, int> saf_expected_;
+    std::map<FlowKey, SafFlowBuffer> saf_flows_;
+    std::deque<FlowKey> saf_ready_;
+    std::deque<sc_bv<256>> rx_fifo_;
+
     // 只存真实包 {ready_cycle, payload}（不每周期存 bubble）。ready_cycle=capture_cycle+latency；
     // 队首成熟(ready<=当前 cycle)且下游 ready(out_avail=true) 才出队——成熟包在 Link 中等待
     // 直到下游可收，不丢包、不越过下游容量。
@@ -109,6 +146,10 @@ private:
     // sc_signal pulse 在写出后的一个调度周期内仍是在途信用；纳入 residual，避免过早宣布 drain。
     bool data_credit_active_ = false;
     bool ctrl_credit_active_ = false;
+    // Production control credit uses a toggling event bit: every delivery flips it, so
+    // consecutive-cycle returns cannot collapse into one level-sensitive pulse.
+    bool data_credit_toggle_ = false;
+    bool ctrl_credit_toggle_ = false;
 };
 
 // V1-b2 独立 SystemC link 测试（驱动真实包）：latency=0/1/7/20、FIFO 序、无丢/重、

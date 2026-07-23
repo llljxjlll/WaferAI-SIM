@@ -1,5 +1,4 @@
 #include "common/system.h"
-#include "die/port.h"
 #include "systemc.h"
 #include <deque>
 #include <iostream>
@@ -99,9 +98,6 @@ WorkerCoreExecutor::WorkerCoreExecutor(const sc_module_name &n, int s_cid,
                                        Event_engine *event_engine)
     : sc_module(n), cid(s_cid), event_engine(event_engine) {
     prim_refill = false;
-    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF)
-        saf_admission.Reset(g_d2d_cfg.saf_buffer_depth);
-
     SC_THREAD(catch_channel_avail_i);
     sensitive << channel_avail_i.pos();
     dont_initialize();

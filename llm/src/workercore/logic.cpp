@@ -37,6 +37,12 @@ void AttachRequestFlowPackets(Msg &m, const Send_prim *prim) {
         throw std::runtime_error(
             "dataflow REQUEST missing a valid flow_packets count");
     m.flow_packets_ = prim->max_packet;
+    // V3-d：在 REQUEST 真正注入控制网之前，对确定性多跳路径上的所有有向 SAF stage
+    // 一次性预留整流容量。失败会回滚并抛错，因此不会出现“部分路径已拿到容量后开始 DATA”。
+    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
+        DieOfGlobal(m.source_) != DieOfGlobal(m.des_))
+        ReserveWholeFlowSafPath(m.source_, m.des_, m.tag_id_, 0,
+                                m.flow_packets_);
 }
 } // namespace
 
@@ -572,16 +578,12 @@ void WorkerCoreExecutor::recv_logic() {
 
                     // 如果是end包，则将recv_index归零，表示开始接收下一个core传来的数据（如果有的话）
                     if (temp.is_end_) {
-                        if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
-                            prim->type == RECV_DATA &&
-                            DieOfGlobal(temp.source_) != DieOfGlobal(cid)) {
-                            FlowKey key{temp.source_, temp.tag_id_, 0};
-                            int reserved_packets = saf_admission.Release(key);
-                            if (reserved_packets != temp.seq_id_)
-                                throw std::runtime_error(
-                                    "whole-flow SAF DATA count mismatch: reserved=" +
-                                    std::to_string(reserved_packets) +
-                                    ", tail_seq=" + std::to_string(temp.seq_id_));
+                        if (prim->type == RECV_DATA) {
+                            long long cycle = (long long)(
+                                sc_time_stamp().value() /
+                                sc_time(CYCLE, SC_NS).value());
+                            g_flow_done_cycle[std::make_tuple(
+                                temp.source_, temp.tag_id_, cid)] = cycle;
                         }
                         end_cnt++;
                         max_recv += temp.seq_id_;
@@ -712,23 +714,6 @@ void WorkerCoreExecutor::req_logic() {
                         auto &msg = msg_buffer_[MSG_TYPE::REQUEST].front();
 
                         if (msg.tag_id_ == prim->tag_id) {
-                            if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
-                                prim->type == RECV_DATA &&
-                                DieOfGlobal(msg.source_) != DieOfGlobal(cid)) {
-                                FlowKey key{msg.source_, msg.tag_id_, 0};
-                                WholeFlowSafResult result =
-                                    saf_admission.Reserve(key, msg.flow_packets_);
-                                if (!result.admitted())
-                                    throw std::runtime_error(
-                                        "whole-flow SAF admission rejected before ACK/DATA: " +
-                                        std::string(WholeFlowSafStatusName(result.status)) +
-                                        ", source=" + std::to_string(msg.source_) +
-                                        ", tag=" + std::to_string(msg.tag_id_) +
-                                        ", flow_packets=" +
-                                        std::to_string(msg.flow_packets_) +
-                                        ", available=" +
-                                        std::to_string(result.available_before));
-                            }
                             ack_queue.push(msg.source_);
                         } else
                             temp.push(msg);

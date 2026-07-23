@@ -1,10 +1,12 @@
 #pragma once
 // D2D 端口 / 链路数据结构（V0：结构与配置校验，尚不承载跨 die 流量）
+#include "common/flow.h"
 #include "defs/enums.h"
 #include "nlohmann/json.hpp"
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -116,11 +118,11 @@ struct D2DRate {
     bool Valid() const { return num > 0 && den > 0 && num <= den; } // 0 < r <= 1
 };
 
-// V3-b2：信用回环的接口流水寄存器拍数（上游 tx 边界 1 拍 + 下游 credit-rx 边界 1 拍）。
-// clocked D2DLinkUnit 即使 link_latency=0，正向交付和反向信用也各至少占一个服务拍；因此
-// 信用往返 = 2*max(link_latency,1) + D2D_CREDIT_PIPE。BDP = ceil(rate * 往返)。
-// standalone 在多组 latency/rate 的 BDP-1/BDP 边界验证该公式，配置校验器复用此 helper，
-// 避免测试与生产公式漂移。
+// V3-b2 standalone credit 模型的接口流水寄存器拍数（上游 tx 边界 1 拍 + 下游
+// credit-rx 边界 1 拍）。clocked D2DLinkUnit 即使 link_latency=0，正向交付和反向信用也
+// 各至少占一个服务拍；保守传输窗口 = ceil(rate * (2*max(latency,1)+pipe))。
+// 生产 whole-flow SAF 数据路径用全路径 reservation + ready 背压而非逐包 credit，但仍执行这个
+// 已验证的保守窗口下界，避免 link_inflight_depth 在未来切回逐包 credit 时成为隐含吞吐瓶颈。
 static const int D2D_CREDIT_PIPE = 2;
 inline long long D2DCreditRttCycles(int link_latency) {
     const long long service_latency = link_latency > 0 ? link_latency : 1;
@@ -144,6 +146,16 @@ struct D2DLinkConfig {
     int ctrl_buffer_depth = 0;
 };
 extern D2DLinkConfig g_d2d_cfg;
+
+// V3-d：whole-flow SAF 的生产路径全路径原子预留。REQUEST 离开源核前，按确定性的
+// die-level XY 路径一次性为每条有向 C2C 边预留 F 个包；任一边容量不足则回滚全部已做预留，
+// 因而 DATA 不会在只拿到部分路径容量时开始注入。各边的 SAF stage 排空该 flow 后分别释放。
+void ResetWholeFlowSafRuntime();
+void ReserveWholeFlowSafPath(int source_global, int dest_global, int tag,
+                             int subflow, int flow_packets);
+void ReleaseWholeFlowSafLink(int link_idx, const FlowKey &key,
+                             int flow_packets);
+long WholeFlowSafReservedPackets();
 
 // 解析 die_ports.c2c 的 V3 字段并做**启动期**校验（非法组合抛 std::runtime_error）。
 // 由 ParseDiePorts 调用；旧配置（无 mode）恒定解析为 functional_v2，行为与 V2 逐位一致。
@@ -293,4 +305,11 @@ extern std::vector<long> g_die_router_pkts;
 // g_die_router_pkts>0 只能说明包进入过该 die 的入口 router，不能排除「入口 tile 恰好就是
 // 下一条 link 的出口 tile、零片内 hop」。中间 die 的本计数 >0 才真正证明穿越了 NoC。
 extern std::vector<long> g_die_mesh_pkts;
+// V3-e：片内 NoC 可归因计数。send=成功通过同 die router→router 输出；stall=该输出有包但
+// 下游 input buffer 满。C2C 边缘输出另计入 d2d_source_stall，避免把端口背压冒充片内争用。
+extern std::vector<long> g_die_noc_sends, g_die_noc_stalls;
+extern long g_d2d_source_stalls;
+// DATA 尾包到达接收核的 cycle，按 (source,tag,dest) 记录，供 mixed/shared fairness 对照。
+extern std::map<std::tuple<int, int, int>, long long> g_flow_done_cycle;
+extern long g_saf_admission_successes, g_saf_admission_rejects;
 void ResetDieActivityStats();

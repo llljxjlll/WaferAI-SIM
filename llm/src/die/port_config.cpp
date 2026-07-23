@@ -2,6 +2,7 @@
 #include "defs/spec.h"
 #include "macros/macros.h"
 #include "utils/print_utils.h"
+#include "utils/router_utils.h"
 #include <cstdlib>
 #include <map>
 #include <set>
@@ -27,12 +28,115 @@ long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
 std::vector<D2DLinkStat> g_d2d_link_stats;
 std::vector<long> g_die_router_pkts;
 std::vector<long> g_die_mesh_pkts;
+std::vector<long> g_die_noc_sends, g_die_noc_stalls;
+long g_d2d_source_stalls = 0;
+std::map<std::tuple<int, int, int>, long long> g_flow_done_cycle;
+long g_saf_admission_successes = 0, g_saf_admission_rejects = 0;
+
+// V3-d：每条有向 link 一份 whole-flow SAF 容量账本。路径预留在单个函数调用内先逐边
+// 尝试，任一失败即回滚；SystemC cooperative 调度不会在该函数中途抢占，故对仿真是原子的。
+static std::vector<WholeFlowSafAdmission> g_saf_link_admission;
+static std::map<FlowKey, std::set<int>> g_saf_flow_links;
+
+static int DirectedLinkIndex(int local_die, int remote_die) {
+    for (int i = 0; i < (int)g_d2d_links.size(); ++i)
+        if (g_d2d_links[i].local_die == local_die &&
+            g_d2d_links[i].remote_die == remote_die)
+            return i;
+    return -1;
+}
+
+void ResetWholeFlowSafRuntime() {
+    g_saf_link_admission.clear();
+    g_saf_flow_links.clear();
+    if (g_d2d_cfg.mode != MODE_BOUNDED_SAF)
+        return;
+    g_saf_link_admission.reserve(g_d2d_links.size());
+    for (size_t i = 0; i < g_d2d_links.size(); ++i)
+        g_saf_link_admission.emplace_back(g_d2d_cfg.saf_buffer_depth);
+}
+
+void ReserveWholeFlowSafPath(int source_global, int dest_global, int tag,
+                             int subflow, int flow_packets) {
+    if (g_d2d_cfg.mode != MODE_BOUNDED_SAF)
+        return;
+    if (source_global < 0 || source_global >= TOTAL_CORES || dest_global < 0 ||
+        dest_global >= TOTAL_CORES)
+        throw std::runtime_error("whole-flow SAF path reservation: illegal endpoint");
+    if (DieOfGlobal(source_global) == DieOfGlobal(dest_global))
+        return;
+    if (g_saf_link_admission.size() != g_d2d_links.size())
+        throw std::runtime_error("whole-flow SAF runtime was not initialized");
+
+    FlowKey key{source_global, tag, subflow};
+    if (g_saf_flow_links.count(key))
+        throw std::runtime_error("whole-flow SAF duplicate active path reservation");
+    std::vector<int> path, admitted;
+    int cur = DieOfGlobal(source_global), dst = DieOfGlobal(dest_global);
+    while (cur != dst) {
+        Directions d = DieFirstHopDir(cur, dst);
+        int nx = cur % DIE_X, ny = cur / DIE_X;
+        if (d == EAST) ++nx; else if (d == WEST) --nx;
+        else if (d == NORTH) ++ny; else if (d == SOUTH) --ny;
+        int next = ny * DIE_X + nx;
+        int idx = DirectedLinkIndex(cur, next);
+        if (idx < 0)
+            throw std::runtime_error("whole-flow SAF path reservation: missing directed link");
+        path.push_back(idx);
+        cur = next;
+    }
+    for (int idx : path) {
+        WholeFlowSafResult r = g_saf_link_admission[idx].Reserve(key, flow_packets);
+        if (!r.admitted()) {
+            g_saf_admission_rejects++;
+            for (int done : admitted)
+                (void)g_saf_link_admission[done].Release(key);
+            throw std::runtime_error(
+                "whole-flow SAF path admission rejected before REQUEST/DATA: " +
+                std::string(WholeFlowSafStatusName(r.status)) +
+                ", link=" + std::to_string(idx) +
+                ", flow_packets=" + std::to_string(flow_packets) +
+                ", available=" + std::to_string(r.available_before));
+        }
+        admitted.push_back(idx);
+    }
+    g_saf_flow_links[key] = std::set<int>(path.begin(), path.end());
+    g_saf_admission_successes++;
+}
+
+void ReleaseWholeFlowSafLink(int link_idx, const FlowKey &key, int flow_packets) {
+    if (g_d2d_cfg.mode != MODE_BOUNDED_SAF)
+        return;
+    auto fit = g_saf_flow_links.find(key);
+    if (fit == g_saf_flow_links.end() || !fit->second.count(link_idx))
+        throw std::runtime_error("whole-flow SAF link release without path reservation");
+    int released = g_saf_link_admission.at(link_idx).Release(key);
+    if (released != flow_packets)
+        throw std::runtime_error("whole-flow SAF link release packet-count mismatch");
+    fit->second.erase(link_idx);
+    if (fit->second.empty())
+        g_saf_flow_links.erase(fit);
+}
+
+long WholeFlowSafReservedPackets() {
+    long total = 0;
+    for (const auto &a : g_saf_link_admission)
+        total += a.Reserved();
+    return total;
+}
 void ResetDieActivityStats() {
     int n = DIE_COUNT > 0 ? DIE_COUNT : 1;
     g_die_router_pkts.assign(n, 0);
     g_die_mesh_pkts.assign(n, 0);
+    g_die_noc_sends.assign(n, 0);
+    g_die_noc_stalls.assign(n, 0);
+    g_d2d_source_stalls = 0;
+    g_flow_done_cycle.clear();
+    g_saf_admission_successes = 0;
+    g_saf_admission_rejects = 0;
 }
 void ResetD2DLinkStats() {
+    ResetWholeFlowSafRuntime();
     g_d2d_repin_total = 0;
     g_d2d_repin_changed = 0;
     g_d2d_repin_same = 0;
@@ -449,10 +553,10 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
                 "flow, inflight covers BDP, rx is remote receive, ctrl is the "
                 "control sub-channel)");
 
-    // link_inflight_depth 必须 >= 带宽时延积，否则信用往返期间链路填不满、稳态吞吐低于 link_rate。
-    // **信用往返 = 2*max(L,1) + 接口流水寄存器 D2D_CREDIT_PIPE 拍**：clocked link 在 L=0
-    // 时正向交付/反向信用仍各至少占一个服务拍。standalone 以多组 latency/rate 的 BDP-1/BDP
-    // 边界验证该公式；这里复用同一 helper，使用 64-bit 整数有理数运算（防溢出、无浮点）。
+    // link_inflight_depth 执行 V3-b standalone 信用模型已验证的保守传输窗口下界：
+    // 2*max(L,1)+D2D_CREDIT_PIPE。生产 DATA 目前使用全路径 reservation + ready 背压，
+    // 不依赖逐包回程 credit；保留该更严格下界可避免未来信用化后无声降低稳态吞吐。
+    // 计算使用 64-bit 整数有理数运算（防溢出、无浮点）。
     long long bdp = D2DBdpPackets(g_d2d_cfg.link_latency, g_d2d_cfg.link_rate);
     if ((long long)g_d2d_cfg.link_inflight_depth < bdp)
         throw std::runtime_error(
@@ -461,8 +565,9 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
             ") < bandwidth-delay product (" + std::to_string(bdp) +
             " = ceil((2*max(link_latency,1) + " +
             std::to_string(D2D_CREDIT_PIPE) +
-            ") * link_rate)); the link could not stay full over the credit "
-            "round-trip. Separate from saf_buffer_depth >= flow size (a "
+            ") * link_rate)); this is the conservative transport-window "
+            "lower bound validated by the standalone credit model. Separate "
+            "from saf_buffer_depth >= flow size (a "
             "correctness requirement checked with the workload)");
 }
 

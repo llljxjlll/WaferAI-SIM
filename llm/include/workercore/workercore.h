@@ -1,7 +1,6 @@
 #pragma once
 #include "systemc.h"
 
-#include "common/flow.h"
 #include "common/memory.h"
 #include "common/msg.h"
 #include "common/pd.h"
@@ -78,8 +77,6 @@ public:
     sc_event ev_recv_msg_type_
         [MSG_TYPE::MSG_TYPE_NUM]; // 使用统一数组存储接收数据包后触发的event
     queue<Msg> msg_buffer_[MSG_TYPE::MSG_TYPE_NUM]; // 使用统一数组存储数据包
-    // V3-c：本接收核 whole-flow SAF buffer 的原子预留账本；仅 bounded_saf 跨 die flow 消费。
-    WholeFlowSafAdmission saf_admission;
 
     sc_event ev_prim_recv_notice; // 当执行recv_data时触发
     sc_event

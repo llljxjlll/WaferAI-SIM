@@ -280,15 +280,8 @@ void Monitor::init() {
     // D2DLinkUnit 创建之前。非法配置在进入仿真前明确失败（异常 → 非零退出），不静默降级。
     if (!g_d2d_links.empty())
         ValidateD2DTopology(); // V3-a：版本感知（functional_v2 沿用 V1/V2 契约）
-    // V3-a 只落地**配置契约**，生产数据路径仍是 V2 的功能性无限 FIFO。若此时放行
-    // bounded_saf，配置会声称有限缓冲/背压而实际按 functional_v2 运行——语义错误且难察觉。
-    // 故在有限 FIFO(V3-b) 与 SAF admission(V3-c) 真正接通前，这里显式拒绝。
-    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF)
-        throw std::runtime_error(
-            "die_ports.c2c: mode=bounded_saf runtime is not enabled yet "
-            "(V3-a is config-contract only; the production path still uses the "
-            "V2 functional unbounded FIFO). Refusing to run a configuration "
-            "that claims bounded buffers but would execute as functional_v2");
+    // V3-d：bounded_saf 已接入生产 D2DLinkUnit 的 whole-flow SAF 多级有限流水线；
+    // functional_v2 仍走原分支。ValidateD2DTopology 在实例化前保证容量/速率契约。
 
     // router & router —— 开边 mesh（无 torus 环绕）。die 边缘方向无 die 内邻居，
     // 输入侧绑定共享终结通道（永不驱动），彻底移除运行时取模环绕连接。
@@ -299,6 +292,8 @@ void Monitor::init() {
     sc_signal<sc_bv<256>> *term_ctrl_channel = new sc_signal<sc_bv<256>>;
     sc_signal<bool> *term_ctrl_avail = new sc_signal<bool>;
     sc_signal<bool> *term_ctrl_sent = new sc_signal<bool>;
+    sc_signal<bool> *term_data_credit = new sc_signal<bool>;
+    sc_signal<bool> *term_ctrl_credit = new sc_signal<bool>;
 
     int d2d_link_sites = 0; // V1-b：peer-connected C2C 出口边计数（b1 仍终结，b2 接 link）
     for (int j = 0; j < TOTAL_CORES; j++) {
@@ -339,6 +334,11 @@ void Monitor::init() {
                 pos->ctrl_channel_avail_i[i](*term_ctrl_avail);
                 pos->ctrl_sent_i[i](*term_ctrl_sent);
             }
+            // credit port arrays 必须全部绑定；C2C egress 延后绑定对应 link return，其余接恒 false。
+            if (!c2c_edge) {
+                pos->d2d_data_credit_i[i](*term_data_credit);
+                pos->d2d_ctrl_credit_i[i](*term_ctrl_credit);
+            }
         }
     }
 
@@ -368,8 +368,19 @@ void Monitor::init() {
         auto *sB_ctrl_channel = new sc_signal<sc_bv<256>>;
         auto *sB_ctrl_sent = new sc_signal<bool>;
 
+        D2DLinkBound bound;
+        if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
+            bound.enabled = true;
+            bound.whole_flow_saf = true;
+            bound.data_depth = g_d2d_cfg.link_inflight_depth;
+            bound.ctrl_depth = g_d2d_cfg.ctrl_buffer_depth;
+            bound.saf_depth = g_d2d_cfg.saf_buffer_depth;
+            bound.rx_depth = g_d2d_cfg.rx_buffer_depth;
+            bound.port_rate = g_d2d_cfg.port_rate;
+            bound.rate = g_d2d_cfg.link_rate;
+        }
         auto *link = new D2DLinkUnit(sc_gen_unique_name("d2d_link"), pa.latency,
-                                     link_seq++);
+                                     link_seq++, bound);
         // 上游 A：读其边缘输出（channel/sent = channel[SA][Ta]），驱动其 avail 输入
         link->in_channel(channel[SA][Ta]);
         link->in_sent(data_sent[SA][Ta]);
@@ -384,12 +395,18 @@ void Monitor::init() {
         link->out_ctrl_channel(*sB_ctrl_channel);
         link->out_ctrl_sent(*sB_ctrl_sent);
         link->out_ctrl_avail(ctrl_channel_avail[SB][Tb]);
-        // V3-b2：信用回还端口。生产（functional_v2）恒 pulse false，接到 throwaway 信号（上游不消费
-        // 信用）；V3-d 接入有限缓冲时，上游 PortUnit 将读这两根信号做真实信用记账。
+        // 信用回还端口：production CTRL 每交付一包翻转 event bit，Router 据此归还一个
+        // ctrl credit；DATA 由全路径原子 reservation + SAF in_avail 契约保护。
         auto *sCredit = new sc_signal<bool>;
         auto *sCtrlCredit = new sc_signal<bool>;
         link->data_credit_return(*sCredit);
         link->ctrl_credit_return(*sCtrlCredit);
+        A->d2d_data_credit_i[SA](*sCredit);
+        A->d2d_ctrl_credit_i[SA](*sCtrlCredit);
+        if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
+            A->EnableD2DDataCredit(SA, g_d2d_cfg.saf_buffer_depth);
+            A->EnableD2DCtrlCredit(SA, g_d2d_cfg.ctrl_buffer_depth);
+        }
 
         // 绑定被延后的 router 输入：A 的 avail_i[SA]、B 的 channel_i/sent_i[SB]（+ctrl）
         A->channel_avail_i[SA](*sA_avail);

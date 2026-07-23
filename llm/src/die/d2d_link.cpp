@@ -73,6 +73,14 @@ D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_,
         if (!bound.rate.Valid())
             throw std::runtime_error(
                 "D2DLinkUnit: bounded rate must satisfy 0 < num/den <= 1");
+        if (bound.whole_flow_saf) {
+            if (bound.saf_depth < 1 || bound.rx_depth < 1)
+                throw std::runtime_error(
+                    "D2DLinkUnit: production SAF/RX depths must be >= 1");
+            if (!bound.port_rate.Valid())
+                throw std::runtime_error(
+                    "D2DLinkUnit: port_rate must satisfy 0 < num/den <= 1");
+        }
     }
     SC_THREAD(forward);
 }
@@ -88,7 +96,10 @@ void D2DLinkUnit::forward() {
         wait(CYCLE, SC_NS);
         cyc++;
         if (bound.enabled) {
-            forward_bounded(cyc);
+            if (bound.whole_flow_saf)
+                forward_bounded_saf(cyc);
+            else
+                forward_bounded(cyc);
             continue;
         }
         // ---- functional_v2（V2 冻结路径，逐字节不变；恒 avail=true、无速率/背压）----
@@ -256,4 +267,177 @@ void D2DLinkUnit::forward_bounded(long cyc) {
         full_cycles++;
     if (!croom)
         ctrl_full_cycles++;
+}
+
+// V3-d production bounded pipeline. DATA path:
+//   router -> whole-flow SAF stage -> port/link token service -> finite inflight+latency
+//          -> finite RX stage -> remote router.
+// REQUEST is observed on the independent CTRL path before its DATA, providing F for packet-count checks.
+// All directed links on the deterministic route were atomically reserved before REQUEST injection; therefore
+// a flow never partially enters the source/intermediate mesh without enough SAF capacity on every hop.
+void D2DLinkUnit::forward_bounded_saf(long cyc) {
+    port_tokens += bound.port_rate.num;
+    tokens += bound.rate.num;
+    // Production DATA/CTRL return credits by toggling event bits. Do not force them low each cycle:
+    // consecutive returns must remain distinguishable to the router.
+    data_credit_active_ = false;
+    ctrl_credit_active_ = false;
+
+    // 1. RX -> remote router. A full RX stage backpressures the mature inflight head.
+    if (!rx_fifo_.empty() && out_avail.read()) {
+        out_channel.write(rx_fifo_.front());
+        out_sent.write(true);
+        rx_fifo_.pop_front();
+        g_protocol_progress++;
+    } else {
+        out_sent.write(false);
+        if (!rx_fifo_.empty() && !out_avail.read())
+            downstream_stall++;
+    }
+
+    // 2. Physical link arrival -> finite RX stage.
+    bool mature = !fifo_.empty() && fifo_.front().first <= cyc;
+    if (mature && (int)rx_fifo_.size() < bound.rx_depth) {
+        sc_bv<256> payload = fifo_.front().second;
+        fifo_.pop_front();
+        rx_fifo_.push_back(payload);
+        CountType(g_d2d_link_out_by_type, payload);
+        CountLink(link_idx, false, payload);
+        ProbeData(g_d2d_data_out, payload, cyc);
+        g_d2d_link_out_pkts++;
+        g_protocol_progress++;
+    } else if (mature) {
+        rx_backpressure_stall++;
+    }
+
+    // 3. A complete SAF flow may enter the finite physical link; incomplete flows never leave SAF.
+    bool ready = !saf_ready_.empty();
+    bool port_ok = port_tokens >= bound.port_rate.den;
+    bool link_ok = tokens >= bound.rate.den;
+    bool inflight_room = (int)fifo_.size() < bound.data_depth;
+    if (ready && port_ok && link_ok && inflight_room) {
+        FlowKey key = saf_ready_.front();
+        auto fit = saf_flows_.find(key);
+        if (fit == saf_flows_.end() || !fit->second.complete || fit->second.packets.empty())
+            throw std::runtime_error("bounded SAF ready queue/accounting mismatch");
+        sc_bv<256> payload = fit->second.packets.front();
+        fit->second.packets.pop_front();
+        fifo_.push_back({cyc + latency, payload});
+        CountType(g_d2d_link_in_by_type, payload);
+        CountLink(link_idx, true, payload);
+        ProbeData(g_d2d_data_in, payload, cyc);
+        g_d2d_link_in_pkts++;
+        port_tokens -= bound.port_rate.den;
+        tokens -= bound.rate.den;
+        // SAF stage freed exactly one physical slot; return one DATA credit to the upstream router.
+        data_credit_toggle_ = !data_credit_toggle_;
+        data_credit_return.write(data_credit_toggle_);
+        if (fit->second.packets.empty()) {
+            int expected = fit->second.expected;
+            ReleaseWholeFlowSafLink(link_idx, key, expected);
+            saf_flows_.erase(fit);
+            saf_expected_.erase(key);
+            saf_ready_.pop_front();
+        }
+    } else if (ready) {
+        if (!port_ok)
+            port_rate_stall++;
+        else if (!link_ok)
+            link_rate_stall++;
+        else if (!inflight_room)
+            rate_stall++; // capacity/credit stall, distinct from programmable-rate stalls above
+    }
+    if (port_tokens > bound.port_rate.den)
+        port_tokens = bound.port_rate.den;
+    if (tokens > bound.rate.den)
+        tokens = bound.rate.den;
+
+    // 4. Independent bounded CTRL channel (not DATA-rate limited). REQUEST records F for this link's SAF stage.
+    bool ctrl_mature = !cfifo_.empty() && cfifo_.front().first <= cyc;
+    if (ctrl_mature && out_ctrl_avail.read()) {
+        sc_bv<256> payload = cfifo_.front().second;
+        cfifo_.pop_front();
+        out_ctrl_channel.write(payload);
+        out_ctrl_sent.write(true);
+        ctrl_credit_toggle_ = !ctrl_credit_toggle_;
+        ctrl_credit_return.write(ctrl_credit_toggle_);
+        CountType(g_d2d_link_out_by_type, payload);
+        CountLink(link_idx, false, payload);
+        g_d2d_link_out_pkts++;
+        g_protocol_progress++;
+    } else {
+        out_ctrl_sent.write(false);
+        if (ctrl_mature && !out_ctrl_avail.read())
+            ctrl_downstream_stall++;
+    }
+    if (in_ctrl_sent.read()) {
+        if ((int)cfifo_.size() >= bound.ctrl_depth) {
+            ctrl_upstream_blocked++;
+            throw std::runtime_error("bounded CTRL producer exceeded advertised capacity");
+        }
+        sc_bv<256> payload = in_ctrl_channel.read();
+        Msg m = DeserializeMsg(payload);
+        if (m.msg_type_ == REQUEST) {
+            FlowKey key{m.source_, m.tag_id_, 0};
+            if (m.flow_packets_ <= 0 || m.flow_packets_ > bound.saf_depth)
+                throw std::runtime_error("bounded SAF REQUEST has invalid flow_packets");
+            if (saf_expected_.count(key) || saf_flows_.count(key))
+                throw std::runtime_error("bounded SAF duplicate REQUEST on active link");
+            saf_expected_[key] = m.flow_packets_;
+        }
+        cfifo_.push_back({cyc + latency, payload});
+        CountType(g_d2d_link_in_by_type, payload);
+        CountLink(link_idx, true, payload);
+        g_d2d_link_in_pkts++;
+    }
+
+    // 5. Router -> SAF capture. Path reservation grants ownership; the SAF-slot credit prevents the
+    // registered ready delta from oversending. Any overflow is therefore a hard contract bug.
+    if (in_sent.read()) {
+        long occupied = 0;
+        for (const auto &kv : saf_flows_)
+            occupied += (long)kv.second.packets.size();
+        if (occupied >= bound.saf_depth) {
+            upstream_blocked++;
+            throw std::runtime_error("bounded SAF stage overflow despite path reservation");
+        }
+        sc_bv<256> payload = in_channel.read();
+        Msg m = DeserializeMsg(payload);
+        if (m.msg_type_ != DATA)
+            throw std::runtime_error("bounded SAF DATA channel received a non-DATA packet");
+        FlowKey key{m.source_, m.tag_id_, 0};
+        auto eit = saf_expected_.find(key);
+        if (eit == saf_expected_.end())
+            throw std::runtime_error("bounded SAF DATA arrived before matching REQUEST");
+        SafFlowBuffer &flow = saf_flows_[key];
+        if (flow.expected == 0)
+            flow.expected = eit->second;
+        if (flow.complete)
+            throw std::runtime_error("bounded SAF received DATA after tail");
+        flow.packets.push_back(payload);
+        if ((int)flow.packets.size() > flow.expected)
+            throw std::runtime_error("bounded SAF flow exceeded declared packet count");
+        if (m.is_end_) {
+            if ((int)flow.packets.size() != flow.expected || m.seq_id_ != flow.expected)
+                throw std::runtime_error("bounded SAF DATA tail does not match REQUEST flow_packets");
+            flow.complete = true;
+            saf_ready_.push_back(key);
+        }
+    }
+
+    // 6. Occupancy/backpressure diagnostics after all state transitions.
+    long saf_occ = 0;
+    for (const auto &kv : saf_flows_)
+        saf_occ += (long)kv.second.packets.size();
+    if (saf_occ > saf_occ_max) saf_occ_max = saf_occ;
+    if ((long)fifo_.size() > inflight_occ_max) inflight_occ_max = (long)fifo_.size();
+    if ((long)rx_fifo_.size() > rx_occ_max) rx_occ_max = (long)rx_fifo_.size();
+    bool saf_room = saf_occ < bound.saf_depth;
+    bool ctrl_room = (int)cfifo_.size() < bound.ctrl_depth;
+    in_avail.write(saf_room);
+    in_ctrl_avail.write(ctrl_room);
+    if (!saf_room) saf_full_cycles++;
+    if ((int)fifo_.size() >= bound.data_depth) inflight_full_cycles++;
+    if ((int)rx_fifo_.size() >= bound.rx_depth) rx_full_cycles++;
+    if (!ctrl_room) ctrl_full_cycles++;
 }
