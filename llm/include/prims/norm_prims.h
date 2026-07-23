@@ -54,19 +54,20 @@ public:
 
 class Send_prim : public PrimBase {
 public:
-    SEND_TYPE type;
-    int des_id;                        // 目标id
+    SEND_TYPE type = SEND_REQ;
+    int des_id = -1;                   // 目标id
     string output_label = UNSET_LABEL; // 需要从哪一个数据块标签获取结果，并发送
-    int max_packet;                    // 需要发送的包裹数量
-    int tag_id;                        // send_tag，用于与recv原语对应
-    int end_length;                    // 尾包长度，避免覆盖
+    // SEND_DATA：实际 DATA 包数；SEND_REQ：tagged-union 为随后 DATA flow 的总包数（V3-c）。
+    int max_packet = 0;
+    int tag_id = 0;                    // send_tag，用于与recv原语对应
+    int end_length = 0;                // 尾包长度，避免覆盖
 
     // V1-c2 运行时路由状态（不进入 prim 配置序列化）：一条 SEND_DATA 原语只选一次
     // source-die C2C 出口，所有 DATA 包复制同一 pinned port。same-die 为 -1。
     int d2d_exit_port = -1;
     bool d2d_exit_selected = false;
 
-    int data_packet_id; // 已经发送的包裹数量
+    int data_packet_id = 0; // 已经发送的包裹数量
 
     int taskCoreDefault(TaskCoreContext &context);
 

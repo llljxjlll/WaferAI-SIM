@@ -470,8 +470,8 @@ int RunD2DV0SelfTest() {
         m.length_ = 99;               // 8-bit
         m.refill_ = true;             // 1-bit -> 显式比较
         m.config_end_ = true;         // 1-bit -> 显式比较
-        m.roofline_packets_ = 7;      // 24-bit
-        m.exit_port_ = 42;            // 8-bit（V1-c0 pinned 出口端口）
+        m.flow_packets_ = 7;          // REQUEST tagged-union 24-bit flow count
+        m.exit_port_ = 42;            // 16-bit（V1-c0 pinned 出口端口）
         m.data_ = sc_bv<128>(0xABCD);
         Msg r = DeserializeMsg(SerializeMsg(m));
         // 逐字段全比较（含 refill_/config_end_）
@@ -485,8 +485,8 @@ int RunD2DV0SelfTest() {
         check(r.length_ == m.length_, "round-trip: length_");
         check(r.refill_ == m.refill_, "round-trip: refill_ (true)");
         check(r.config_end_ == m.config_end_, "round-trip: config_end_ (true)");
-        check(r.roofline_packets_ == m.roofline_packets_,
-              "round-trip: roofline_packets_");
+        check(r.flow_packets_ == m.flow_packets_,
+              "round-trip: REQUEST flow_packets_ tagged union");
         check(r.exit_port_ == m.exit_port_, "round-trip: exit_port_ (42)");
         check(r.data_ == m.data_, "round-trip: data_");
         // exit_port_ 编码边界（0=未 pin，port=port_id+1）：-1/0/254/255 均正确 round-trip
@@ -1557,9 +1557,89 @@ int RunD2DV0SelfTest() {
         ParseDiePorts(mk(legacy));
     }
 
+    // ---- 16c. V3-c：REQUEST flow_packets tagged union + whole-flow SAF 原子 admission ----
+    {
+        // 256-bit wire 不扩宽：REQUEST 在 roofline 的 24-bit 段携 F；边界 1/max 精确 round-trip。
+        bool flow_wire_ok = true;
+        for (int f : {1, (int)M_D_FLOW_PACKETS_MAX}) {
+            Msg req(MSG_TYPE::REQUEST, 16, 7, 0);
+            req.flow_packets_ = f;
+            Msg wire = DeserializeMsg(SerializeMsg(req));
+            flow_wire_ok = flow_wire_ok && wire.msg_type_ == REQUEST &&
+                           wire.flow_packets_ == f && wire.roofline_packets_ == 0;
+        }
+        check(flow_wire_ok,
+              "V3-c REQUEST flow_packets 24-bit boundaries round-trip (tagged union)");
+
+        // 非 REQUEST 仍使用原 roofline 语义，flow_packets 不得污染 DATA wire。
+        Msg data(true, MSG_TYPE::DATA, 1, 16, 0, 7, M_D_DATA, sc_bv<128>(1));
+        data.roofline_packets_ = 12345;
+        data.flow_packets_ = 999;
+        Msg data_wire = DeserializeMsg(SerializeMsg(data));
+        check(data_wire.roofline_packets_ == 12345 && data_wire.flow_packets_ == 0,
+              "V3-c tagged union preserves non-REQUEST roofline semantics");
+
+        bool overflow_rejected = false;
+        try {
+            Msg req(MSG_TYPE::REQUEST, 16, 7, 0);
+            req.flow_packets_ = (int)M_D_FLOW_PACKETS_MAX + 1;
+            (void)SerializeMsg(req);
+        } catch (const std::runtime_error &) {
+            overflow_rejected = true;
+        }
+        check(overflow_rejected,
+              "V3-c REQUEST flow_packets beyond 24-bit wire capacity rejected");
+
+        FlowKey a{0, 16, 0}, b{1, 16, 0}, c{2, 16, 0};
+        WholeFlowSafAdmission exact(5);
+        auto ar = exact.Reserve(a, 5);
+        check(ar.admitted() && exact.Reserved() == 5 && exact.Available() == 0 &&
+                  exact.Release(a) == 5 && exact.Reserved() == 0,
+              "V3-c whole-flow SAF F==capacity admits atomically and releases to zero");
+
+        WholeFlowSafAdmission under(4);
+        auto ur = under.Reserve(a, 5);
+        check(ur.status == WholeFlowSafStatus::INSUFFICIENT_CAPACITY &&
+                  under.Reserved() == 0 && under.ActiveFlows() == 0,
+              "V3-c whole-flow SAF F-1 rejects with zero partial reservation");
+
+        // BDP 只保证利用率：即使 inflight BDP=4 合法，也不能承载 F=5 的 whole flow。
+        WholeFlowSafAdmission bdp_only(4);
+        auto br = bdp_only.Reserve(a, 5);
+        check(D2DBdpPackets(0, D2DRate{1, 1}) == 4 && !br.admitted() &&
+                  bdp_only.Reserved() == 0,
+              "V3-c BDP<F is not mistaken for whole-flow SAF capacity");
+
+        WholeFlowSafAdmission shared(8);
+        auto a5 = shared.Reserve(a, 5);
+        auto b4 = shared.Reserve(b, 4); // available=3，必须原子拒绝且不改变 a 的预留
+        auto b3 = shared.Reserve(b, 3);
+        check(a5.admitted() && !b4.admitted() && b4.available_before == 3 &&
+                  b3.admitted() && shared.Reserved() == 8 &&
+                  shared.ActiveFlows() == 2 && shared.Release(a) == 5 &&
+                  shared.Release(b) == 3 && shared.Reserved() == 0,
+              "V3-c concurrent reservations conserve capacity (no over-reservation)");
+
+        WholeFlowSafAdmission defensive(8);
+        auto first = defensive.Reserve(c, 2);
+        auto dup = defensive.Reserve(c, 2);
+        auto zero = defensive.Reserve(a, 0);
+        bool missing_release = false;
+        try {
+            defensive.Release(a);
+        } catch (const std::runtime_error &) {
+            missing_release = true;
+        }
+        check(first.admitted() &&
+                  dup.status == WholeFlowSafStatus::DUPLICATE_FLOW &&
+                  zero.status == WholeFlowSafStatus::INVALID_FLOW_SIZE &&
+                  defensive.Reserved() == 2 && missing_release,
+              "V3-c duplicate/zero/unknown-release defenses preserve reservation state");
+    }
+
     // ---- 17. FlowKey (source,tag,subflow) 三元组语义 ----
     // 注：output_lock **不用** FlowKey（tag 已=全局接收槽，多发一需 tag-only 聚合，见 flow.h）。
-    // FlowKey 预留给 V5 subflow striping：同 (source,tag) 拆多条 subflow 时用三元组区分。
+    // FlowKey 用于 V3 SAF 按发送流预留；V5 subflow striping 还会使用第三维区分子流。
     {
         FlowKey a{5, 3, 0}, b{21, 3, 0}, c{5, 3, 0}, d{5, 7, 0}, e{5, 3, 1};
         // 同 tag 不同 source → 不同 key（跨 die 同 local-id/同 tag 不别名）

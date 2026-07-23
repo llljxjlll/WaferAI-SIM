@@ -8,6 +8,7 @@
 #include "defs/const.h"
 #include "defs/global.h"
 #include "defs/spec.h"
+#include "die/port.h"
 #include "utils/router_utils.h"
 #include "link/nb_global_memif_v2.h"
 #include "memory/dram/GPUNB_DcacheIF.h"
@@ -26,6 +27,18 @@
 #include "utils/system_utils.h"
 #include "workercore/workercore.h"
 
+namespace {
+void AttachRequestFlowPackets(Msg &m, const Send_prim *prim) {
+    // V3-c 当前支持 dataflow：calculate_address 已将后续 SEND_DATA.max_packet 配对写入 SEND_REQ。
+    // functional_v2 也携带该元数据但不消费；bounded SAF 会在目的端以它做原子 admission。
+    if (SYSTEM_MODE == SIM_DATAFLOW &&
+        (prim->max_packet <= 0 ||
+         (unsigned)prim->max_packet > M_D_FLOW_PACKETS_MAX))
+        throw std::runtime_error(
+            "dataflow REQUEST missing a valid flow_packets count");
+    m.flow_packets_ = prim->max_packet;
+}
+} // namespace
 
 void WorkerCoreExecutor::send_logic() {
     while (true) {
@@ -110,6 +123,7 @@ void WorkerCoreExecutor::send_logic() {
 
                 send_buffer =
                     Msg(MSG_TYPE::REQUEST, prim->des_id, prim->tag_id, cid);
+                AttachRequestFlowPackets(send_buffer, prim);
                 PinControlMsgExit(send_buffer);
 
                 send_helper_write = 3;
@@ -337,6 +351,7 @@ void WorkerCoreExecutor::send_para_logic() {
                         // 可以发送数据
                         send_buffer = Msg(MSG_TYPE::REQUEST, s_prim->des_id,
                                           s_prim->tag_id, cid);
+                        AttachRequestFlowPackets(send_buffer, s_prim);
                         PinControlMsgExit(send_buffer);
 
                         ev_send_helper.notify(0, SC_NS);
@@ -557,6 +572,17 @@ void WorkerCoreExecutor::recv_logic() {
 
                     // 如果是end包，则将recv_index归零，表示开始接收下一个core传来的数据（如果有的话）
                     if (temp.is_end_) {
+                        if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
+                            prim->type == RECV_DATA &&
+                            DieOfGlobal(temp.source_) != DieOfGlobal(cid)) {
+                            FlowKey key{temp.source_, temp.tag_id_, 0};
+                            int reserved_packets = saf_admission.Release(key);
+                            if (reserved_packets != temp.seq_id_)
+                                throw std::runtime_error(
+                                    "whole-flow SAF DATA count mismatch: reserved=" +
+                                    std::to_string(reserved_packets) +
+                                    ", tail_seq=" + std::to_string(temp.seq_id_));
+                        }
                         end_cnt++;
                         max_recv += temp.seq_id_;
 
@@ -686,6 +712,23 @@ void WorkerCoreExecutor::req_logic() {
                         auto &msg = msg_buffer_[MSG_TYPE::REQUEST].front();
 
                         if (msg.tag_id_ == prim->tag_id) {
+                            if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
+                                prim->type == RECV_DATA &&
+                                DieOfGlobal(msg.source_) != DieOfGlobal(cid)) {
+                                FlowKey key{msg.source_, msg.tag_id_, 0};
+                                WholeFlowSafResult result =
+                                    saf_admission.Reserve(key, msg.flow_packets_);
+                                if (!result.admitted())
+                                    throw std::runtime_error(
+                                        "whole-flow SAF admission rejected before ACK/DATA: " +
+                                        std::string(WholeFlowSafStatusName(result.status)) +
+                                        ", source=" + std::to_string(msg.source_) +
+                                        ", tag=" + std::to_string(msg.tag_id_) +
+                                        ", flow_packets=" +
+                                        std::to_string(msg.flow_packets_) +
+                                        ", available=" +
+                                        std::to_string(result.available_before));
+                            }
                             ack_queue.push(msg.source_);
                         } else
                             temp.push(msg);

@@ -1273,6 +1273,30 @@ def main():
            "runtime is not enabled yet" in out,
            f"exit={rc} entered_sim={entered}")
 
+    # (4) V3-c whole-flow SAF 启动期容量边界。C3_WL 的跨 die DATA flow 恰为 F=4 包：
+    #     saf=F 通过 per-flow preflight 后应继续走到 bounded runtime gate；saf=F-1 必须更早明确拒绝。
+    bounded_f = {"mode": "bounded_saf", "safety": "whole_flow_saf",
+                 "port_rate": {"num": 1, "den": 2},
+                 "link_rate": {"num": 1, "den": 4},
+                 "link_latency": 20, "saf_buffer_depth": 4,
+                 "link_inflight_depth": 11, "rx_buffer_depth": 8,
+                 "ctrl_buffer_depth": 4}
+    rc, out, entered = run_with_c2c(bounded_f, timeout=20)
+    record("V3-c startup: whole-flow SAF capacity==F(4) passes admission then hits runtime gate",
+           rc not in (0, 124) and not entered and
+           "runtime is not enabled yet" in out and
+           "whole-flow SAF preflight" not in out,
+           f"exit={rc} entered_sim={entered}")
+
+    bounded_under = dict(bounded_f)
+    bounded_under["saf_buffer_depth"] = 3
+    rc, out, entered = run_with_c2c(bounded_under, timeout=20)
+    record("V3-c startup: whole-flow SAF capacity==F-1 rejects before DATA injection",
+           rc not in (0, 124) and not entered and
+           "whole-flow SAF preflight" in out and
+           "flow_packets (4) exceeds saf_buffer_depth (3)" in out,
+           f"exit={rc} entered_sim={entered}")
+
     # 4. 单 die 回归
     rc, out = run([NPUSIM, "--workload-config", WL,
                    "--hardware-config",

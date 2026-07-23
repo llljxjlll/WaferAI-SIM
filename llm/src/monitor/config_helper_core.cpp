@@ -7,6 +7,7 @@
 
 #include "common/system.h"
 #include "defs/spec.h"
+#include "die/port.h"
 #include "monitor/config_helper_core.h"
 #include "monitor/host_envelope.h"
 #include "monitor/workload_normalize.h"
@@ -420,6 +421,7 @@ void config_helper_core::calculate_address(bool do_loop) {
             int output_offset = 0;
             int index = 0;
             string output_label = "";
+            Send_prim *pending_req = nullptr;
 
             if (!do_loop && judge_is_end_work(work))
                 continue; // 汇节点
@@ -447,12 +449,41 @@ void config_helper_core::calculate_address(bool do_loop) {
             for (auto &prim : (*v)) {
                 if (typeid(*prim) == typeid(Send_prim)) {
                     Send_prim *temp = (Send_prim *)prim;
+                    if (temp->type == SEND_REQ) {
+                        if (pending_req)
+                            throw std::runtime_error(
+                                "dataflow SEND_REQ has no intervening SEND_DATA");
+                        pending_req = temp;
+                        continue;
+                    }
                     if (temp->type != SEND_DATA)
                         continue;
 
                     CalculatePacketNum(output_size, work.cast[index].weight,
                                        (prim->datatype ? 2 : 1),
                                        temp->max_packet, temp->end_length);
+                    if (!pending_req || pending_req->des_id != temp->des_id ||
+                        pending_req->tag_id != temp->tag_id)
+                        throw std::runtime_error(
+                            "SEND_REQ/SEND_DATA pair mismatch while assigning flow_packets");
+                    if (temp->max_packet <= 0 ||
+                        (unsigned)temp->max_packet > M_D_FLOW_PACKETS_MAX)
+                        throw std::runtime_error(
+                            "DATA flow packet count is not encodable in REQUEST flow_packets");
+                    // Send_prim wire 上 max_packet 对 SEND_REQ 是 tagged union：把后续 DATA 的 F
+                    // 带到源核，源核再写入 REQUEST Msg.flow_packets_。
+                    pending_req->max_packet = temp->max_packet;
+                    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
+                        coreconfigs[i].id / CORES_PER_DIE !=
+                            temp->des_id / CORES_PER_DIE &&
+                        temp->max_packet > g_d2d_cfg.saf_buffer_depth)
+                        throw std::runtime_error(
+                            "whole-flow SAF preflight: flow_packets (" +
+                            std::to_string(temp->max_packet) +
+                            ") exceeds saf_buffer_depth (" +
+                            std::to_string(g_d2d_cfg.saf_buffer_depth) +
+                            "); reject before DATA injection");
+                    pending_req = nullptr;
 
                     temp->output_label = output_label_split.size() == 1
                                              ? output_label_split[0]
@@ -460,6 +491,9 @@ void config_helper_core::calculate_address(bool do_loop) {
                     index++;
                 }
             }
+            if (pending_req)
+                throw std::runtime_error(
+                    "dataflow SEND_REQ has no following SEND_DATA");
         }
     }
 }

@@ -105,6 +105,10 @@
 #define M_D_LENGTH 8
 #define M_D_REFILL 1
 #define M_D_ROOFLINE 24
+// V3-c tagged union：同一 24-bit wire 段在 REQUEST 中表示整条后续 DATA flow 的包数，
+// 在其它消息中保持 roofline_packets 语义。无需扩宽 256-bit message；最大 flow=2^24-1 包。
+#define M_D_FLOW_PACKETS M_D_ROOFLINE
+#define M_D_FLOW_PACKETS_MAX ((1u << M_D_FLOW_PACKETS) - 1u)
 #define M_D_CONF_END 1
 #define M_D_DATA 128
 // V1-c0：跨 die 路由 pinned 出口端口（源 die 选一次并钉死，随包携带）。16-bit：编码

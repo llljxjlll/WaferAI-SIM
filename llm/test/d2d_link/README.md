@@ -600,10 +600,11 @@ runner **15 → 23 组**(4×4 W/S/E/N + 4×2 W/S/E/N);self-test 165/165。
 
 ## V3（有限缓冲与背压）—— 进行中
 
-> **当前边界（务必先读）**：V3-a **只落地配置契约**，**生产数据路径仍是 V2 的功能性无限 FIFO**。
-> 因此 `mode=bounded_saf` 的配置虽然能通过解析与校验，但会在 Monitor **被显式拒绝**并非零退出——
-> 绝不允许「配置声称有限缓冲、实际按 functional_v2 跑完」这种静默错误语义。该 gate 要等
-> V3-b（有限 FIFO）与 V3-c（SAF admission）真正接通生产路径后才移除。
+> **当前边界（务必先读）**：V3-a～V3-c 已落地配置、独立有限 link、REQUEST 流大小协议和
+> whole-flow SAF 原子 admission 账本，但**生产数据路径仍是 V2 的功能性无限 FIFO**。
+> 因此 `mode=bounded_saf` 会在 Monitor **被显式拒绝**并非零退出——绝不允许「配置声称有限缓冲、
+> 实际按 functional_v2 跑完」这种静默错误语义。V3-d 把有限 link、每跳共享端口/接收 buffer、
+> credit 与 admission 接入生产路径并完成 e2e 后，才可移除该 gate。
 
 - **V3-a ✔（配置契约与兼容模式）**
   - **模式**：`functional_v2`（默认；旧配置不写 `mode` 即此，行为与 V2 逐位一致）与
@@ -666,3 +667,20 @@ runner **15 → 23 组**(4×4 W/S/E/N + 4×2 W/S/E/N);self-test 165/165。
   - **容量边界**：当前 `D2DLinkBound::data_depth` 是 **link 在途 FIFO**，不等同于 V3-a 单独声明的
     `rx_buffer_depth`；后者须由 V3-d 的接收端 PortUnit 独立实现和接线。
   - **构造期硬校验**：`data_depth>=1`、`ctrl_depth>=1`、`0<rate<=1`，绕过解析器的非法构造直接抛。
+
+- **V3-c ✔（整流大小协议 + 原子 SAF admission；生产 bounded 数据路径仍 gated）**
+  - **256-bit 位宽收口**：消息原布局已占 255 bit，因此不扩宽消息。REQUEST 以 tagged union 复用
+    `roofline_packets` 的 24-bit 段携带 `flow_packets`，其余消息保持原 roofline 语义；范围为
+    `1..2^24-1`，越界明确拒绝。dataflow 配置阶段把每个 `SEND_REQ` 与随后同 `(dest,tag)` 的
+    `SEND_DATA` 配对，并把计算出的 DATA 网络包数写入 REQUEST；缺失/错配/不可编码均启动期报错。
+  - **原子预留账本**：`WholeFlowSafAdmission` 以 `FlowKey(source,tag,subflow)` 记账；只有
+    `available >= F` 才一次性预留，容量不足、重复 key、零包请求均不改变状态。DATA 尾包按同一 key
+    释放，并核对尾包序号与预留包数；未知释放/计数不符明确报错。START 不参与 DATA 预留。
+  - **边界契约已测**：`capacity=F` 接受并释放归零，`capacity=F-1` 在 ACK/DATA 前拒绝，
+    `BDP<F` 不会被误当作满足整流容量，并发 flow 的预留总量不越 capacity。真实启动路径使用
+    4-packet 跨 die flow 验证 `saf=4` 通过 workload preflight 后到达 runtime gate、`saf=3` 更早拒绝。
+  - **刻意边界**：V3-c 的账本是 admission/protocol 层；Monitor gate 尚未移除，因而不声称生产
+    有限缓冲已无死锁。V3-d 必须把账本归属收口到实际共享的每跳 C2C/接收 buffer，接通 credit，
+    验证并发争用、背压传播与 drain，再允许 bounded workload 进入仿真。
+
+- **当前门**：自测 **280/280**、Link self-test **32/32**、runner **67/67**、NoC 冻结值不变。

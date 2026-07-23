@@ -403,11 +403,12 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 
 多跳传输功能正确、路径可解释；合法协议调度能够完成，已知协议依赖环能够被 watchdog 正确诊断。本版不对有限缓冲网络死锁作出保证。
 
-### 4.3b V3 当前进展（V3-a / V3-b 已完成）
+### 4.3b V3 当前进展（V3-a / V3-b / V3-c 已完成）
 
-> **边界**：V3-a/V3-b 均**不改生产数据路径**（仍是 V2 功能性无限 FIFO）；`mode=bounded_saf`
-> 会在 Monitor 被**显式拒绝**（非零退出），杜绝「配置声称有限缓冲、实际按 functional_v2 运行」。
-> V3-b 的有限 FIFO 仅在**独立 link self-test** 启用。该 gate 待 V3-c/V3-d 接通生产路径后移除。
+> **边界**：V3-a～V3-c 已完成配置、独立有限 link、整流大小协议与原子 admission；生产数据路径
+> 仍是 V2 功能性无限 FIFO，`mode=bounded_saf` 继续在 Monitor **显式拒绝**（非零退出）。V3-b 的
+> 有限 FIFO 仅在独立 link self-test 启用；V3-d 把每跳共享端口/接收 buffer、credit 与 admission
+> 接入生产并完成 e2e 后，才允许移除 gate。
 
 - **V3-a ✔**：`functional_v2`（默认，旧配置逐位不变）/ `bounded_saf` 双模式；
   `bounded_saf` 必须显式 `safety=whole_flow_saf`；速率为整数有理数且 `0 < rate <= 1`
@@ -427,7 +428,15 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
   （DATA 限速不拖慢 CTRL）、构造期参数硬校验。结束时 FIFO、回程 credit queue/pulse 均为空且
   DATA/CTRL 信用恢复初始 depth；`residual()` 包含在途信用。注意 standalone 的 `data_depth` 是 link
   在途 FIFO，不等同于仍待 V3-d 实现的独立 `rx_buffer_depth`。link self-test **18 → 32**。
-- **当前门**：自测 **272/272**、Link self-test **32/32**、runner **65/65**、NoC 冻结值不变。
+- **V3-c ✔（协议/admission 层，生产 bounded 数据路径仍 gated）**：REQUEST 用 tagged union 复用
+  既有 roofline 24-bit 段携带 `flow_packets`（消息仍为 256 bit，旧语义隔离，范围越界拒绝）；
+  dataflow 配置把 `SEND_REQ` 与随后同 `(dest,tag)` 的 `SEND_DATA` 配对并写入整流包数，缺失/错配
+  启动期拒绝。`WholeFlowSafAdmission` 按 `FlowKey(source,tag,subflow)` 原子记账：只有
+  `available>=F` 才预留，失败不改变状态，DATA 尾包释放并校验计数，START 不参与 DATA 预留。
+  已覆盖 `capacity=F` 接受/释放归零、`F-1` 在 ACK/DATA 前拒绝、`BDP<F` 不误判、并发预留守恒、
+  duplicate/zero/unknown-release 防御；真实 4-packet workload 的 `saf=4/3` 启动边界也已验证。
+  V3-d 仍须把该账本归属到实际共享的每跳 C2C/接收 buffer 并接通 credit，才能声称生产 SAF 安全。
+- **当前门**：自测 **280/280**、Link self-test **32/32**、runner **67/67**、NoC 冻结值不变。
 
 ### 4.4 V3：周期精确拥塞与背压版
 

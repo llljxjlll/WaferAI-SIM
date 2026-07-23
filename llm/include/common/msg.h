@@ -19,7 +19,10 @@ public:
     int length_ = 0;            // 真实数据的长度，避免end包覆盖
     bool refill_ = false;       // 在end包中表示是否需要refill
     bool config_end_ = false;   // 是否为一个原语config的最后一个包
-    int roofline_packets_ = 0;  // 视作发送X个数据包，加快模拟速度
+    int roofline_packets_ = 0;  // 非 REQUEST：视作发送X个数据包，加快模拟速度
+    // V3-c：仅 REQUEST 有效，声明随后 DATA flow 的总网络包数；wire 上与 roofline_packets_
+    // tagged-union 复用同一 24-bit 段，0=未声明（bounded SAF admission 会拒绝）。
+    int flow_packets_ = 0;
     // V1-c0：跨 die pinned 出口端口（源 die CrossDieSelectExit 选一次并钉死，随包携带；
     // 离开源 die 前不重选）。-1=未 pin / 非跨 die 包。V1-c1+ 才填充与使用。
     int exit_port_ = -1;

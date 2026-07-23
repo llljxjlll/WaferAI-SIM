@@ -1,6 +1,13 @@
 #include "utils/msg_utils.h"
 #include "defs/global.h"
 #include "defs/spec.h"
+#include <stdexcept>
+
+static_assert(M_D_IS_END + M_D_MSG_TYPE + M_D_SEQ_ID + M_D_DES + M_D_OFFSET +
+                      M_D_TAG_ID + M_D_SOURCE + M_D_LENGTH + M_D_REFILL +
+                      M_D_ROOFLINE + M_D_CONF_END + M_D_DATA + M_D_EXIT_PORT <=
+                  256,
+              "Msg wire layout exceeds sc_bv<256>");
 
 sc_bv<256> SerializeMsg(Msg msg) {
     sc_bv<256> serialized_msg;
@@ -33,8 +40,17 @@ sc_bv<256> SerializeMsg(Msg msg) {
     serialized_msg.range(pos + M_D_REFILL - 1, pos) =
         sc_bv<M_D_REFILL>(msg.refill_);
     pos += M_D_REFILL;
-    serialized_msg.range(pos + M_D_ROOFLINE - 1, pos) =
-        sc_bv<M_D_ROOFLINE>(msg.roofline_packets_);
+    // Tagged union：REQUEST 携 whole-flow SAF 包数；其它消息保持 roofline 语义。
+    if (msg.msg_type_ == MSG_TYPE::REQUEST) {
+        if (msg.flow_packets_ < 0 ||
+            (unsigned)msg.flow_packets_ > M_D_FLOW_PACKETS_MAX)
+            throw std::runtime_error("REQUEST flow_packets exceeds 24-bit wire capacity");
+        serialized_msg.range(pos + M_D_FLOW_PACKETS - 1, pos) =
+            sc_bv<M_D_FLOW_PACKETS>(msg.flow_packets_);
+    } else {
+        serialized_msg.range(pos + M_D_ROOFLINE - 1, pos) =
+            sc_bv<M_D_ROOFLINE>(msg.roofline_packets_);
+    }
     pos += M_D_ROOFLINE;
     serialized_msg.range(pos + M_D_CONF_END - 1, pos) = msg.config_end_;
     pos += M_D_CONF_END;
@@ -71,8 +87,12 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
     pos += M_D_LENGTH;
     msg.refill_ = buffer.range(pos + M_D_REFILL - 1, pos).to_uint64(),
     pos += M_D_REFILL;
-    msg.roofline_packets_ =
-        buffer.range(pos + M_D_ROOFLINE - 1, pos).to_uint64(),
+    if (msg.msg_type_ == MSG_TYPE::REQUEST)
+        msg.flow_packets_ =
+            buffer.range(pos + M_D_FLOW_PACKETS - 1, pos).to_uint64();
+    else
+        msg.roofline_packets_ =
+            buffer.range(pos + M_D_ROOFLINE - 1, pos).to_uint64();
     pos += M_D_ROOFLINE;
     msg.config_end_ = buffer.range(pos + M_D_CONF_END - 1, pos).to_uint64(),
     pos += M_D_CONF_END;
