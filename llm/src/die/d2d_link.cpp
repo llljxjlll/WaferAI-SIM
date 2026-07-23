@@ -94,6 +94,10 @@ void D2DLinkUnit::forward() {
         // ---- functional_v2（V2 冻结路径，逐字节不变；恒 avail=true、无速率/背压）----
         in_avail.write(true);
         in_ctrl_avail.write(true);
+        data_credit_return.write(false); // functional 无信用机制
+        ctrl_credit_return.write(false);
+        data_credit_active_ = false;
+        ctrl_credit_active_ = false;
 
         if (in_sent.read()) {
             sc_bv<256> payload = in_channel.read();
@@ -145,6 +149,24 @@ void D2DLinkUnit::forward() {
 void D2DLinkUnit::forward_bounded(long cyc) {
     tokens += bound.rate.num;
 
+    // 0. 信用回还：pop 时排入 due=cyc+latency（回程 L 拍）；本拍 pulse 一个已到期的（每拍至多 1，
+    //    与交付率一致）。clocked link 的正向/回程各至少一个服务拍，完整 RTT 统一由
+    //    D2DCreditRttCycles() 定义（另含上游 tx、credit-rx 两个接口拍）。
+    bool ret = false;
+    if (!data_credit_due_.empty() && data_credit_due_.front() <= cyc) {
+        ret = true;
+        data_credit_due_.pop_front();
+    }
+    data_credit_return.write(ret);
+    data_credit_active_ = ret;
+    bool cret = false;
+    if (!ctrl_credit_due_.empty() && ctrl_credit_due_.front() <= cyc) {
+        cret = true;
+        ctrl_credit_due_.pop_front();
+    }
+    ctrl_credit_return.write(cret);
+    ctrl_credit_active_ = cret;
+
     // 1a. 交付 DATA（先出队腾空位）：成熟 + 下游 ready + token 足
     bool data_mature = !fifo_.empty() && fifo_.front().first <= cyc;
     bool has_token = tokens >= bound.rate.den;
@@ -155,6 +177,7 @@ void D2DLinkUnit::forward_bounded(long cyc) {
         CountLink(link_idx, false, fifo_.front().second);
         ProbeData(g_d2d_data_out, fifo_.front().second, cyc);
         fifo_.pop_front();
+        data_credit_due_.push_back(cyc + latency); // 空位释放 → L 拍后回还信用
         g_d2d_link_out_pkts++;
         g_protocol_progress++;
         tokens -= bound.rate.den;
@@ -179,6 +202,7 @@ void D2DLinkUnit::forward_bounded(long cyc) {
         CountType(g_d2d_link_out_by_type, cfifo_.front().second);
         CountLink(link_idx, false, cfifo_.front().second);
         cfifo_.pop_front();
+        ctrl_credit_due_.push_back(cyc + latency);
         g_d2d_link_out_pkts++;
         g_protocol_progress++;
     } else {
@@ -187,12 +211,10 @@ void D2DLinkUnit::forward_bounded(long cyc) {
             ctrl_downstream_stall++;
     }
 
-    // 2. 接受上游 DATA。flow control 采用**信用式**（bounded link 的标准模型；见 forward_bounded
-    //    注释）：上游持有的信用 = 下游空位，link 交付一包即归还一信用，上游据此不过量发送 →
-    //    link 接受时必然有空位（occ < depth），**永不溢出、永不丢包**。in_avail 是可观测的
-    //    背压信号（下方 step 4 公布，供上游/测试验证），accept 判据用当前真实空位。
-    //    单个 sc_bv<256> 信道有 1 拍 delta 延迟，纯组合 valid/ready 会退化成 2 拍环
-    //    （要么滞留重收、要么填充边沿丢包）；信用式流控是无此歧义的正确硬件模型。
+    // 2. 接受上游 DATA。**流控唯一真源 = 信用**（data_credit_return 接口）：上游持 credit=depth，
+    //    credit>0 才发，收到回还 +1，故永不过量、link 接受时必有空位（occ<depth）、**永不溢出/丢包**。
+    //    in_avail 仅作**诊断镜像**（step 4 公布 occ<depth 供观测），**不参与流控决策**——避免两套
+    //    不同步的流控真源。（单信道 1 拍 delta 使纯组合 valid/ready 退化成 2 拍环，故不用它做流控。）
     bool has_room = (int)fifo_.size() < bound.data_depth;
     if (in_sent.read()) {
         if (has_room) {

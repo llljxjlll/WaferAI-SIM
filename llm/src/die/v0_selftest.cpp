@@ -1452,18 +1452,18 @@ int RunD2DV0SelfTest() {
               "V3-a bounded_saf without saf_buffer_depth rejected");
         check(throwsRuntime(mk(bounded(64, 0, 8, 4))),
               "V3-a bounded_saf without link_inflight_depth rejected");
-        check(throwsRuntime(mk(bounded(64, 10, 0, 4))),
+        check(throwsRuntime(mk(bounded(64, 11, 0, 4))),
               "V3-a bounded_saf without rx_buffer_depth rejected");
-        check(throwsRuntime(mk(bounded(64, 10, 8, 0))),
+        check(throwsRuntime(mk(bounded(64, 11, 8, 0))),
               "V3-a bounded_saf without ctrl_buffer_depth rejected");
 
         // (e) 完整 bounded_saf 配置被接受，且四类容量与有理数速率被如实解析
-        ParseDiePorts(mk(bounded(64, 10, 8, 4)));
+        ParseDiePorts(mk(bounded(64, 11, 8, 4)));
         check(g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
                   g_d2d_cfg.safety == SAFETY_WHOLE_FLOW_SAF,
               "V3-a bounded_saf + whole_flow_saf accepted");
         check(g_d2d_cfg.saf_buffer_depth == 64 &&
-                  g_d2d_cfg.link_inflight_depth == 10 &&
+                  g_d2d_cfg.link_inflight_depth == 11 &&
                   g_d2d_cfg.rx_buffer_depth == 8 &&
                   g_d2d_cfg.ctrl_buffer_depth == 4,
               "V3-a four capacities parsed independently (no single buffer_depth)");
@@ -1479,20 +1479,20 @@ int RunD2DV0SelfTest() {
         check(bok, "V3-a version-aware validate accepts complete bounded_saf");
 
         // (f) rate>1 必须**明确拒绝**——单信道每拍只能载 1 包，不得静默按 1 建模
-        D2DJson r2 = bounded(64, 10, 8, 4);
+        D2DJson r2 = bounded(64, 11, 8, 4);
         r2["link_rate"] = {{"num", 4}, {"den", 1}};
         check(throwsRuntime(mk(r2)),
               "V3-a link_rate > 1 packet/cycle rejected (not silently clamped)");
-        r2 = bounded(64, 10, 8, 4);
+        r2 = bounded(64, 11, 8, 4);
         r2["port_rate"] = 2; // 整数简写 2 == 2/1 > 1
         check(throwsRuntime(mk(r2)), "V3-a port_rate > 1 rejected (integer form)");
-        r2 = bounded(64, 10, 8, 4);
+        r2 = bounded(64, 11, 8, 4);
         r2["link_rate"] = {{"num", 1}, {"den", 0}};
         check(throwsRuntime(mk(r2)), "V3-a rate with den=0 rejected");
-        r2 = bounded(64, 10, 8, 4);
+        r2 = bounded(64, 11, 8, 4);
         r2["link_rate"] = {{"num", -1}, {"den", 4}};
         check(throwsRuntime(mk(r2)), "V3-a negative rate rejected");
-        r2 = bounded(64, 10, 8, 4);
+        r2 = bounded(64, 11, 8, 4);
         r2["saf_buffer_depth"] = 0;
         check(throwsRuntime(mk(r2)), "V3-a zero depth rejected");
 
@@ -1519,29 +1519,33 @@ int RunD2DV0SelfTest() {
         check(throwsRuntime(mk(mix)),
               "V3-a link_latency under functional_v2 rejected (conflicts with 'latency')");
         // 反向：bounded_saf 下 legacy 字段必须拒绝，杜绝 latency=20 与 link_latency=7 并存
-        D2DJson conflict = bounded(64, 10, 8, 4);
+        D2DJson conflict = bounded(64, 11, 8, 4);
         conflict["latency"] = 20;
         check(throwsRuntime(mk(conflict)),
               "V3-a legacy 'latency' under bounded_saf rejected (no silent override)");
-        conflict = bounded(64, 10, 8, 4);
+        conflict = bounded(64, 11, 8, 4);
         conflict["link_bw"] = 4;
         check(throwsRuntime(mk(conflict)),
               "V3-a legacy 'link_bw' under bounded_saf rejected (contradicts link_rate)");
 
-        // (h) link_inflight_depth 必须 >= BDP = ceil(2*L*rate)；SAF depth>=F 留待 V3-c
-        //     L=20, rate=1/4 -> BDP = ceil(40/4) = 10
-        D2DJson bdp = bounded(64, 10, 8, 4);
-        check(!throwsRuntime(mk(bdp)), "V3-a link_inflight_depth == BDP (10) accepted");
-        bdp = bounded(64, 9, 8, 4);
+        // (h) link_inflight_depth 必须 >= BDP = ceil((2*max(L,1) + D2D_CREDIT_PIPE)*rate)；SAF depth>=F 留待 V3-c。
+        //     L=20, rate=1/4, PIPE=2 -> BDP = ceil((40+2)/4) = ceil(10.5) = 11
+        D2DJson bdp = bounded(64, 11, 8, 4);
+        check(!throwsRuntime(mk(bdp)), "V3-a link_inflight_depth == BDP (11) accepted");
+        bdp = bounded(64, 10, 8, 4);
         check(throwsRuntime(mk(bdp)),
-              "V3-a link_inflight_depth < BDP rejected (link could not stay full)");
-        // latency=0 -> BDP=0，任何 depth>=1 均可
-        D2DJson zero = bounded(64, 1, 8, 4);
+              "V3-a link_inflight_depth < BDP (10<11) rejected (link could not stay full)");
+        // latency=0 的 clocked link 正/反向仍各至少一个服务拍：RTT=2*max(0,1)+PIPE=4。
+        // rate=1 时 BDP=4，精确边界接受、BDP-1 拒绝。
+        D2DJson zero = bounded(64, 4, 8, 4);
         zero["link_latency"] = 0;
-        check(!throwsRuntime(mk(zero)), "V3-a latency=0 -> BDP=0, depth 1 accepted");
+        zero["link_rate"] = {{"num", 1}, {"den", 1}};
+        check(!throwsRuntime(mk(zero)), "V3-a latency=0 rate=1 -> BDP=4, depth 4 accepted");
+        zero["link_inflight_depth"] = 3;
+        check(throwsRuntime(mk(zero)), "V3-a latency=0 rate=1 -> depth 3<BDP rejected");
 
         // (i) 无 die_ports 时必须复位 g_d2d_cfg（防止重复解析残留上次 bounded 配置）
-        ParseDiePorts(mk(bounded(64, 10, 8, 4)));
+        ParseDiePorts(mk(bounded(64, 11, 8, 4)));
         D2DJson none;
         ParseDiePorts(none);
         check(g_d2d_cfg.mode == MODE_FUNCTIONAL_V2 &&

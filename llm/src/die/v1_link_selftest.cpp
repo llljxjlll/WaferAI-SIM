@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 namespace {
 
@@ -19,23 +20,22 @@ struct LinkProbe : sc_module {
     D2DLinkUnit *link;
     sc_signal<sc_bv<256>> in_ch, out_ch, in_cch, out_cch;
     sc_signal<bool> in_s, in_av, out_s, out_av, in_cs, in_cav, out_cs, out_cav;
+    sc_signal<bool> data_cret, ctrl_cret; // V3-b2：link → 上游 的信用回还
 
     std::vector<std::pair<int, int>> data_in, ctrl_in; // (cycle, id)
     int avail_lo = -1, avail_hi = -1;                  // out_avail=false 窗口 [lo,hi)
     int run_cycles = 60;
     std::vector<std::pair<int, int>> data_out, ctrl_out; // (cycle, id)
 
-    // V3-b：burst 注入（>0 时启用）。flow control = **信用式**（bounded link 的标准无损模型；
-    // 单 sc_bv 信道的 delta 延迟使纯组合 valid/ready 退化成 2 拍环、要么滞留重收要么填充边沿丢包）。
-    // 信用 = 下游空位：初始 = depth，发一包 -1，观测到一次交付(out_s) +1。同时**读真实 in_avail**
-    // 并记录，用于**验证背压信号**：满时应观测到 in_avail=false（notready_seen>0），
-    // 且有信用时（能发）in_avail 应为 true——把「in_avail 是否正确拉低/拉高」独立断言出来。
+    // V3-b2：burst 注入（>0 时启用）。flow control = **信用式**（bounded link 的唯一流控真源）。
+    // 信用 = 下游空位：初始 = depth，发一包 -1，**观测到 link 的 data_credit_return pulse +1**
+    // （真实模块接口，非窥探 out_sent）。同时读真实 in_avail 记录，仅作背压信号诊断（非流控真源）。
     int inject_burst = 0;
     int next_id = 500; // burst 首包 id
     int sent_count = 0;
     int credit = 1 << 30;  // functional 视作无限；bounded 构造函数置为 data_depth
     int ready_seen = 0;    // 有信用可发 且 观测到 in_avail=true 的拍数
-    int inconsistent = 0;  // 有信用可发 但 in_avail=false（背压信号与真实空位不符）→ 应恒为 0
+    int inconsistent = 0;  // 有信用可发但诊断镜像仍 false 的 settle 边沿次数（仅观测，不要求为 0）
     int notready_seen = 0; // 观测到 in_avail=false 的拍数（背压确实发生）
     int ctrl_burst = 0;    // 控制通道 burst（同信用式，信用 = ctrl_depth）
     int next_cid = 700;
@@ -62,20 +62,23 @@ struct LinkProbe : sc_module {
         link->out_ctrl_channel(out_cch);
         link->out_ctrl_sent(out_cs);
         link->out_ctrl_avail(out_cav);
+        link->data_credit_return(data_cret);
+        link->ctrl_credit_return(ctrl_cret);
         SC_THREAD(drive);
     }
 
     void drive() {
         for (int c = 0; c <= run_cycles; c++) {
-            // 记录上一拍已 settle 的输出；每观测到一次交付 → 归还 1 信用（link 腾出 1 空位）
-            if (out_s.read()) {
+            // 记录上一拍已 settle 的输出（仅记录，不据此归还信用）
+            if (out_s.read())
                 data_out.push_back({c, (int)out_ch.read().to_uint()});
-                credit++;
-            }
-            if (out_cs.read()) {
+            if (out_cs.read())
                 ctrl_out.push_back({c, (int)out_cch.read().to_uint()});
+            // **信用回还来自 link 的真实接口信号**（非窥探 out_sent）：观测到 pulse → credit++
+            if (data_cret.read())
+                credit++;
+            if (ctrl_cret.read())
                 ccredit++;
-            }
             // 下游 ready（停顿窗内 false）
             bool av = !(c >= avail_lo && c < avail_hi);
             out_av.write(av);
@@ -84,12 +87,11 @@ struct LinkProbe : sc_module {
             bool ds = false;
             int did = 0;
             if (inject_burst > 0) {
-                // 信用式发送（无损）；同时读真实 in_avail 验证背压信号。
+                // 信用式发送（无损）；读真实 in_avail 仅作背压诊断（inconsistent 记 settle 滞后，不断言）。
                 bool avail = in_av.read();
                 if (!avail)
                     notready_seen++;
                 if (sent_count < inject_burst && credit > 0) {
-                    // 有信用可发：此刻 link 必有空位，故 in_avail 应为 true（否则背压信号错误）
                     if (avail)
                         ready_seen++;
                     else
@@ -109,7 +111,7 @@ struct LinkProbe : sc_module {
             in_s.write(ds);
             if (ds)
                 in_ch.write((sc_bv<256>)did);
-            // 驱动 CTRL 输入（burst 走同样的真实握手，读 in_ctrl_avail）
+            // 驱动 CTRL 输入（burst 仅依赖独立 ctrl credit；in_ctrl_avail 同样只是诊断镜像）
             bool cs = false;
             int cid = 0;
             if (ctrl_burst > 0) {
@@ -214,7 +216,7 @@ int RunD2DLinkSelfTest() {
     auto *b_rate = new LinkProbe("b_rate", 1, mkbound(2, 4, 1, 4));
     b_rate->inject_burst = 10;
     b_rate->run_cycles = 160;
-    // b_ser: depth=1, rate=1/2, lat=0（BDP=0）—— 纯速率串行化，占用恒 <=1
+    // b_ser: depth=1, rate=1/2, lat=0（低于 BDP）—— 信用往返 + 速率串行化，占用恒 <=1
     auto *b_ser = new LinkProbe("b_ser", 0, mkbound(1, 4, 1, 2));
     b_ser->inject_burst = 6;
     b_ser->run_cycles = 160;
@@ -224,13 +226,6 @@ int RunD2DLinkSelfTest() {
     b_ds->run_cycles = 160;
     b_ds->avail_lo = 0;
     b_ds->avail_hi = 40;
-    // BDP 演示：rate=1, lat=1 → BDP=2。depth=1<BDP 吞吐减半（gap 2）；depth=2==BDP 满速（gap 1）。
-    auto *b_bdp_lo = new LinkProbe("b_bdp_lo", 1, mkbound(1, 4, 1, 1));
-    b_bdp_lo->inject_burst = 20;
-    b_bdp_lo->run_cycles = 160;
-    auto *b_bdp_hi = new LinkProbe("b_bdp_hi", 1, mkbound(8, 4, 1, 1));
-    b_bdp_hi->inject_burst = 20;
-    b_bdp_hi->run_cycles = 160;
     // 有理数 2/3：token 守恒——长期 goodput≈2/3，gap 只由 1、2 交替构成（非单一众数）
     auto *b_23 = new LinkProbe("b_23", 1, mkbound(8, 4, 2, 3));
     b_23->inject_burst = 16;
@@ -248,7 +243,71 @@ int RunD2DLinkSelfTest() {
     b_mix->ctrl_burst = 8;
     b_mix->run_cycles = 200;
 
-    sc_start(210 * CYCLE, SC_NS); // 覆盖最慢探针
+    // 深度扫描（L=1, rate=1）：测模型信用往返，找达到满速的最小深度（= 实测 BDP）。
+    std::vector<int> scan_depths = {1, 2, 3, 4, 5, 8};
+    std::vector<LinkProbe *> scan;
+    for (int d : scan_depths) {
+        auto *q = new LinkProbe(("scan_d" + std::to_string(d)).c_str(), 1,
+                                mkbound(d, 4, 1, 1));
+        q->inject_burst = 60;
+        q->run_cycles = 320;
+        scan.push_back(q);
+    }
+
+    // 通用 BDP 边界：每组同时跑 depth=BDP-1 与 depth=BDP。特别覆盖 L=0（clocked link 的
+    // 正/反向各有一个最小服务拍）以及 1/2、2/3、1/4 有理速率，防止只在 L=1,rate=1 巧合成立。
+    struct BdpBoundary {
+        int latency, num, den;
+        long long rtt, bdp;
+        LinkProbe *under, *exact;
+    };
+    int bdp_specs[][3] = {{0, 1, 1}, {1, 1, 1}, {1, 1, 2},
+                          {1, 2, 3}, {7, 1, 4}};
+    std::vector<BdpBoundary> bdp_cases;
+    for (auto &spec : bdp_specs) {
+        D2DRate rate;
+        rate.num = spec[1];
+        rate.den = spec[2];
+        long long rtt = D2DCreditRttCycles(spec[0]);
+        long long bdp = D2DBdpPackets(spec[0], rate);
+        if (bdp < 2)
+            throw std::runtime_error("V3-b BDP test requires BDP>=2");
+        std::string base = "bdp_L" + std::to_string(spec[0]) + "_r" +
+                           std::to_string(spec[1]) + "_" + std::to_string(spec[2]);
+        auto *under = new LinkProbe((base + "_under").c_str(), spec[0],
+                                    mkbound((int)bdp - 1, 4, spec[1], spec[2]));
+        auto *exact = new LinkProbe((base + "_exact").c_str(), spec[0],
+                                    mkbound((int)bdp, 4, spec[1], spec[2]));
+        under->inject_burst = exact->inject_burst = 96;
+        under->run_cycles = exact->run_cycles = 720;
+        bdp_cases.push_back({spec[0], spec[1], spec[2], rtt, bdp, under, exact});
+    }
+
+    // 构造期参数校验负例——**必须在 sc_start 之前**（elaboration 期才能构造 sc_module）。
+    // 只接受**预期的 std::runtime_error 且错误文本含关键字**：避免把 SystemC 的其它异常（如
+    // 「运行期插入模块失败」）误判为「参数校验成功」——这正是旧 catch(...) 掩盖的坑。
+    {
+        int uid = 0;
+        auto throws_ctor = [&](D2DLinkBound b, const std::string &key) {
+            try {
+                D2DLinkUnit u(("bad_ctor_" + std::to_string(uid++)).c_str(), 1, -1,
+                              b);
+            } catch (const std::runtime_error &e) {
+                return std::string(e.what()).find(key) != std::string::npos;
+            }
+            return false; // 未抛 / 抛非 runtime_error 都算失败
+        };
+        check(throws_ctor(mkbound(0, 4, 1, 1), "data_depth"),
+              "V3-b ctor rejects data_depth=0 (expected runtime_error)");
+        check(throws_ctor(mkbound(8, 0, 1, 1), "ctrl_depth"),
+              "V3-b ctor rejects ctrl_depth=0 (expected runtime_error)");
+        check(throws_ctor(mkbound(8, 4, 2, 1), "rate"),
+              "V3-b ctor rejects rate>1 (2/1)");
+        check(throws_ctor(mkbound(8, 4, 1, 0), "rate"),
+              "V3-b ctor rejects rate den=0");
+    }
+
+    sc_start(760 * CYCLE, SC_NS); // 覆盖最慢的有理速率 BDP-1 边界及全部信用回还
 
     // 期望交付 id 序列（burst：base .. base+burst-1）
     auto expect_ids = [](int base, int burst) {
@@ -276,19 +335,23 @@ int RunD2DLinkSelfTest() {
         return (double)(out.size() - 1) /
                (double)(out.back().first - out.front().first);
     };
-    // gap 集合是否 ⊆ {1,2} 且两者都出现（2/3 的特征：1、2 交替，非单一众数）
-    auto gaps_1_2_mixed = [](const std::vector<std::pair<int, int>> &out) {
-        int n1 = 0, n2 = 0;
-        for (size_t i = 1; i < out.size(); i++) {
-            int g = out[i].first - out[i - 1].first;
-            if (g == 1)
-                n1++;
-            else if (g == 2)
-                n2++;
-            else
+    // token 守恒（精确速率判据）：稳态区内**每个长度 den 的滑动窗恰含 num 次交付**。比「众数 gap」
+    // 或「宽松 goodput 区间」强得多，且能表达 num>1 的一般速率（如 2/3：每 3 拍恰 2 包）。
+    auto rate_exact = [](const std::vector<std::pair<int, int>> &out, int num,
+                         int den) {
+        if ((int)out.size() < 2 * den + 2)
+            return false;
+        int lo = out.front().first, hi = out.back().first;
+        // 跳过首尾 den 拍的边界效应，检查中段每个 den 窗
+        for (int t = lo + den; t + den <= hi - den; t++) {
+            int cnt = 0;
+            for (auto &o : out)
+                if (o.first >= t && o.first < t + den)
+                    cnt++;
+            if (cnt != num)
                 return false;
         }
-        return n1 > 0 && n2 > 0;
+        return true;
     };
 
     std::cout << "  [info] V3-b: b_rate gap=" << steady_gap(b_rate->data_out)
@@ -298,21 +361,29 @@ int RunD2DLinkSelfTest() {
               << " rstall=" << b_rate->link->RateStall()
               << " notready=" << b_rate->notready_seen
               << " inconsist=" << b_rate->inconsistent
-              << " | bdp_lo gp=" << goodput(b_bdp_lo->data_out)
-              << " | bdp_hi gp=" << goodput(b_bdp_hi->data_out)
-              << " gap=" << steady_gap(b_bdp_hi->data_out)
               << " | 2/3 gp=" << goodput(b_23->data_out)
               << " | ctrl occ=" << b_ctrl->link->OccCtrlMax()
               << " cds=" << b_ctrl->link->CtrlDownstreamStall()
               << " | mix dgap=" << steady_gap(b_mix->data_out)
               << " cgap=" << steady_gap(b_mix->ctrl_out) << std::endl;
+    std::cout << "  [info] depth scan (L=1,rate=1) goodput:";
+    for (size_t i = 0; i < scan.size(); i++)
+        std::cout << " d" << scan_depths[i] << "=" << goodput(scan[i]->data_out);
+    std::cout << std::endl;
+    std::cout << "  [info] BDP boundaries:";
+    for (auto &c : bdp_cases)
+        std::cout << " L" << c.latency << "@" << c.num << "/" << c.den
+                  << "(rtt=" << c.rtt << ",bdp=" << c.bdp
+                  << ",under=" << goodput(c.under->data_out)
+                  << ",exact=" << goodput(c.exact->data_out) << ")";
+    std::cout << std::endl;
 
-    // in_avail 正确性（本轮核心）：① 背压时观测到 ready 确实拉低（notready>0，通过真实 in_avail 信号）；
-    // ② link 从不溢出/丢包（upstream_blocked==0 且下方 ids_match 全对）。inconsistent（有信用但 ready
-    // 仍 false）只反映 sc_signal 的 1 拍 settle 滞后（此处 =2，均为满→空过渡沿），非溢出，故仅诊断不断言。
+    // 流控 = 信用式（唯一真源）：上游只据信用发送，link 永不溢出（upstream_blocked==0）、全程无丢/重。
+    // in_avail 仅作**诊断镜像**：背压时应观测到它拉低（notready>0）。inconsistent（有信用但 in_avail
+    // 仍 false）只是 sc_signal 的 1 拍 settle 滞后，非流控真源冲突（信用才是），故仅诊断不断言。
     check(b_rate->notready_seen > 0 && b_rate->link->UpstreamBlocked() == 0,
-          "V3-b in_avail correctness: backpressure observed via real in_avail (ready low), "
-          "link never overflows (upstream_blocked=0, lossless)");
+          "V3-b credit flow control: upstream sends only on credit, link never overflows "
+          "(upstream_blocked=0, lossless); in_avail (diagnostic) observed low under backpressure");
 
     // b_rate：速率限制 gap==4、占用<=depth、满状态(full)+速率停顿(rate_stall)触发、下游停顿=0、按序全收、排空
     check(ids_match(b_rate->data_out, expect_ids(b_rate->next_id, b_rate->inject_burst)) &&
@@ -339,26 +410,52 @@ int RunD2DLinkSelfTest() {
           "V3-b downstream stall: held until release, downstream_stall>0 & rate_stall=0, "
           "in-order, drained");
 
-    // 缓冲深度 vs 吞吐（信用往返）：depth 过浅（=1）吞吐被信用往返限制（goodput 明显 <1）；
-    // depth 充裕（=8，> 往返）维持满速（goodput≈1、gap 1）。两者都无丢/重、排空。
-    // （注：本 standalone 的信用往返含 testbench 观测延迟，故阈值以「够深」表征，不钉死配置 BDP=2L。）
-    check(ids_match(b_bdp_lo->data_out,
-                    expect_ids(b_bdp_lo->next_id, b_bdp_lo->inject_burst)) &&
-              ids_match(b_bdp_hi->data_out,
-                        expect_ids(b_bdp_hi->next_id, b_bdp_hi->inject_burst)) &&
-              goodput(b_bdp_lo->data_out) < 0.6 &&
-              goodput(b_bdp_hi->data_out) > 0.95 &&
-              steady_gap(b_bdp_hi->data_out) == 1 &&
-              b_bdp_lo->link->DataOcc() == 0 && b_bdp_hi->link->DataOcc() == 0,
-          "V3-b buffer-vs-throughput: shallow depth=1 throttled by credit round-trip "
-          "(goodput<0.6), ample depth=8 sustains full rate (goodput~1, gap 1), both lossless");
+    // BDP 契约验证：配置与测试共用 D2DCreditRttCycles/D2DBdpPackets。除完整 depth scan 外，
+    // 多组 L/r 均要求 BDP 深度达到配置速率、BDP-1 受信用往返限制为 (BDP-1)/RTT；L=0 也必须成立。
+    {
+        const long long RTT = D2DCreditRttCycles(1); // =4
+        bool ok = true;
+        for (size_t i = 0; i < scan.size(); i++) {
+            LinkProbe *q = scan[i];
+            int d = scan_depths[i];
+            double gp = goodput(q->data_out);
+            double expect = std::min(1.0, (double)d / RTT);
+            ok = ok &&
+                 ids_match(q->data_out, expect_ids(q->next_id, q->inject_burst)) &&
+                 q->link->residual() == 0 && q->link->OccMax() <= d &&
+                 gp > expect - 0.06 && gp < expect + 0.06;
+        }
+        for (auto &c : bdp_cases) {
+            double target = (double)c.num / c.den;
+            double under_target = (double)(c.bdp - 1) / c.rtt;
+            double gp_under = goodput(c.under->data_out);
+            double gp_exact = goodput(c.exact->data_out);
+            ok = ok &&
+                 ids_match(c.under->data_out,
+                           expect_ids(c.under->next_id, c.under->inject_burst)) &&
+                 ids_match(c.exact->data_out,
+                           expect_ids(c.exact->next_id, c.exact->inject_burst)) &&
+                 c.under->link->residual() == 0 && c.exact->link->residual() == 0 &&
+                 c.under->link->OccMax() <= c.bdp - 1 &&
+                 c.exact->link->OccMax() <= c.bdp &&
+                 gp_under > under_target - 0.025 &&
+                 gp_under < under_target + 0.025 &&
+                 gp_exact > target - 0.025 && gp_exact < target + 0.025 &&
+                 gp_under < gp_exact - 0.02;
+        }
+        check(ok,
+              "V3-b BDP contract: shared formula holds at BDP-1/BDP for "
+              "L=0/1/7 and rate=1,1/2,2/3,1/4");
+    }
 
-    // 2/3 有理数：**不能用单一众数 gap**——验证 gap∈{1,2} 且都出现，长期 goodput≈2/3
+    // 2/3 有理数：**精确 token 守恒**——稳态每 3 拍窗恰 2 包交付（不能用单一众数 gap 表达）、
+    // 长期 goodput≈2/3、按序全收、排空
     check(ids_match(b_23->data_out, expect_ids(b_23->next_id, b_23->inject_burst)) &&
-              gaps_1_2_mixed(b_23->data_out) &&
-              goodput(b_23->data_out) > 0.62 && goodput(b_23->data_out) < 0.71 &&
+              rate_exact(b_23->data_out, 2, 3) &&
+              goodput(b_23->data_out) > 0.63 && goodput(b_23->data_out) < 0.70 &&
               b_23->link->DataOcc() == 0,
-          "V3-b rate=2/3: token conservation (gaps 1&2 mixed, goodput~2/3), in-order, drained");
+          "V3-b rate=2/3: exact token conservation (every 3-cycle window has 2 deliveries), "
+          "goodput~2/3, in-order, drained");
 
     // bounded 控制 FIFO：控制包驻留至释放、ctrl_downstream_stall>0、占用<=ctrl_depth、按序全收、
     // 排空；well-behaved 上游 ctrl_upstream_blocked==0
@@ -381,27 +478,24 @@ int RunD2DLinkSelfTest() {
 
     // 占用不变量（横向）：所有 bounded 探针峰值占用 <= 各自 depth
     check(b_rate->link->OccMax() <= 2 && b_ser->link->OccMax() <= 1 &&
-              b_ds->link->OccMax() <= 8 && b_bdp_lo->link->OccMax() <= 1 &&
-              b_bdp_hi->link->OccMax() <= 8 && b_ctrl->link->OccCtrlMax() <= 1,
+              b_ds->link->OccMax() <= 8 && b_ctrl->link->OccCtrlMax() <= 1,
           "V3-b occupancy invariant: peak occupancy never exceeds configured depth");
 
-    // 构造期参数校验负例：depth=0 / rate 非法 必须在构造时抛
-    {
-        auto throws_ctor = [&](D2DLinkBound b) {
-            try {
-                D2DLinkUnit u("bad", 1, -1, b);
-            } catch (const std::runtime_error &) {
-                return true;
-            } catch (...) {
-                return true;
-            }
-            return false;
-        };
-        check(throws_ctor(mkbound(0, 4, 1, 1)), "V3-b ctor rejects data_depth=0");
-        check(throws_ctor(mkbound(8, 0, 1, 1)), "V3-b ctor rejects ctrl_depth=0");
-        check(throws_ctor(mkbound(8, 4, 2, 1)), "V3-b ctor rejects rate>1 (2/1)");
-        check(throws_ctor(mkbound(8, 4, 1, 0)), "V3-b ctor rejects rate den=0");
+    // 真正排空：不仅包 FIFO 为空，回程 credit queue/pulse 也为空，且 testbench 两路信用恢复初值。
+    std::vector<LinkProbe *> bounded = {b_rate, b_ser, b_ds, b_23, b_ctrl, b_mix};
+    bounded.insert(bounded.end(), scan.begin(), scan.end());
+    for (auto &c : bdp_cases) {
+        bounded.push_back(c.under);
+        bounded.push_back(c.exact);
     }
+    bool credit_clean = true;
+    for (LinkProbe *q : bounded)
+        credit_clean = credit_clean && q->link->residual() == 0 &&
+                       q->link->CreditResidual() == 0 &&
+                       q->credit == q->link->bound.data_depth &&
+                       q->ccredit == q->link->bound.ctrl_depth;
+    check(credit_clean,
+          "V3-b drain: DATA/CTRL FIFO empty, credit return queues/pulses empty, credits restored");
 
     // 干净探针：序 + latency
     int base = -999;

@@ -1265,7 +1265,7 @@ def main():
          "port_rate": {"num": 1, "den": 2},
          "link_rate": {"num": 1, "den": 4},
          "link_latency": 20, "saf_buffer_depth": 64,
-         "link_inflight_depth": 10, "rx_buffer_depth": 8,
+         "link_inflight_depth": 11, "rx_buffer_depth": 8,
          "ctrl_buffer_depth": 4}, timeout=20)
     record("V3-a startup: valid bounded_saf refused while its runtime is unimplemented "
            "(no silent fallback to functional_v2)",

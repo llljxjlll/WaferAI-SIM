@@ -384,6 +384,12 @@ void Monitor::init() {
         link->out_ctrl_channel(*sB_ctrl_channel);
         link->out_ctrl_sent(*sB_ctrl_sent);
         link->out_ctrl_avail(ctrl_channel_avail[SB][Tb]);
+        // V3-b2：信用回还端口。生产（functional_v2）恒 pulse false，接到 throwaway 信号（上游不消费
+        // 信用）；V3-d 接入有限缓冲时，上游 PortUnit 将读这两根信号做真实信用记账。
+        auto *sCredit = new sc_signal<bool>;
+        auto *sCtrlCredit = new sc_signal<bool>;
+        link->data_credit_return(*sCredit);
+        link->ctrl_credit_return(*sCtrlCredit);
 
         // 绑定被延后的 router 输入：A 的 avail_i[SA]、B 的 channel_i/sent_i[SB]（+ctrl）
         A->channel_avail_i[SA](*sA_avail);

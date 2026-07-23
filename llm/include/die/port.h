@@ -116,6 +116,22 @@ struct D2DRate {
     bool Valid() const { return num > 0 && den > 0 && num <= den; } // 0 < r <= 1
 };
 
+// V3-b2：信用回环的接口流水寄存器拍数（上游 tx 边界 1 拍 + 下游 credit-rx 边界 1 拍）。
+// clocked D2DLinkUnit 即使 link_latency=0，正向交付和反向信用也各至少占一个服务拍；因此
+// 信用往返 = 2*max(link_latency,1) + D2D_CREDIT_PIPE。BDP = ceil(rate * 往返)。
+// standalone 在多组 latency/rate 的 BDP-1/BDP 边界验证该公式，配置校验器复用此 helper，
+// 避免测试与生产公式漂移。
+static const int D2D_CREDIT_PIPE = 2;
+inline long long D2DCreditRttCycles(int link_latency) {
+    const long long service_latency = link_latency > 0 ? link_latency : 1;
+    return 2LL * service_latency + D2D_CREDIT_PIPE;
+}
+
+inline long long D2DBdpPackets(int link_latency, const D2DRate &rate) {
+    const long long n = D2DCreditRttCycles(link_latency) * rate.num;
+    return (n + rate.den - 1) / rate.den;
+}
+
 struct D2DLinkConfig {
     D2DMode mode = MODE_FUNCTIONAL_V2;
     D2DSafety safety = SAFETY_NONE;

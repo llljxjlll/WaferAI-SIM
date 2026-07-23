@@ -412,19 +412,22 @@ D2D 入口 → 中间 die NoC → 下一 D2D 出口
 - **V3-a ✔**：`functional_v2`（默认，旧配置逐位不变）/ `bounded_saf` 双模式；
   `bounded_saf` 必须显式 `safety=whole_flow_saf`；速率为整数有理数且 `0 < rate <= 1`
   （`rate>1` 明确拒绝，不静默按 1）；四类容量分别必填并校验
-  `link_inflight_depth >= BDP=ceil(2*L*rate)`（64-bit 整数运算），
+  `link_inflight_depth >= BDP=ceil((2*max(L,1)+2)*rate)`（64-bit 整数运算），
   `saf_buffer_depth >= F` 留待 V3-c；字段按模式严格分区，杜绝接受后忽略与静默覆盖；
   `ValidateD2DTopology` 版本感知且**生产 Monitor 已切换**。
 - **V3-b ✔（仅独立 link，不接生产）**：`D2DLinkUnit` 增加 `D2DLinkBound.enabled` 门控的 bounded
   模式（生产恒 disabled、走 functional 分支逐字节不变；e2e 仍 398ns、NoC 冻结值不变）。
-  有限 FIFO（`in_avail` 公布真实空位、占用不越 depth）、**信用式无损 flow control**（单信道 1 拍
-  delta 延迟使纯组合 valid/ready 退化成 2 拍环，信用式无歧义；仍读真实 `in_avail` 断言背压正确、
-  link 永不溢出）、先交付后接受（depth 过浅时吞吐被信用往返限制：depth=1 goodput≈0.33、depth=8≈1）、
+  有限 FIFO（`in_avail` 仅作空位诊断镜像、占用不越 depth）、**显式 DATA/CTRL 回程信用接口**作为
+  唯一无损 flow-control 真源（上游按 credit 发，真实 return pulse 归还；合法上游下 link 永不溢出）。
+  clocked link 的信用 RTT=`2*max(L,1)+2`，在 `L=0/1/7` 与 `rate=1、1/2、2/3、1/4` 上均验证
+  `BDP-1` 欠速、`BDP` 达到目标速率；
   token-bucket 速率（发后 cap 至 den，支持任意 num/den：1/4→gap4、1/2→gap2、**2/3→gap 1、2 交替，
   token 守恒 goodput≈2/3**）、统计命名严格区分（`full_cycles` 状态 ≠ `upstream_blocked` 需求被挡；
   `rate_stall` ≠ `downstream_stall`，各类只在对应场景触发）、bounded 控制 FIFO + data/ctrl 并发
-  （DATA 限速不拖慢 CTRL）、构造期参数硬校验。link self-test **18 → 31**。
-- **当前门**：自测 **271/271**、Link self-test **31/31**、runner **65/65**、NoC 冻结值不变。
+  （DATA 限速不拖慢 CTRL）、构造期参数硬校验。结束时 FIFO、回程 credit queue/pulse 均为空且
+  DATA/CTRL 信用恢复初始 depth；`residual()` 包含在途信用。注意 standalone 的 `data_depth` 是 link
+  在途 FIFO，不等同于仍待 V3-d 实现的独立 `rx_buffer_depth`。link self-test **18 → 32**。
+- **当前门**：自测 **272/272**、Link self-test **32/32**、runner **65/65**、NoC 冻结值不变。
 
 ### 4.4 V3：周期精确拥塞与背压版
 

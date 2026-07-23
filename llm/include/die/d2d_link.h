@@ -21,7 +21,7 @@
 // bounded 逻辑全在独立的 forward_bounded()，仅 link self-test 显式开启。接入生产属 V3-d。
 struct D2DLinkBound {
     bool enabled = false;
-    int data_depth = 0; // 数据 FIFO 容量（enabled 时必须 >=1）
+    int data_depth = 0; // link 在途 DATA FIFO 容量（enabled 时必须 >=1；不是远端 rx_buffer_depth）
     int ctrl_depth = 0; // 控制 FIFO 容量
     D2DRate rate;       // 链路交付速率（包/cycle，0<r<=1）；token bucket 表达 <1
 };
@@ -43,7 +43,14 @@ public:
     sc_out<bool> out_ctrl_sent;
     sc_in<bool> out_ctrl_avail;
 
-    int latency; // 固定链路延迟（cycle）
+    // V3-b2：**信用回还接口**（真实模块信号，非 testbench 窥探）。link 每释放一个在途 FIFO 空位
+    // 就在对应通道 pulse 一拍，经**回程 latency**（同物理链路 L）后到达上游；上游据此 credit++。
+    // 这是 bounded 唯一流控真源：上游初始 credit=depth，credit>0 才发、发后 -1、收到 return +1。
+    // functional_v2 无背压，恒 false。data/ctrl 各一路，独立记账。
+    sc_out<bool> data_credit_return;
+    sc_out<bool> ctrl_credit_return;
+
+    int latency; // 可编程链路延迟；信用 RTT 由 D2DCreditRttCycles() 定义（含 clocked 最小服务拍）
     // V2-c：本单元对应的有向 link 在 g_d2d_links / g_d2d_link_stats 中的下标（-1=未归因）。
     int link_idx;
 
@@ -54,12 +61,12 @@ public:
     long occ_ctrl_max = 0;  // 控制 FIFO 最大占用（<= ctrl_depth）
     long full_cycles = 0;   // 数据 FIFO **处于满状态** 的拍数（纯状态，与上游是否想发无关）
     long ctrl_full_cycles = 0;       // 控制 FIFO 满状态拍数
-    long upstream_blocked = 0;       // 数据：in_sent 想发 **且** 已公布 ready=false（确有发送需求被挡）
+    long upstream_blocked = 0;       // 数据：满时仍收到 in_sent（信用违约/记账错误，合法上游应恒为 0）
     long ctrl_upstream_blocked = 0;  // 控制：同上
     long rate_stall = 0;    // 有成熟 DATA、下游 ready、但 token 不足未发的拍数
     long downstream_stall = 0;       // 有成熟 DATA、但下游 out_avail=false 的拍数
     long ctrl_downstream_stall = 0;  // 有成熟 CTRL、但下游 out_ctrl_avail=false 的拍数
-    long tokens = 0;        // token 累加器（信用；发一包扣 rate.den；发后 cap 至 den，限突发≤1 包）
+    long tokens = 0;        // 速率 token 累加器（非流控信用；发一包扣 den，发后 cap 至 den）
 
     SC_HAS_PROCESS(D2DLinkUnit);
     D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
@@ -67,8 +74,15 @@ public:
     void forward();
     void forward_bounded(long cyc); // V3-b：有限缓冲 + 速率的每拍逻辑（bound.enabled 时）
 
-    // V1 drain 不变量：仿真正常完成后数据/控制 FIFO 均须为空。
-    long residual() const { return (long)fifo_.size() + (long)cfifo_.size(); }
+    // drain 不变量：bounded 模式除数据/控制 FIFO 外，回程中的信用及当前输出 pulse 也必须清空。
+    long residual() const {
+        return (long)fifo_.size() + (long)cfifo_.size() + CreditResidual();
+    }
+    long CreditResidual() const {
+        return (long)data_credit_due_.size() + (long)ctrl_credit_due_.size() +
+               (data_credit_active_ ? 1L : 0L) +
+               (ctrl_credit_active_ ? 1L : 0L);
+    }
 
     // V3-b 只读观测（仅供仿真结束后断言，禁止当同步信号跨线程读）
     long OccMax() const { return occ_max; }
@@ -89,6 +103,12 @@ private:
     // 直到下游可收，不丢包、不越过下游容量。
     std::deque<std::pair<long, sc_bv<256>>> fifo_;  // 数据
     std::deque<std::pair<long, sc_bv<256>>> cfifo_; // 控制
+    // V3-b2：信用回还的到达时刻队列（pop 时 push cyc+latency，模拟回程 L 拍；每拍 pulse 一个到期的）。
+    std::deque<long> data_credit_due_;
+    std::deque<long> ctrl_credit_due_;
+    // sc_signal pulse 在写出后的一个调度周期内仍是在途信用；纳入 residual，避免过早宣布 drain。
+    bool data_credit_active_ = false;
+    bool ctrl_credit_active_ = false;
 };
 
 // V1-b2 独立 SystemC link 测试（驱动真实包）：latency=0/1/7/20、FIFO 序、无丢/重、

@@ -449,19 +449,21 @@ void ParseD2DLinkConfig(const D2DJson &c2c) {
                 "flow, inflight covers BDP, rx is remote receive, ctrl is the "
                 "control sub-channel)");
 
-    // link_inflight_depth 必须 >= 带宽时延积，否则链路填不满、稳态吞吐低于 link_rate。
-    // 用 64-bit 整数有理数运算（防溢出、无浮点）：BDP = ceil(2 * L * num / den)。
-    long long bdp_num = 2LL * g_d2d_cfg.link_latency * g_d2d_cfg.link_rate.num;
-    long long bdp = (bdp_num + g_d2d_cfg.link_rate.den - 1) /
-                    g_d2d_cfg.link_rate.den;
+    // link_inflight_depth 必须 >= 带宽时延积，否则信用往返期间链路填不满、稳态吞吐低于 link_rate。
+    // **信用往返 = 2*max(L,1) + 接口流水寄存器 D2D_CREDIT_PIPE 拍**：clocked link 在 L=0
+    // 时正向交付/反向信用仍各至少占一个服务拍。standalone 以多组 latency/rate 的 BDP-1/BDP
+    // 边界验证该公式；这里复用同一 helper，使用 64-bit 整数有理数运算（防溢出、无浮点）。
+    long long bdp = D2DBdpPackets(g_d2d_cfg.link_latency, g_d2d_cfg.link_rate);
     if ((long long)g_d2d_cfg.link_inflight_depth < bdp)
         throw std::runtime_error(
             "die_ports.c2c: link_inflight_depth (" +
             std::to_string(g_d2d_cfg.link_inflight_depth) +
             ") < bandwidth-delay product (" + std::to_string(bdp) +
-            " = ceil(2 * link_latency * link_rate)); the link could not stay "
-            "full. Note this is separate from saf_buffer_depth >= flow size, "
-            "which is a correctness requirement checked with the workload");
+            " = ceil((2*max(link_latency,1) + " +
+            std::to_string(D2D_CREDIT_PIPE) +
+            ") * link_rate)); the link could not stay full over the credit "
+            "round-trip. Separate from saf_buffer_depth >= flow size (a "
+            "correctness requirement checked with the workload)");
 }
 
 void ValidateD2DTopology() {
