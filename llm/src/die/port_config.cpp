@@ -26,6 +26,7 @@ long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
 long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
 D2DBehavioralStats g_d2d_behavioral_stats;
 D2DDataProbe g_d2d_data_in, g_d2d_data_out;
+std::map<V5SubflowProbeKey, V5SubflowStat> g_v5_subflow_stats;
 long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
 std::vector<D2DLinkStat> g_d2d_link_stats;
 std::vector<long> g_die_router_pkts;
@@ -160,6 +161,7 @@ void ResetD2DLinkStats() {
     }
     g_d2d_data_in = D2DDataProbe();
     g_d2d_data_out = D2DDataProbe();
+    g_v5_subflow_stats.clear();
     g_d2d_behavioral_stats = D2DBehavioralStats{};
 }
 void ResetHostLaneStats(int n_lanes) {

@@ -1010,4 +1010,14 @@ V4 开发完成。
 - 本阶段门：纯函数 **305/305**；`run_v4_exit.py` 全绿，NoC 冻结值
   **14781/29109、14833/45441** 精确不变。
 
-下一步 V5-b/V5-c：多端口生产接线与 sender striping + receiver grouped join 必须同批闭环。
+- **V5-b/V5-c 已完成**：生产 sender 按 `q/r` 拆分 1/2/4 条子流；每条子流分别发送
+  REQUEST、等待对应 ACK、携固定端口发送独立 seq 空间和尾包。接收端按
+  `(source,subflow)` 聚合，只有全部 sender×stripe 尾包到齐才结束原语；`tag` 继续表示全局
+  接收聚合槽，`output_lock` 仍按 tag，不错误迁移到 FlowKey。
+- 证据：四个独立 E/W 端口，`F=7,k=1/2/4` 的配额为 `[7]`、`[4,3]`、
+  `[2,2,2,1]`；逐 subflow 的 link、in/out、seq hash、完整 payload checksum、连续序号、
+  唯一尾包均一致；k=4 使用四条不同 link；两次运行确定，所有残留为 0。runner **7/7**。
+- 审查修复：Behavioral 每 subflow 的唯一代表包必须同时是 `seq=1`（获取 Router 锁）和
+  `is_end=true`（释放锁）；修复后 V4 Behavioral **13/13**，避免仅周期精确路径通过的假闭环。
+
+下一步 V5-d：bounded SAF 对全部 subflow 做一次原子 admission/rollback，并实现 link-group 共享容量。

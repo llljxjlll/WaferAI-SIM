@@ -155,6 +155,27 @@ int sc_main(int argc, char *argv[]) {
             << " in_last_cycle=" << g_d2d_data_in.last_cycle
             << " out_first_cycle=" << g_d2d_data_out.first_cycle
             << " out_last_cycle=" << g_d2d_data_out.last_cycle;
+        // V5-b/c：striping 的序号空间按 subflow 独立，从 1 重新开始。逐 link 分桶
+        // 可同时证明选口、每条子流的 q/r 配额、顺序、唯一尾包和 wire payload 守恒。
+        for (const auto &kv : g_v5_subflow_stats) {
+            const auto &[idx, source, tag, subflow] = kv.first;
+            const V5SubflowStat &st = kv.second;
+            LOG_INFO(SYSTEM)
+                << "[V5_SUBFLOW] idx=" << idx << " source=" << source
+                << " tag=" << tag << " subflow=" << subflow
+                << " in=" << st.in_pkts << " out=" << st.out_pkts
+                << " in_seqhash=" << st.in_seqhash
+                << " out_seqhash=" << st.out_seqhash
+                << " in_csum=" << st.in_csum
+                << " out_csum=" << st.out_csum
+                << " inorder=" << (st.out_inorder ? 1 : 0)
+                << " minseq=" << st.out_minseq
+                << " maxseq=" << st.out_maxseq
+                << " endseq=" << st.out_endseq
+                << " ends=" << st.out_end_count
+                << " end_length=" << st.out_end_length;
+        }
+
         // V2-b 多跳证据：每个包每跨一次 link，在落点 die 的入口被重新 pin 一次。
         // same>0 说明存在「新旧 exit_port 数值相同」的重写（如 3×1 直线 E→E），这类情形
         // 光看路由结果无法证明重写发生，必须靠本计数。

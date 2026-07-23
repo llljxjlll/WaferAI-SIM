@@ -69,6 +69,12 @@ public:
     int d2d_exit_port = -1;
     bool d2d_exit_selected = false;
 
+    // V5 运行态（不序列化）：每条 subflow 的包数、已发包数和固定出口。
+    vector<int> stripe_packets;
+    vector<int> stripe_sent;
+    vector<int> stripe_exit_ports;
+    int next_subflow = 0;
+
     int data_packet_id = 0; // 已经发送的包裹数量
 
     int taskCoreDefault(TaskCoreContext &context);

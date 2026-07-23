@@ -2,6 +2,7 @@
 #include <deque>
 #include <iostream>
 #include <queue>
+#include <set>
 #include <string>
 #include <typeinfo>
 
@@ -28,20 +29,41 @@
 #include "workercore/workercore.h"
 
 namespace {
-void AttachRequestFlowPackets(Msg &m, const Send_prim *prim) {
-    // V3-c 当前支持 dataflow：calculate_address 已将后续 SEND_DATA.max_packet 配对写入 SEND_REQ。
-    // functional_v2 也携带该元数据但不消费；bounded SAF 会在目的端以它做原子 admission。
+int StripePackets(int total, int stripes, int subflow) {
+    if (stripes != 1 && stripes != 2 && stripes != 4)
+        throw std::runtime_error("V5 stripe count must be 1, 2, or 4");
+    if (total < stripes || subflow < 0 || subflow >= stripes)
+        throw std::runtime_error(
+            "V5 striping requires at least one packet per subflow");
+    return total / stripes + (subflow < total % stripes ? 1 : 0);
+}
+
+void InitDataStripeState(Send_prim *prim, int source) {
+    const int k = prim->stripe_count;
+    prim->stripe_packets.assign(k, 0);
+    prim->stripe_sent.assign(k, 0);
+    prim->stripe_exit_ports.assign(k, -1);
+    for (int s = 0; s < k; ++s) {
+        prim->stripe_packets[s] = StripePackets(prim->max_packet, k, s);
+        prim->stripe_exit_ports[s] =
+            SelectCoreMsgExit(source, prim->des_id, prim->tag_id, s);
+    }
+    prim->d2d_exit_port = prim->stripe_exit_ports[0];
+    prim->d2d_exit_selected = true;
+}
+
+void AttachRequestFlowPackets(Msg &m, const Send_prim *prim, int subflow) {
     if (SYSTEM_MODE == SIM_DATAFLOW &&
         (prim->max_packet <= 0 ||
          (unsigned)prim->max_packet > M_D_FLOW_PACKETS_MAX))
         throw std::runtime_error(
             "dataflow REQUEST missing a valid flow_packets count");
-    m.flow_packets_ = prim->max_packet;
-    // V3-d：在 REQUEST 真正注入控制网之前，对确定性多跳路径上的所有有向 SAF stage
-    // 一次性预留整流容量。失败会回滚并抛错，因此不会出现“部分路径已拿到容量后开始 DATA”。
+    m.subflow_ = subflow;
+    m.flow_packets_ = StripePackets(prim->max_packet, prim->stripe_count,
+                                    subflow);
     if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
         DieOfGlobal(m.source_) != DieOfGlobal(m.des_))
-        ReserveWholeFlowSafPath(m.source_, m.des_, m.tag_id_, 0,
+        ReserveWholeFlowSafPath(m.source_, m.des_, m.tag_id_, subflow,
                                 m.flow_packets_);
 }
 } // namespace
@@ -51,10 +73,13 @@ void WorkerCoreExecutor::send_logic() {
         Send_prim *prim = (Send_prim *)prim_queue.front();
 
         prim->data_packet_id = 0;
-        if (prim->type == SEND_DATA && !prim->d2d_exit_selected) {
-            prim->d2d_exit_port = SelectCoreMsgExit(cid, prim->des_id);
-            prim->d2d_exit_selected = true;
-        }
+        prim->next_subflow = 0;
+        prim->d2d_exit_selected = false;
+        prim->stripe_packets.clear();
+        prim->stripe_sent.clear();
+        prim->stripe_exit_ports.clear();
+        if (prim->type == SEND_DATA)
+            InitDataStripeState(prim, cid);
         bool job_done = false; // 结束内圈循环的标志
 
         LOG_INFO(PRIM) << "Core " << cid << " start send primitive "
@@ -73,44 +98,51 @@ void WorkerCoreExecutor::send_logic() {
             if (prim->type == SEND_DATA) {
                 while (job_done != true) {
                     // [发送方] 正常发送数据
-                    prim->data_packet_id++;
-
-                    bool is_end_packet =
-                        prim->data_packet_id == prim->max_packet;
-                    int length = is_end_packet ? prim->end_length : M_D_DATA;
-
+                    int subflow = 0, seq = 0;
+                    bool logical_last = false;
                     if (SPEC_USE_BEHA_NOC) {
-                        is_end_packet = true;
-                        roofline_packets = prim->max_packet;
+                        subflow = prim->next_subflow++;
+                        seq = 1; // Behavioral 每 subflow 仅发一个代表包；首包也必须是 seq=1
+                        prim->data_packet_id++;
+                        roofline_packets = prim->stripe_packets[subflow];
+                        logical_last = prim->next_subflow == prim->stripe_count;
+                    } else {
+                        int global_seq = ++prim->data_packet_id;
+                        subflow = (global_seq - 1) % prim->stripe_count;
+                        seq = ++prim->stripe_sent[subflow];
+                        logical_last = global_seq == prim->max_packet;
                     }
+                    bool is_end_packet = SPEC_USE_BEHA_NOC ||
+                                         seq == prim->stripe_packets[subflow];
+                    int last_subflow =
+                        (prim->max_packet - 1) % prim->stripe_count;
+                    int length = (is_end_packet && subflow == last_subflow)
+                                     ? prim->end_length
+                                     : M_D_DATA;
 
-                    int delay = 0;
                     TaskCoreContext context = generate_context(this);
-                    // 因为send taskCoreDefault 会delay 所以 ev_send_helper
-                    // 有机会发出去 然后wc 里面又要wait 一个cycle ev_send_helper
-                    // 一低一高
-                    delay = prim->taskCoreDefault(context);
+                    (void)prim->taskCoreDefault(context);
 
                     if (!channel_avail_i.read())
                         wait(ev_channel_avail_i);
 
-                    Msg temp_msg = Msg(is_end_packet, MSG_TYPE::DATA,
-                                       prim->data_packet_id, prim->des_id, 0,
-                                       prim->tag_id, length, sc_bv<128>(0x1));
+                    Msg temp_msg = Msg(is_end_packet, MSG_TYPE::DATA, seq,
+                                       prim->des_id, 0, prim->tag_id, length,
+                                       sc_bv<128>(0x1));
                     temp_msg.roofline_packets_ = roofline_packets;
-                    temp_msg.source_ = cid; // 真实全局 source
-                    temp_msg.exit_port_ = prim->d2d_exit_port;
+                    temp_msg.source_ = cid;
+                    temp_msg.subflow_ = subflow;
+                    temp_msg.exit_port_ = prim->stripe_exit_ports[subflow];
                     send_buffer = temp_msg;
 
-                    // send_helper_write = 3;
                     atomic_helper_lock(sc_time_stamp(), 3);
                     ev_send_helper.notify(0, SC_NS);
 
-                    if (is_end_packet) {
+                    if (logical_last) {
                         LOG_DEBUG(NETWORK)
                             << "Core " << cid << " -> DATA -> " << prim->des_id;
-                        LOG_DEBUG(NETWORK) << "max_packet " << prim->max_packet;
-
+                        LOG_DEBUG(NETWORK) << "max_packet " << prim->max_packet
+                                           << ", stripe " << prim->stripe_count;
                         job_done = true;
                     }
 
@@ -129,16 +161,17 @@ void WorkerCoreExecutor::send_logic() {
 
                 send_buffer =
                     Msg(MSG_TYPE::REQUEST, prim->des_id, prim->tag_id, cid);
-                AttachRequestFlowPackets(send_buffer, prim);
+                int subflow = prim->next_subflow++;
+                AttachRequestFlowPackets(send_buffer, prim, subflow);
                 PinControlMsgExit(send_buffer);
 
                 send_helper_write = 3;
                 ev_send_helper.notify(0, SC_NS);
 
-                LOG_DEBUG(NETWORK)
-                    << "Core " << cid << " -> REQ -> " << prim->des_id;
+                LOG_DEBUG(NETWORK) << "Core " << cid << " -> REQ["
+                                   << subflow << "] -> " << prim->des_id;
 
-                job_done = true;
+                job_done = prim->next_subflow == prim->stripe_count;
             }
 
             else if (prim->type == SEND_DONE) {
@@ -357,7 +390,11 @@ void WorkerCoreExecutor::send_para_logic() {
                         // 可以发送数据
                         send_buffer = Msg(MSG_TYPE::REQUEST, s_prim->des_id,
                                           s_prim->tag_id, cid);
-                        AttachRequestFlowPackets(send_buffer, s_prim);
+                        if (s_prim->stripe_count != 1)
+                            throw std::runtime_error(
+                                "V5 striping is supported by the sequential "
+                                "dataflow path, not parallel-send pipeline mode");
+                        AttachRequestFlowPackets(send_buffer, s_prim, 0);
                         PinControlMsgExit(send_buffer);
 
                         ev_send_helper.notify(0, SC_NS);
@@ -449,6 +486,8 @@ void WorkerCoreExecutor::recv_logic() {
         bool wait_send = false;
         bool job_done = false;
         vector<sc_bv<128>> segments; // 单个原语配置的所有数据包
+        std::set<int> ack_subflows;
+        std::set<std::pair<int, int>> ended_subflows;
 
         LOG_INFO(PRIM) << "Core " << cid << " start receive primitive "
                        << GetEnumRecvType(prim->type);
@@ -473,9 +512,16 @@ void WorkerCoreExecutor::recv_logic() {
                 msg_buffer_[MSG_TYPE::ACK].pop();
 
                 if (m.msg_type_ == ACK) {
-                    job_done = true;
-
-                    LOG_DEBUG(NETWORK) << "Core " << cid << " <- ACK";
+                    if (m.subflow_ < 0 || m.subflow_ >= prim->stripe_count)
+                        throw std::runtime_error(
+                            "V5 ACK carries an invalid subflow id");
+                    if (!ack_subflows.insert(m.subflow_).second)
+                        throw std::runtime_error(
+                            "V5 received a duplicate ACK subflow");
+                    job_done =
+                        (int)ack_subflows.size() == prim->stripe_count;
+                    LOG_DEBUG(NETWORK) << "Core " << cid << " <- ACK["
+                                       << m.subflow_ << "]";
                 }
             }
 
@@ -579,6 +625,15 @@ void WorkerCoreExecutor::recv_logic() {
                     // 如果是end包，则将recv_index归零，表示开始接收下一个core传来的数据（如果有的话）
                     if (temp.is_end_) {
                         if (prim->type == RECV_DATA) {
+                            if (temp.subflow_ < 0 ||
+                                temp.subflow_ >= prim->stripe_count)
+                                throw std::runtime_error(
+                                    "V5 DATA tail carries an invalid subflow id");
+                            if (!ended_subflows
+                                     .insert({temp.source_, temp.subflow_})
+                                     .second)
+                                throw std::runtime_error(
+                                    "V5 received a duplicate DATA subflow tail");
                             long long cycle = (long long)(
                                 sc_time_stamp().value() /
                                 sc_time(CYCLE, SC_NS).value());
@@ -598,7 +653,10 @@ void WorkerCoreExecutor::recv_logic() {
                         // prim->recv_cnt 记录的是 receive 原语
                         // 需要接受的 end 包的数量 多发一的实现 max_recv
                         // 表示当前 DATA 包 发送了多少个 package 数量
-                        if (end_cnt == prim->recv_cnt && recv_cnt >= max_recv) {
+                        const int expected_ends =
+                            prim->recv_cnt *
+                            (prim->type == RECV_DATA ? prim->stripe_count : 1);
+                        if (end_cnt == expected_ends && recv_cnt >= max_recv) {
                             // 收到了所有的数据，可以结束此原语，进入comp原语
                             // 无需更新pos_locator中的kv的size，由原语自己指定输入大小
                             job_done = true;
@@ -705,7 +763,7 @@ void WorkerCoreExecutor::task_logic() {
     }
 }
 void WorkerCoreExecutor::req_logic() {
-    queue<int> ack_queue;
+    queue<Msg> ack_queue;
 
     while (true) {
         if (prim_queue.size()) {
@@ -722,7 +780,11 @@ void WorkerCoreExecutor::req_logic() {
                         auto &msg = msg_buffer_[MSG_TYPE::REQUEST].front();
 
                         if (msg.tag_id_ == prim->tag_id) {
-                            ack_queue.push(msg.source_);
+                            if (msg.subflow_ < 0 ||
+                                msg.subflow_ >= prim->stripe_count)
+                                throw std::runtime_error(
+                                    "V5 REQUEST carries an invalid subflow id");
+                            ack_queue.push(msg);
                         } else
                             temp.push(msg);
 
@@ -739,15 +801,17 @@ void WorkerCoreExecutor::req_logic() {
                             wait(CYCLE, SC_NS);
                     }
 
-                    int des = ack_queue.front();
+                    Msg req = ack_queue.front();
                     ack_queue.pop();
 
+                    int des = req.source_;
                     send_buffer = Msg(MSG_TYPE::ACK, des, des, cid);
+                    send_buffer.subflow_ = req.subflow_;
                     PinControlMsgExit(send_buffer);
                     ev_send_helper.notify(0, SC_NS);
 
-                    LOG_DEBUG(NETWORK)
-                        << "Core " << cid << " -> ACK -> " << des;
+                    LOG_DEBUG(NETWORK) << "Core " << cid << " -> ACK["
+                                       << req.subflow_ << "] -> " << des;
                 }
             }
         }

@@ -314,6 +314,24 @@ struct D2DDataProbe {
 };
 extern D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 
+// ---- V5-b/c：逐 link、逐 subflow 的 DATA 完整性探针 ----
+// 旧 D2DDataProbe 只覆盖单 DATA 序列；striping 后各 subflow 的 seq 都从 1
+// 开始，必须按 (link,source,tag,subflow) 分桶，否则合法交织会被误报为乱序。
+struct V5SubflowStat {
+    long in_pkts = 0, out_pkts = 0;
+    unsigned long long in_seqhash = 1469598103934665603ULL;
+    unsigned long long out_seqhash = 1469598103934665603ULL;
+    unsigned long long in_csum = 1469598103934665603ULL;
+    unsigned long long out_csum = 1469598103934665603ULL;
+    int out_minseq = -1, out_maxseq = -1, out_endseq = -1;
+    int out_end_count = 0, out_end_length = -1, out_expect = 0;
+    bool out_inorder = true;
+};
+using V5SubflowProbeKey = std::tuple<int, int, int, int>;
+// key = (directed link index, source global id, tag, subflow)
+extern std::map<V5SubflowProbeKey, V5SubflowStat> g_v5_subflow_stats;
+
+
 // ---- V2-b：C2C 入口 re-pin（每进入一个 die 重新选出口）统计 ----
 // 包跨 link 进入本 die 时，router 在入口清除上一跳的 pinned exit 并按本 die 重新 pin：
 // 目的在本 die → -1（转片内 XY）；否则 → CrossDieSelectExit(入口 tile, des)。

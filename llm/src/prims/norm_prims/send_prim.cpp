@@ -14,6 +14,10 @@ void Send_prim::deserialize(vector<sc_bv<128>> segments) {
     // d2d_exit_* 是一次执行期间的运行态，不能从上一次反序列化/执行继承。
     d2d_exit_port = -1;
     d2d_exit_selected = false;
+    stripe_packets.clear();
+    stripe_sent.clear();
+    stripe_exit_ports.clear();
+    next_subflow = 0;
 
     auto buffer = segments[0];
 

@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 namespace {
+inline void MixWord(unsigned long long &h, unsigned long long w);
 void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
     int type = static_cast<int>(DeserializeMsg(payload).msg_type_);
     if (type >= 0 && type < MSG_TYPE_NUM)
@@ -23,6 +24,34 @@ void CountLink(int idx, bool is_in, const sc_bv<256> &payload) {
         g_d2d_link_stats[idx].in_by_type[type]++;
     else
         g_d2d_link_stats[idx].out_by_type[type]++;
+
+    Msg m = DeserializeMsg(payload);
+    if (m.msg_type_ != DATA)
+        return;
+    auto key = std::make_tuple(idx, m.source_, m.tag_id_, m.subflow_);
+    V5SubflowStat &st = g_v5_subflow_stats[key];
+    long &pkts = is_in ? st.in_pkts : st.out_pkts;
+    unsigned long long &seqhash = is_in ? st.in_seqhash : st.out_seqhash;
+    unsigned long long &csum = is_in ? st.in_csum : st.out_csum;
+    bool first = pkts == 0;
+    pkts++;
+    MixWord(seqhash, (unsigned long long)(m.seq_id_ + 1));
+    for (int w = 0; w < 256; w += 64)
+        MixWord(csum, payload.range(w + 63, w).to_uint64());
+    if (!is_in) {
+        if (!first && m.seq_id_ != st.out_expect)
+            st.out_inorder = false;
+        st.out_expect = m.seq_id_ + 1;
+        if (first || m.seq_id_ < st.out_minseq)
+            st.out_minseq = m.seq_id_;
+        if (m.seq_id_ > st.out_maxseq)
+            st.out_maxseq = m.seq_id_;
+        if (m.is_end_) {
+            st.out_endseq = m.seq_id_;
+            st.out_end_count++;
+            st.out_end_length = m.length_;
+        }
+    }
 }
 
 // FNV-1a 风格顺序敏感混合：h 依次吸收一个 64-bit 字。乱序/改值都会改变结果。
@@ -486,7 +515,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
         sc_bv<256> payload = in_ctrl_channel.read();
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ == REQUEST) {
-            FlowKey key{m.source_, m.tag_id_, 0};
+            FlowKey key{m.source_, m.tag_id_, m.subflow_};
             if (m.flow_packets_ <= 0 || m.flow_packets_ > bound.saf_depth)
                 throw std::runtime_error("bounded SAF REQUEST has invalid flow_packets");
             if (saf_expected_.count(key) || saf_flows_.count(key))
@@ -513,7 +542,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ != DATA)
             throw std::runtime_error("bounded SAF DATA channel received a non-DATA packet");
-        FlowKey key{m.source_, m.tag_id_, 0};
+        FlowKey key{m.source_, m.tag_id_, m.subflow_};
         auto eit = saf_expected_.find(key);
         if (eit == saf_expected_.end())
             throw std::runtime_error("bounded SAF DATA arrived before matching REQUEST");

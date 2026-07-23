@@ -9,6 +9,7 @@
 python3 llm/test/d2d_link/run_test_d2d_v0.py     # 需先 build 出 build/npusim
 # 或单独跑纯函数自测：
 cd build && ./npusim --d2d-v0-selftest
+```
 
 ## V5 开发进展（feat/d2d-v5）
 
@@ -24,7 +25,16 @@ cd build && ./npusim --d2d-v0-selftest
 - V5-a 验证：纯函数 **305/305**，V4 聚合门 `AGGREGATE EXIT=0`，NoC 冻结值精确不变。
   `dynamic` 当前只完成选择算法接缝；active-flow 记账、尾包释放与运行时验收属于 V5-f，不能把
   本阶段的算法单测表述为 dynamic 端到端完成。
-```
+- **V5-b/c ✔ 多端口生产接线 + sender striping + grouped receive**：总包数按
+  `q=F/k,r=F%k` 拆分，前 `r` 条子流各 `q+1` 包；REQUEST/ACK/DATA 都携带 subflow，
+  每条子流固定一个出口，接收端收齐全部 ACK 和 `(source,subflow)` 尾包后才完成一次逻辑 flow。
+- 新增 `[V5_SUBFLOW]` 按 `(link,source,tag,subflow)` 分桶，避免旧单序列探针把合法交织误判
+  为乱序；逐子流核对 in/out、顺序 hash、完整 payload checksum、连续 seq 和唯一尾包。
+- 四端口一跳生产测试 `F=7`：k=1/2/4 配额分别为 `[7]`、`[4,3]`、`[2,2,2,1]`，
+  k=4 精确使用四条 link；两次运行选择/统计一致，router/link/SAF 全部 drain-to-zero；
+  `F<k` 在 DATA 注入前明确拒绝。V5 runner 当前 **7/7**，V4 runner **13/13**。
+- Behavioral 代表包仍满足 `seq=1 && is_end=true`，既获取又释放 Router 锁；V4 cycle ledger、
+  时序与 NoC Behavioral 回归因此保持原契约。
 
 ## 当前状态（逐增量推进）
 
