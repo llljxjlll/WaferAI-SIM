@@ -11,9 +11,20 @@
 // 端到端 latency 由 V1-d 标定。
 #include "systemc.h"
 #include "defs/const.h"
+#include "die/port.h"
 #include "macros/macros.h"
 #include <deque>
 #include <utility>
+
+// V3-b：有限缓冲 + token-bucket 速率的可选配置。**默认 disabled**——生产路径（functional_v2）
+// 恒为 disabled，forward() 行为与 V2 逐字节一致；仅独立 link self-test 显式开启，验证有限 FIFO
+// 与速率语义。真正接入生产 router↔port↔link 属 V3-d。
+struct D2DLinkBound {
+    bool enabled = false;
+    int data_depth = 0; // 数据 FIFO 容量（enabled 时必须 >=1）
+    int ctrl_depth = 0; // 控制 FIFO 容量
+    D2DRate rate;       // 链路交付速率（包/cycle，0<r<=1）；token bucket 表达 <1
+};
 
 class D2DLinkUnit : public sc_module {
 public:
@@ -36,12 +47,35 @@ public:
     // V2-c：本单元对应的有向 link 在 g_d2d_links / g_d2d_link_stats 中的下标（-1=未归因）。
     int link_idx;
 
+    D2DLinkBound bound; // V3-b：有限缓冲 + 速率（默认 disabled = V2 行为）
+
+    // V3-b 统计（仅 bounded 时有意义）：占用峰值、满拍数、速率停顿、下游停顿。
+    long occ_max = 0;      // 数据 FIFO 观测到的最大占用（不变量：<= data_depth）
+    long occ_ctrl_max = 0; // 控制 FIFO 最大占用
+    long full_cycles = 0;  // in_avail=false（数据 FIFO 满、对上游施背压）的拍数
+    long rate_stall = 0;   // 有成熟包且下游 ready，但 token 不足未发的拍数
+    long ds_stall = 0;     // 有成熟包但下游 out_avail=false 的拍数
+    long tokens = 0;       // token 累加器（信用；发一包扣 rate.den）
+    long data_captured = 0; // 本单元实际采集(入 FIFO)的数据包数（供 self-test 做无丢 handshake）
+
     SC_HAS_PROCESS(D2DLinkUnit);
-    D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1);
+    D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
+                D2DLinkBound bound_ = D2DLinkBound{});
     void forward();
 
     // V1 drain 不变量：仿真正常完成后数据/控制 FIFO 均须为空。
     long residual() const { return (long)fifo_.size() + (long)cfifo_.size(); }
+
+    // V3-b 只读观测（供 self-test 断言）
+    long OccMax() const { return occ_max; }
+    long OccCtrlMax() const { return occ_ctrl_max; }
+    long FullCycles() const { return full_cycles; }
+    long RateStall() const { return rate_stall; }
+    long DsStall() const { return ds_stall; }
+    long DataOcc() const { return (long)fifo_.size(); }
+    long CtrlOcc() const { return (long)cfifo_.size(); }
+    long Tokens() const { return tokens; }
+    long DataCaptured() const { return data_captured; }
 
 private:
     // 只存真实包 {ready_cycle, payload}（不每周期存 bubble）。ready_cycle=capture_cycle+latency；
