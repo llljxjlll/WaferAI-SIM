@@ -300,6 +300,16 @@ struct D2DBehavioralStats {
     long long fixed_cycles = 0;
 };
 extern D2DBehavioralStats g_d2d_behavioral_stats;
+
+struct D2DBehavioralFlowMeta {
+    int dest_global = -1;
+    int packets = 0;
+    int stripes = 1;
+};
+void RegisterD2DBehavioralFlow(int source_global, int dest_global, int tag,
+                               int packets, int stripes);
+D2DBehavioralFlowMeta ConsumeD2DBehavioralFlow(int source_global, int tag);
+long D2DBehavioralFlowResidual();
 void ResetD2DLinkStats();
 
 // ---- V1-d2：DATA 逐包完整性探针 ----

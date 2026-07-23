@@ -229,21 +229,26 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
         if (link_idx >= 0 && link_idx < (int)g_d2d_links.size())
             first_link =
                 g_d2d_links[link_idx].local_die == DieOfGlobal(m.source_);
-        if (first_link) {
-            D2DRate effective = D2DMinRate(
-                D2DRate{1, 1},
-                D2DMinRate(behavioral.port_rate, behavioral.link_rate));
-            long long service =
-                D2DServiceCycles(m.roofline_packets_, effective);
-            delay += service;
+        if (first_link && m.subflow_ == 0) {
+            D2DBehavioralFlowMeta meta =
+                ConsumeD2DBehavioralFlow(m.source_, m.tag_id_);
+            if (meta.dest_global != m.des_)
+                throw std::runtime_error(
+                    "Behavioral DATA destination disagrees with flow metadata");
+            D2DBehavioralEstimate estimate = EstimateD2DBehavioralStriped(
+                m.source_, m.des_, m.tag_id_, meta.packets, meta.stripes,
+                behavioral.port_rate, behavioral.link_rate, latency);
+            delay += estimate.bulk_service_cycles;
             g_d2d_behavioral_stats.data_flows++;
-            g_d2d_behavioral_stats.logical_data_packets += m.roofline_packets_;
-            g_d2d_behavioral_stats.service_cycles += service;
+            g_d2d_behavioral_stats.logical_data_packets += meta.packets;
+            g_d2d_behavioral_stats.service_cycles +=
+                estimate.bulk_service_cycles;
         }
         if (delay > std::numeric_limits<long>::max() - cyc)
             throw std::runtime_error("V4 Behavioral ready-cycle overflow");
         behavioral_data_events_.emplace(cyc + (long)delay, payload);
-        g_d2d_behavioral_stats.fixed_cycles += latency;
+        if (m.subflow_ == 0)
+            g_d2d_behavioral_stats.fixed_cycles += latency;
         g_d2d_link_in_pkts++;
         CountType(g_d2d_link_in_by_type, payload);
         CountLink(link_idx, true, payload);
@@ -259,7 +264,8 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
             throw std::runtime_error(
                 "V4 Behavioral control ready-cycle overflow");
         behavioral_ctrl_events_.emplace(cyc + latency, payload);
-        g_d2d_behavioral_stats.fixed_cycles += latency;
+        if (m.subflow_ == 0)
+            g_d2d_behavioral_stats.fixed_cycles += latency;
         g_d2d_link_in_pkts++;
         CountType(g_d2d_link_in_by_type, payload);
         CountLink(link_idx, true, payload);

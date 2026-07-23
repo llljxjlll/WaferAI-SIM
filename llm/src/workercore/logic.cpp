@@ -50,6 +50,10 @@ void InitDataStripeState(Send_prim *prim, int source) {
     }
     prim->d2d_exit_port = prim->stripe_exit_ports[0];
     prim->d2d_exit_selected = true;
+    if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL &&
+        DieOfGlobal(source) != DieOfGlobal(prim->des_id))
+        RegisterD2DBehavioralFlow(source, prim->des_id, prim->tag_id,
+                                  prim->max_packet, k);
 }
 
 void AttachRequestFlowPackets(Msg &m, const Send_prim *prim, int subflow) {

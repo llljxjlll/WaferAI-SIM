@@ -315,7 +315,8 @@ int sc_main(int argc, char *argv[]) {
             return r;
         };
         LOG_INFO(SYSTEM) << "[DRAIN] d2d_link_residual="
-                         << resid(sc_get_top_level_objects());
+                         << resid(sc_get_top_level_objects()) +
+                                D2DBehavioralFlowResidual();
     }
 
     // output_lock_ref 峰值：>=2 证明同 tag 多流共享同一把锁（多发一聚合，tag-only 核心语义）。

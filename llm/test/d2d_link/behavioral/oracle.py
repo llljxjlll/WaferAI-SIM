@@ -160,6 +160,139 @@ def estimate(hw: dict, source: int, dest: int, packets: int) -> dict:
             "transaction_d2d_cycles": 3 * per_phase + bulk}
 
 
+SIDE_ORDER = ("N", "S", "W", "E")
+MASK64 = (1 << 64) - 1
+
+
+def expanded_c2c_ports(hw: dict) -> List[dict]:
+    gx = int(hw["x"])
+    gy = int(hw.get("y", gx))
+    dp = hw.get("die_ports", {})
+    overrides = {}
+    for item in dp.get("overrides", []):
+        indices = item["idx"] if isinstance(item["idx"], list) else [item["idx"]]
+        for idx in indices:
+            require((item["side"], int(idx)) not in overrides,
+                    "duplicate port override")
+            overrides[(item["side"], int(idx))] = item
+    ports, port_id = [], 0
+    for side in SIDE_ORDER:
+        limit = gy if side in ("E", "W") else gx
+        for idx in range(limit):
+            spec = overrides.get((side, idx), dp.get("edges", {}).get(side))
+            if spec is None:
+                continue
+            if spec.get("role") == "c2c":
+                direction = spec.get("dir", side)
+                require(direction == side, "V5 MVP requires side==dir")
+                ports.append({"port_id": port_id, "side": side, "dir": direction,
+                              "idx": idx, "tile": tile_for(side, idx, gx, gy),
+                              "link_group": spec.get("link_group", -1)})
+            port_id += 1
+    return ports
+
+
+def stable_hash(seed: int, source: int, tag: int) -> int:
+    x = (seed ^ 0x9E3779B97F4A7C15) & MASK64
+    for value in (source & 0xFFFFFFFF, tag & 0xFFFFFFFF):
+        x ^= (value + 0x9E3779B97F4A7C15 + ((x << 6) & MASK64) +
+              (x >> 2)) & MASK64
+        x &= MASK64
+        x ^= x >> 30
+        x = (x * 0xBF58476D1CE4E5B9) & MASK64
+        x ^= x >> 27
+        x = (x * 0x94D049BB133111EB) & MASK64
+        x ^= x >> 31
+        x &= MASK64
+    return x
+
+
+def select_v5_port(hw: dict, local_core: int, direction: str,
+                   source: int, tag: int, subflow: int) -> dict:
+    gx = int(hw["x"])
+    gy = int(hw.get("y", gx))
+    ports = sorted((p for p in expanded_c2c_ports(hw) if p["dir"] == direction),
+                   key=lambda p: (p["idx"], p["port_id"]))
+    require(ports, f"missing C2C ports for {direction}")
+    c2c = hw["die_ports"]["c2c"]
+    if not c2c.get("multi_port", False) or len(ports) == 1:
+        return min(ports, key=lambda p: (local_manhattan(local_core, p["tile"], gx),
+                                        p["port_id"]))
+    policy = c2c["select_policy"]
+    coord = local_core // gx if direction in ("E", "W") else local_core % gx
+    extent = gy if direction in ("E", "W") else gx
+    band = min(len(ports) - 1, coord * len(ports) // extent)
+    if policy == "nearest":
+        return min(ports, key=lambda p: (local_manhattan(local_core, p["tile"], gx),
+                                        p["port_id"]))
+    if policy == "banded_nearest":
+        pick = band
+    elif policy == "hybrid":
+        pick = (band + subflow) % len(ports)
+    elif policy == "tag_hash":
+        pick = (stable_hash(int(c2c.get("select_seed", 0)), source, tag) +
+                subflow) % len(ports)
+    else:
+        raise ValueError("dynamic policy requires runtime active-flow state")
+    return ports[pick]
+
+
+def estimate_striped(hw: dict, source: int, dest: int, tag: int,
+                     packets: int, stripes: int) -> dict:
+    require(stripes in (1, 2, 4) and packets >= stripes,
+            "invalid striped flow")
+    gx = int(hw["x"])
+    gy = int(hw.get("y", gx))
+    die_x = int(hw.get("die", {}).get("x", 1))
+    die_y = int(hw.get("die", {}).get("y", 1))
+    cpd = gx * gy
+    routes = []
+    for subflow in range(stripes):
+        cur_die, dst_die = source // cpd, dest // cpd
+        cur_local, links, hops = source % cpd, [], 0
+        while cur_die != dst_die:
+            direction = first_dir(cur_die, dst_die, die_x)
+            port = select_v5_port(hw, cur_local, direction, source, tag, subflow)
+            hops += local_manhattan(cur_local, port["tile"], gx)
+            nxt = next_die(cur_die, direction, die_x, die_y)
+            links.append({"local_die": cur_die, "remote_die": nxt, **port})
+            cur_die = nxt
+            cur_local = tile_for(OPPOSITE[direction], port["idx"], gx, gy)
+        hops += local_manhattan(cur_local, dest % cpd, gx)
+        routes.append({"links": links, "intra_die_hops": hops})
+    nhop = len(routes[0]["links"])
+    require(all(len(r["links"]) == nhop for r in routes),
+            "striped routes have inconsistent hop counts")
+    if nhop == 0:
+        return {"d2d_hops": 0, "effective_rate": [1, 1],
+                "bulk_service_cycles": 0, "transaction_link_latency_cycles": 0,
+                "transaction_d2d_cycles": 0, "routes": routes}
+    c2c = hw["die_ports"]["c2c"]
+    port_rate = parse_rate(c2c["port_rate"], "port_rate")
+    link_rate = parse_rate(c2c["link_rate"], "link_rate")
+    rate = Fraction(1, 1)
+    for hop in range(nhop):
+        ports = {(r["links"][hop]["local_die"], r["links"][hop]["port_id"])
+                 for r in routes}
+        resources = set()
+        for r in routes:
+            link = r["links"][hop]
+            group = link["link_group"]
+            resources.add((link["local_die"], link["remote_die"],
+                           "group", group) if group >= 0 else
+                          (link["local_die"], link["remote_die"],
+                           "port", link["port_id"]))
+        rate = min(rate, min(Fraction(1, 1), len(ports) * port_rate),
+                   min(Fraction(1, 1), len(resources) * link_rate))
+    latency = int(c2c["link_latency"])
+    fixed = 3 * nhop * latency
+    bulk = ceil_fraction(Fraction(packets, 1) / rate)
+    return {"d2d_hops": nhop, "effective_rate": [rate.numerator, rate.denominator],
+            "bulk_service_cycles": bulk,
+            "transaction_link_latency_cycles": fixed,
+            "transaction_d2d_cycles": fixed + bulk, "routes": routes}
+
+
 def fixture(die_x: int, die_y: int, directions: Tuple[str, ...]) -> dict:
     return {"x": 4, "die": {"x": die_x, "y": die_y},
             "die_ports": {"edges": {"S": {"role": "host"}},

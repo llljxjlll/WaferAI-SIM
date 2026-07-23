@@ -43,6 +43,15 @@ cd build && ./npusim --d2d-v0-selftest
   仲裁器共享一个 DATA cut；CTRL 独立、不被 DATA 限速。`F=31,k=4` 实测独立 group 692 ns、
   共享 group 702 ns，四个正向成员均出现仲裁等待 `19/9/17/16` 且配额 `[8,8,8,7]` 全部
   按序排空；容量负例在首个 REQUEST 前失败。V5 runner **12/12**，Link 自测 **37/37**。
+- **V5-e ✔ Behavioral 多端口 min-cut**：每一 die-hop 分别求所选端口速率和、独立 link
+  速率和；同一 `(local_die,remote_die,link_group)` 只计一次，最后与源/目的 NoC 的 `1/1`
+  cut 取最小。禁止 `k*min(single-lane)` 式虚假加速。完整逻辑 flow 元数据只注册一次，由
+  `subflow=0` 首链代表包消费并承担一次 `ceil(F/R_eff)` bulk 服务；其余代表包只加固定延迟。
+- 独立 Python oracle 自行展开端口、静态选择、逐 hop 资源和共享 group，不读取 C++ 统计。
+  `F=31,k=4,port=link=1/4`：独立四链 `R=1,S=31`，共享 group `R=1/4,S=124`；
+  C++ ledger 分别精确为 `(1,31,31,21,52)` 与 `(1,31,124,21,145)`，完成时间
+  572/742 ns 且重复运行一致。未消费元数据计入 D2D drain/watchdog。V5 runner **15/15**，
+  V4 Behavioral **13/13**。
 
 ## 当前状态（逐增量推进）
 

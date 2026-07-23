@@ -16,8 +16,11 @@ NPUSIM = os.path.join(BUILD, "npusim")
 WL = os.path.join(HERE, "workload", "cross_die_2core.json")
 HW = os.path.join(HERE, "hardware", "core_4x4_die2x1_c2c_multi4.json")
 SIM = "../llm/test/noc_congestion/sim/sim_cycle.json"
+SIM_BEHA = "../llm/test/noc_congestion/sim/sim_beha.json"
 MAP = "../llm/test/noc_congestion/mapping/identity.spec"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+sys.path.insert(0, os.path.join(HERE, "behavioral"))
+from oracle import estimate_striped  # noqa: E402
 results = []
 
 
@@ -54,6 +57,24 @@ def bounded_hw(saf_depth, shared_group=False, policy="tag_hash"):
     return h
 
 
+def behavioral_hw(shared_group=False):
+    h = load(HW)
+    c = h["die_ports"]["c2c"]
+    for field in ("link_bw", "latency", "buffer_depth"):
+        c.pop(field, None)
+    c.update({
+        "backend": "behavioral", "select_policy": "hybrid",
+        "port_rate": {"num": 1, "den": 4},
+        "link_rate": {"num": 1, "den": 4},
+        "link_latency": 7,
+    })
+    if shared_group:
+        for p in h["die_ports"]["overrides"]:
+            if p["role"] == "c2c":
+                p["link_group"] = 0
+    return h
+
+
 def workload(packets, stripes):
     w = load(WL)
     w["vars"]["OC"] = packets * 16
@@ -71,13 +92,13 @@ def temp_json(obj):
     return f.name
 
 
-def run_case(packets, stripes, timeout=60, hw=None):
+def run_case(packets, stripes, timeout=60, hw=None, sim=SIM):
     wp = temp_json(workload(packets, stripes))
     hp = temp_json(hw) if hw is not None else None
     try:
         p = subprocess.run(
             [NPUSIM, "--workload-config", wp, "--hardware-config", hp or HW,
-             "--simulation-config", SIM, "--mapping-config", MAP],
+             "--simulation-config", sim, "--mapping-config", MAP],
             cwd=BUILD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=timeout)
         return parse(p.returncode, ANSI.sub("", p.stdout))
@@ -111,6 +132,9 @@ def parse(rc, out):
         r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)", out)
     repin = fields(r"\[D2D_REPIN\] total=(\d+) changed=(\d+) same=(\d+)", out)
     admit = fields(r"\[SAF_ADMIT\] success=(\d+) reject=(\d+)", out)
+    beha = fields(r"\[D2D_BEHA\] data_flows=(\d+) logical_data_packets=(\d+) "
+                  r"service_cycles=(\d+) fixed_cycles=(\d+) "
+                  r"total_d2d_cycles=(\d+)", out)
     finish = re.search(r"All requests finished.*?\| (\d+) ns", out)
     group_stalls = {
         int(idx): int(stall)
@@ -119,7 +143,7 @@ def parse(rc, out):
     }
     return {
         "rc": rc, "out": out, "subflows": subflows, "typed": typed,
-        "repin": repin, "admit": admit,
+        "repin": repin, "admit": admit, "beha": beha,
         "ns": int(finish.group(1)) if finish else None,
         "group_stalls": group_stalls,
         "drained": "[DRAIN] router_residual=0" in out and
@@ -217,6 +241,46 @@ def main():
            f"shared={shared_long['ns']}ns "
            f"group_stalls={shared_forward_stalls} quotas=[8,8,8,7]")
 
+
+    beha_ind_hw = behavioral_hw(False)
+    beha_group_hw = behavioral_hw(True)
+    oracle_ind = estimate_striped(beha_ind_hw, 0, 16, 16, 31, 4)
+    oracle_group = estimate_striped(beha_group_hw, 0, 16, 16, 31, 4)
+    beha_ind_a = run_case(31, 4, hw=beha_ind_hw, sim=SIM_BEHA)
+    beha_ind_b = run_case(31, 4, hw=beha_ind_hw, sim=SIM_BEHA)
+    beha_group_a = run_case(31, 4, hw=beha_group_hw, sim=SIM_BEHA)
+    beha_group_b = run_case(31, 4, hw=beha_group_hw, sim=SIM_BEHA)
+    expected_ind = (1, 31, oracle_ind["bulk_service_cycles"],
+                    oracle_ind["transaction_link_latency_cycles"],
+                    oracle_ind["transaction_d2d_cycles"])
+    expected_group = (1, 31, oracle_group["bulk_service_cycles"],
+                      oracle_group["transaction_link_latency_cycles"],
+                      oracle_group["transaction_d2d_cycles"])
+    ind_rate = oracle_ind["effective_rate"]
+    group_rate = oracle_group["effective_rate"]
+    ind_service = oracle_ind["bulk_service_cycles"]
+    group_service = oracle_group["bulk_service_cycles"]
+    ind_ledger = beha_ind_a["beha"]
+    group_ledger = beha_group_a["beha"]
+    ind_ns = beha_ind_a["ns"]
+    group_ns = beha_group_a["ns"]
+    record("V5-e oracle: source NoC caps four independent lanes; shared group counts once",
+           ind_rate == [1, 1] and ind_service == 31 and
+           group_rate == [1, 4] and group_service == 124,
+           f"ind={ind_rate}/S{ind_service} group={group_rate}/S{group_service}")
+    record("V5-e runtime ledger equals independent multi-port oracle",
+           all(r["rc"] == 0 and r["drained"] and
+               r["typed"] == (4, 4, 4, 4, 4, 4)
+               for r in (beha_ind_a, beha_ind_b, beha_group_a, beha_group_b)) and
+           beha_ind_a["beha"] == beha_ind_b["beha"] == expected_ind and
+           beha_group_a["beha"] == beha_group_b["beha"] == expected_group,
+           f"ind={ind_ledger} oracle={expected_ind} "
+           f"group={group_ledger} oracle={expected_group}")
+    record("V5-e Behavioral completion is deterministic and shared cut is slower",
+           beha_ind_a["ns"] == beha_ind_b["ns"] and
+           beha_group_a["ns"] == beha_group_b["ns"] and
+           beha_group_a["ns"] > beha_ind_a["ns"],
+           f"ind={ind_ns}ns group={group_ns}ns")
 
     failed = sum(not ok for _, ok, _ in results)
     print(f"\nV5 D2D tests: {len(results)-failed}/{len(results)} passed")

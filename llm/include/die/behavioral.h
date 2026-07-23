@@ -8,7 +8,11 @@
 #include "die/port.h"
 #include "defs/spec.h"
 #include "utils/router_utils.h"
+#include <algorithm>
 #include <limits>
+#include <numeric>
+#include <set>
+#include <tuple>
 #include <stdexcept>
 #include <vector>
 
@@ -40,6 +44,17 @@ inline bool D2DRateLess(const D2DRate &a, const D2DRate &b) {
 
 inline D2DRate D2DMinRate(const D2DRate &a, const D2DRate &b) {
     return D2DRateLess(a, b) ? a : b;
+}
+
+inline D2DRate D2DScaleRateCappedOne(const D2DRate &rate, int lanes) {
+    if (!rate.Valid() || lanes < 1)
+        throw std::runtime_error("Behavioral D2D aggregate rate input is invalid");
+    long long num = (long long)rate.num * lanes;
+    long long den = rate.den;
+    if (num >= den)
+        return {1, 1};
+    long long g = std::gcd(num, den);
+    return {(int)(num / g), (int)(den / g)};
 }
 
 inline long long D2DServiceCycles(long long packets, const D2DRate &rate) {
@@ -84,8 +99,8 @@ inline int D2DDirectedLinkIndexForPort(int die, int port_id, int next_die) {
     return -1;
 }
 
-inline D2DBehavioralRoute BuildD2DBehavioralRoute(int source_global,
-                                                   int dest_global) {
+inline D2DBehavioralRoute BuildD2DBehavioralRouteForFlow(
+    int source_global, int dest_global, int tag, int subflow) {
     if (source_global < 0 || source_global >= TOTAL_CORES || dest_global < 0 ||
         dest_global >= TOTAL_CORES)
         throw std::runtime_error("Behavioral D2D route: illegal endpoint");
@@ -96,7 +111,8 @@ inline D2DBehavioralRoute BuildD2DBehavioralRoute(int source_global,
     out.dies.push_back(cur_die);
     while (cur_die != dest_die) {
         Directions dir = DieFirstHopDir(cur_die, dest_die);
-        int port_id = PortForDir(cur_local, dir);
+        int port_id = SelectPortForFlow(cur_local, dir, source_global, tag,
+                                           subflow);
         if (port_id < 0 || port_id >= (int)g_die_ports.ports.size())
             throw std::runtime_error("Behavioral D2D route: missing C2C exit");
         const D2DPort &p = g_die_ports.ports[port_id];
@@ -120,24 +136,58 @@ inline D2DBehavioralRoute BuildD2DBehavioralRoute(int source_global,
     return out;
 }
 
-inline D2DBehavioralEstimate EstimateD2DBehavioral(
-    int source_global, int dest_global, int packets, const D2DRate &port_rate,
-    const D2DRate &link_rate, int link_latency) {
+inline D2DBehavioralRoute BuildD2DBehavioralRoute(int source_global,
+                                                   int dest_global) {
+    return BuildD2DBehavioralRouteForFlow(source_global, dest_global, 0, 0);
+}
+
+inline D2DBehavioralEstimate EstimateD2DBehavioralStriped(
+    int source_global, int dest_global, int tag, int packets, int stripes,
+    const D2DRate &port_rate, const D2DRate &link_rate, int link_latency) {
     if (link_latency < 0)
         throw std::runtime_error("Behavioral D2D link_latency must be >= 0");
-    D2DBehavioralRoute route = BuildD2DBehavioralRoute(source_global, dest_global);
+    if (packets < 1 || (stripes != 1 && stripes != 2 && stripes != 4) ||
+        packets < stripes)
+        throw std::runtime_error("Behavioral D2D striped flow is invalid");
+
+    std::vector<D2DBehavioralRoute> routes;
+    routes.reserve(stripes);
+    for (int s = 0; s < stripes; ++s)
+        routes.push_back(BuildD2DBehavioralRouteForFlow(
+            source_global, dest_global, tag, s));
+
     D2DBehavioralEstimate e;
     e.packets = packets;
-    e.d2d_hops = (int)route.link_indices.size();
-    e.intra_die_hops = route.intra_die_hops;
-    if (packets < 1)
-        throw std::runtime_error("Behavioral D2D packets must be >= 1");
+    e.d2d_hops = (int)routes.front().link_indices.size();
+    for (const auto &r : routes) {
+        if ((int)r.link_indices.size() != e.d2d_hops)
+            throw std::runtime_error("Behavioral striped routes have inconsistent hop counts");
+        e.intra_die_hops = std::max(e.intra_die_hops, r.intra_die_hops);
+    }
     if (e.d2d_hops == 0)
-        return e; // 同 die 不产生 D2D 专属增量
-    // 单 lane NoC source/destination cut 均为 1 packet/cycle；V4 MVP 无 striping。
-    // TODO(V5): 多 lane/striping 落地时必须把 1/1 替换为沿真实共享 NoC cut 聚合后的
-    // 有理数速率；不能使用 lane_count * min(single-lane rates) 这种会高估共享瓶颈的公式。
-    e.effective_rate = D2DMinRate(D2DRate{1, 1}, D2DMinRate(port_rate, link_rate));
+        return e;
+
+    e.effective_rate = {1, 1};
+    for (int hop = 0; hop < e.d2d_hops; ++hop) {
+        std::set<std::pair<int, int>> ports;
+        std::set<std::tuple<int, int, int, int>> link_resources;
+        for (const auto &r : routes) {
+            int idx = r.link_indices.at(hop);
+            const D2DLink &l = g_d2d_links.at(idx);
+            ports.insert({l.local_die, l.local_port});
+            if (l.link_group >= 0)
+                link_resources.insert({l.local_die, l.remote_die, 0,
+                                       l.link_group});
+            else
+                link_resources.insert({l.local_die, l.remote_die, 1, idx});
+        }
+        D2DRate port_cut =
+            D2DScaleRateCappedOne(port_rate, (int)ports.size());
+        D2DRate link_cut =
+            D2DScaleRateCappedOne(link_rate, (int)link_resources.size());
+        e.effective_rate = D2DMinRate(
+            e.effective_rate, D2DMinRate(port_cut, link_cut));
+    }
     e.per_phase_link_latency_cycles = (long long)e.d2d_hops * link_latency;
     e.transaction_link_latency_cycles = 3LL * e.per_phase_link_latency_cycles;
     e.first_packet_service_cycles = D2DServiceCycles(1, e.effective_rate);
@@ -148,4 +198,11 @@ inline D2DBehavioralEstimate EstimateD2DBehavioral(
     e.transaction_d2d_cycles = e.transaction_link_latency_cycles +
                                e.bulk_service_cycles;
     return e;
+}
+
+inline D2DBehavioralEstimate EstimateD2DBehavioral(
+    int source_global, int dest_global, int packets, const D2DRate &port_rate,
+    const D2DRate &link_rate, int link_latency) {
+    return EstimateD2DBehavioralStriped(source_global, dest_global, 0, packets,
+                                        1, port_rate, link_rate, link_latency);
 }

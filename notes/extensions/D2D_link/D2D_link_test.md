@@ -1029,4 +1029,11 @@ V4 开发完成。
   `F=31,k=4` 长流量中四成员均获进展。V5 runner **12/12**，纯函数 **305/305**，
   Link SystemC 自测 **37/37**；V1–V4 冻结门随后继续作为每阶段阻塞门。
 
-下一步 V5-e：Behavioral 多端口 min-cut 与独立 Python oracle；共享 group 只能计一次容量。
+- **V5-e 已完成**：Behavioral 对每个 die-hop 聚合实际选中的端口和物理 link；独立 link 求和，
+  相同 link_group 去重，再与源/目的单 lane NoC cut=`1/1` 取 min。聚合服务由 subflow 0
+  leader 只计一次，完整 flow 元数据消费后删除并纳入 drain/watchdog。
+- 独立 Python oracle 与 C++ runtime ledger 精确一致：`F=31,k=4,rate=1/4` 时独立四链
+  `R=1,S=31`，共享 group `R=1/4,S=124`；重复运行完成时间 572/742 ns。V5 runner
+  **15/15**，V4 runner **13/13**。
+
+下一步 V5-f：dynamic active-flow pin cache、每 die 独立负载、尾包/ACK 释放、确定性与活性。

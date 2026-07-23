@@ -25,6 +25,7 @@ long g_d2d_link_out_pkts = 0;
 long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
 long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
 D2DBehavioralStats g_d2d_behavioral_stats;
+static std::map<std::pair<int, int>, D2DBehavioralFlowMeta> g_d2d_behavioral_flows;
 D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 std::map<V5SubflowProbeKey, V5SubflowStat> g_v5_subflow_stats;
 long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
@@ -321,6 +322,35 @@ void ResetDieActivityStats() {
     g_saf_admission_successes = 0;
     g_saf_admission_rejects = 0;
 }
+void RegisterD2DBehavioralFlow(int source_global, int dest_global, int tag,
+                               int packets, int stripes) {
+    if (source_global < 0 || source_global >= TOTAL_CORES || dest_global < 0 ||
+        dest_global >= TOTAL_CORES || packets < 1 ||
+        (stripes != 1 && stripes != 2 && stripes != 4) || packets < stripes)
+        throw std::runtime_error("Behavioral striped flow metadata is invalid");
+    std::pair<int, int> key{source_global, tag};
+    D2DBehavioralFlowMeta meta{dest_global, packets, stripes};
+    auto it = g_d2d_behavioral_flows.find(key);
+    if (it != g_d2d_behavioral_flows.end() &&
+        (it->second.dest_global != dest_global ||
+         it->second.packets != packets || it->second.stripes != stripes))
+        throw std::runtime_error("Behavioral flow metadata conflicts for source/tag");
+    g_d2d_behavioral_flows[key] = meta;
+}
+
+D2DBehavioralFlowMeta ConsumeD2DBehavioralFlow(int source_global, int tag) {
+    auto it = g_d2d_behavioral_flows.find({source_global, tag});
+    if (it == g_d2d_behavioral_flows.end())
+        throw std::runtime_error("Behavioral DATA has no registered logical flow metadata");
+    D2DBehavioralFlowMeta meta = it->second;
+    g_d2d_behavioral_flows.erase(it);
+    return meta;
+}
+
+long D2DBehavioralFlowResidual() {
+    return (long)g_d2d_behavioral_flows.size();
+}
+
 void ResetD2DLinkStats() {
     ResetWholeFlowSafRuntime();
     ResetV5PortSelectionStats();
@@ -345,6 +375,7 @@ void ResetD2DLinkStats() {
     g_d2d_data_out = D2DDataProbe();
     g_v5_subflow_stats.clear();
     g_d2d_behavioral_stats = D2DBehavioralStats{};
+    g_d2d_behavioral_flows.clear();
 }
 void ResetHostLaneStats(int n_lanes) {
     g_host_lane_done.assign(n_lanes, 0);
