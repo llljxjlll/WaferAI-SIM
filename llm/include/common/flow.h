@@ -113,6 +113,12 @@ public:
     int Available() const { return capacity_ - reserved_; }
     int ActiveFlows() const { return (int)reservations_.size(); }
     bool Has(const FlowKey &key) const { return reservations_.count(key) != 0; }
+    int ReservedFor(const FlowKey &key) const {
+        auto it = reservations_.find(key);
+        if (it == reservations_.end())
+            return 0;
+        return it->second;
+    }
 
 private:
     int capacity_ = 0;

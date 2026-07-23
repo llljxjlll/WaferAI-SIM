@@ -486,14 +486,23 @@ void config_helper_core::calculate_address(bool do_loop) {
                     pending_req->max_packet = temp->max_packet;
                     if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
                         coreconfigs[i].id / CORES_PER_DIE !=
-                            temp->des_id / CORES_PER_DIE &&
-                        temp->max_packet > g_d2d_cfg.saf_buffer_depth)
-                        throw std::runtime_error(
-                            "whole-flow SAF preflight: flow_packets (" +
-                            std::to_string(temp->max_packet) +
-                            ") exceeds saf_buffer_depth (" +
-                            std::to_string(g_d2d_cfg.saf_buffer_depth) +
-                            "); reject before DATA injection");
+                            temp->des_id / CORES_PER_DIE) {
+                        int max_subflow_packets =
+                            (temp->max_packet + temp->stripe_count - 1) /
+                            temp->stripe_count;
+                        if (max_subflow_packets > g_d2d_cfg.saf_buffer_depth) {
+                            const char *size_name = temp->stripe_count == 1
+                                                        ? "flow_packets"
+                                                        : "max subflow packets";
+                            throw std::runtime_error(
+                                "whole-flow SAF preflight: " +
+                                std::string(size_name) + " (" +
+                                std::to_string(max_subflow_packets) +
+                                ") exceeds saf_buffer_depth (" +
+                                std::to_string(g_d2d_cfg.saf_buffer_depth) +
+                                "); reject before DATA injection");
+                        }
+                    }
                     pending_req = nullptr;
 
                     temp->output_label = output_label_split.size() == 1

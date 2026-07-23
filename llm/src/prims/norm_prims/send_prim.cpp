@@ -18,6 +18,7 @@ void Send_prim::deserialize(vector<sc_bv<128>> segments) {
     stripe_sent.clear();
     stripe_exit_ports.clear();
     next_subflow = 0;
+    stripe_saf_reserved = false;
 
     auto buffer = segments[0];
 

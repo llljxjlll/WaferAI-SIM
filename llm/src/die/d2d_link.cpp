@@ -171,7 +171,10 @@ void D2DLinkUnit::forward() {
             CountLink(link_idx, true, in_ctrl_channel.read());
         }
 
-        if (!fifo_.empty() && fifo_.front().first <= cyc && out_avail.read()) {
+        bool group_request =
+            !fifo_.empty() && fifo_.front().first <= cyc && out_avail.read();
+        bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
+        if (group_request && group_ok) {
             out_channel.write(fifo_.front().second);
             out_sent.write(true);
             CountType(g_d2d_link_out_by_type, fifo_.front().second);
@@ -182,6 +185,8 @@ void D2DLinkUnit::forward() {
             g_protocol_progress++;
         } else {
             out_sent.write(false);
+            if (group_request && !group_ok)
+                link_group_stall++;
         }
         if (!cfifo_.empty() && cfifo_.front().first <= cyc &&
             out_ctrl_avail.read()) {
@@ -318,7 +323,9 @@ void D2DLinkUnit::forward_bounded(long cyc) {
     // 1a. 交付 DATA（先出队腾空位）：成熟 + 下游 ready + token 足
     bool data_mature = !fifo_.empty() && fifo_.front().first <= cyc;
     bool has_token = tokens >= bound.rate.den;
-    if (data_mature && out_avail.read() && has_token) {
+    bool group_request = data_mature && out_avail.read() && has_token;
+    bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
+    if (group_request && group_ok) {
         out_channel.write(fifo_.front().second);
         out_sent.write(true);
         CountType(g_d2d_link_out_by_type, fifo_.front().second);
@@ -336,6 +343,8 @@ void D2DLinkUnit::forward_bounded(long cyc) {
                 downstream_stall++;
             else if (!has_token)
                 rate_stall++;
+            else if (!group_ok)
+                link_group_stall++;
         }
     }
     // token 在发之后 cap 至 den（限突发 <=1 包；不在发之前 cap，否则会丢失 num>1 的速率）
@@ -452,7 +461,9 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
     bool port_ok = port_tokens >= bound.port_rate.den;
     bool link_ok = tokens >= bound.rate.den;
     bool inflight_room = (int)fifo_.size() < bound.data_depth;
-    if (ready && port_ok && link_ok && inflight_room) {
+    bool group_request = ready && port_ok && link_ok && inflight_room;
+    bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
+    if (group_request && group_ok) {
         FlowKey key = saf_ready_.front();
         auto fit = saf_flows_.find(key);
         if (fit == saf_flows_.end() || !fit->second.complete || fit->second.packets.empty())
@@ -483,6 +494,8 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
             link_rate_stall++;
         else if (!inflight_room)
             rate_stall++; // capacity/credit stall, distinct from programmable-rate stalls above
+        else if (!group_ok)
+            link_group_stall++;
     }
     if (port_tokens > bound.port_rate.den)
         port_tokens = bound.port_rate.den;

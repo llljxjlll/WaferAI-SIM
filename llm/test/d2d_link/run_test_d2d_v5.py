@@ -31,6 +31,29 @@ def load(path):
         return json.load(f)
 
 
+def bounded_hw(saf_depth, shared_group=False, policy="tag_hash"):
+    h = load(HW)
+    c = h["die_ports"]["c2c"]
+    c["select_policy"] = policy
+    for field in ("link_bw", "latency", "buffer_depth"):
+        c.pop(field, None)
+    c.update({
+        "mode": "bounded_saf", "safety": "whole_flow_saf",
+        "port_rate": {"num": 1, "den": 1},
+        "link_rate": {"num": 1, "den": 1},
+        "link_latency": 7,
+        "saf_buffer_depth": saf_depth,
+        "link_inflight_depth": 32,
+        "rx_buffer_depth": 4,
+        "ctrl_buffer_depth": 4,
+    })
+    if shared_group:
+        for p in h["die_ports"]["overrides"]:
+            if p["role"] == "c2c":
+                p["link_group"] = 0
+    return h
+
+
 def workload(packets, stripes):
     w = load(WL)
     w["vars"]["OC"] = packets * 16
@@ -48,11 +71,12 @@ def temp_json(obj):
     return f.name
 
 
-def run_case(packets, stripes, timeout=60):
+def run_case(packets, stripes, timeout=60, hw=None):
     wp = temp_json(workload(packets, stripes))
+    hp = temp_json(hw) if hw is not None else None
     try:
         p = subprocess.run(
-            [NPUSIM, "--workload-config", wp, "--hardware-config", HW,
+            [NPUSIM, "--workload-config", wp, "--hardware-config", hp or HW,
              "--simulation-config", SIM, "--mapping-config", MAP],
             cwd=BUILD, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=timeout)
@@ -63,6 +87,8 @@ def run_case(packets, stripes, timeout=60):
     finally:
         os.remove(wp)
 
+        if hp:
+            os.remove(hp)
 
 def fields(pattern, out):
     m = re.search(pattern, out)
@@ -84,13 +110,23 @@ def parse(rc, out):
         r"\[D2D_TYPE\] request_in=(\d+) request_out=(\d+) "
         r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)", out)
     repin = fields(r"\[D2D_REPIN\] total=(\d+) changed=(\d+) same=(\d+)", out)
+    admit = fields(r"\[SAF_ADMIT\] success=(\d+) reject=(\d+)", out)
+    finish = re.search(r"All requests finished.*?\| (\d+) ns", out)
+    group_stalls = {
+        int(idx): int(stall)
+        for idx, stall in re.findall(
+            r"\[D2D_BOUND\] idx=(\d+).*?group_stall=(\d+)", out)
+    }
     return {
         "rc": rc, "out": out, "subflows": subflows, "typed": typed,
-        "repin": repin,
+        "repin": repin, "admit": admit,
+        "ns": int(finish.group(1)) if finish else None,
+        "group_stalls": group_stalls,
         "drained": "[DRAIN] router_residual=0" in out and
                    "[DRAIN] d2d_link_residual=0" in out,
         "saf_zero": "[SAF] reserved_packets=0" in out,
         "watchdog": "[PROTO_WAIT]" in out,
+        "group_zero": "group_reserved_packets=0" in out,
     }
 
 
@@ -142,6 +178,45 @@ def main():
     record("V5-b/c rejects F<stripe_count before DATA injection",
            bad["rc"] != 0 and "at least one packet per subflow" in bad["out"],
            f"rc={bad['rc']}")
+
+    bounded = run_case(7, 4, hw=bounded_hw(4))
+    ok, detail = check_run(bounded, 7, 4)
+    record("V5-d striped SAF admits all four independent subflows atomically",
+           ok and bounded["admit"] == (1, 0) and bounded["group_zero"],
+           f"{detail} admit={bounded['admit']} group0={bounded['group_zero']}")
+
+    no_partial = run_case(7, 2, hw=bounded_hw(4, policy="nearest"))
+    record("V5-d per-link capacity failure rejects before every REQUEST",
+           no_partial["rc"] != 0 and no_partial["typed"] is None and
+           "before any REQUEST: link capacity" in no_partial["out"],
+           f"rc={no_partial['rc']} typed={no_partial['typed']}")
+
+    group_bad = run_case(7, 4, hw=bounded_hw(4, shared_group=True))
+    record("V5-d shared link_group capacity is checked across all subflows",
+           group_bad["rc"] != 0 and group_bad["typed"] is None and
+           "shared link_group capacity" in group_bad["out"],
+           f"rc={group_bad['rc']} typed={group_bad['typed']}")
+
+    group_ok = run_case(7, 4, hw=bounded_hw(8, shared_group=True))
+    ok, detail = check_run(group_ok, 7, 4)
+    record("V5-d admitted shared group releases both link and group ledgers",
+           ok and group_ok["admit"] == (1, 0) and group_ok["group_zero"],
+           f"{detail} admit={group_ok['admit']} group0={group_ok['group_zero']}")
+
+    independent_long = run_case(31, 4, hw=bounded_hw(32))
+    shared_long = run_case(31, 4, hw=bounded_hw(32, shared_group=True))
+    independent_ok, _ = check_run(independent_long, 31, 4)
+    shared_ok, _ = check_run(shared_long, 31, 4)
+    shared_forward_stalls = [shared_long["group_stalls"].get(i, 0)
+                             for i in range(4)]
+    record("V5-d link_group enforces one shared DATA cut with fair progress",
+           independent_ok and shared_ok and
+           shared_long["ns"] > independent_long["ns"] and
+           all(stall > 0 for stall in shared_forward_stalls),
+           f"independent={independent_long['ns']}ns "
+           f"shared={shared_long['ns']}ns "
+           f"group_stalls={shared_forward_stalls} quotas=[8,8,8,7]")
+
 
     failed = sum(not ok for _, ok, _ in results)
     print(f"\nV5 D2D tests: {len(results)-failed}/{len(results)} passed")

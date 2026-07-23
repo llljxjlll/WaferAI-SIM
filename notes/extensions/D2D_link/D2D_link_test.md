@@ -1020,4 +1020,13 @@ V4 开发完成。
 - 审查修复：Behavioral 每 subflow 的唯一代表包必须同时是 `seq=1`（获取 Router 锁）和
   `is_end=true`（释放锁）；修复后 V4 Behavioral **13/13**，避免仅周期精确路径通过的假闭环。
 
-下一步 V5-d：bounded SAF 对全部 subflow 做一次原子 admission/rollback，并实现 link-group 共享容量。
+- **V5-d 已完成**：bounded SAF 在第一个 REQUEST 前对全部 subflow 做一次全路径预检；需求按
+  物理 link 和 `(local_die,remote_die,link_group)` 共享账本分别聚合，任一不足时零修改、零 REQUEST，
+  通过后统一提交。释放前同时校验 link/group 对同一 FlowKey 的包数，再成对扣账，防止失败路径
+  留下半释放状态。
+- 共享 group 的运行时 DATA 带宽由确定性 round-robin 仲裁为一个 packet/cycle cut；CTRL 保持
+  独立。生产回归覆盖独立四端口成功、同 link 过量拒绝、共享 group 过量拒绝、双账本归零，以及
+  `F=31,k=4` 长流量中四成员均获进展。V5 runner **12/12**，纯函数 **305/305**，
+  Link SystemC 自测 **37/37**；V1–V4 冻结门随后继续作为每阶段阻塞门。
+
+下一步 V5-e：Behavioral 多端口 min-cut 与独立 Python oracle；共享 group 只能计一次容量。

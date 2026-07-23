@@ -35,6 +35,14 @@ cd build && ./npusim --d2d-v0-selftest
   `F<k` 在 DATA 注入前明确拒绝。V5 runner 当前 **7/7**，V4 runner **13/13**。
 - Behavioral 代表包仍满足 `seq=1 && is_end=true`，既获取又释放 Router 锁；V4 cycle ledger、
   时序与 NoC Behavioral 回归因此保持原契约。
+- **V5-d ✔ 条带化 whole-flow SAF 与共享 link group**：sender 在第一个 REQUEST 前一次性
+  计算全部 subflow 配额和实际逐跳端口路径；先聚合检查每条物理 link 与每个共享 group 的总需求，
+  任一容量不足均在修改账本和发 REQUEST 前拒绝，成功则统一提交。每个 subflow 尾包逐 link
+  排空后成对释放 link/group 账本，结束时两者都必须为 0。
+- `link_group` 不仅共享 admission 容量，也通过按有向 die-pair/group 建立的确定性 round-robin
+  仲裁器共享一个 DATA cut；CTRL 独立、不被 DATA 限速。`F=31,k=4` 实测独立 group 692 ns、
+  共享 group 702 ns，四个正向成员均出现仲裁等待 `19/9/17/16` 且配额 `[8,8,8,7]` 全部
+  按序排空；容量负例在首个 REQUEST 前失败。V5 runner **12/12**，Link 自测 **37/37**。
 
 ## 当前状态（逐增量推进）
 

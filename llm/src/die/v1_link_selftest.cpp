@@ -401,11 +401,20 @@ int RunD2DLinkSelfTest() {
     const int old_host_endpoint = HOST_ENDPOINT_ID;
     D2DLinkConfig old_d2d_cfg = g_d2d_cfg;
     std::vector<D2DLink> old_d2d_links = g_d2d_links;
+    D2DPortTable old_die_ports = g_die_ports;
     GRID_X = GRID_Y = GRID_SIZE = CORES_PER_DIE = 1;
     DIE_X = DIE_COUNT = TOTAL_CORES = HOST_ENDPOINT_ID = 2;
     DIE_Y = 1;
-    g_d2d_links = {{0, 0, 1, 0, 1, 1, 3},
-                   {1, 0, 0, 0, 1, 1, 1}};
+    g_die_ports = {};
+    g_die_ports.active = true;
+    g_die_ports.ports = {
+        {0, 0, EAST, ROLE_C2C, EAST, 1, 1, 64, -1},
+        {1, 0, WEST, ROLE_C2C, WEST, 1, 1, 64, -1}};
+    g_die_ports.port_for.assign(1, std::vector<int>(DIRECTIONS, -1));
+    g_die_ports.port_for[0][EAST] = 0;
+    g_die_ports.port_for[0][WEST] = 1;
+    g_d2d_links = {{0, 0, 1, 1, 1, 1, 3},
+                   {1, 1, 0, 0, 1, 1, 1}};
     g_d2d_cfg.mode = MODE_BOUNDED_SAF;
     g_d2d_cfg.safety = SAFETY_WHOLE_FLOW_SAF;
     g_d2d_cfg.saf_buffer_depth = 64;
@@ -769,6 +778,7 @@ int RunD2DLinkSelfTest() {
     TOTAL_CORES = old_total_cores;
     HOST_ENDPOINT_ID = old_host_endpoint;
     g_d2d_cfg = old_d2d_cfg;
+    g_die_ports = old_die_ports;
     g_d2d_links = old_d2d_links;
     ResetWholeFlowSafRuntime();
 

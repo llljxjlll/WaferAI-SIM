@@ -74,6 +74,7 @@ public:
     vector<int> stripe_sent;
     vector<int> stripe_exit_ports;
     int next_subflow = 0;
+    bool stripe_saf_reserved = false;
 
     int data_packet_id = 0; // 已经发送的包裹数量
 

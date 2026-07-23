@@ -175,9 +175,19 @@ extern D2DLinkConfig g_d2d_cfg;
 void ResetWholeFlowSafRuntime();
 void ReserveWholeFlowSafPath(int source_global, int dest_global, int tag,
                              int subflow, int flow_packets);
+// V5-d：一次逻辑 flow 的所有 subflow 做**同一次**预检/提交。counts[s] 是 subflow s
+// 的整流包数；任一物理 link 或共享 link_group 容量不足时，所有账本保持不变。
+void ReserveStripedWholeFlowSafPaths(int source_global, int dest_global,
+                                     int tag,
+                                     const std::vector<int> &counts);
 void ReleaseWholeFlowSafLink(int link_idx, const FlowKey &key,
                              int flow_packets);
 long WholeFlowSafReservedPackets();
+long WholeFlowSafGroupReservedPackets();
+// V5-d：同一有向 die pair、同 link_group 的 DATA 共享 1 packet/cycle cut。
+// 所有成员上一拍登记 request，本拍按 link index round-robin 选一个 grant，结果与进程调用顺序无关。
+bool V5LinkGroupGrant(int link_idx, long long cycle, bool request);
+void ResetV5LinkGroupRuntime();
 
 // 解析 die_ports.c2c 的 V3/V4 字段并做**启动期**校验（非法组合抛 std::runtime_error）。
 // 由 ParseDiePorts 调用；旧配置（无 backend/mode）恒定解析为 cycle+functional_v2，

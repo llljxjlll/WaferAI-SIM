@@ -224,14 +224,16 @@ int sc_main(int argc, char *argv[]) {
                             << " link_stall=" << link->LinkRateStall()
                             << " inflight_stall=" << link->RateStall()
                             << " rx_stall=" << link->RxBackpressureStall()
-                            << " downstream_stall=" << link->DownstreamStall();
+                            << " downstream_stall=" << link->DownstreamStall()
+                            << " group_stall=" << link->LinkGroupStall();
                     }
                     bounded_dump(o->get_child_objects());
                 }
             };
         bounded_dump(sc_get_top_level_objects());
         LOG_INFO(SYSTEM) << "[SAF] reserved_packets="
-                         << WholeFlowSafReservedPackets();
+                         << WholeFlowSafReservedPackets()
+                         << " group_reserved_packets=" << WholeFlowSafGroupReservedPackets();
 
         // V2-c：每 die 的 router 入口包数。中间 die >0 证明包确实穿越了该 die 的 NoC。
         {

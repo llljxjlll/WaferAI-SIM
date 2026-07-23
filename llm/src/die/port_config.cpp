@@ -37,27 +37,194 @@ std::map<std::tuple<int, int, int>, long long> g_flow_done_cycle;
 long g_saf_admission_successes = 0, g_saf_admission_rejects = 0;
 static std::vector<long> g_v5_port_selects;
 
-// V3-d：每条有向 link 一份 whole-flow SAF 容量账本。路径预留在单个函数调用内先逐边
-// 尝试，任一失败即回滚；SystemC cooperative 调度不会在该函数中途抢占，故对仿真是原子的。
+// V3-d/V5-d：每条有向 link 一份 whole-flow SAF 容量账本；V5 同一有向 die pair 中
+// link_group 相同的端口还共享一份容量账本。所有 subflow 先完整预检，再统一提交。
 static std::vector<WholeFlowSafAdmission> g_saf_link_admission;
 static std::map<FlowKey, std::set<int>> g_saf_flow_links;
+using SafGroupKey = std::tuple<int, int, int>; // local_die, remote_die, group
+static std::map<SafGroupKey, WholeFlowSafAdmission> g_saf_group_admission;
+static std::map<FlowKey, std::set<SafGroupKey>> g_saf_flow_groups;
+struct V5GroupArbiter {
+    long long cycle = -1;
+    int grant = -1;
+    int last_winner = -1;
+    std::set<int> pending;
+};
+static std::map<SafGroupKey, V5GroupArbiter> g_v5_group_arbiters;
 
-static int DirectedLinkIndex(int local_die, int remote_die) {
+
+static int DirectedLinkIndexForPort(int local_die, int local_port) {
     for (int i = 0; i < (int)g_d2d_links.size(); ++i)
         if (g_d2d_links[i].local_die == local_die &&
-            g_d2d_links[i].remote_die == remote_die)
+            g_d2d_links[i].local_port == local_port)
             return i;
     return -1;
+}
+
+static SafGroupKey GroupKeyForLink(int idx) {
+    const D2DLink &l = g_d2d_links.at(idx);
+    return {l.local_die, l.remote_die, l.link_group};
+}
+
+static std::vector<int> WholeFlowSafPath(int source_global, int dest_global,
+                                         int tag, int subflow) {
+    std::vector<int> path;
+    int at = source_global;
+    while (DieOfGlobal(at) != DieOfGlobal(dest_global)) {
+        int port = CrossDieSelectExit(at, dest_global, source_global, tag,
+                                      subflow);
+        int idx = DirectedLinkIndexForPort(DieOfGlobal(at), port);
+        if (idx < 0)
+            throw std::runtime_error(
+                "whole-flow SAF path reservation: selected port has no directed link");
+        path.push_back(idx);
+        const D2DLink &l = g_d2d_links[idx];
+        const D2DPort &remote = g_die_ports.ports.at(l.remote_port);
+        at = l.remote_die * CORES_PER_DIE + remote.tile;
+    }
+    return path;
+}
+
+struct SafPlan {
+    FlowKey key;
+    int packets = 0;
+    std::vector<int> path;
+};
+
+void ResetV5LinkGroupRuntime() {
+    g_v5_group_arbiters.clear();
+    for (int i = 0; i < (int)g_d2d_links.size(); ++i)
+        if (g_d2d_links[i].link_group >= 0)
+            g_v5_group_arbiters.emplace(GroupKeyForLink(i), V5GroupArbiter{});
+}
+
+bool V5LinkGroupGrant(int link_idx, long long cycle, bool request) {
+    if (link_idx < 0 || link_idx >= (int)g_d2d_links.size())
+        return request;
+    if (g_d2d_links[link_idx].link_group < 0)
+        return request;
+    SafGroupKey key = GroupKeyForLink(link_idx);
+    auto it = g_v5_group_arbiters.find(key);
+    if (it == g_v5_group_arbiters.end())
+        throw std::runtime_error("V5 link_group arbiter was not initialized");
+    V5GroupArbiter &a = it->second;
+    if (cycle < a.cycle)
+        throw std::runtime_error("V5 link_group cycle moved backwards");
+    if (cycle != a.cycle) {
+        a.cycle = cycle;
+        a.grant = -1;
+        if (!a.pending.empty()) {
+            auto pick = a.pending.upper_bound(a.last_winner);
+            if (pick == a.pending.end())
+                pick = a.pending.begin();
+            a.grant = *pick;
+            a.last_winner = a.grant;
+        }
+        a.pending.clear();
+    }
+    if (request)
+        a.pending.insert(link_idx);
+    return request && a.grant == link_idx;
 }
 
 void ResetWholeFlowSafRuntime() {
     g_saf_link_admission.clear();
     g_saf_flow_links.clear();
+    g_saf_group_admission.clear();
+    g_saf_flow_groups.clear();
+    ResetV5LinkGroupRuntime();
     if (g_d2d_cfg.mode != MODE_BOUNDED_SAF)
         return;
     g_saf_link_admission.reserve(g_d2d_links.size());
-    for (size_t i = 0; i < g_d2d_links.size(); ++i)
+    for (size_t i = 0; i < g_d2d_links.size(); ++i) {
         g_saf_link_admission.emplace_back(g_d2d_cfg.saf_buffer_depth);
+        if (g_d2d_links[i].link_group >= 0)
+            g_saf_group_admission.emplace(
+                GroupKeyForLink((int)i),
+                WholeFlowSafAdmission(g_d2d_cfg.saf_buffer_depth));
+    }
+}
+
+static void ReserveSafPlans(const std::vector<SafPlan> &plans) {
+    if (g_d2d_cfg.mode != MODE_BOUNDED_SAF)
+        return;
+    if (g_saf_link_admission.size() != g_d2d_links.size())
+        throw std::runtime_error("whole-flow SAF runtime was not initialized");
+
+    std::map<int, int> link_need;
+    std::map<SafGroupKey, int> group_need;
+    for (const SafPlan &p : plans) {
+        if (p.packets <= 0)
+            throw std::runtime_error("whole-flow SAF invalid striped flow size");
+        if (g_saf_flow_links.count(p.key))
+            throw std::runtime_error(
+                "whole-flow SAF duplicate active path reservation");
+        for (int idx : p.path) {
+            link_need[idx] += p.packets;
+            if (g_d2d_links[idx].link_group >= 0)
+                group_need[GroupKeyForLink(idx)] += p.packets;
+        }
+    }
+
+    for (const auto &[idx, need] : link_need)
+        if (g_saf_link_admission.at(idx).Available() < need) {
+            g_saf_admission_rejects++;
+            throw std::runtime_error(
+                "striped whole-flow SAF admission rejected before any REQUEST: "
+                "link capacity, link=" + std::to_string(idx) +
+                ", required=" + std::to_string(need) +
+                ", available=" +
+                std::to_string(g_saf_link_admission.at(idx).Available()));
+        }
+    for (const auto &[group, need] : group_need) {
+        auto it = g_saf_group_admission.find(group);
+        if (it == g_saf_group_admission.end())
+            throw std::runtime_error("whole-flow SAF missing link-group ledger");
+        if (it->second.Available() < need) {
+            g_saf_admission_rejects++;
+            throw std::runtime_error(
+                "striped whole-flow SAF admission rejected before any REQUEST: "
+                "shared link_group capacity, required=" + std::to_string(need) +
+                ", available=" + std::to_string(it->second.Available()));
+        }
+    }
+
+    std::vector<std::pair<int, FlowKey>> links_done;
+    std::vector<std::pair<SafGroupKey, FlowKey>> groups_done;
+    try {
+        for (const SafPlan &p : plans) {
+            for (int idx : p.path) {
+                WholeFlowSafResult lr =
+                    g_saf_link_admission[idx].Reserve(p.key, p.packets);
+                if (!lr.admitted())
+                    throw std::runtime_error(
+                        "whole-flow SAF internal link commit mismatch");
+                links_done.push_back({idx, p.key});
+                if (g_d2d_links[idx].link_group >= 0) {
+                    SafGroupKey group = GroupKeyForLink(idx);
+                    WholeFlowSafResult gr =
+                        g_saf_group_admission.at(group).Reserve(p.key, p.packets);
+                    if (!gr.admitted())
+                        throw std::runtime_error(
+                            "whole-flow SAF internal group commit mismatch");
+                    groups_done.push_back({group, p.key});
+                }
+            }
+        }
+    } catch (...) {
+        for (auto it = groups_done.rbegin(); it != groups_done.rend(); ++it)
+            (void)g_saf_group_admission.at(it->first).Release(it->second);
+        for (auto it = links_done.rbegin(); it != links_done.rend(); ++it)
+            (void)g_saf_link_admission.at(it->first).Release(it->second);
+        throw;
+    }
+    for (const SafPlan &p : plans) {
+        g_saf_flow_links[p.key] = std::set<int>(p.path.begin(), p.path.end());
+        for (int idx : p.path)
+            if (g_d2d_links[idx].link_group >= 0)
+                g_saf_flow_groups[p.key].insert(GroupKeyForLink(idx));
+    }
+    g_saf_admission_successes++;
 }
 
 void ReserveWholeFlowSafPath(int source_global, int dest_global, int tag,
@@ -69,43 +236,26 @@ void ReserveWholeFlowSafPath(int source_global, int dest_global, int tag,
         throw std::runtime_error("whole-flow SAF path reservation: illegal endpoint");
     if (DieOfGlobal(source_global) == DieOfGlobal(dest_global))
         return;
-    if (g_saf_link_admission.size() != g_d2d_links.size())
-        throw std::runtime_error("whole-flow SAF runtime was not initialized");
+    SafPlan p{{source_global, tag, subflow}, flow_packets,
+              WholeFlowSafPath(source_global, dest_global, tag, subflow)};
+    ReserveSafPlans({p});
+}
 
-    FlowKey key{source_global, tag, subflow};
-    if (g_saf_flow_links.count(key))
-        throw std::runtime_error("whole-flow SAF duplicate active path reservation");
-    std::vector<int> path, admitted;
-    int cur = DieOfGlobal(source_global), dst = DieOfGlobal(dest_global);
-    while (cur != dst) {
-        Directions d = DieFirstHopDir(cur, dst);
-        int nx = cur % DIE_X, ny = cur / DIE_X;
-        if (d == EAST) ++nx; else if (d == WEST) --nx;
-        else if (d == NORTH) ++ny; else if (d == SOUTH) --ny;
-        int next = ny * DIE_X + nx;
-        int idx = DirectedLinkIndex(cur, next);
-        if (idx < 0)
-            throw std::runtime_error("whole-flow SAF path reservation: missing directed link");
-        path.push_back(idx);
-        cur = next;
-    }
-    for (int idx : path) {
-        WholeFlowSafResult r = g_saf_link_admission[idx].Reserve(key, flow_packets);
-        if (!r.admitted()) {
-            g_saf_admission_rejects++;
-            for (int done : admitted)
-                (void)g_saf_link_admission[done].Release(key);
-            throw std::runtime_error(
-                "whole-flow SAF path admission rejected before REQUEST/DATA: " +
-                std::string(WholeFlowSafStatusName(r.status)) +
-                ", link=" + std::to_string(idx) +
-                ", flow_packets=" + std::to_string(flow_packets) +
-                ", available=" + std::to_string(r.available_before));
-        }
-        admitted.push_back(idx);
-    }
-    g_saf_flow_links[key] = std::set<int>(path.begin(), path.end());
-    g_saf_admission_successes++;
+void ReserveStripedWholeFlowSafPaths(int source_global, int dest_global,
+                                     int tag,
+                                     const std::vector<int> &counts) {
+    if (g_d2d_cfg.mode != MODE_BOUNDED_SAF)
+        return;
+    if (source_global < 0 || source_global >= TOTAL_CORES || dest_global < 0 ||
+        dest_global >= TOTAL_CORES || counts.empty() || counts.size() > 4)
+        throw std::runtime_error("striped whole-flow SAF reservation: invalid input");
+    if (DieOfGlobal(source_global) == DieOfGlobal(dest_global))
+        return;
+    std::vector<SafPlan> plans;
+    for (int s = 0; s < (int)counts.size(); ++s)
+        plans.push_back({{source_global, tag, s}, counts[s],
+                         WholeFlowSafPath(source_global, dest_global, tag, s)});
+    ReserveSafPlans(plans);
 }
 
 void ReleaseWholeFlowSafLink(int link_idx, const FlowKey &key, int flow_packets) {
@@ -114,9 +264,34 @@ void ReleaseWholeFlowSafLink(int link_idx, const FlowKey &key, int flow_packets)
     auto fit = g_saf_flow_links.find(key);
     if (fit == g_saf_flow_links.end() || !fit->second.count(link_idx))
         throw std::runtime_error("whole-flow SAF link release without path reservation");
-    int released = g_saf_link_admission.at(link_idx).Release(key);
-    if (released != flow_packets)
-        throw std::runtime_error("whole-flow SAF link release packet-count mismatch");
+    WholeFlowSafAdmission &link_ledger = g_saf_link_admission.at(link_idx);
+    if (link_ledger.ReservedFor(key) != flow_packets)
+        throw std::runtime_error(
+            "whole-flow SAF link release packet-count mismatch");
+
+    const bool grouped = g_d2d_links.at(link_idx).link_group >= 0;
+    SafGroupKey group{};
+    WholeFlowSafAdmission *group_ledger = nullptr;
+    auto git = g_saf_flow_groups.end();
+    if (grouped) {
+        group = GroupKeyForLink(link_idx);
+        git = g_saf_flow_groups.find(key);
+        if (git == g_saf_flow_groups.end() || !git->second.count(group))
+            throw std::runtime_error(
+                "whole-flow SAF group release without path reservation");
+        group_ledger = &g_saf_group_admission.at(group);
+        if (group_ledger->ReservedFor(key) != flow_packets)
+            throw std::runtime_error(
+                "whole-flow SAF group release count mismatch");
+    }
+
+    (void)link_ledger.Release(key);
+    if (grouped) {
+        (void)group_ledger->Release(key);
+        git->second.erase(group);
+        if (git->second.empty())
+            g_saf_flow_groups.erase(git);
+    }
     fit->second.erase(link_idx);
     if (fit->second.empty())
         g_saf_flow_links.erase(fit);
@@ -128,6 +303,13 @@ long WholeFlowSafReservedPackets() {
         total += a.Reserved();
     return total;
 }
+long WholeFlowSafGroupReservedPackets() {
+    long total = 0;
+    for (const auto &kv : g_saf_group_admission)
+        total += kv.second.Reserved();
+    return total;
+}
+
 void ResetDieActivityStats() {
     int n = DIE_COUNT > 0 ? DIE_COUNT : 1;
     g_die_router_pkts.assign(n, 0);

@@ -87,6 +87,7 @@ public:
     long saf_occ_max = 0, inflight_occ_max = 0, rx_occ_max = 0;
     long saf_full_cycles = 0, inflight_full_cycles = 0, rx_full_cycles = 0;
     long port_rate_stall = 0, link_rate_stall = 0, rx_backpressure_stall = 0;
+    long link_group_stall = 0;
 
     SC_HAS_PROCESS(D2DLinkUnit);
     D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
@@ -135,6 +136,7 @@ public:
     long PortRateStall() const { return port_rate_stall; }
     long LinkRateStall() const { return link_rate_stall; }
     long RxBackpressureStall() const { return rx_backpressure_stall; }
+    long LinkGroupStall() const { return link_group_stall; }
 
 private:
     struct SafFlowBuffer {

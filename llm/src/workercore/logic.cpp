@@ -61,10 +61,19 @@ void AttachRequestFlowPackets(Msg &m, const Send_prim *prim, int subflow) {
     m.subflow_ = subflow;
     m.flow_packets_ = StripePackets(prim->max_packet, prim->stripe_count,
                                     subflow);
-    if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
-        DieOfGlobal(m.source_) != DieOfGlobal(m.des_))
-        ReserveWholeFlowSafPath(m.source_, m.des_, m.tag_id_, subflow,
-                                m.flow_packets_);
+}
+
+void ReserveStripedSafOnce(Send_prim *prim, int source) {
+    if (prim->stripe_saf_reserved || g_d2d_cfg.mode != MODE_BOUNDED_SAF ||
+        DieOfGlobal(source) == DieOfGlobal(prim->des_id))
+        return;
+    std::vector<int> counts;
+    counts.reserve(prim->stripe_count);
+    for (int s = 0; s < prim->stripe_count; ++s)
+        counts.push_back(StripePackets(prim->max_packet, prim->stripe_count, s));
+    ReserveStripedWholeFlowSafPaths(source, prim->des_id, prim->tag_id,
+                                    counts);
+    prim->stripe_saf_reserved = true;
 }
 } // namespace
 
@@ -78,6 +87,7 @@ void WorkerCoreExecutor::send_logic() {
         prim->stripe_packets.clear();
         prim->stripe_sent.clear();
         prim->stripe_exit_ports.clear();
+        prim->stripe_saf_reserved = false;
         if (prim->type == SEND_DATA)
             InitDataStripeState(prim, cid);
         bool job_done = false; // 结束内圈循环的标志
@@ -159,6 +169,7 @@ void WorkerCoreExecutor::send_logic() {
                 if (!ctrl_channel_avail_i.read())
                     wait(ev_ctrl_channel_avail_i);
 
+                ReserveStripedSafOnce(prim, cid);
                 send_buffer =
                     Msg(MSG_TYPE::REQUEST, prim->des_id, prim->tag_id, cid);
                 int subflow = prim->next_subflow++;
