@@ -964,3 +964,11 @@ completed
   冻结门保持精确全绿。
 
 下一步 V4-d：多跳、消息大小、latency/rate 扫描，逐项校验 oracle 斜率与边界。
+
+- **V4-d 已完成**：覆盖 `F=1/7/8/9/128`、有理数 min-cut
+  `R=1,2/3,1/2,1/4`、`L=0/1/7/20` 和 1/2-hop。
+- 所有 runtime 账本与独立 oracle 精确一致；两跳 fixed=`6L` 且 bulk 不重复。
+- 真实完成时间同时满足 `ΔT=CYCLE·ΔS(F)` 与 `ΔT=CYCLE·3HΔL`，证明延迟进入
+  生产事件调度而不只是统计输出。V4 runner **9/9**。
+
+下一步 V4-e：Behavioral/cycle 无争用校准，以及 shared/disjoint 争用语义边界对照。

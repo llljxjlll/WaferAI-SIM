@@ -758,3 +758,12 @@ V4 从 `e1a8c02` 建立独立分支 `feat/d2d-v4`。V3 的 `d2d-v3-baseline` tag
   `286 ns`、drain=0；cycle NoC 误配被启动期拒绝。
 
 门：V4 **4/4**、纯函数 **300/300**、Link **37/37**、V3 **16/16**，NoC 冻结值不变。
+
+### V4-d：解析参数扫描（完成）
+
+- `F=1/7/8/9/128`、`R=1,2/3,1/2,1/4`、`L=0/1/7/20`；
+- 2×1 一跳与 3×1 两跳；fixed=`3HL`，pipelined bulk 只计一次；
+- runtime/oracle 账本完全一致，并以真实 sim-time 验证
+  `ΔT=CYCLE·ΔS(F)`、`ΔT=CYCLE·3HΔL`。
+
+V4 runner：**9/9**。

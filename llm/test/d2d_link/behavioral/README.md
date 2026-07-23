@@ -66,3 +66,15 @@ python3 llm/test/d2d_link/run_test_d2d_v4.py
 
 V4-c 门为 **4/4**：完成/drain、代表消息计数/re-pin、runtime=oracle，以及 Behavioral
 误配 cycle NoC 的启动期拒绝。
+
+## V4-d 扫描门
+
+同一 runner 继续覆盖：`F=1/7/8/9/128`、`R=1,2/3,1/2,1/4`、
+`L=0/1/7/20`，以及 1-hop/2-hop。V4 总门增至 **9/9**。
+
+除了 runtime 周期账本逐项等于 oracle，还断言生产完成时间的相对斜率：
+
+- `ΔT=CYCLE·ΔS(F)`；
+- `ΔT=CYCLE·3·H·ΔL`。
+
+这避免只验证诊断输出，而没有证明实际事件调度使用了该延迟。
