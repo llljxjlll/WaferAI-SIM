@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
@@ -127,6 +128,46 @@ def run_case(packets, stripes, timeout=60, hw=None, sim=SIM, wl=None):
         if hp:
             os.remove(hp)
 
+def run_case_profile(packets, stripes, timeout=120, hw=None, wl=None):
+    wp = temp_json(wl if wl is not None else workload(packets, stripes))
+    hp = temp_json(hw) if hw is not None else None
+    command = [NPUSIM, "--workload-config", wp,
+               "--hardware-config", hp or HW,
+               "--simulation-config", SIM, "--mapping-config", MAP]
+    start = time.monotonic()
+    peak_rss_kb = 0
+    timed_out = False
+    try:
+        with tempfile.TemporaryFile(mode="w+") as log:
+            p = subprocess.Popen(command, cwd=BUILD, stdout=log,
+                                 stderr=subprocess.STDOUT, text=True)
+            while p.poll() is None:
+                try:
+                    with open(f"/proc/{p.pid}/status") as status:
+                        m = re.search(r"^VmRSS:\s+(\d+) kB",
+                                      status.read(), re.MULTILINE)
+                    if m:
+                        peak_rss_kb = max(peak_rss_kb, int(m.group(1)))
+                except (FileNotFoundError, ProcessLookupError):
+                    pass
+                if time.monotonic() - start > timeout:
+                    timed_out = True
+                    p.kill()
+                    break
+                time.sleep(0.005)
+            p.wait()
+            log.seek(0)
+            out = ANSI.sub("", log.read())
+        run = parse(124 if timed_out else p.returncode, out)
+        run["wall_s"] = time.monotonic() - start
+        run["rss_kb"] = peak_rss_kb
+        return run
+    finally:
+        os.remove(wp)
+        if hp:
+            os.remove(hp)
+
+
 def fields(pattern, out):
     m = re.search(pattern, out)
     return tuple(map(int, m.groups())) if m else None
@@ -157,6 +198,10 @@ def parse(rc, out):
         for idx, stall in re.findall(
             r"\[D2D_BOUND\] idx=(\d+).*?group_stall=(\d+)", out)
     }
+    hierarchy = fields(
+        r"Instantiated cores=(\d+) routers=(\d+) workers=(\d+) dies=(\d+)",
+        out)
+    link_units = fields(r"\[D2D\] link_sites=\d+ link_units=(\d+)", out)
     dynamic_match = re.search(
         r"\[V5_DYNAMIC\] selections=(\d+) releases=(\d+) "
         r"active=(\d+) loads=([0-9,]*)", out)
@@ -170,6 +215,8 @@ def parse(rc, out):
         "repin": repin, "admit": admit, "beha": beha,
         "ns": int(finish.group(1)) if finish else None,
         "group_stalls": group_stalls, "dynamic": dynamic,
+        "hierarchy": hierarchy,
+        "link_units": link_units[0] if link_units else None,
         "drained": "[DRAIN] router_residual=0" in out and
                    "[DRAIN] d2d_link_residual=0" in out,
         "saf_zero": "[SAF] reserved_packets=0" in out,
@@ -425,6 +472,48 @@ def main():
            dynamic_multi_a["ns"] == dynamic_multi_b["ns"] and
            not dynamic_multi_a["watchdog"] and not dynamic_multi_b["watchdog"],
            "ns={}/{}".format(dynamic_multi_a["ns"], dynamic_multi_b["ns"]))
+
+    scale = {}
+    scale_functional = True
+    for dies in (1, 2, 4, 8):
+        scale_hw = bounded_hw(8, policy="dynamic")
+        scale_hw["die"]["x"] = dies
+        dest = 1 if dies == 1 else (dies - 1) * 16
+        run = run_case_profile(7, 4, hw=scale_hw,
+                               wl=workload(7, 4, dest=dest))
+        scale[dies] = run
+        expected_hierarchy = (16 * dies, 16 * dies, 16 * dies, dies)
+        expected_units = 8 * (dies - 1)
+        basic = (run["rc"] == 0 and run["hierarchy"] == expected_hierarchy and
+                 run["link_units"] == expected_units and run["drained"] and
+                 not run["watchdog"])
+        if dies == 1:
+            dyn = run["dynamic"]
+            basic = (basic and dyn is not None and dyn[:3] == (0, 0, 0) and
+                     all(v == 0 for v in dyn[3]))
+        else:
+            hops = dies - 1
+            flow_ok, _ = check_multihop_flow(run, 7, 4, 0, dest, hops)
+            dyn = run["dynamic"]
+            basic = (basic and flow_ok and dyn is not None and
+                     dyn[:3] == (8 * hops, 8 * hops, 0) and
+                     all(v == 0 for v in dyn[3]) and
+                     run["repin"] == (15 * hops, 15 * hops, 0))
+        scale_functional = scale_functional and basic
+    scale_detail = " ".join(
+        "{}d:wall={:.3f}s,rss={}KiB,links={}".format(
+            dies, run["wall_s"], run["rss_kb"], run["link_units"])
+        for dies, run in scale.items())
+    record("V5-g 1/2/4/8-die production scale: hierarchy, links, integrity and drain",
+           scale_functional, scale_detail)
+    rss = [scale[d]["rss_kb"] for d in (1, 2, 4, 8)]
+    wall = [scale[d]["wall_s"] for d in (1, 2, 4, 8)]
+    resource_ok = (all(0 < r < 1572864 for r in rss) and
+                   all(0 < t < 30 for t in wall) and
+                   rss[-1] <= rss[0] * 8 + 131072 and
+                   wall[-1] <= wall[0] * 12 + 1)
+    record("V5-g scale resource growth remains within frozen smoke bounds",
+           resource_ok, scale_detail)
 
     failed = sum(not ok for _, ok, _ in results)
     print(f"\nV5 D2D tests: {len(results)-failed}/{len(results)} passed")
