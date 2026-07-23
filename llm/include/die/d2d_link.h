@@ -14,6 +14,7 @@
 #include "die/port.h"
 #include "macros/macros.h"
 #include <deque>
+#include <map>
 #include <utility>
 
 // 有限缓冲 + token-bucket 速率的可选配置。默认 disabled：functional_v2 走 forward() 的冻结分支。
@@ -30,6 +31,14 @@ struct D2DLinkBound {
     int rx_depth = 0;   // 远端接收 stage 容量
     D2DRate port_rate;  // SAF stage → link 的端口注入速率
     D2DRate rate;       // 链路速率（包/cycle，0<r<=1）；token bucket 表达 <1
+};
+
+// V4 Behavioral：无有限 FIFO/credit/backpressure/跨 flow 争用。每个逻辑 DATA flow
+// 只让一个代表包穿过 Router；首条有向 link 额外承担 ceil(F/min(port,link)) 的聚合服务。
+struct D2DLinkBehavioral {
+    bool enabled = false;
+    D2DRate port_rate;
+    D2DRate link_rate;
 };
 
 class D2DLinkUnit : public sc_module {
@@ -62,6 +71,7 @@ public:
 
     D2DLinkBound bound; // V3-b：有限缓冲 + 速率（默认 disabled = V2 行为，不改冻结时序/计数）
 
+    D2DLinkBehavioral behavioral; // V4：解析后端；与 bound 互斥
     // V3-b 统计（仅 bounded 时有意义）。命名严格区分「状态」与「阻塞事件」：
     long occ_max = 0;       // 数据 FIFO 观测到的最大占用（不变量：<= data_depth）
     long occ_ctrl_max = 0;  // 控制 FIFO 最大占用（<= ctrl_depth）
@@ -80,19 +90,23 @@ public:
 
     SC_HAS_PROCESS(D2DLinkUnit);
     D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
-                D2DLinkBound bound_ = D2DLinkBound{});
+                D2DLinkBound bound_ = D2DLinkBound{},
+                D2DLinkBehavioral behavioral_ = D2DLinkBehavioral{});
     void forward();
     void forward_bounded(long cyc); // V3-b standalone 单级有限 FIFO
     void forward_bounded_saf(long cyc); // V3-d 生产 whole-flow SAF 多级流水线
 
     // drain 不变量：bounded 模式除数据/控制 FIFO 外，回程中的信用及当前输出 pulse 也必须清空。
+    void forward_behavioral(long cyc); // V4 聚合代表消息
     long residual() const {
         long saf_packets = 0;
         for (const auto &kv : saf_flows_)
             saf_packets += (long)kv.second.packets.size();
         return (long)fifo_.size() + (long)cfifo_.size() +
                (long)rx_fifo_.size() + saf_packets +
-               (long)saf_expected_.size() + CreditResidual();
+               (long)saf_expected_.size() + CreditResidual() +
+               (long)behavioral_data_events_.size() +
+               (long)behavioral_ctrl_events_.size();
     }
     long CreditResidual() const {
         return (long)data_credit_due_.size() + (long)ctrl_credit_due_.size() +
@@ -143,6 +157,10 @@ private:
     // V3-b2：信用回还的到达时刻队列（pop 时 push cyc+latency，模拟回程 L 拍；每拍 pulse 一个到期的）。
     std::deque<long> data_credit_due_;
     std::deque<long> ctrl_credit_due_;
+    // Behavioral 不把聚合服务占用解释成有限队列；事件表仅保存代表消息的到达时刻。
+    std::multimap<long, sc_bv<256>> behavioral_data_events_;
+    std::multimap<long, sc_bv<256>> behavioral_ctrl_events_;
+
     // sc_signal pulse 在写出后的一个调度周期内仍是在途信用；纳入 residual，避免过早宣布 drain。
     bool data_credit_active_ = false;
     bool ctrl_credit_active_ = false;

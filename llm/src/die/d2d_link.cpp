@@ -1,4 +1,5 @@
 #include "die/d2d_link.h"
+#include "die/behavioral.h"
 #include "die/port.h"
 #include "monitor/watchdog.h"
 #include "utils/msg_utils.h"
@@ -59,9 +60,21 @@ void ProbeData(D2DDataProbe &p, const sc_bv<256> &payload, long long cycle) {
 } // namespace
 
 D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_,
-                         D2DLinkBound bound_)
-    : sc_module(n), latency(latency_), link_idx(link_idx_), bound(bound_) {
+                         D2DLinkBound bound_, D2DLinkBehavioral behavioral_)
+    : sc_module(n), latency(latency_), link_idx(link_idx_), bound(bound_),
+      behavioral(behavioral_) {
     // V3-b：构造期硬校验 bounded 参数（生产解析器已保证，但 standalone/其它调用者可能绕过）。
+    if (bound.enabled && behavioral.enabled)
+        throw std::runtime_error(
+            "D2DLinkUnit: bounded and behavioral modes are mutually exclusive");
+    if (behavioral.enabled) {
+        if (!behavioral.port_rate.Valid() || !behavioral.link_rate.Valid())
+            throw std::runtime_error(
+                "D2DLinkUnit: behavioral rates must satisfy 0 < num/den <= 1");
+        if (latency < 0)
+            throw std::runtime_error(
+                "D2DLinkUnit: behavioral latency must be >= 0");
+    }
     if (bound.enabled) {
         if (bound.data_depth < 1)
             throw std::runtime_error(
@@ -95,6 +108,10 @@ void D2DLinkUnit::forward() {
     while (true) {
         wait(CYCLE, SC_NS);
         cyc++;
+        if (behavioral.enabled) {
+            forward_behavioral(cyc);
+            continue;
+        }
         if (bound.enabled) {
             if (bound.whole_flow_saf)
                 forward_bounded_saf(cyc);
@@ -149,6 +166,97 @@ void D2DLinkUnit::forward() {
         } else {
             out_ctrl_sent.write(false);
         }
+    }
+}
+
+// V4 Behavioral 生产路径。REQUEST/ACK/DATA 各保留一个代表消息穿过真实 Router；控制消息
+// 每 hop 只加固定 link latency。DATA 在源 die 的第一条有向 link 上额外加一次 end-to-end
+// 聚合服务 ceil(F/min(1,port_rate,link_rate))，后续 hop 只加 latency，因此多跳是 pipelined
+// min-cut，而不是逐 hop 重复 bulk serialization。事件表无容量上限、无跨-flow资源争用。
+void D2DLinkUnit::forward_behavioral(long cyc) {
+    in_avail.write(true);
+    in_ctrl_avail.write(true);
+    data_credit_return.write(false);
+    ctrl_credit_return.write(false);
+    data_credit_active_ = false;
+    ctrl_credit_active_ = false;
+
+    if (in_sent.read()) {
+        sc_bv<256> payload = in_channel.read();
+        Msg m = DeserializeMsg(payload);
+        if (m.msg_type_ != DATA)
+            throw std::runtime_error(
+                "V4 Behavioral data channel received a non-DATA message");
+        if (m.roofline_packets_ < 1)
+            throw std::runtime_error(
+                "V4 Behavioral DATA requires roofline_packets >= 1");
+        long long delay = latency;
+        bool first_link = false;
+        if (link_idx >= 0 && link_idx < (int)g_d2d_links.size())
+            first_link =
+                g_d2d_links[link_idx].local_die == DieOfGlobal(m.source_);
+        if (first_link) {
+            D2DRate effective = D2DMinRate(
+                D2DRate{1, 1},
+                D2DMinRate(behavioral.port_rate, behavioral.link_rate));
+            long long service =
+                D2DServiceCycles(m.roofline_packets_, effective);
+            delay += service;
+            g_d2d_behavioral_stats.data_flows++;
+            g_d2d_behavioral_stats.logical_data_packets += m.roofline_packets_;
+            g_d2d_behavioral_stats.service_cycles += service;
+        }
+        if (delay > std::numeric_limits<long>::max() - cyc)
+            throw std::runtime_error("V4 Behavioral ready-cycle overflow");
+        behavioral_data_events_.emplace(cyc + (long)delay, payload);
+        g_d2d_behavioral_stats.fixed_cycles += latency;
+        g_d2d_link_in_pkts++;
+        CountType(g_d2d_link_in_by_type, payload);
+        CountLink(link_idx, true, payload);
+        ProbeData(g_d2d_data_in, payload, cyc);
+    }
+    if (in_ctrl_sent.read()) {
+        sc_bv<256> payload = in_ctrl_channel.read();
+        Msg m = DeserializeMsg(payload);
+        if (m.msg_type_ != REQUEST && m.msg_type_ != ACK)
+            throw std::runtime_error(
+                "V4 Behavioral control channel accepts only REQUEST/ACK");
+        if (latency > std::numeric_limits<long>::max() - cyc)
+            throw std::runtime_error(
+                "V4 Behavioral control ready-cycle overflow");
+        behavioral_ctrl_events_.emplace(cyc + latency, payload);
+        g_d2d_behavioral_stats.fixed_cycles += latency;
+        g_d2d_link_in_pkts++;
+        CountType(g_d2d_link_in_by_type, payload);
+        CountLink(link_idx, true, payload);
+    }
+
+    auto data = behavioral_data_events_.begin();
+    if (data != behavioral_data_events_.end() && data->first <= cyc &&
+        out_avail.read()) {
+        out_channel.write(data->second);
+        out_sent.write(true);
+        CountType(g_d2d_link_out_by_type, data->second);
+        CountLink(link_idx, false, data->second);
+        ProbeData(g_d2d_data_out, data->second, cyc);
+        behavioral_data_events_.erase(data);
+        g_d2d_link_out_pkts++;
+        g_protocol_progress++;
+    } else {
+        out_sent.write(false);
+    }
+    auto ctrl = behavioral_ctrl_events_.begin();
+    if (ctrl != behavioral_ctrl_events_.end() && ctrl->first <= cyc &&
+        out_ctrl_avail.read()) {
+        out_ctrl_channel.write(ctrl->second);
+        out_ctrl_sent.write(true);
+        CountType(g_d2d_link_out_by_type, ctrl->second);
+        CountLink(link_idx, false, ctrl->second);
+        behavioral_ctrl_events_.erase(ctrl);
+        g_d2d_link_out_pkts++;
+        g_protocol_progress++;
+    } else {
+        out_ctrl_sent.write(false);
     }
 }
 

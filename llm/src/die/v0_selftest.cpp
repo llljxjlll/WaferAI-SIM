@@ -1599,15 +1599,14 @@ int RunD2DV0SelfTest() {
         ParseDiePorts(mk(behavioral()));
         bool old_beha = SPEC_USE_BEHA_NOC;
         SPEC_USE_BEHA_NOC = true;
-        bool runtime_rejected = false;
+        bool runtime_accepted = true;
         try {
             ValidateD2DTopology();
-        } catch (const std::runtime_error &e) {
-            runtime_rejected = std::string(e.what()).find("not wired yet") !=
-                               std::string::npos;
+        } catch (const std::runtime_error &) {
+            runtime_accepted = false;
         }
-        check(runtime_rejected,
-              "V4-a valid behavioral config is explicitly rejected until runtime wiring lands");
+        check(runtime_accepted,
+              "V4-c valid behavioral config is accepted by the production topology gate");
         SPEC_USE_BEHA_NOC = old_beha;
 
         // 恢复默认，避免影响后续段落

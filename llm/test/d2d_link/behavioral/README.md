@@ -53,3 +53,16 @@ python3 llm/test/d2d_link/behavioral/oracle.py \
 - Python oracle self-test：**8/8**；
 - C++ route/estimate 与配置纯函数总门：**300/300**；
 - 两者对固定的 2×1、3×1、2×2 解析样例给出相同路径和 cycle 值。
+
+## V4-c 生产闭环
+
+```bash
+python3 llm/test/d2d_link/run_test_d2d_v4.py
+```
+
+运行时使用一个 REQUEST、ACK、DATA 代表消息，DATA 的 `roofline_packets_` 保留逻辑 `F`。
+`[D2D_BEHA]` 将 `service_cycles`、`fixed_cycles` 和两者之和分别输出；runner 使用本目录
+的独立 Python oracle 对比，而非调用生产 C++ estimate。
+
+V4-c 门为 **4/4**：完成/drain、代表消息计数/re-pin、runtime=oracle，以及 Behavioral
+误配 cycle NoC 的启动期拒绝。

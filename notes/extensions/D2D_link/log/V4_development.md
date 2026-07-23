@@ -64,3 +64,26 @@ V4-f  聚合门、文档、冻结
 
 自审修正：乘法在发生前做 `LLONG_MAX/den` 检查；ceil 用商余数避免末端加法溢出；
 Python/C++ 保持独立实现，防止测试只是复述生产函数。
+
+## 5. V4-c：Behavioral 单流运行时（完成）
+
+- `D2DLinkUnit` 增加与 bounded 分支互斥的 Behavioral 分支；事件表无容量上限，
+  不产生 credit、背压或跨-flow资源争用。
+- REQUEST/ACK/DATA 各保留一个代表消息真实穿过 Router；DATA 原始包数 `F` 保留在
+  `roofline_packets_`。源 die 第一条 link 计一次 `S(F)`，每次 link crossing 计 `L`。
+- 接收核对跨 die Behavioral DATA 只消费代表包的一拍，不重复等待 `F`。
+- `[D2D_BEHA]` 输出 flow、逻辑包数、service/fixed/total 周期账本，可直接与独立 oracle 对比。
+- production gate 要求 `use_beha_noc=true`；错误使用 cycle NoC 在进入仿真前拒绝。
+
+验证（`run_test_d2d_v4.py` **4/4**）：
+
+- 一跳 `F=4,L=7,R=1`：wire `REQ/ACK/DATA=1/1/1`，逻辑 DATA=4；
+- runtime/oracle 均为 `service=4,fixed=21,total=25 cycle`；连续两次 `286 ns`；
+- repin=`3/3/0`，Router/Link residual 均为 0；错误 cycle-NoC 配置非零退出。
+
+自审修正：首次接线时 Behavioral dispatch 被误嵌套在 `bound.enabled` 内，端到端账本测试
+立即以全零抓出该静默退化；修为 Behavioral→bounded→functional 三路互斥 dispatch。
+同时规范 `<limits>` include 位置，并为 control ready-cycle 补齐溢出检查。
+
+冻结回归：纯函数 **300/300**、Link **37/37**、V3 production **16/16**，NoC
+**14781/29109、14833/45441** 精确不变。

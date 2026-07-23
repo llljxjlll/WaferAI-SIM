@@ -23,6 +23,7 @@ long g_d2d_link_in_pkts = 0;
 long g_d2d_link_out_pkts = 0;
 long g_d2d_link_in_by_type[MSG_TYPE_NUM] = {};
 long g_d2d_link_out_by_type[MSG_TYPE_NUM] = {};
+D2DBehavioralStats g_d2d_behavioral_stats;
 D2DDataProbe g_d2d_data_in, g_d2d_data_out;
 long g_d2d_repin_total = 0, g_d2d_repin_changed = 0, g_d2d_repin_same = 0;
 std::vector<D2DLinkStat> g_d2d_link_stats;
@@ -156,6 +157,7 @@ void ResetD2DLinkStats() {
     }
     g_d2d_data_in = D2DDataProbe();
     g_d2d_data_out = D2DDataProbe();
+    g_d2d_behavioral_stats = D2DBehavioralStats{};
 }
 void ResetHostLaneStats(int n_lanes) {
     g_host_lane_done.assign(n_lanes, 0);
@@ -625,8 +627,14 @@ void ValidateD2DTopology() {
         if (!SPEC_USE_BEHA_NOC)
             throw std::runtime_error(
                 "V4 Behavioral D2D requires noc.use_beha_noc=true");
-        throw std::runtime_error(
-            "V4-a Behavioral D2D configuration is valid but runtime is not wired yet");
+        if (!g_d2d_cfg.port_rate.Valid() || !g_d2d_cfg.link_rate.Valid() ||
+            g_d2d_cfg.link_latency < 0)
+            throw std::runtime_error(
+                "V4 Behavioral D2D requires valid rates and nonnegative latency");
+        // Behavioral 复用 V1 的单端口、peer、pinned-exit 编码契约；只替换链路服务模型。
+        // 端口 bw 在解析时规范化为 1，真实聚合速率由 port_rate/link_rate 表示。
+        ValidateV1MvpTopology();
+        return;
     }
     if (g_d2d_cfg.mode == MODE_BOUNDED_SAF) {
         if (!g_d2d_cfg.port_rate.Valid() || !g_d2d_cfg.link_rate.Valid())

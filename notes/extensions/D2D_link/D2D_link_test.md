@@ -954,3 +954,13 @@ completed
   **300/300**、Python **8/8**。
 
 下一步 V4-c：让 REQUEST/ACK/DATA 代表包进入 Behavioral runtime，并使其可观测值逐项匹配 oracle。
+
+- **V4-c 已完成**：生产 D2DLinkUnit 增加独立 Behavioral dispatch；wire 上每 flow 保留
+  REQUEST/ACK/DATA 各一个代表消息，DATA 的逻辑 `F` 不丢失，bulk 只在第一条 link 计一次。
+- `[D2D_BEHA]` 与独立 oracle 对 `data_flows/logical packets/service/fixed/total` 逐项比较。
+  一跳 `F=4,L=7,R=1` 两边均为 `service=4,fixed=21,total=25`，两次运行均 `286 ns`；
+  代表消息计数、repin、drain 和错误 backend/NoC 组合拒绝均已覆盖（V4 **4/4**）。
+- 自审抓出并修复 Behavioral dispatch 误嵌套在 bounded 分支导致的静默退化；完整 V3/NoC
+  冻结门保持精确全绿。
+
+下一步 V4-d：多跳、消息大小、latency/rate 扫描，逐项校验 oracle 斜率与边界。

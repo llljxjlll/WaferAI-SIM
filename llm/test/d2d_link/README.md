@@ -748,3 +748,13 @@ V4 从 `e1a8c02` 建立独立分支 `feat/d2d-v4`。V3 的 `d2d-v3-baseline` tag
 - Behavioral 明确无跨-flow争用/有限 FIFO/credit/SAF 语义。
 
 门：C++ pure-function **300/300**，Python oracle **8/8**。详细公式见 `behavioral/README.md`。
+
+### V4-c：Behavioral 单流运行时（完成）
+
+- REQUEST/ACK/DATA 代表消息走真实 Router；源 die 首 link 对 DATA 一次计入 `S(F)`，
+  每阶段每 hop 计 `L`，接收核不重复计 bulk；
+- `[D2D_BEHA]` 保存逻辑包数和周期分解，`run_test_d2d_v4.py` 用独立 oracle 检查；
+- 一跳 `F=4,L=7,R=1` 实测 wire 计数 `1/1/1`、账本 `4+21=25 cycle`、两次
+  `286 ns`、drain=0；cycle NoC 误配被启动期拒绝。
+
+门：V4 **4/4**、纯函数 **300/300**、Link **37/37**、V3 **16/16**，NoC 冻结值不变。

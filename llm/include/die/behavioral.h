@@ -8,11 +8,11 @@
 #include "die/port.h"
 #include "defs/spec.h"
 #include "utils/router_utils.h"
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
 struct D2DBehavioralRoute {
-#include <limits>
     std::vector<int> dies;         // 含源/目的 die
     std::vector<int> link_indices; // forward path，有向 link 下标
     int intra_die_hops = 0;        // 代表 DATA 包实际穿 Router 的 hop 数（只报告，不重复 wait）

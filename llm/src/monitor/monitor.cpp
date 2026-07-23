@@ -379,8 +379,14 @@ void Monitor::init() {
             bound.port_rate = g_d2d_cfg.port_rate;
             bound.rate = g_d2d_cfg.link_rate;
         }
+        D2DLinkBehavioral behavioral;
+        if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL) {
+            behavioral.enabled = true;
+            behavioral.port_rate = g_d2d_cfg.port_rate;
+            behavioral.link_rate = g_d2d_cfg.link_rate;
+        }
         auto *link = new D2DLinkUnit(sc_gen_unique_name("d2d_link"), pa.latency,
-                                     link_seq++, bound);
+                                     link_seq++, bound, behavioral);
         // 上游 A：读其边缘输出（channel/sent = channel[SA][Ta]），驱动其 avail 输入
         link->in_channel(channel[SA][Ta]);
         link->in_sent(data_sent[SA][Ta]);

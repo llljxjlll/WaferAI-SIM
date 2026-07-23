@@ -606,8 +606,16 @@ void WorkerCoreExecutor::recv_logic() {
                     }
 
                     need_long_wait = true;
-                    if (SPEC_USE_BEHA_NOC)
-                        roofline_packets = temp.roofline_packets_;
+                    if (SPEC_USE_BEHA_NOC) {
+                        // V4 Behavioral 跨 die DATA 的 F 包 bulk service 已由源 die 第一条
+                        // D2D link 一次性计费；到达接收核的是代表包，不能再次等待 F 拍。
+                        // 同 die Behavioral NoC 沿用原 roofline 行为。
+                        if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL &&
+                            DieOfGlobal(temp.source_) != DieOfGlobal(cid))
+                            roofline_packets = 1;
+                        else
+                            roofline_packets = temp.roofline_packets_;
+                    }
                 }
             }
 

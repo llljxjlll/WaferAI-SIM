@@ -124,6 +124,17 @@ int sc_main(int argc, char *argv[]) {
             << " ack_out=" << g_d2d_link_out_by_type[ACK]
             << " data_in=" << g_d2d_link_in_by_type[DATA]
             << " data_out=" << g_d2d_link_out_by_type[DATA];
+        if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL) {
+            LOG_INFO(SYSTEM)
+                << "[D2D_BEHA] data_flows=" << g_d2d_behavioral_stats.data_flows
+                << " logical_data_packets="
+                << g_d2d_behavioral_stats.logical_data_packets
+                << " service_cycles=" << g_d2d_behavioral_stats.service_cycles
+                << " fixed_cycles=" << g_d2d_behavioral_stats.fixed_cycles
+                << " total_d2d_cycles="
+                << (g_d2d_behavioral_stats.service_cycles +
+                    g_d2d_behavioral_stats.fixed_cycles);
+        }
         // V1-d2 DATA 逐包完整性：in/out 两侧 pkts/seqhash/csum 相等提供链路无丢/重/
         // 乱序/损坏的强证据；序号是 base-agnostic 连续区间（当前生产从 1 开始），唯一
         // is_end 必须落在 maxseq。cycle span 用于 V1-d3 验证 latency 不改变稳态包间距。

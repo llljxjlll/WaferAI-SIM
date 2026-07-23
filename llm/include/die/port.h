@@ -260,6 +260,17 @@ extern long g_d2d_link_out_pkts;
 // REQUEST/ACK/DATA 都真实穿链且各自守恒；非法/未知类型不计入此数组。
 extern long g_d2d_link_in_by_type[MSG_TYPE_NUM];
 extern long g_d2d_link_out_by_type[MSG_TYPE_NUM];
+
+// V4-c Behavioral 聚合传输统计。wire 上每条 DATA flow 只有一个代表包；logical_data_packets
+// 保留原始 F。service_cycles 只在 flow 的第一条 D2D link 计一次；fixed_cycles 对
+// REQUEST/ACK/DATA 每次跨 link 各加 L，据此可直接和 oracle 的 3*H*L+S(F) 对照。
+struct D2DBehavioralStats {
+    long data_flows = 0;
+    long long logical_data_packets = 0;
+    long long service_cycles = 0;
+    long long fixed_cycles = 0;
+};
+extern D2DBehavioralStats g_d2d_behavioral_stats;
 void ResetD2DLinkStats();
 
 // ---- V1-d2：DATA 逐包完整性探针 ----
