@@ -2,7 +2,8 @@
 """V0-exit 统一准入门（冻结基线）：依次执行三道阻塞门并汇总退出码。
 
   门 1+2  D2D 纯函数自测 + 端到端 runner（全部通过）      -> run_test_d2d_v0.py
-  门 3     NoC 四场景精确数值 14781/29109/14833/45441      -> run_test_noc_congestion.py
+  门 3     V3 production bounded SAF / congestion / backpressure -> run_test_d2d_v3.py
+  门 4     NoC 四场景精确数值 14781/29109/14833/45441      -> run_test_noc_congestion.py
 
 冻结契约：V0 的功能测试（自测 + 端到端，冻结时 165/23）必须**继续全部通过**、NoC 四场景
 数值**精确不变**；随 V1+ 增量测试总数可以增长，但既有 V0 契约不得回归。
@@ -20,6 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GATES = [
     ("D2D self-test + e2e (all pass)",
      [sys.executable, os.path.join(HERE, "d2d_link", "run_test_d2d_v0.py")]),
+    ("D2D V3 bounded SAF production (all pass)",
+     [sys.executable, os.path.join(HERE, "d2d_link", "run_test_d2d_v3.py")]),
     ("NoC four-scenario exact (14781/29109, 14833/45441)",
      [sys.executable, os.path.join(HERE, "noc_congestion",
                                    "run_test_noc_congestion.py")]),
@@ -33,7 +36,7 @@ def main():
         rc = subprocess.run(cmd).returncode
         results.append((name, rc))
 
-    print("\n==================== V0-exit 准入门汇总 ====================")
+    print("\n==================== D2D 全版本准入门汇总 ====================")
     all_ok = True
     for name, rc in results:
         print(f"  [{'PASS' if rc == 0 else 'FAIL'}] {name}  (exit={rc})")

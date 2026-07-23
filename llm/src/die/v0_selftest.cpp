@@ -1637,6 +1637,67 @@ int RunD2DV0SelfTest() {
               "V3-c duplicate/zero/unknown-release defenses preserve reservation state");
     }
 
+    // ---- 16d. V3-d：生产全路径 SAF admission 原子性 ----
+    {
+        setTopo(4, 4, 3, 1);
+        D2DJson hw;
+        hw["die_ports"]["edges"]["S"] = {{"role", "host"}};
+        hw["die_ports"]["overrides"] = D2DJson::array();
+        hw["die_ports"]["overrides"].push_back(
+            {{"side", "E"}, {"idx", 0}, {"role", "c2c"}, {"dir", "E"}});
+        hw["die_ports"]["overrides"].push_back(
+            {{"side", "W"}, {"idx", 0}, {"role", "c2c"}, {"dir", "W"}});
+        hw["die_ports"]["c2c"] = {
+            {"mode", "bounded_saf"}, {"safety", "whole_flow_saf"},
+            {"port_rate", {{"num", 1}, {"den", 1}}},
+            {"link_rate", {{"num", 1}, {"den", 1}}},
+            {"link_latency", 1}, {"saf_buffer_depth", 4},
+            {"link_inflight_depth", 4}, {"rx_buffer_depth", 2},
+            {"ctrl_buffer_depth", 2}};
+        ParseDiePorts(hw);
+        ResetWholeFlowSafRuntime();
+        // 先只占满第二跳，使随后 0->2 的申请在第一跳成功、第二跳失败，真正覆盖部分回滚。
+        FlowKey blocker{CORES_PER_DIE, 32, 0};
+        ReserveWholeFlowSafPath(CORES_PER_DIE, 2 * CORES_PER_DIE, 32, 0, 4);
+        check(WholeFlowSafReservedPackets() == 4,
+              "V3-d single-hop reservation occupies exactly one directed SAF stage");
+
+        bool overbook_rejected = false;
+        try {
+            ReserveWholeFlowSafPath(0, 2 * CORES_PER_DIE + 1, 33, 0, 4);
+        } catch (const std::runtime_error &) {
+            overbook_rejected = true;
+        }
+        check(overbook_rejected && WholeFlowSafReservedPackets() == 4,
+              "V3-d later-hop overbook rejection rolls back the earlier partial reservation");
+
+        for (int i = 0; i < (int)g_d2d_links.size(); ++i)
+            if (g_d2d_links[i].local_die == 1 &&
+                g_d2d_links[i].remote_die == 2)
+                ReleaseWholeFlowSafLink(i, blocker, 4);
+
+        FlowKey key{0, 34, 0};
+        bool path_ok = true;
+        try {
+            ReserveWholeFlowSafPath(0, 2 * CORES_PER_DIE, 34, 0, 4);
+        } catch (...) {
+            path_ok = false;
+        }
+        check(path_ok && WholeFlowSafReservedPackets() == 8,
+              "V3-d 2-hop path reserves F atomically on every directed link");
+
+        int released_links = 0;
+        for (int i = 0; i < (int)g_d2d_links.size(); ++i) {
+            if ((g_d2d_links[i].local_die == 0 && g_d2d_links[i].remote_die == 1) ||
+                (g_d2d_links[i].local_die == 1 && g_d2d_links[i].remote_die == 2)) {
+                ReleaseWholeFlowSafLink(i, key, 4);
+                released_links++;
+            }
+        }
+        check(released_links == 2 && WholeFlowSafReservedPackets() == 0,
+              "V3-d per-link SAF release drains the global path reservation to zero");
+    }
+
     // ---- 17. FlowKey (source,tag,subflow) 三元组语义 ----
     // 注：output_lock **不用** FlowKey（tag 已=全局接收槽，多发一需 tag-only 聚合，见 flow.h）。
     // FlowKey 用于 V3 SAF 按发送流预留；V5 subflow striping 还会使用第三维区分子流。

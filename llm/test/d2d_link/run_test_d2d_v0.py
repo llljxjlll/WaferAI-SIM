@@ -1258,35 +1258,59 @@ def main():
            "only applies to mode=bounded_saf" in out,
            f"exit={rc} entered_sim={entered}")
 
-    # (3) 合法 bounded_saf 配置解析通过，但 runtime 尚未启用 → 必须明确拒绝，
-    #     绝不能让「声称有限缓冲」的配置实际按 functional_v2 的无限 FIFO 跑完。
-    rc, out, entered = run_with_c2c(
-        {"mode": "bounded_saf", "safety": "whole_flow_saf",
-         "port_rate": {"num": 1, "den": 2},
-         "link_rate": {"num": 1, "den": 4},
-         "link_latency": 20, "saf_buffer_depth": 64,
-         "link_inflight_depth": 11, "rx_buffer_depth": 8,
-         "ctrl_buffer_depth": 4}, timeout=20)
-    record("V3-a startup: valid bounded_saf refused while its runtime is unimplemented "
-           "(no silent fallback to functional_v2)",
-           rc not in (0, 124) and not entered and
-           "runtime is not enabled yet" in out,
-           f"exit={rc} entered_sim={entered}")
+    def bounded_evidence(out):
+        bm = re.search(r"\[D2D_BOUND\] idx=0 saf_peak=(\d+) inflight_peak=(\d+) "
+                       r"rx_peak=(\d+) saf_full=(\d+) inflight_full=(\d+) "
+                       r"rx_full=(\d+) port_stall=(\d+) link_stall=(\d+) "
+                       r"inflight_stall=(\d+) rx_stall=(\d+) downstream_stall=(\d+)", out)
+        return {
+            "bound": tuple(map(int, bm.groups())) if bm else None,
+            "types": "request_in=1 request_out=1 ack_in=1 ack_out=1 data_in=4 data_out=4" in out,
+            "integrity": ("[D2D_DATA] in_pkts=4 out_pkts=4" in out and
+                          "out_inorder=1" in out and "out_endseq=4 out_end_count=1" in out),
+            "drain": ("[DRAIN] router_residual=0" in out and
+                      "[DRAIN] d2d_link_residual=0" in out and
+                      "[SAF] reserved_packets=0" in out and
+                      "[CREDIT] data_balanced=1 ctrl_balanced=1" in out),
+        }
 
-    # (4) V3-c whole-flow SAF 启动期容量边界。C3_WL 的跨 die DATA flow 恰为 F=4 包：
-    #     saf=F 通过 per-flow preflight 后应继续走到 bounded runtime gate；saf=F-1 必须更早明确拒绝。
+    # (3) V3-d：合法 bounded_saf 真实进入生产有限流水线，不再 gate，也不能退回 functional_v2。
+    bounded_roomy = {"mode": "bounded_saf", "safety": "whole_flow_saf",
+                     "port_rate": {"num": 1, "den": 2},
+                     "link_rate": {"num": 1, "den": 4},
+                     "link_latency": 20, "saf_buffer_depth": 64,
+                     "link_inflight_depth": 11, "rx_buffer_depth": 8,
+                     "ctrl_buffer_depth": 4}
+    bruns = [run_with_c2c(bounded_roomy, timeout=60) for _ in range(2)]
+    be = [bounded_evidence(x[1]) for x in bruns]
+    record("V3-d production bounded_saf: REQUEST/ACK/DATA cross finite pipeline "
+           "(2x deterministic, integrity + drain)",
+           all(x[0] == 0 and x[2] and e["bound"] is not None and e["types"] and
+               e["integrity"] and e["drain"] for x, e in zip(bruns, be)) and
+           finish_ns(bruns[0][1]) == finish_ns(bruns[1][1]) == 424,
+           f"exit={bruns[0][0]}/{bruns[1][0]} ns={finish_ns(bruns[0][1])}/"
+           f"{finish_ns(bruns[1][1])} bound={be[0]['bound']}")
+
+    # (4) V3-c/V3-d whole-flow SAF 容量边界。C3_WL 的跨 die DATA flow 恰为 F=4 包：
+    #     saf=F 必须真实完成且 SAF stage 命中满状态；saf=F-1 必须在首包前拒绝。
     bounded_f = {"mode": "bounded_saf", "safety": "whole_flow_saf",
                  "port_rate": {"num": 1, "den": 2},
                  "link_rate": {"num": 1, "den": 4},
                  "link_latency": 20, "saf_buffer_depth": 4,
                  "link_inflight_depth": 11, "rx_buffer_depth": 8,
                  "ctrl_buffer_depth": 4}
-    rc, out, entered = run_with_c2c(bounded_f, timeout=20)
-    record("V3-c startup: whole-flow SAF capacity==F(4) passes admission then hits runtime gate",
-           rc not in (0, 124) and not entered and
-           "runtime is not enabled yet" in out and
-           "whole-flow SAF preflight" not in out,
-           f"exit={rc} entered_sim={entered}")
+    exact_runs = [run_with_c2c(bounded_f, timeout=60) for _ in range(2)]
+    exact_ev = [bounded_evidence(x[1]) for x in exact_runs]
+    exact_bound = exact_ev[0]["bound"]
+    record("V3-d whole-flow SAF capacity==F(4): completes only after full-flow store, "
+           "then drains reservation",
+           all(x[0] == 0 and x[2] and e["types"] and e["integrity"] and e["drain"]
+               for x, e in zip(exact_runs, exact_ev)) and
+           finish_ns(exact_runs[0][1]) == finish_ns(exact_runs[1][1]) == 424 and
+           exact_bound is not None and exact_bound[0] == 4 and exact_bound[3] > 0,
+           f"exit={exact_runs[0][0]}/{exact_runs[1][0]} "
+           f"ns={finish_ns(exact_runs[0][1])}/{finish_ns(exact_runs[1][1])} "
+           f"bound={exact_bound}")
 
     bounded_under = dict(bounded_f)
     bounded_under["saf_buffer_depth"] = 3
