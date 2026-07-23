@@ -83,7 +83,7 @@ void DumpProtocolWaitState(long cycle) {
         rres += r->residual();
     for (auto *l : links)
         lres += l->residual();
-    lres += D2DBehavioralFlowResidual();
+    lres += D2DBehavioralFlowResidual() + V5DynamicActivePins();
 
     LOG_WARN(SYSTEM) << "[PROTO_WAIT] protocol_wait_cycle=" << cycle
                      << " last_progress_cycle=" << g_protocol_last_progress

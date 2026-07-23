@@ -135,6 +135,19 @@ int sc_main(int argc, char *argv[]) {
                 << (g_d2d_behavioral_stats.service_cycles +
                     g_d2d_behavioral_stats.fixed_cycles);
         }
+        if (g_d2d_cfg.v5_multiport) {
+            std::string loads;
+            const auto &v = V5DynamicPortLoads();
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (i) loads += ",";
+                loads += std::to_string(v[i]);
+            }
+            LOG_INFO(SYSTEM)
+                << "[V5_DYNAMIC] selections=" << V5DynamicSelections()
+                << " releases=" << V5DynamicReleases()
+                << " active=" << V5DynamicActivePins()
+                << " loads=" << loads;
+        }
         // V1-d2 DATA 逐包完整性：in/out 两侧 pkts/seqhash/csum 相等提供链路无丢/重/
         // 乱序/损坏的强证据；序号是 base-agnostic 连续区间（当前生产从 1 开始），唯一
         // is_end 必须落在 maxseq。cycle span 用于 V1-d3 验证 latency 不改变稳态包间距。
@@ -316,7 +329,7 @@ int sc_main(int argc, char *argv[]) {
         };
         LOG_INFO(SYSTEM) << "[DRAIN] d2d_link_residual="
                          << resid(sc_get_top_level_objects()) +
-                                D2DBehavioralFlowResidual();
+                                D2DBehavioralFlowResidual() + V5DynamicActivePins();
     }
 
     // output_lock_ref 峰值：>=2 证明同 tag 多流共享同一把锁（多发一聚合，tag-only 核心语义）。

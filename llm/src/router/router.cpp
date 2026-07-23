@@ -5,6 +5,20 @@
 
 long g_max_output_lock_ref = 0;
 
+namespace {
+void MaybeReleaseV5DynamicPin(const Msg &m, int rid, Directions dir) {
+    if (g_d2d_cfg.select_policy != SELECT_DYNAMIC ||
+        !IsC2CEgressEdge(rid, dir))
+        return;
+    const bool data_done = m.msg_type_ == DATA && m.is_end_;
+    const bool ack_done = m.msg_type_ == ACK;
+    if (!data_done && !ack_done)
+        return;
+    ReleaseV5DynamicPort(DieOfGlobal(rid), dir,
+                         FlowKey{m.source_, m.tag_id_, m.subflow_});
+}
+} // namespace
+
 RouterMonitor::RouterMonitor(const sc_module_name &n,
                              Event_engine *event_engine)
     : sc_module(n), event_engine(event_engine) {
@@ -270,6 +284,7 @@ void RouterUnit::router_execute() {
             data_sent_o[i].write(true);
             if (d2d_data_credit_enabled[i])
                 d2d_data_credits[i]--;
+            MaybeReleaseV5DynamicPin(tt, rid, Directions(i));
             int d = DieOfGlobal(rid);
             if (!IsC2CEgressEdge(rid, Directions(i)) && d >= 0 &&
                 d < (int)g_die_noc_sends.size())
@@ -304,6 +319,7 @@ void RouterUnit::router_execute() {
             ctrl_sent_o[i].write(true);
             if (d2d_ctrl_credit_enabled[i])
                 d2d_ctrl_credits[i]--;
+            MaybeReleaseV5DynamicPin(tt, rid, Directions(i));
 
             // need trigger again
             flag_trigger = true;

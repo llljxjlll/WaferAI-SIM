@@ -792,7 +792,7 @@ V3 网络级覆盖：
 | T15 | Behavioral/cycle 对照 | V4 | 两档语义一致 | 无争用接近；仅 cycle 响应争用 |
 | T16 | Striping 非整除 | V5 | 子流正确性 | 数据守恒、一次逻辑完成 |
 | T17 | 多端口聚合与共享 cut | V5 | 防止虚假加速 | 聚合吞吐不超过所有共享瓶颈 |
-| T18 | Dynamic 可复现与活性 | V5 | 高级策略安全 | 固定 seed 可复现、无乱序和死锁 |
+| T18 | Dynamic 可复现与活性 | V5 | 高级策略安全 | **已覆盖**：一跳单/双流及 3×1 两跳逐 die pin；固定 seed 下路径/统计/sim-time 一致，selection==release、负载/残留归零、无 watchdog |
 | T19 | SAF 容量 admission 边界（采用 SAF 时） | V3 | 防止 SAF 保证静默失效 | **已覆盖**：`F` 完成、`F-1` 注入前拒绝、later-hop 失败原子回滚、并发预留守恒 |
 | T20 | Escape VC 有限缓冲压力（采用 escape VC 时） | V3 | 验证网络 buffer 死锁安全 | 最小合法 buffer/credit 下持续进展并最终排空 |
 | T21 | HOST 可达性与 endpoint 解码 | V0 | 统一端口框架校验（点 5） | 无 HOST 端口/全被 C2C override 时启动报错；`port_for_host` 每核有定义 |
@@ -1036,4 +1036,14 @@ V4 开发完成。
   `R=1,S=31`，共享 group `R=1/4,S=124`；重复运行完成时间 572/742 ns。V5 runner
   **15/15**，V4 runner **13/13**。
 
-下一步 V5-f：dynamic active-flow pin cache、每 die 独立负载、尾包/ACK 释放、确定性与活性。
+- **V5-f 已完成**：`dynamic` 使用 `(local_die,dir,FlowKey)` active-flow pin cache；同一 flow 的
+  REQUEST/DATA 在每个 die 内复用固定端口，DATA 尾包和反向 ACK 在实际 C2C 发送后释放。负载为
+  每个物理 `(die,port)` 上的 active-flow 数；缺失/重复释放、下溢和端口方向不一致均硬失败。
+- 多跳不是逐包动态选择：REQUEST 先行并在每个 die 惰性建立 pin，后续 DATA 只查缓存；这等价于
+  在 DATA 到来前由控制面建立整条逐 die 固定路径，满足不乱序约束。active pin 纳入 drain/watchdog。
+- 证据：一跳单流 selection/release=`8/8`，两并发流=`16/16` 且每流四端口均衡；3×1 两跳
+  单流=`16/16`、8 条正向 subflow-hop link 完整、typed=`(8,8,8,8,62,62)`、
+  repin=`78/78/0`。所有负载/残留归零，两次运行路径、统计和 sim-time 一致。纯函数 **307/307**、
+  Link **37/37**、V5 runner **21/21**。
+
+下一步 V5-g：规模/资源增长回归、全版本聚合门、开发日志与冻结。

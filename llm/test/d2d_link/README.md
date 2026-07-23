@@ -23,8 +23,7 @@ cd build && ./npusim --d2d-v0-selftest
   stripe 同步到 REQUEST/RECV_ACK/SEND_DATA 和 grouped RECV。静态选择固定在
   `(source,tag,subflow,seed)`，中间 die re-pin 保留同一 key。
 - V5-a 验证：纯函数 **305/305**，V4 聚合门 `AGGREGATE EXIT=0`，NoC 冻结值精确不变。
-  `dynamic` 当前只完成选择算法接缝；active-flow 记账、尾包释放与运行时验收属于 V5-f，不能把
-  本阶段的算法单测表述为 dynamic 端到端完成。
+  V5-a 时 `dynamic` 只有选择算法接缝；active-flow 记账、尾包释放与运行时验收现已由 V5-f 补齐。
 - **V5-b/c ✔ 多端口生产接线 + sender striping + grouped receive**：总包数按
   `q=F/k,r=F%k` 拆分，前 `r` 条子流各 `q+1` 包；REQUEST/ACK/DATA 都携带 subflow，
   每条子流固定一个出口，接收端收齐全部 ACK 和 `(source,subflow)` 尾包后才完成一次逻辑 flow。
@@ -52,6 +51,16 @@ cd build && ./npusim --d2d-v0-selftest
   C++ ledger 分别精确为 `(1,31,31,21,52)` 与 `(1,31,124,21,145)`，完成时间
   572/742 ns 且重复运行一致。未消费元数据计入 D2D drain/watchdog。V5 runner **15/15**，
   V4 Behavioral **13/13**。
+
+- **V5-f ✔ dynamic active-flow pin**：动态策略按 `(die,dir,source,tag,subflow)` 缓存一次选择，
+  负载定义为物理端口上的活跃 flow 数；重复 REQUEST/DATA 复用 pin，不逐包换口。DATA 尾包和 ACK
+  真正从 C2C egress 发出后分别释放正向/反向 pin；重复/缺失释放硬报错，active pin 同时计入
+  drain/watchdog。多跳采用 REQUEST 控制面在每个 die 首次到达时惰性建立固定 pin，等价于在 DATA
+  到来前完成逐 die 路径钉死，细化了早期计划中的“中间 die 不得逐包动态重选”约束。
+- 生产证据：单流 `F=31,k=4` 为 selection/release=`8/8`；两条并发流为 `16/16`，每流四端口
+  配额 `[8,8,8,7]`、负载最终全 0；3×1 两跳单流逐 die 建立/释放 `16/16` 个 pin，8 条正向
+  DATA link 均按序完整，`typed=(8,8,8,8,62,62)`、repin=`78/78/0`。所有场景连续两次
+  选择、统计和 sim-time 一致且无 watchdog。纯函数 **307/307**，V5 runner **21/21**，Link **37/37**。
 
 ## 当前状态（逐增量推进）
 

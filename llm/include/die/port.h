@@ -216,8 +216,13 @@ int PortForDir(int local_core, Directions dir);
 // V5：按一次 flow/subflow 选择并固定一个出口。静态策略由
 // (source,tag,subflow,seed) 决定；dynamic 只在此 flow 选择点更新负载，绝不逐包重选。
 int SelectPortForFlow(int local_core, Directions dir, int source, int tag,
-                      int subflow);
+                      int subflow, int local_die = -1);
+void ReleaseV5DynamicPort(int local_die, Directions dir, const FlowKey &key);
 void ResetV5PortSelectionStats();
+long V5DynamicActivePins();
+long V5DynamicSelections();
+long V5DynamicReleases();
+const std::vector<long> &V5DynamicPortLoads();
 
 // 全局 tile 在方向 dir 上是否是「peer-connected C2C 出口边」——即该 tile 的局部位置有一个
 // side==dir 的 C2C 端口，且该 die 在 dir 方向存在邻 die。V1-b 拓扑接线据此把该边接到 D2D Link

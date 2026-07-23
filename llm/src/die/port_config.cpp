@@ -5,6 +5,7 @@
 #include "utils/router_utils.h"
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -36,7 +37,10 @@ std::vector<long> g_die_noc_sends, g_die_noc_stalls;
 long g_d2d_source_stalls = 0;
 std::map<std::tuple<int, int, int>, long long> g_flow_done_cycle;
 long g_saf_admission_successes = 0, g_saf_admission_rejects = 0;
-static std::vector<long> g_v5_port_selects;
+using V5DynamicKey = std::tuple<int, int, FlowKey>;
+static std::map<V5DynamicKey, int> g_v5_dynamic_pins;
+static std::vector<long> g_v5_dynamic_loads;
+static long g_v5_dynamic_selections = 0, g_v5_dynamic_releases = 0;
 
 // V3-d/V5-d：每条有向 link 一份 whole-flow SAF 容量账本；V5 同一有向 die pair 中
 // link_group 相同的端口还共享一份容量账本。所有 subflow 先完整预检，再统一提交。
@@ -171,8 +175,9 @@ static void ReserveSafPlans(const std::vector<SafPlan> &plans) {
         if (g_saf_link_admission.at(idx).Available() < need) {
             g_saf_admission_rejects++;
             throw std::runtime_error(
-                "striped whole-flow SAF admission rejected before any REQUEST: "
-                "link capacity, link=" + std::to_string(idx) +
+                "whole-flow SAF path admission rejected before REQUEST/DATA: "
+                "striped preflight before any REQUEST: link capacity "
+                "(insufficient_capacity), link=" + std::to_string(idx) +
                 ", required=" + std::to_string(need) +
                 ", available=" +
                 std::to_string(g_saf_link_admission.at(idx).Available()));
@@ -184,8 +189,9 @@ static void ReserveSafPlans(const std::vector<SafPlan> &plans) {
         if (it->second.Available() < need) {
             g_saf_admission_rejects++;
             throw std::runtime_error(
-                "striped whole-flow SAF admission rejected before any REQUEST: "
-                "shared link_group capacity, required=" + std::to_string(need) +
+                "whole-flow SAF path admission rejected before REQUEST/DATA: "
+                "striped preflight before any REQUEST: shared link_group capacity "
+                "(insufficient_capacity), required=" + std::to_string(need) +
                 ", available=" + std::to_string(it->second.Available()));
         }
     }
@@ -1111,8 +1117,17 @@ int PortForDir(int local_core, Directions dir) {
 }
 
 void ResetV5PortSelectionStats() {
-    g_v5_port_selects.assign(g_die_ports.ports.size(), 0);
+    g_v5_dynamic_pins.clear();
+    g_v5_dynamic_loads.assign(
+        std::max(1, DIE_COUNT) * (int)g_die_ports.ports.size(), 0);
+    g_v5_dynamic_selections = 0;
+    g_v5_dynamic_releases = 0;
 }
+
+long V5DynamicActivePins() { return (long)g_v5_dynamic_pins.size(); }
+long V5DynamicSelections() { return g_v5_dynamic_selections; }
+long V5DynamicReleases() { return g_v5_dynamic_releases; }
+const std::vector<long> &V5DynamicPortLoads() { return g_v5_dynamic_loads; }
 
 static unsigned long long V5StableHash(int source, int tag) {
     unsigned long long x = g_d2d_cfg.select_seed ^ 0x9e3779b97f4a7c15ULL;
@@ -1130,10 +1145,16 @@ static unsigned long long V5StableHash(int source, int tag) {
 }
 
 int SelectPortForFlow(int local_core, Directions dir, int source, int tag,
-                      int subflow) {
+                      int subflow, int local_die) {
     if (local_core < 0 || local_core >= CORES_PER_DIE || subflow < 0 ||
         subflow > 3)
         throw std::runtime_error("V5 port selection: illegal core/subflow");
+    if (local_die < 0)
+        local_die = (source >= 0 && source < TOTAL_CORES)
+                        ? DieOfGlobal(source)
+                        : 0;
+    if (local_die < 0 || local_die >= DIE_COUNT)
+        throw std::runtime_error("V5 port selection: illegal local die");
     std::vector<int> ports = g_die_ports.PortsForDir(dir);
     if (ports.empty())
         return -1;
@@ -1143,7 +1164,8 @@ int SelectPortForFlow(int local_core, Directions dir, int source, int tag,
         int ca = PerpCoord(pa), cb = PerpCoord(pb);
         return ca != cb ? ca < cb : a < b;
     });
-    if (!g_d2d_cfg.v5_multiport || ports.size() == 1)
+    if (!g_d2d_cfg.v5_multiport ||
+        (ports.size() == 1 && g_d2d_cfg.select_policy != SELECT_DYNAMIC))
         return PortForDir(local_core, dir);
 
     size_t pick = 0;
@@ -1165,16 +1187,68 @@ int SelectPortForFlow(int local_core, Directions dir, int source, int tag,
     case SELECT_HYBRID:
         pick = (band + (size_t)subflow) % ports.size();
         break;
-    case SELECT_DYNAMIC:
-        if (g_v5_port_selects.size() != g_die_ports.ports.size())
+    case SELECT_DYNAMIC: {
+        FlowKey flow{source, tag, subflow};
+        V5DynamicKey cache_key{local_die, (int)dir, flow};
+        auto cached = g_v5_dynamic_pins.find(cache_key);
+        if (cached != g_v5_dynamic_pins.end())
+            return cached->second;
+        const int nport = (int)g_die_ports.ports.size();
+        const int expected = std::max(1, DIE_COUNT) * nport;
+        if ((int)g_v5_dynamic_loads.size() != expected) {
+            if (!g_v5_dynamic_pins.empty())
+                throw std::runtime_error(
+                    "V5 dynamic load table changed with active pins");
             ResetV5PortSelectionStats();
-        for (size_t i = 1; i < ports.size(); ++i)
-            if (g_v5_port_selects[ports[i]] < g_v5_port_selects[ports[pick]])
-                pick = i;
-        g_v5_port_selects[ports[pick]]++;
-        break;
+        }
+        unsigned long long h = V5StableHash(source, tag);
+        size_t start = (h + (unsigned)subflow +
+                        (unsigned long long)local_die * 0x9e3779b9ULL) %
+                       ports.size();
+        long best_load = std::numeric_limits<long>::max();
+        for (int port : ports)
+            best_load = std::min(
+                best_load, g_v5_dynamic_loads[local_die * nport + port]);
+        for (size_t off = 0; off < ports.size(); ++off) {
+            size_t candidate = (start + off) % ports.size();
+            int port = ports[candidate];
+            if (g_v5_dynamic_loads[local_die * nport + port] == best_load) {
+                pick = candidate;
+                break;
+            }
+        }
+        int selected = ports[pick];
+        g_v5_dynamic_pins[cache_key] = selected;
+        g_v5_dynamic_loads[local_die * nport + selected]++;
+        g_v5_dynamic_selections++;
+        return selected;
+    }
     }
     return ports[pick];
+}
+
+void ReleaseV5DynamicPort(int local_die, Directions dir, const FlowKey &key) {
+    if (g_d2d_cfg.select_policy != SELECT_DYNAMIC)
+        return;
+    if (local_die < 0 || local_die >= DIE_COUNT || dir < WEST || dir > SOUTH)
+        throw std::runtime_error("V5 dynamic release: illegal die/direction");
+    V5DynamicKey cache_key{local_die, (int)dir, key};
+    auto it = g_v5_dynamic_pins.find(cache_key);
+    if (it == g_v5_dynamic_pins.end())
+        throw std::runtime_error("V5 dynamic release without active pin");
+    const int nport = (int)g_die_ports.ports.size();
+    int port = it->second;
+    int idx = local_die * nport + port;
+    if (local_die < 0 || local_die >= DIE_COUNT || port < 0 || port >= nport ||
+        idx < 0 || idx >= (int)g_v5_dynamic_loads.size() ||
+        g_v5_dynamic_loads[idx] <= 0)
+        throw std::runtime_error("V5 dynamic release accounting underflow");
+    const D2DPort &p = g_die_ports.ports[port];
+    if (p.role != ROLE_C2C || p.dir != dir)
+        throw std::runtime_error("V5 dynamic release port/direction mismatch");
+    g_v5_dynamic_loads[idx]--;
+    g_v5_dynamic_pins.erase(it);
+    g_v5_dynamic_releases++;
 }
 
 void BuildHostAttach() {

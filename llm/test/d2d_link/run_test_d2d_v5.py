@@ -14,6 +14,7 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 BUILD = os.path.join(ROOT, "build")
 NPUSIM = os.path.join(BUILD, "npusim")
 WL = os.path.join(HERE, "workload", "cross_die_2core.json")
+WL2 = os.path.join(HERE, "workload", "cross_die_2flow.json")
 HW = os.path.join(HERE, "hardware", "core_4x4_die2x1_c2c_multi4.json")
 SIM = "../llm/test/noc_congestion/sim/sim_cycle.json"
 SIM_BEHA = "../llm/test/noc_congestion/sim/sim_beha.json"
@@ -75,13 +76,28 @@ def behavioral_hw(shared_group=False):
     return h
 
 
-def workload(packets, stripes):
+def workload(packets, stripes, dest=16):
     w = load(WL)
     w["vars"]["OC"] = packets * 16
     cast = w["chips"][0]["cores"][0]["worklist"][0]["cast"][0]
+    cast["dest"] = dest
+    cast["tag"] = dest
     cast["stripe"] = stripes
+    w["chips"][0]["cores"][1]["id"] = dest
     recv = w["chips"][0]["cores"][1]["worklist"][0]
+    recv["recv_tag"] = dest
     recv["recv_stripe"] = stripes
+    return w
+
+
+def workload_two(packets, stripes):
+    w = load(WL2)
+    w["vars"]["OC"] = packets * 16
+    for core in w["chips"][0]["cores"]:
+        if core["id"] in (0, 1):
+            core["worklist"][0]["cast"][0]["stripe"] = stripes
+        elif core["id"] in (16, 17):
+            core["worklist"][0]["recv_stripe"] = stripes
     return w
 
 
@@ -92,8 +108,8 @@ def temp_json(obj):
     return f.name
 
 
-def run_case(packets, stripes, timeout=60, hw=None, sim=SIM):
-    wp = temp_json(workload(packets, stripes))
+def run_case(packets, stripes, timeout=60, hw=None, sim=SIM, wl=None):
+    wp = temp_json(wl if wl is not None else workload(packets, stripes))
     hp = temp_json(hw) if hw is not None else None
     try:
         p = subprocess.run(
@@ -141,11 +157,19 @@ def parse(rc, out):
         for idx, stall in re.findall(
             r"\[D2D_BOUND\] idx=(\d+).*?group_stall=(\d+)", out)
     }
+    dynamic_match = re.search(
+        r"\[V5_DYNAMIC\] selections=(\d+) releases=(\d+) "
+        r"active=(\d+) loads=([0-9,]*)", out)
+    dynamic = None
+    if dynamic_match:
+        dynamic = (int(dynamic_match.group(1)), int(dynamic_match.group(2)),
+                   int(dynamic_match.group(3)),
+                   [int(x) for x in dynamic_match.group(4).split(",") if x])
     return {
         "rc": rc, "out": out, "subflows": subflows, "typed": typed,
         "repin": repin, "admit": admit, "beha": beha,
         "ns": int(finish.group(1)) if finish else None,
-        "group_stalls": group_stalls,
+        "group_stalls": group_stalls, "dynamic": dynamic,
         "drained": "[DRAIN] router_residual=0" in out and
                    "[DRAIN] d2d_link_residual=0" in out,
         "saf_zero": "[SAF] reserved_packets=0" in out,
@@ -183,6 +207,53 @@ def check_run(run, packets, stripes):
           run["saf_zero"] and not run["watchdog"])
     return ok, (f"quotas={quotas} links={sorted(buckets[s][0] for s in buckets)} "
                 f"typed={run['typed']} repin={run['repin']}")
+
+
+def check_flow(run, packets, stripes, source, tag):
+    buckets = {}
+    for (idx, src, flow_tag, subflow), stat in run["subflows"].items():
+        if src == source and flow_tag == tag:
+            buckets[subflow] = (idx, stat)
+    quotas = expected_quotas(packets, stripes)
+    if set(buckets) != set(range(stripes)):
+        return False, [], f"{source}:{tag} keys={sorted(buckets)}"
+    for subflow, quota in enumerate(quotas):
+        _, st = buckets[subflow]
+        (inp, outp, inh, outh, inc, outc, inorder, minseq, maxseq,
+         endseq, ends, _) = st
+        if not (inp == outp == quota and inh == outh and inc == outc and
+                inorder == 1 and minseq == 1 and maxseq == endseq == quota and
+                ends == 1):
+            return False, [], f"{source}:{tag}:sf{subflow}={st}"
+    links = [buckets[s][0] for s in range(stripes)]
+    return len(set(links)) == stripes, links, f"links={links} quotas={quotas}"
+
+
+def check_multihop_flow(run, packets, stripes, source, tag, hops):
+    buckets = {s: [] for s in range(stripes)}
+    for (idx, src, flow_tag, subflow), stat in run["subflows"].items():
+        if src == source and flow_tag == tag and subflow in buckets:
+            buckets[subflow].append((idx, stat))
+    quotas = expected_quotas(packets, stripes)
+    for subflow, quota in enumerate(quotas):
+        entries = buckets[subflow]
+        if len(entries) != hops:
+            return False, f"sf{subflow} links={len(entries)} expected={hops}"
+        for idx, st in entries:
+            (inp, outp, inh, outh, inc, outc, inorder, minseq, maxseq,
+             endseq, ends, _) = st
+            if not (inp == outp == quota and inh == outh and inc == outc and
+                    inorder == 1 and minseq == 1 and
+                    maxseq == endseq == quota and ends == 1):
+                return False, f"sf{subflow}={st} quota={quota}"
+    links = [idx for entries in buckets.values() for idx, _ in entries]
+    want_typed = (stripes * hops, stripes * hops,
+                  stripes * hops, stripes * hops, packets * hops, packets * hops)
+    ok = (run["rc"] == 0 and run["typed"] == want_typed and run["drained"] and
+          run["saf_zero"] and not run["watchdog"] and
+          len(links) == stripes * hops and len(set(links)) == len(links))
+    return ok, "quotas={} links={} typed={}".format(
+        quotas, sorted(links), run["typed"])
 
 
 def main():
@@ -281,6 +352,79 @@ def main():
            beha_group_a["ns"] == beha_group_b["ns"] and
            beha_group_a["ns"] > beha_ind_a["ns"],
            f"ind={ind_ns}ns group={group_ns}ns")
+
+    dynamic_hw = bounded_hw(32, policy="dynamic")
+    dynamic_a = run_case(31, 4, hw=dynamic_hw)
+    dynamic_b = run_case(31, 4, hw=dynamic_hw)
+    dynamic_ok_a, dynamic_detail = check_run(dynamic_a, 31, 4)
+    dynamic_ok_b, _ = check_run(dynamic_b, 31, 4)
+    dyn_a = dynamic_a["dynamic"]
+    dyn_b = dynamic_b["dynamic"]
+    dynamic_drained = (dyn_a is not None and dyn_b is not None and
+                       dyn_a[:3] == dyn_b[:3] == (8, 8, 0) and
+                       all(v == 0 for v in dyn_a[3]) and
+                       all(v == 0 for v in dyn_b[3]))
+    record("V5-f dynamic pins REQUEST/DATA per flow and releases on DATA-tail/ACK",
+           dynamic_ok_a and dynamic_ok_b and dynamic_drained,
+           f"{dynamic_detail} dynamic={dyn_a}/{dyn_b}")
+    dyn_ns_a, dyn_ns_b = dynamic_a["ns"], dynamic_b["ns"]
+    record("V5-f single-flow dynamic selection is deterministic across runs",
+           dynamic_a["subflows"] == dynamic_b["subflows"] and
+           dynamic_a["typed"] == dynamic_b["typed"] and
+           dynamic_a["ns"] == dynamic_b["ns"],
+           f"ns={dyn_ns_a}/{dyn_ns_b}")
+
+    two_wl = workload_two(31, 4)
+    dynamic_two_a = run_case(31, 4, hw=dynamic_hw, wl=two_wl)
+    dynamic_two_b = run_case(31, 4, hw=dynamic_hw, wl=two_wl)
+    f0_ok, f0_links, f0_detail = check_flow(dynamic_two_a, 31, 4, 0, 16)
+    f1_ok, f1_links, f1_detail = check_flow(dynamic_two_a, 31, 4, 1, 17)
+    two_dyn_a = dynamic_two_a["dynamic"]
+    two_dyn_b = dynamic_two_b["dynamic"]
+    two_drained = (two_dyn_a is not None and two_dyn_b is not None and
+                   two_dyn_a[:3] == two_dyn_b[:3] == (16, 16, 0) and
+                   all(v == 0 for v in two_dyn_a[3]) and
+                   all(v == 0 for v in two_dyn_b[3]))
+    balanced_links = (sorted(f0_links) == sorted(f1_links) and
+                      len(set(f0_links + f1_links)) == 4)
+    record("V5-f two concurrent dynamic flows are complete, balanced and drain",
+           f0_ok and f1_ok and balanced_links and two_drained and
+           dynamic_two_a["rc"] == 0 and dynamic_two_a["drained"] and
+           dynamic_two_a["typed"] == (8, 8, 8, 8, 62, 62),
+           f"flow0={f0_detail} flow1={f1_detail} dynamic={two_dyn_a}")
+    two_ns_a, two_ns_b = dynamic_two_a["ns"], dynamic_two_b["ns"]
+    record("V5-f concurrent dynamic behavior is reproducible and live",
+           dynamic_two_a["subflows"] == dynamic_two_b["subflows"] and
+           dynamic_two_a["typed"] == dynamic_two_b["typed"] and
+           dynamic_two_a["ns"] == dynamic_two_b["ns"] and
+           not dynamic_two_a["watchdog"] and not dynamic_two_b["watchdog"],
+           f"ns={two_ns_a}/{two_ns_b}")
+
+    dynamic_3x1_hw = bounded_hw(32, policy="dynamic")
+    dynamic_3x1_hw["die"]["x"] = 3
+    multi_wl = workload(31, 4, dest=32)
+    dynamic_multi_a = run_case(31, 4, hw=dynamic_3x1_hw, wl=multi_wl)
+    dynamic_multi_b = run_case(31, 4, hw=dynamic_3x1_hw, wl=multi_wl)
+    multi_ok_a, multi_detail = check_multihop_flow(
+        dynamic_multi_a, 31, 4, 0, 32, 2)
+    multi_ok_b, _ = check_multihop_flow(dynamic_multi_b, 31, 4, 0, 32, 2)
+    multi_dyn_a = dynamic_multi_a["dynamic"]
+    multi_dyn_b = dynamic_multi_b["dynamic"]
+    multi_drained = (multi_dyn_a is not None and multi_dyn_b is not None and
+                     multi_dyn_a[:3] == multi_dyn_b[:3] == (16, 16, 0) and
+                     all(v == 0 for v in multi_dyn_a[3]) and
+                     all(v == 0 for v in multi_dyn_b[3]))
+    record("V5-f multi-hop dynamic pins are per-die and all release",
+           multi_ok_a and multi_ok_b and multi_drained and
+           dynamic_multi_a["repin"] == (78, 78, 0),
+           "{} repin={} dynamic={}".format(
+               multi_detail, dynamic_multi_a["repin"], multi_dyn_a))
+    record("V5-f multi-hop dynamic selection is deterministic and live",
+           dynamic_multi_a["subflows"] == dynamic_multi_b["subflows"] and
+           dynamic_multi_a["typed"] == dynamic_multi_b["typed"] and
+           dynamic_multi_a["ns"] == dynamic_multi_b["ns"] and
+           not dynamic_multi_a["watchdog"] and not dynamic_multi_b["watchdog"],
+           "ns={}/{}".format(dynamic_multi_a["ns"], dynamic_multi_b["ns"]))
 
     failed = sum(not ok for _, ok, _ in results)
     print(f"\nV5 D2D tests: {len(results)-failed}/{len(results)} passed")

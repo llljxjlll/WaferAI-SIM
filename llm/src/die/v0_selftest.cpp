@@ -2155,9 +2155,27 @@ int RunD2DV0SelfTest() {
         g_d2d_cfg.select_policy = SELECT_DYNAMIC;
         ResetV5PortSelectionStats();
         int d0 = SelectPortForFlow(1, EAST, 1, 23, 0);
+        int d0_again = SelectPortForFlow(1, EAST, 1, 23, 0);
         int d1 = SelectPortForFlow(1, EAST, 1, 24, 0);
-        check(d0 != d1,
-              "V5-a dynamic: selection happens per flow and balances least-used ports");
+        check(d0 == d0_again && d0 != d1 &&
+                  V5DynamicSelections() == 2 && V5DynamicActivePins() == 2,
+              "V5-f dynamic: a flow is pinned once and active flows balance");
+        ReleaseV5DynamicPort(0, EAST, FlowKey{1, 23, 0});
+        ReleaseV5DynamicPort(0, EAST, FlowKey{1, 24, 0});
+        bool dynamic_loads_zero = true;
+        for (long load : V5DynamicPortLoads())
+            dynamic_loads_zero &= load == 0;
+        check(V5DynamicReleases() == 2 && V5DynamicActivePins() == 0 &&
+                  dynamic_loads_zero,
+              "V5-f dynamic: release drains pins and per-port load accounting");
+        bool duplicate_release_threw = false;
+        try {
+            ReleaseV5DynamicPort(0, EAST, FlowKey{1, 23, 0});
+        } catch (const std::runtime_error &) {
+            duplicate_release_threw = true;
+        }
+        check(duplicate_release_threw && V5DynamicActivePins() == 0,
+              "V5-f dynamic: duplicate release fails without corrupting state");
 
         bool no_policy_threw = false;
         try {

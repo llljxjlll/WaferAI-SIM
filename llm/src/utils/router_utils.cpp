@@ -221,7 +221,7 @@ int CrossDieSelectExit(int at_core, int des_global, int source_core, int tag,
     if (source_core < 0)
         source_core = at_core;
     int port = SelectPortForFlow(LocalOfGlobal(at_core), D, source_core, tag,
-                                 subflow);
+                                 subflow, md);
     if (port < 0)
         throw std::runtime_error(
             "cross-die routing: no C2C port toward die-direction (unreachable)");
