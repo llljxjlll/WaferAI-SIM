@@ -218,7 +218,7 @@ def parse_output(output: str, spec: CaseSpec) -> Result:
     bound = re.search(r"\[D2D_BOUND\]\s+idx=0\s+([^\n]+)", output)
     require(bound is not None, f"{spec.name}: D2D_BOUND missing")
     bound_values = ints(bound.group(1).split("|")[0])
-    require(len(bound_values) == 11, f"{spec.name}: bad D2D_BOUND shape")
+    require(len(bound_values) == 12, f"{spec.name}: bad D2D_BOUND shape")
 
     credit = re.search(r"\[CREDIT\]\s+([^\n]+)", output)
     drain_values = [

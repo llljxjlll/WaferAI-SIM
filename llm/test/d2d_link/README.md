@@ -745,6 +745,11 @@ source router
   stall `7/0`，且 shared 的两跳 D2D 完成 cycle `397 > 380`，证明拥塞出现在实际共享的片内路径。
   固定配置、双次重复运行和自动报告见
   [`mixed_noc_congestion/`](mixed_noc_congestion/README.md)。
+- **V5 striping 混合拥塞专项**：冻结后独立实验让 32 包跨 die GEMM 拆成两条
+  16-packet subflow，分别使用两条 C2C link；shared/disjoint 只平移源核和端口行，
+  保持两边总 packet-hop 与 D2D 资源相同。测试自动计算 NoC 有向链路负载并把理论
+  32-cycle 容量增量与周期仿真对比，详见
+  [`mixed_noc_congestion_v5/`](mixed_noc_congestion_v5/README.md)。
 - **真实生产背压链**：中间 die 热点在 `rx=1、inflight=4` 下稳定触发
   `inflight_full=85、rx_full=95、inflight_stall=60、rx_stall=63、downstream_stall=63`，
   全部 flow 完成并排空；`source_stalls=0` 是 whole-flow SAF 已切断源侧依赖的预期，不是漏接背压。
