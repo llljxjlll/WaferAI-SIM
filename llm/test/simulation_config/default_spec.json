@@ -15,6 +15,17 @@
         "fast_warmup": true,
         "send_recv_parallel": false
     },
+    "dte": {
+        "use_beha_dte": false,
+        "streaming": false,
+        "async": false,
+        "aggregation": false,
+        "fine_grained_resources": false,
+        "aggregation_max_descriptors": 16,
+        "aggregation_max_bytes": 4096,
+        "aggregation_timeout_ns": 20,
+        "aggregation_address_block_bytes": 65536
+    },
     "gpu": {
         "use_inner_mm": true,
         "cache_log": false,

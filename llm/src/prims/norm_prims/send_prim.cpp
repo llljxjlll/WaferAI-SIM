@@ -28,6 +28,15 @@ void Send_prim::deserialize(vector<sc_bv<128>> segments) {
     if (type == SEND_DATA)
         output_label =
             g_addr_label_table.findRecord(buffer.range(35, 24).to_uint64());
+    if (type == SEND_DATA || type == SEND_REQ) {
+        packet_scale = buffer.range(43, 36).to_uint64();
+        packets_in_last_group = buffer.range(51, 44).to_uint64();
+        // 兼容未携带精确 payload 元数据的旧编码。
+        if (packet_scale == 0)
+            packet_scale = 1;
+        if (packets_in_last_group == 0)
+            packets_in_last_group = 1;
+    }
 
     max_packet = buffer.range(91, 60).to_uint64();
     tag_id = buffer.range(111, 92).to_uint64();
@@ -43,7 +52,7 @@ void Send_prim::deserialize(vector<sc_bv<128>> segments) {
 vector<sc_bv<128>> Send_prim::serialize() {
     vector<sc_bv<128>> segments;
 
-    sc_bv<128> d;
+    sc_bv<128> d = 0;
     d.range(7, 0) = sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
     d.range(23, 8) = sc_bv<16>(des_id);
 
@@ -54,6 +63,15 @@ vector<sc_bv<128>> Send_prim::serialize() {
         }
         
         d.range(35, 24) = sc_bv<12>(g_addr_label_table.addRecord(output_label));
+    }
+    if (type == SEND_DATA || type == SEND_REQ) {
+        if (packet_scale <= 0 || packet_scale > 255 ||
+            packets_in_last_group <= 0 ||
+            packets_in_last_group > packet_scale)
+            throw std::runtime_error(
+                "SEND flow packet aggregation metadata is invalid");
+        d.range(43, 36) = sc_bv<8>(packet_scale);
+        d.range(51, 44) = sc_bv<8>(packets_in_last_group);
     }
 
     d.range(59, 56) = sc_bv<4>(type);

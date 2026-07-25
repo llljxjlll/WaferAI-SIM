@@ -3,6 +3,8 @@
 #include "defs/spec.h"
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "dte/dte_async.h"
+#include "dte/dte_unit.h"
 #include "monitor/monitor.h"
 #include "monitor/watchdog.h"
 #include "router/router.h"
@@ -46,6 +48,18 @@ Define_bool_opt("--d2d-v0-selftest", g_flag_d2d_v0_selftest, false,
 Define_bool_opt("--d2d-link-selftest", g_flag_d2d_link_selftest, false,
                 "run D2D V1 SystemC link self-test (drives packets) and exit");
 
+Define_bool_opt("--dte-v0-selftest", g_flag_dte_v0_selftest, false,
+                "run DTE V0 payload/resource SystemC self-test and exit");
+
+Define_bool_opt("--dte-v3-selftest", g_flag_dte_v3_selftest, false,
+                "run DTE V3a async token/dependency SystemC self-test and exit");
+
+Define_bool_opt("--dte-v3b-selftest", g_flag_dte_v3b_selftest, false,
+                "run DTE V3b aggregation SystemC self-test and exit");
+
+Define_bool_opt("--dte-v4-selftest", g_flag_dte_v4_selftest, false,
+                "run DTE V4 resource SystemC self-test and exit");
+
 int sc_main(int argc, char *argv[]) {
     clock_t start = clock();
 
@@ -78,6 +92,23 @@ int sc_main(int argc, char *argv[]) {
     // D2D V1 link 自测：SystemC testbench 驱动真实包穿过 D2DLinkUnit
     if (g_flag_d2d_link_selftest) {
         int fails = RunD2DLinkSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    // DTE V0：bit/payload 纯函数 + 有界 channel/shared-bus SystemC 自测。
+    if (g_flag_dte_v0_selftest) {
+        int fails = RunDTEV0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_dte_v3_selftest) {
+        int fails = RunDTEV3SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_dte_v3b_selftest) {
+        int fails = RunDTEV3bSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_dte_v4_selftest) {
+        int fails = RunDTEV4SelfTest();
         return fails == 0 ? 0 : 1;
     }
 

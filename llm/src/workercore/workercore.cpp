@@ -97,6 +97,57 @@ WorkerCore::~WorkerCore() {
 WorkerCoreExecutor::WorkerCoreExecutor(const sc_module_name &n, int s_cid,
                                        Event_engine *event_engine)
     : sc_module(n), cid(s_cid), event_engine(event_engine) {
+    const CoreHWConfig *hw = GetCoreHWConfig(cid);
+    DTEConfig dte_config =
+        MakeDTEConfig(static_cast<uint32_t>(hw->dte_channel_count),
+                      static_cast<uint32_t>(hw->dte_bit_width),
+                      HW_DTE_GAMMA_NS, HW_DTE_TAU_LAUNCH_NS);
+    dte_config.fine_grained_resources = SPEC_DTE_V4_RESOURCES;
+    if (SPEC_DTE_V4_RESOURCES) {
+        dte_config.command_slots_per_channel =
+            static_cast<uint32_t>(HW_DTE_COMMAND_SLOTS_PER_CHANNEL);
+        dte_config.pending_queue_depth =
+            static_cast<uint32_t>(HW_DTE_PENDING_QUEUE_DEPTH);
+        dte_config.spm_read_width_bits =
+            static_cast<uint32_t>(HW_DTE_SPM_READ_WIDTH_BITS);
+        dte_config.spm_write_width_bits =
+            static_cast<uint32_t>(HW_DTE_SPM_WRITE_WIDTH_BITS);
+        dte_config.axi_read_width_bits =
+            static_cast<uint32_t>(HW_DTE_AXI_READ_WIDTH_BITS);
+        dte_config.axi_write_width_bits =
+            static_cast<uint32_t>(HW_DTE_AXI_WRITE_WIDTH_BITS);
+        dte_config.launch_energy_pj = HW_DTE_LAUNCH_ENERGY_PJ;
+        dte_config.spm_energy_pj_per_bit =
+            HW_DTE_SPM_ENERGY_PJ_PER_BIT;
+        dte_config.axi_energy_pj_per_bit =
+            HW_DTE_AXI_ENERGY_PJ_PER_BIT;
+        dte_config.base_area_um2 = HW_DTE_BASE_AREA_UM2;
+        dte_config.channel_area_um2 = HW_DTE_CHANNEL_AREA_UM2;
+        dte_config.command_slot_area_um2 =
+            HW_DTE_COMMAND_SLOT_AREA_UM2;
+        dte_config.port_bit_area_um2 = HW_DTE_PORT_BIT_AREA_UM2;
+    }
+    DTEUnit::ValidateConfig(dte_config);
+    const std::string dte_name = "dte_core_" + std::to_string(cid);
+    dte = std::make_unique<DTEUnit>(dte_name.c_str(), dte_config, cid,
+                                    event_engine);
+    DteAggregationConfig aggregation;
+    aggregation.enabled = SPEC_DTE_AGGREGATION;
+    aggregation.max_descriptors =
+        static_cast<uint32_t>(DTE_AGGREGATION_MAX_DESCRIPTORS);
+    aggregation.max_payload_bytes =
+        static_cast<uint64_t>(DTE_AGGREGATION_MAX_BYTES);
+    aggregation.timeout_cycles =
+        (static_cast<uint64_t>(DTE_AGGREGATION_TIMEOUT_NS) +
+         static_cast<uint64_t>(CYCLE) - 1) /
+        static_cast<uint64_t>(CYCLE);
+    aggregation.address_block_bytes =
+        static_cast<uint64_t>(DTE_AGGREGATION_ADDRESS_BLOCK_BYTES);
+    const std::string async_name =
+        "dte_async_core_" + std::to_string(cid);
+    dte_async = std::make_unique<DteAsyncTracker>(
+        async_name.c_str(), *dte, aggregation, cid, event_engine);
+
     prim_refill = false;
     SC_THREAD(catch_channel_avail_i);
     sensitive << channel_avail_i.pos();
@@ -212,12 +263,45 @@ void WorkerCoreExecutor::end_of_elaboration() {
     ctrl_core_busy_o.write(false);
 }
 
+void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
+    if (prim == nullptr)
+        throw std::invalid_argument("DTE V3a received a null primitive");
+    if (!SPEC_DTE_ASYNC)
+        throw std::runtime_error(
+            "Dte_async primitive requires dte.async=true");
+
+    switch (prim->op) {
+    case DteAsyncOp::ISSUE:
+        dte_async->IssueToken(
+            prim->token, prim->payload_bits, prim->direction,
+            prim->spm_addr, prim->spm_size, prim->remote_peer,
+            prim->remote_addr, prim->address_block);
+        break;
+    case DteAsyncOp::WAIT:
+        dte_async->WaitToken(prim->token);
+        break;
+    case DteAsyncOp::POLL:
+        prim->poll_complete = dte_async->PollToken(prim->token);
+        break;
+    case DteAsyncOp::FENCE:
+        dte_async->Fence();
+        break;
+    case DteAsyncOp::CANCEL:
+        dte_async->CancelToken(prim->token);
+        break;
+    }
+}
+
 void WorkerCoreExecutor::worker_core_execute() {
     while (true) {
         PrimBase *p = nullptr;    // 下一个要执行的原语
         bool conf_delete = false; // 是否自动填充了一个recv_conf原语
 
         if (prim_queue.size() == 0) {
+            if (SPEC_DTE_ASYNC && dte_async->OutstandingCount() != 0)
+                throw std::runtime_error(
+                    "DTE V3a primitive queue drained with outstanding tokens; "
+                    "an explicit wait/fence is required");
             // 队列中没有指令，意味着现在是初始状态或者所有原语都被执行完了（假设所有原语只做一轮），默认作recv，直到config发进来
             // 显式 tag=0、recv_cnt=0：CONFIG ACK tag 契约固定为 0（不依赖未初始化值）。
             p = new Recv_prim(RECV_TYPE::RECV_CONF, /*tag=*/0, /*recv_cnt=*/0);
@@ -233,7 +317,23 @@ void WorkerCoreExecutor::worker_core_execute() {
         // switch_prim_block 收到 ev_block 触发 ev_block 在 send_logic 和
         // recv_logic 中触发
 
-        if (typeid(*p) == typeid(Send_prim)) {
+        if (typeid(*p) == typeid(Dte_async_prim)) {
+            auto *async_prim = static_cast<Dte_async_prim *>(p);
+            const std::string op = DteAsyncOpName(async_prim->op);
+            event_engine->add_event(
+                "Core " + ToHexString(cid), "Dte_async_prim", "B",
+                Trace_event_util("Dte_async_prim " + op));
+            execute_dte_async(async_prim);
+            event_engine->add_event(
+                "Core " + ToHexString(cid), "Dte_async_prim", "E",
+                Trace_event_util("Dte_async_prim " + op));
+        } else if (typeid(*p) == typeid(Send_prim)) {
+            auto *send_prim = static_cast<Send_prim *>(p);
+            if (SPEC_DTE_ASYNC && send_prim->type == SEND_DONE &&
+                dte_async->OutstandingCount() != 0)
+                throw std::runtime_error(
+                    "DTE V3a SEND_DONE reached with outstanding tokens; "
+                    "an explicit wait/fence is required");
             // 触发 send_logic
             if (!SPEC_SEND_RECV_PARALLEL) {
                 ev_send.notify(CYCLE, SC_NS);

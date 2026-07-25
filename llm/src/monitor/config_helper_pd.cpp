@@ -460,7 +460,14 @@ void config_helper_pd::generate_prims(int i) {
 
                     CalculatePacketNum(
                         last_comp->out_size, ca.weight, last_comp->data_byte,
-                        send_data->max_packet, send_data->end_length);
+                        send_data->max_packet, send_data->end_length,
+                        send_data->packet_scale,
+                        send_data->packets_in_last_group);
+                    send_req->max_packet = send_data->max_packet;
+                    send_req->end_length = send_data->end_length;
+                    send_req->packet_scale = send_data->packet_scale;
+                    send_req->packets_in_last_group =
+                        send_data->packets_in_last_group;
                     send_data->output_label =
                         last_comp->prim_context->datapass_label_->outdata;
 
@@ -503,7 +510,7 @@ void config_helper_pd::generate_prims(int i) {
 
             PrimBase *recv_data_2 =
                 new Recv_prim(RECV_TYPE::RECV_DATA, recv_tag, 1);
-            PrimBase *send_req =
+            Send_prim *send_req =
                 new Send_prim(SEND_TYPE::SEND_REQ, send_dest, send_tag);
             PrimBase *recv_ack = new Recv_prim(RECV_TYPE::RECV_ACK);
             Send_prim *send_data =
@@ -516,7 +523,13 @@ void config_helper_pd::generate_prims(int i) {
 
             int output_size = max(int(C * T * B), 1);
             CalculatePacketNum(output_size, 1, 1, send_data->max_packet,
-                               send_data->end_length);
+                               send_data->end_length, send_data->packet_scale,
+                               send_data->packets_in_last_group);
+            send_req->max_packet = send_data->max_packet;
+            send_req->end_length = send_data->end_length;
+            send_req->packet_scale = send_data->packet_scale;
+            send_req->packets_in_last_group =
+                send_data->packets_in_last_group;
 
             if ((core_id / tp_size + 1) % model_stage != 1) {
                 // 不是stage 1 就是接收上一个 stage 传过来的中间结果

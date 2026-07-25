@@ -346,6 +346,10 @@ void config_helper_core::generate_prims(int i) {
     auto add_comps = [&](vector<PrimBase *> &prims,
                          const vector<PrimBase *> &works) {
         for (auto *prim : works) {
+            if (dynamic_cast<Dte_async_prim *>(prim) != nullptr) {
+                prims.push_back(prim);
+                continue;
+            }
             PrimBase *p = PrimFactory::getInstance().createPrim("Set_addr");
             auto label = p->prim_context->datapass_label_;
             if (prim->prim_type & PRIM_TYPE::COMP_PRIM) {
@@ -469,7 +473,9 @@ void config_helper_core::calculate_address(bool do_loop) {
 
                     CalculatePacketNum(output_size, work.cast[index].weight,
                                        (prim->datatype ? 2 : 1),
-                                       temp->max_packet, temp->end_length);
+                                       temp->max_packet, temp->end_length,
+                                       temp->packet_scale,
+                                       temp->packets_in_last_group);
                     if (!pending_req || pending_req->des_id != temp->des_id ||
                         pending_req->tag_id != temp->tag_id)
                         throw std::runtime_error(
@@ -484,6 +490,10 @@ void config_helper_core::calculate_address(bool do_loop) {
                     // Send_prim wire 上 max_packet 对 SEND_REQ 是 tagged union：把后续 DATA 的 F
                     // 带到源核，源核再写入 REQUEST Msg.flow_packets_。
                     pending_req->max_packet = temp->max_packet;
+                    pending_req->end_length = temp->end_length;
+                    pending_req->packet_scale = temp->packet_scale;
+                    pending_req->packets_in_last_group =
+                        temp->packets_in_last_group;
                     if (g_d2d_cfg.mode == MODE_BOUNDED_SAF &&
                         coreconfigs[i].id / CORES_PER_DIE !=
                             temp->des_id / CORES_PER_DIE) {

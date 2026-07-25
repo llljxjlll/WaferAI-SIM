@@ -32,6 +32,15 @@ extern bool SPEC_USE_DRAMSYS;         // 是否使用DRAMSys
 extern bool SPEC_FAST_WARMUP;         // 是否跳过初始数据发送
 extern bool SPEC_ROUTER_PIPE;         // 是否开启路由并行
 extern bool SPEC_SEND_RECV_PARALLEL;  // 发送与接收原语是否同时进行
+extern bool SPEC_USE_BEHA_DTE;        // 是否启用行为级 DTE（V1 接入 workload）
+extern bool SPEC_DTE_STREAMING;       // V2b：端点 DTE 与网络数据阶段流水重叠
+extern bool SPEC_DTE_ASYNC;           // V3a：显式 issue/wait/poll/fence/cancel
+extern bool SPEC_DTE_AGGREGATION;     // V3b：在线 compound descriptor 聚合
+extern bool SPEC_DTE_V4_RESOURCES;    // V4：双 command、独立 SPM/AXI 端口与 credit
+extern int DTE_AGGREGATION_MAX_DESCRIPTORS;
+extern int DTE_AGGREGATION_MAX_BYTES;
+extern int DTE_AGGREGATION_TIMEOUT_NS;
+extern int DTE_AGGREGATION_ADDRESS_BLOCK_BYTES;
 
 // hardware config中包含的参数
 extern int HW_CORE_CREDIT; //  在PD模式中，单核每一拍可安排的任务量
@@ -41,6 +50,21 @@ extern int HW_SRAM_SIZE;             // SRAM的大小
 extern int HW_NOC_PAYLOAD_PER_CYCLE; // 在1cycle内，NoC单信道可传输的数据包数量
 extern float HW_COMP_UTIL;
 extern float HW_BEHA_DRAM_UTIL;
+extern int HW_DTE_GAMMA_NS;      // COMET 评估默认固定启动项，可配置
+extern int HW_DTE_TAU_LAUNCH_NS; // COMET 评估默认 descriptor launch 项，可配置
+extern int HW_DTE_COMMAND_SLOTS_PER_CHANNEL;
+extern int HW_DTE_PENDING_QUEUE_DEPTH;
+extern int HW_DTE_SPM_READ_WIDTH_BITS;
+extern int HW_DTE_SPM_WRITE_WIDTH_BITS;
+extern int HW_DTE_AXI_READ_WIDTH_BITS;
+extern int HW_DTE_AXI_WRITE_WIDTH_BITS;
+extern double HW_DTE_LAUNCH_ENERGY_PJ;
+extern double HW_DTE_SPM_ENERGY_PJ_PER_BIT;
+extern double HW_DTE_AXI_ENERGY_PJ_PER_BIT;
+extern double HW_DTE_BASE_AREA_UM2;
+extern double HW_DTE_CHANNEL_AREA_UM2;
+extern double HW_DTE_COMMAND_SLOT_AREA_UM2;
+extern double HW_DTE_PORT_BIT_AREA_UM2;
 
 // gpu相关参数
 extern bool GPU_USE_INNER_MM;

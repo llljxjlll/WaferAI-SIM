@@ -1,0 +1,51 @@
+{
+  "vars": {
+    "loop": 1,
+    "X": 1
+  },
+  "pipeline": 1,
+  "source": [
+    {
+      "dest": 0,
+      "size": "X"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 0,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "prims": [
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 1,
+                  "payload_bits": 4096,
+                  "direction": "SPM_TO_DRAM",
+                  "spm_addr": 0,
+                  "spm_size": 512,
+                  "remote_addr": 65536
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "fence"
+                }
+              ],
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

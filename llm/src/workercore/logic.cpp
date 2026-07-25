@@ -1,6 +1,8 @@
 #include "systemc.h"
 #include <deque>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <queue>
 #include <set>
 #include <string>
@@ -10,6 +12,7 @@
 #include "defs/global.h"
 #include "defs/spec.h"
 #include "die/port.h"
+#include "dte/dte_streaming.h"
 #include "utils/router_utils.h"
 #include "link/nb_global_memif_v2.h"
 #include "memory/dram/GPUNB_DcacheIF.h"
@@ -65,6 +68,75 @@ void AttachRequestFlowPackets(Msg &m, const Send_prim *prim, int subflow) {
     m.subflow_ = subflow;
     m.flow_packets_ = StripePackets(prim->max_packet, prim->stripe_count,
                                     subflow);
+    AttachRequestDtePayload(m, *prim, SPEC_USE_BEHA_DTE);
+}
+
+uint64_t CurrentDteNanoseconds() {
+    return static_cast<uint64_t>(
+        sc_time_stamp().value() / sc_time(1, SC_NS).value());
+}
+
+sc_time DteCycleTime(uint64_t cycle) {
+    if (cycle > std::numeric_limits<uint64_t>::max() /
+                    static_cast<uint64_t>(CYCLE))
+        throw std::overflow_error("DTE V2b cycle-to-time conversion overflows");
+    return sc_time(static_cast<double>(cycle) * CYCLE, SC_NS);
+}
+
+void WaitForDteTransmitStart(DteTransferContext &context) {
+    if (context.state == DteTransferState::PENDING ||
+        context.state == DteTransferState::LAUNCHING ||
+        context.state == DteTransferState::BUS_WAIT)
+        wait(context.transmit_started);
+    if (context.state != DteTransferState::TRANSMITTING &&
+        context.state != DteTransferState::COMPLETED)
+        throw std::logic_error(
+            "DTE V2b transfer did not reach the transmitting state");
+}
+
+void WaitUntilDteTime(const sc_time &target) {
+    if (target > sc_time_stamp())
+        wait(target - sc_time_stamp());
+}
+
+std::string DteStreamingFlowName(int source, int dest, int tag) {
+    return "DTE_stream_" + std::to_string(source) + "_" +
+           std::to_string(dest) + "_" + std::to_string(tag);
+}
+
+void TraceDteStreaming(Event_engine *event_engine, const char *stage,
+                       const char *phase, int source, int dest, int tag,
+                       uint64_t payload_bits,
+                       sc_time relative_time = SC_ZERO_TIME) {
+    if (event_engine == nullptr)
+        return;
+    std::string detail = std::string(stage) + " source=" +
+                         std::to_string(source) + " dest=" +
+                         std::to_string(dest) + " tag=" +
+                         std::to_string(tag) + " bits=" +
+                         std::to_string(payload_bits);
+    event_engine->add_event(DteStreamingFlowName(source, dest, tag), stage,
+                            phase, Trace_event_util(detail), relative_time);
+}
+
+uint64_t DteStreamingReadyBits(const Send_prim &prim, uint32_t dte_width,
+                               bool behavioral_noc) {
+    const uint64_t payload_bits = ComputeSendPayloadBits(prim);
+    if (behavioral_noc)
+        return std::min(payload_bits, static_cast<uint64_t>(dte_width));
+    const uint64_t packet_index = static_cast<uint64_t>(prim.data_packet_id);
+    if (packet_index == 0)
+        throw std::logic_error("DTE V2b DATA packet index is zero");
+    const uint64_t raw_packets =
+        (static_cast<uint64_t>(prim.max_packet) - 1) * prim.packet_scale +
+        prim.packets_in_last_group;
+    const uint64_t ready_packets = std::min(
+        raw_packets, packet_index * static_cast<uint64_t>(prim.packet_scale));
+    if (ready_packets == raw_packets)
+        return payload_bits;
+    if (ready_packets > std::numeric_limits<uint64_t>::max() / M_D_DATA)
+        throw std::overflow_error("DTE V2b source-ready bit count overflows");
+    return ready_packets * M_D_DATA;
 }
 
 void ReserveStripedSafOnce(Send_prim *prim, int source) {
@@ -101,6 +173,27 @@ void WorkerCoreExecutor::send_logic() {
         LOG_DEBUG(PRIM) << "destination " << prim->des_id << ", tag "
                         << prim->tag_id << ", max packet " << prim->max_packet;
 
+        DteTransferContext *stream_source_xfer = nullptr;
+        uint64_t stream_source_first_ns = 0;
+        bool stream_source_started = false;
+        if (SPEC_USE_BEHA_DTE && prim->type == SEND_DATA) {
+            dte->WaitForCredit();
+            DteTransferContext &xfer = dte->Issue(
+                ComputeSendPayloadBits(*prim), DteDir::SPM_TO_REMOTE);
+            if (SPEC_DTE_STREAMING) {
+                stream_source_xfer = &xfer;
+                TraceDteStreaming(event_engine, "DTE_stream_source_fill", "B",
+                                  cid, prim->des_id, prim->tag_id,
+                                  xfer.payload_bits);
+                WaitForDteTransmitStart(xfer);
+            } else {
+                wait(xfer.done);
+                if (!dte->Release(xfer.xfer_id))
+                    throw std::logic_error(
+                        "source DTE completed context could not be released");
+            }
+        }
+
         while (true) {
             bool need_long_wait = false;
             int roofline_packets = 1;
@@ -134,11 +227,36 @@ void WorkerCoreExecutor::send_logic() {
                                      ? prim->end_length
                                      : M_D_DATA;
 
+                    if (stream_source_xfer != nullptr) {
+                        const uint64_t ready_bits = DteStreamingReadyBits(
+                            *prim, dte->config().bit_width_bits,
+                            SPEC_USE_BEHA_NOC);
+                        const sc_time ready_time =
+                            stream_source_xfer->transmit_start_time +
+                            DteCycleTime(CeilDivU64(
+                                ready_bits, dte->config().bit_width_bits));
+                        WaitUntilDteTime(ready_time);
+                    }
+
                     TaskCoreContext context = generate_context(this);
                     (void)prim->taskCoreDefault(context);
 
                     if (!channel_avail_i.read())
                         wait(ev_channel_avail_i);
+
+                    if (stream_source_xfer != nullptr &&
+                        !stream_source_started) {
+                        stream_source_started = true;
+                        stream_source_first_ns = CurrentDteNanoseconds();
+                        TraceDteStreaming(
+                            event_engine, "DTE_stream_source_fill", "E", cid,
+                            prim->des_id, prim->tag_id,
+                            stream_source_xfer->payload_bits);
+                        TraceDteStreaming(
+                            event_engine, "DTE_stream_network", "B", cid,
+                            prim->des_id, prim->tag_id,
+                            stream_source_xfer->payload_bits);
+                    }
 
                     Msg temp_msg = Msg(is_end_packet, MSG_TYPE::DATA, seq,
                                        prim->des_id, 0, prim->tag_id, length,
@@ -147,6 +265,14 @@ void WorkerCoreExecutor::send_logic() {
                     temp_msg.source_ = cid;
                     temp_msg.subflow_ = subflow;
                     temp_msg.exit_port_ = prim->stripe_exit_ports[subflow];
+                    if (stream_source_xfer != nullptr) {
+                        temp_msg.dte_stream_source_first_ns_ =
+                            stream_source_first_ns;
+                        temp_msg.dte_stream_source_done_ns_ =
+                            static_cast<uint64_t>(
+                                stream_source_xfer->scheduled_completion_time.value() /
+                                sc_time(1, SC_NS).value());
+                    }
                     send_buffer = temp_msg;
 
                     atomic_helper_lock(sc_time_stamp(), 3);
@@ -223,6 +349,15 @@ void WorkerCoreExecutor::send_logic() {
             wait(roofline_packets * CYCLE, SC_NS);
 
             if (job_done) {
+                if (stream_source_xfer != nullptr) {
+                    if (stream_source_xfer->state !=
+                        DteTransferState::COMPLETED)
+                        wait(stream_source_xfer->done);
+                    if (!dte->Release(stream_source_xfer->xfer_id))
+                        throw std::logic_error(
+                            "DTE V2b source context could not be released");
+                    stream_source_xfer = nullptr;
+                }
                 LOG_INFO(PRIM) << "Core " << cid << " end send primitive "
                                << GetEnumSendType(prim->type);
                 break;
@@ -236,6 +371,43 @@ void WorkerCoreExecutor::send_logic() {
 
 void WorkerCoreExecutor::send_para_logic() {
     while (true) {
+        // V2a：先为本批所有 SEND_DATA 背靠背 issue。context 由 DTEUnit 的
+        // 地址稳定 list 持有；这里显式记录 prim -> (xfer_id, context) 映射。
+        std::map<Send_prim *, std::pair<uint64_t, DteTransferContext *>>
+            dte_batch;
+        size_t batch_data_remaining = 0;
+        std::queue<PrimBase *> pending = send_para_queue;
+        while (!pending.empty()) {
+            PrimBase *candidate = pending.front();
+            pending.pop();
+            if (typeid(*candidate) != typeid(Send_prim))
+                continue;
+            auto *send = static_cast<Send_prim *>(candidate);
+            if (send->type != SEND_DATA)
+                continue;
+            ++batch_data_remaining;
+            if (!SPEC_USE_BEHA_DTE)
+                continue;
+            if (dte_batch.count(send))
+                throw std::logic_error(
+                    "DTE V2a batch contains a duplicate SEND_DATA primitive");
+            dte->WaitForCredit();
+            DteTransferContext &xfer = dte->Issue(
+                ComputeSendPayloadBits(*send), DteDir::SPM_TO_REMOTE);
+            dte_batch.emplace(send, std::make_pair(xfer.xfer_id, &xfer));
+        }
+
+        auto consume_data_tail = [&]() {
+            if (batch_data_remaining == 0)
+                throw std::logic_error(
+                    "parallel SEND_DATA tail accounting underflow");
+            --batch_data_remaining;
+            // 一个 compute-ready token 对本批所有 fan-out DATA 生效；仅在最后
+            // 一条 DATA 尾包提交后消费它，避免第二条 SEND 永久等待。
+            if (batch_data_remaining == 0)
+                send_last_packet = false;
+        };
+
         while (send_para_queue.size()) {
             PrimBase *prim = send_para_queue.front();
             send_para_queue.pop();
@@ -263,6 +435,32 @@ void WorkerCoreExecutor::send_para_logic() {
                 event_engine->add_event(
                     "Core " + ToHexString(cid), "Recv_prim", "B",
                     Trace_event_util("Recv_prim" + prim_type));
+            }
+
+            if (SPEC_USE_BEHA_DTE &&
+                typeid(*prim) == typeid(Send_prim) &&
+                static_cast<Send_prim *>(prim)->type == SEND_DATA) {
+                auto *send = static_cast<Send_prim *>(prim);
+                auto mapping = dte_batch.find(send);
+                if (mapping == dte_batch.end())
+                    throw std::logic_error(
+                        "DTE V2a SEND_DATA has no batch transfer context");
+                const uint64_t xfer_id = mapping->second.first;
+                DteTransferContext *context = mapping->second.second;
+                if (context == nullptr || context->xfer_id != xfer_id)
+                    throw std::logic_error(
+                        "DTE V2a SEND_DATA transfer mapping is corrupt");
+                // done 可能在控制握手期间已经通知；先查状态，避免错过
+                // SC_ZERO_TIME 事件后再 wait 导致永久阻塞。
+                if (context->state != DteTransferState::COMPLETED)
+                    wait(context->done);
+                if (context->state != DteTransferState::COMPLETED)
+                    throw std::logic_error(
+                        "DTE V2a SEND_DATA woke before transfer completion");
+                if (!dte->Release(xfer_id))
+                    throw std::logic_error(
+                        "DTE V2a completed SEND_DATA context could not be released");
+                dte_batch.erase(mapping);
             }
 
             bool job_done = false; // 结束内圈循环的标志
@@ -317,7 +515,7 @@ void WorkerCoreExecutor::send_para_logic() {
                                             wait(CYCLE, SC_NS);
                                         }
                                     }
-                                    send_last_packet = false;
+                                    consume_data_tail();
                                 }
                                 send_buffer =
                                     Msg(s_prim->data_packet_id ==
@@ -367,7 +565,7 @@ void WorkerCoreExecutor::send_para_logic() {
                                 length = s_prim->end_length;
                                 while (!send_last_packet)
                                     wait(ev_send_last_packet);
-                                send_last_packet = false;
+                                consume_data_tail();
                             }
                             send_buffer = Msg(
                                 s_prim->data_packet_id == s_prim->max_packet,
@@ -485,6 +683,12 @@ void WorkerCoreExecutor::send_para_logic() {
             }
         }
 
+        if (!dte_batch.empty())
+            throw std::logic_error(
+                "DTE V2a batch ended with unreleased SEND_DATA contexts");
+        if (batch_data_remaining != 0)
+            throw std::logic_error(
+                "parallel send batch ended before every DATA tail");
         send_done = true;
         wait();
     }
@@ -503,6 +707,13 @@ void WorkerCoreExecutor::recv_logic() {
         vector<sc_bv<128>> segments; // 单个原语配置的所有数据包
         std::set<int> ack_subflows;
         std::set<std::pair<int, int>> ended_subflows;
+        std::map<int, DteTransferContext *> stream_destination_xfers;
+        std::map<int, uint64_t> stream_destination_xfer_ids;
+        std::map<int, uint64_t> stream_payload_bits;
+        std::map<int, uint64_t> stream_source_first_ns;
+        std::map<int, uint64_t> stream_source_done_ns;
+        std::map<int, uint64_t> stream_source_tail_at_destination_ns;
+        std::map<int, uint64_t> stream_network_tail_ns;
 
         LOG_INFO(PRIM) << "Core " << cid << " start receive primitive "
                        << GetEnumRecvType(prim->type);
@@ -613,6 +824,71 @@ void WorkerCoreExecutor::recv_logic() {
                             << ", with received tag " << temp.tag_id_;
                     }
 
+                    if (SPEC_DTE_STREAMING && prim->type == RECV_DATA) {
+                        if (temp.dte_stream_source_first_ns_ == 0 ||
+                            temp.dte_stream_source_done_ns_ == 0)
+                            throw std::runtime_error(
+                                "DTE V2b DATA is missing source timing metadata");
+                        auto existing =
+                            stream_destination_xfers.find(temp.source_);
+                        if (existing == stream_destination_xfers.end()) {
+                            const auto key =
+                                std::make_pair(temp.source_, prim->tag_id);
+                            auto metadata = dte_flow_payload_rounds.find(key);
+                            if (metadata == dte_flow_payload_rounds.end() ||
+                                metadata->second.empty())
+                                throw std::runtime_error(
+                                    "DTE V2b first DATA has no REQUEST payload metadata");
+                            const DteFlowPayloadRound &round =
+                                metadata->second.front();
+                            const uint8_t expected_mask =
+                                static_cast<uint8_t>(
+                                    (1u << prim->stripe_count) - 1u);
+                            if (round.stripe_count != prim->stripe_count ||
+                                round.subflow_mask != expected_mask)
+                                throw std::runtime_error(
+                                    "DTE V2b first DATA has incomplete REQUEST metadata");
+
+                            dte->WaitForCredit();
+                            DteTransferContext &xfer = dte->Issue(
+                                round.payload_bits, DteDir::REMOTE_TO_SPM);
+                            stream_destination_xfers.emplace(temp.source_,
+                                                             &xfer);
+                            stream_destination_xfer_ids.emplace(temp.source_,
+                                                                xfer.xfer_id);
+                            stream_payload_bits.emplace(temp.source_,
+                                                        round.payload_bits);
+                            stream_source_first_ns.emplace(
+                                temp.source_,
+                                temp.dte_stream_source_first_ns_);
+                            stream_source_done_ns.emplace(
+                                temp.source_,
+                                temp.dte_stream_source_done_ns_);
+
+                            const uint64_t now_ns = CurrentDteNanoseconds();
+                            if (now_ns <
+                                temp.dte_stream_source_first_ns_)
+                                throw std::runtime_error(
+                                    "DTE V2b DATA arrived before source first-ready time");
+                            stream_source_tail_at_destination_ns.emplace(
+                                temp.source_,
+                                ProjectDteSourceTailToDestinationNs(
+                                    temp.dte_stream_source_first_ns_,
+                                    temp.dte_stream_source_done_ns_, now_ns));
+                            TraceDteStreaming(
+                                event_engine, "DTE_stream_destination", "B",
+                                temp.source_, cid, prim->tag_id,
+                                round.payload_bits);
+                        } else {
+                            if (stream_source_first_ns.at(temp.source_) !=
+                                    temp.dte_stream_source_first_ns_ ||
+                                stream_source_done_ns.at(temp.source_) !=
+                                    temp.dte_stream_source_done_ns_)
+                                throw std::runtime_error(
+                                    "DTE V2b DATA changes source timing within a flow");
+                        }
+                    }
+
                     if (prim->type == RECV_DATA)
                         msg_buffer_[MSG_TYPE::DATA].pop();
                     else
@@ -684,10 +960,50 @@ void WorkerCoreExecutor::recv_logic() {
                         // D2D link 一次性计费；到达接收核的是代表包，不能再次等待 F 拍。
                         // 同 die Behavioral NoC 沿用原 roofline 行为。
                         if (g_d2d_cfg.backend == BACKEND_BEHAVIORAL &&
-                            DieOfGlobal(temp.source_) != DieOfGlobal(cid))
-                            roofline_packets = 1;
-                        else
+                            DieOfGlobal(temp.source_) != DieOfGlobal(cid)) {
+                            if (SPEC_DTE_STREAMING) {
+                                if (temp.dte_stream_network_tail_cycles_ >
+                                    static_cast<uint32_t>(
+                                        std::numeric_limits<int>::max() - 1))
+                                    throw std::overflow_error(
+                                        "DTE V2b behavioral network tail overflows wait cycles");
+                                roofline_packets = 1 + static_cast<int>(
+                                    temp.dte_stream_network_tail_cycles_);
+                            } else {
+                                roofline_packets = 1;
+                            }
+                        } else
                             roofline_packets = temp.roofline_packets_;
+                    }
+                    if (SPEC_DTE_STREAMING && prim->type == RECV_DATA &&
+                        temp.is_end_) {
+                        const uint64_t now_ns = CurrentDteNanoseconds();
+                        const uint64_t wait_ns =
+                            static_cast<uint64_t>(roofline_packets) *
+                            static_cast<uint64_t>(CYCLE);
+                        if (wait_ns >
+                            std::numeric_limits<uint64_t>::max() - now_ns)
+                            throw std::overflow_error(
+                                "DTE V2b network tail time overflows");
+                        const uint64_t tail_ns = now_ns + wait_ns;
+                        auto &saved_tail =
+                            stream_network_tail_ns[temp.source_];
+                        saved_tail = std::max(saved_tail, tail_ns);
+
+                        int source_ends = 0;
+                        for (const auto &flow : ended_subflows)
+                            if (flow.first == temp.source_)
+                                ++source_ends;
+                        if (source_ends == prim->stripe_count) {
+                            const uint64_t final_tail_ns = saved_tail;
+                            TraceDteStreaming(
+                                event_engine, "DTE_stream_network", "E",
+                                temp.source_, cid, prim->tag_id,
+                                stream_payload_bits.at(temp.source_),
+                                sc_time(static_cast<double>(
+                                            final_tail_ns - now_ns),
+                                        SC_NS));
+                        }
                     }
                 }
             }
@@ -746,6 +1062,106 @@ void WorkerCoreExecutor::recv_logic() {
 
             ev_msg_process_end.notify();
             if (job_done) {
+                if (SPEC_USE_BEHA_DTE && prim->type == RECV_DATA &&
+                    prim->recv_cnt > 0) {
+                    if (SPEC_SEND_RECV_PARALLEL && !send_done)
+                        throw std::runtime_error(
+                            "DTE V2a does not support concurrent SEND_DATA and "
+                            "RECV_DATA on the same core");
+                    std::set<int> completed_sources;
+                    for (const auto &flow : ended_subflows)
+                        completed_sources.insert(flow.first);
+                    if ((int)completed_sources.size() != prim->recv_cnt)
+                        throw std::runtime_error(
+                            "DTE RECV_DATA source count does not match recv_cnt");
+
+                    uint64_t payload_bits = 0;
+                    for (int source : completed_sources) {
+                        const auto key = std::make_pair(source, prim->tag_id);
+                        auto metadata = dte_flow_payload_rounds.find(key);
+                        if (metadata == dte_flow_payload_rounds.end() ||
+                            metadata->second.empty())
+                            throw std::runtime_error(
+                                "DTE RECV_DATA is missing REQUEST payload metadata");
+                        const DteFlowPayloadRound &round =
+                            metadata->second.front();
+                        const uint8_t expected_mask = static_cast<uint8_t>(
+                            (1u << prim->stripe_count) - 1u);
+                        if (round.stripe_count != prim->stripe_count ||
+                            round.subflow_mask != expected_mask)
+                            throw std::runtime_error(
+                                "DTE RECV_DATA has incomplete REQUEST stripe metadata");
+                        if (payload_bits >
+                            std::numeric_limits<uint64_t>::max() -
+                                round.payload_bits)
+                            throw std::overflow_error(
+                                "DTE RECV_DATA payload bit count overflows");
+                        payload_bits += round.payload_bits;
+                        metadata->second.pop_front();
+                        if (metadata->second.empty())
+                            dte_flow_payload_rounds.erase(metadata);
+                    }
+
+                    if (SPEC_DTE_STREAMING) {
+                        if (stream_destination_xfers.size() !=
+                                completed_sources.size() ||
+                            stream_network_tail_ns.size() !=
+                                completed_sources.size())
+                            throw std::runtime_error(
+                                "DTE V2b flow/context completion count mismatch");
+
+                        uint64_t overall_target_ns = CurrentDteNanoseconds();
+                        for (int source : completed_sources) {
+                            DteTransferContext *context =
+                                stream_destination_xfers.at(source);
+                            if (context == nullptr ||
+                                context->xfer_id !=
+                                    stream_destination_xfer_ids.at(source))
+                                throw std::logic_error(
+                                    "DTE V2b destination context mapping is corrupt");
+                            if (context->state !=
+                                DteTransferState::COMPLETED)
+                                wait(context->done);
+                            if (context->state !=
+                                DteTransferState::COMPLETED)
+                                throw std::logic_error(
+                                    "DTE V2b destination woke before completion");
+                            const uint64_t dte_done_ns = static_cast<uint64_t>(
+                                context->completion_time.value() /
+                                sc_time(1, SC_NS).value());
+                            const uint64_t target_ns =
+                                CombineDteStreamingTailsNs(
+                                    stream_source_tail_at_destination_ns.at(
+                                        source),
+                                    stream_network_tail_ns.at(source),
+                                    dte_done_ns,
+                                    static_cast<uint64_t>(CYCLE));
+                            overall_target_ns =
+                                std::max(overall_target_ns, target_ns);
+                        }
+
+                        WaitUntilDteTime(sc_time(
+                            static_cast<double>(overall_target_ns), SC_NS));
+                        for (int source : completed_sources) {
+                            TraceDteStreaming(
+                                event_engine, "DTE_stream_destination", "E",
+                                source, cid, prim->tag_id,
+                                stream_payload_bits.at(source));
+                            if (!dte->Release(
+                                    stream_destination_xfer_ids.at(source)))
+                                throw std::logic_error(
+                                    "DTE V2b destination context could not be released");
+                        }
+                    } else {
+                        dte->WaitForCredit();
+                        DteTransferContext &xfer =
+                            dte->Issue(payload_bits, DteDir::REMOTE_TO_SPM);
+                        wait(xfer.done);
+                        if (!dte->Release(xfer.xfer_id))
+                            throw std::logic_error(
+                                "destination DTE completed context could not be released");
+                    }
+                }
                 LOG_INFO(PRIM) << "Core " << cid << " end recv primitive "
                                << GetEnumRecvType(prim->type);
                 break;
@@ -799,6 +1215,33 @@ void WorkerCoreExecutor::req_logic() {
                                 msg.subflow_ >= prim->stripe_count)
                                 throw std::runtime_error(
                                     "V5 REQUEST carries an invalid subflow id");
+                            if (SPEC_USE_BEHA_DTE) {
+                                if (msg.dte_payload_bits_ == 0)
+                                    throw std::runtime_error(
+                                        "DTE REQUEST is missing logical payload bits");
+                                const auto key =
+                                    std::make_pair(msg.source_, msg.tag_id_);
+                                auto &rounds = dte_flow_payload_rounds[key];
+                                const uint8_t expected_mask =
+                                    static_cast<uint8_t>(
+                                        (1u << prim->stripe_count) - 1u);
+                                if (rounds.empty() ||
+                                    rounds.back().subflow_mask == expected_mask)
+                                    rounds.push_back(DteFlowPayloadRound{
+                                        msg.dte_payload_bits_, 0,
+                                        prim->stripe_count});
+                                DteFlowPayloadRound &round = rounds.back();
+                                if (round.stripe_count != prim->stripe_count ||
+                                    round.payload_bits != msg.dte_payload_bits_)
+                                    throw std::runtime_error(
+                                        "DTE REQUEST payload metadata mismatch within a round");
+                                const uint8_t subflow_bit = static_cast<uint8_t>(
+                                    1u << msg.subflow_);
+                                if (round.subflow_mask & subflow_bit)
+                                    throw std::runtime_error(
+                                        "DTE REQUEST repeats a subflow before the round is complete");
+                                round.subflow_mask |= subflow_bit;
+                            }
                             ack_queue.push(msg);
                         } else
                             temp.push(msg);

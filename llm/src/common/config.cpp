@@ -50,13 +50,21 @@ void from_json(const json &j, CoreJob &c) {
     if (j.contains("prims")) {
         auto prims = j["prims"];
         for (auto prim : prims) {
-            CompBase *p = nullptr;
-            string type = prim.at("type");
+            const string type = prim.at("type");
+            PrimBase *base = PrimFactory::getInstance().createPrim(type);
+            if (base == nullptr)
+                throw std::invalid_argument(
+                    "workload contains an unknown primitive: " + type);
+            if (auto *async_prim = dynamic_cast<Dte_async_prim *>(base))
+                async_prim->parseJson(prim);
+            else if (auto *comp = dynamic_cast<CompBase *>(base))
+                comp->parseJson(prim);
+            else
+                throw std::invalid_argument(
+                    "workload prims supports only compute or Dte_async "
+                    "primitives, got: " + type);
 
-            p = (CompBase *)(PrimFactory::getInstance().createPrim(type));
-            p->parseJson(prim);
-
-            c.prims.push_back((PrimBase *)p);
+            c.prims.push_back(base);
         }
     }
 }
@@ -165,4 +173,16 @@ void from_json(const json &j, CoreHWConfig &c) {
     SetParamFromJson<string>(j, "dram_config", &(c.dram_config),
                              DEFAULT_DRAM_CONFIG_PATH);
     SetParamFromJson<int>(j, "dram_bw", &(c.dram_bw), HW_DRAM_DEFAULT_BITWIDTH);
+    SetParamFromJson<int>(j, "dte_channel_count", &(c.dte_channel_count), 2);
+    SetParamFromJson<int>(j, "dte_bit_width", &(c.dte_bit_width), 2048);
+    if (c.dte_channel_count <= 0)
+        throw std::invalid_argument(
+            "core[" + std::to_string(c.id) +
+            "].dte_channel_count must be > 0, got " +
+            std::to_string(c.dte_channel_count));
+    if (c.dte_bit_width <= 0)
+        throw std::invalid_argument(
+            "core[" + std::to_string(c.id) +
+            "].dte_bit_width must be > 0, got " +
+            std::to_string(c.dte_bit_width));
 }

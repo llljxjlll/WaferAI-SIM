@@ -132,6 +132,8 @@ public:
     string dram_config; // DRAM配置文件名
     int dram_bw;
     int sram_bitwidth; // SRAM的位宽
+    int dte_channel_count; // DTE active transfer 上限
+    int dte_bit_width;     // DTE 共享聚合数据通路位宽（bit）
 
     void printSelf() {
         // cout << "CoreHWConfig: " << id << endl;
@@ -149,16 +151,21 @@ public:
           vec(nullptr),
           dram_config(""),
           dram_bw(0),
-          sram_bitwidth(0) {}
+          sram_bitwidth(0),
+          dte_channel_count(2),
+          dte_bit_width(2048) {}
     CoreHWConfig(int id, ExuConfig *exu, SfuConfig *sfu, VectorConfig *vec, string dram_config,
-                 int dram_bw, int sram_bitwidth)
+                 int dram_bw, int sram_bitwidth, int dte_channel_count = 2,
+                 int dte_bit_width = 2048)
         : id(id),
           exu(exu),
           sfu(sfu),
           vec(vec),
           dram_config(dram_config),
           dram_bw(dram_bw),
-          sram_bitwidth(sram_bitwidth) {}
+          sram_bitwidth(sram_bitwidth),
+          dte_channel_count(dte_channel_count),
+          dte_bit_width(dte_bit_width) {}
     ~CoreHWConfig() {
         delete exu;
         delete sfu;

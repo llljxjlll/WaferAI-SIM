@@ -1,0 +1,102 @@
+{
+  "vars": {
+    "loop": 1,
+    "X": 1
+  },
+  "pipeline": 1,
+  "source": [
+    {
+      "dest": 0,
+      "size": "X"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 0,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "prims": [
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 1,
+                  "payload_bits": 4096,
+                  "direction": "SPM_TO_REMOTE",
+                  "spm_addr": 0,
+                  "spm_size": 512,
+                  "remote_peer": 1,
+                  "remote_addr": 0
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 2,
+                  "payload_bits": 4096,
+                  "direction": "REMOTE_TO_SPM",
+                  "spm_addr": 1024,
+                  "spm_size": 512,
+                  "remote_peer": 1,
+                  "remote_addr": 1024
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 3,
+                  "payload_bits": 4096,
+                  "direction": "SPM_TO_SPM",
+                  "spm_addr": 2048,
+                  "spm_size": 512,
+                  "remote_addr": 4096
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 4,
+                  "payload_bits": 4096,
+                  "direction": "SPM_TO_DRAM",
+                  "spm_addr": 6144,
+                  "spm_size": 512,
+                  "remote_addr": 65536
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 5,
+                  "payload_bits": 4096,
+                  "direction": "DRAM_TO_SPM",
+                  "spm_addr": 8192,
+                  "spm_size": 512,
+                  "remote_addr": 131072
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "issue",
+                  "token": 6,
+                  "payload_bits": 4096,
+                  "direction": "DRAM_TO_REMOTE",
+                  "remote_peer": 2,
+                  "remote_addr": 196608
+                },
+                {
+                  "type": "Dte_async",
+                  "op": "fence"
+                }
+              ],
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

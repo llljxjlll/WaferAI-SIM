@@ -110,7 +110,7 @@
 #define M_D_FLOW_PACKETS M_D_ROOFLINE
 #define M_D_FLOW_PACKETS_MAX ((1u << M_D_FLOW_PACKETS) - 1u)
 #define M_D_CONF_END 1
-#define M_D_DATA 128
+#define M_D_DATA 128 // DATA 包的 payload 位宽，单位 bit
 // V1-c0：跨 die 路由 pinned 出口端口（源 die 选一次并钉死，随包携带）。16-bit：编码
 // **0=未 pin，合法端口=port_id+1**（避免 8-bit 下 port_id==255 撞哨兵、>=256 静默截断——
 // port_id 是全局递增 int，大 die/较多 HOST/MEM 端口时可超 254）。用 0 表示未 pin 还使

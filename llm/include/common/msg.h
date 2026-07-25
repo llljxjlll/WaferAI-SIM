@@ -1,5 +1,6 @@
 #pragma once
 #include "systemc.h"
+#include <cstdint>
 
 #include "defs/enums.h"
 #include "macros/macros.h"
@@ -16,13 +17,21 @@ public:
     int offset_ = 0;            // 目标地址偏移
     int tag_id_ = -1;           // send & recv对应的tag编号
     int source_ = -1;           // 发送此msg的core id
-    int length_ = 0;            // 真实数据的长度，避免end包覆盖
+    int length_ = 0;            // 真实数据长度（bit），避免 end 包按 M_D_DATA 覆盖
     bool refill_ = false;       // 在end包中表示是否需要refill
     bool config_end_ = false;   // 是否为一个原语config的最后一个包
     int roofline_packets_ = 0;  // 非 REQUEST：视作发送X个数据包，加快模拟速度
     // V3-c：仅 REQUEST 有效，声明随后 DATA flow 的总网络包数；wire 上与 roofline_packets_
     // tagged-union 复用同一 24-bit 段，0=未声明（bounded SAF admission 会拒绝）。
     int flow_packets_ = 0;
+    // DTE V1：REQUEST 声明随后整个逻辑 flow 的真实 payload（bit）。
+    // wire 上复用 REQUEST 不承载业务数据的 data_[127:64]；每个 stripe 携带相同值。
+    uint64_t dte_payload_bits_ = 0;
+    // DTE V2b：DATA 流式闭式模型的源端时间戳和 behavioral D2D 尾部。
+    // 仅 streaming DATA 有效；wire 上复用模拟器不消费的 DATA data_ 位。
+    uint64_t dte_stream_source_first_ns_ = 0; // 48-bit wire
+    uint64_t dte_stream_source_done_ns_ = 0;  // 48-bit wire
+    uint32_t dte_stream_network_tail_cycles_ = 0; // 32-bit wire
     // V5：同一逻辑 (source,tag) flow 的条带子流号。MVP 支持 stripe=1/2/4，
     // 故 2 bit 足够。wire 上对 REQUEST/ACK/DATA 与 refill_/config_end_ 做
     // tagged-union；这些标志只对 CONFIG 生效，旧流量 subflow=0 的编码不变。

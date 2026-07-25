@@ -3,6 +3,7 @@
 
 #include "common/memory.h"
 #include "common/pd.h"
+#include "dte/dte_async_types.h"
 #include "prims/base.h"
 
 class Clear_sram : public PrimBase {
@@ -28,6 +29,31 @@ public:
     Load_prim() { name = "Load_prim"; }
 };
 
+
+class Dte_async_prim : public PrimBase {
+public:
+    DteAsyncOp op = DteAsyncOp::ISSUE;
+    uint32_t token = 0;
+    uint64_t payload_bits = 0;
+    DteDir direction = DteDir::SPM_TO_REMOTE;
+    uint64_t spm_addr = 0;
+    uint64_t spm_size = 0; // byte
+    // V3b aggregation compatibility metadata. Legacy V3a workloads may omit it
+    // while aggregation is disabled.
+    uint32_t remote_peer = DTE_ASYNC_INVALID_REMOTE_PEER;
+    uint64_t remote_addr = 0;
+    uint32_t address_block = 0;
+    // Runtime-only poll result; the repository has no branch primitive yet.
+    bool poll_complete = false;
+
+    int taskCoreDefault(TaskCoreContext &context);
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> segments);
+    void parseJson(json j);
+    void printSelf();
+
+    Dte_async_prim() { name = "Dte_async"; }
+};
 
 class Recv_prim : public PrimBase {
 public:
@@ -58,10 +84,14 @@ public:
     SEND_TYPE type = SEND_REQ;
     int des_id = -1;                   // 目标id
     string output_label = UNSET_LABEL; // 需要从哪一个数据块标签获取结果，并发送
-    // SEND_DATA：实际 DATA 包数；SEND_REQ：tagged-union 为随后 DATA flow 的总包数（V3-c）。
+    // SEND_DATA：聚合后的模拟 DATA 包数；SEND_REQ：tagged-union 为随后 DATA flow 的总包数（V3-c）。
     int max_packet = 0;
     int tag_id = 0;                    // send_tag，用于与recv原语对应
-    int end_length = 0;                // 尾包长度，避免覆盖
+    int end_length = 0;                // 尾包有效长度（bit），范围 1..M_D_DATA
+    // max_packet 是按 HW_NOC_PAYLOAD_PER_CYCLE 聚合后的模拟包数：
+    // raw_packets = (max_packet - 1) * packet_scale + packets_in_last_group。
+    int packet_scale = 1;
+    int packets_in_last_group = 1;
     int stripe_count = 1;              // V5：1/2/4 条 subflow
 
     // V1-c2 运行时路由状态（不进入 prim 配置序列化）：一条 SEND_DATA 原语只选一次

@@ -1,0 +1,9 @@
+{
+  "noc": {
+    "use_beha_noc": false,
+    "send_recv_parallel": true
+  },
+  "dte": {
+    "use_beha_dte": true
+  }
+}

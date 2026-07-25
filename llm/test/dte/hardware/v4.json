@@ -1,0 +1,52 @@
+{
+  "x": 4,
+  "noc": {
+    "noc_payload_per_cycle": 4
+  },
+  "dte": {
+    "gamma_ns": 4,
+    "tau_launch_avg_ns": 0,
+    "command_slots_per_channel": 2,
+    "pending_queue_depth": 1,
+    "spm_read_width_bits": 64,
+    "spm_write_width_bits": 32,
+    "axi_read_width_bits": 16,
+    "axi_write_width_bits": 128,
+    "launch_energy_pj": 10.0,
+    "spm_energy_pj_per_bit": 0.01,
+    "axi_energy_pj_per_bit": 0.02,
+    "base_area_um2": 1000.0,
+    "channel_area_um2": 100.0,
+    "command_slot_area_um2": 10.0,
+    "port_bit_area_um2": 0.5
+  },
+  "operand": {
+    "comp_util": 0.7,
+    "core_credit": 8,
+    "pd_ratio": 5
+  },
+  "memory": {
+    "beha_dram_util": 0.7,
+    "dram_default_bitwidth": 32,
+    "sram_size": 33554432
+  },
+  "gpu": {
+    "dram_bandwidth": 512,
+    "dram_burst_size": 2048,
+    "dram_aligned": 64
+  },
+  "cores": [
+    {
+      "id": 0,
+      "exu_x": 32,
+      "sfu_x": 1024,
+      "vec_x": 128,
+      "sa_cnt": 10,
+      "vec_cnt": 32,
+      "sram_bitwidth": 4096,
+      "dram_bw": 400,
+      "dte_channel_count": 1,
+      "dte_bit_width": 128
+    }
+  ]
+}

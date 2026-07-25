@@ -1,3 +1,4 @@
+#include <cmath>
 #include <regex>
 
 #include "common/config.h"
@@ -79,6 +80,68 @@ void ParseHardwareConfig(json j) {
             HW_NOC_PAYLOAD_PER_CYCLE = conf_noc["noc_payload_per_cycle"];
     }
 
+    if (j.contains("dte")) {
+        auto conf_dte = j["dte"];
+        if (conf_dte.contains("gamma_ns"))
+            HW_DTE_GAMMA_NS = conf_dte["gamma_ns"];
+        if (conf_dte.contains("tau_launch_avg_ns"))
+            HW_DTE_TAU_LAUNCH_NS = conf_dte["tau_launch_avg_ns"];
+        if (conf_dte.contains("command_slots_per_channel"))
+            HW_DTE_COMMAND_SLOTS_PER_CHANNEL =
+                conf_dte["command_slots_per_channel"];
+        if (conf_dte.contains("pending_queue_depth"))
+            HW_DTE_PENDING_QUEUE_DEPTH = conf_dte["pending_queue_depth"];
+        if (conf_dte.contains("spm_read_width_bits"))
+            HW_DTE_SPM_READ_WIDTH_BITS = conf_dte["spm_read_width_bits"];
+        if (conf_dte.contains("spm_write_width_bits"))
+            HW_DTE_SPM_WRITE_WIDTH_BITS = conf_dte["spm_write_width_bits"];
+        if (conf_dte.contains("axi_read_width_bits"))
+            HW_DTE_AXI_READ_WIDTH_BITS = conf_dte["axi_read_width_bits"];
+        if (conf_dte.contains("axi_write_width_bits"))
+            HW_DTE_AXI_WRITE_WIDTH_BITS = conf_dte["axi_write_width_bits"];
+        if (conf_dte.contains("launch_energy_pj"))
+            HW_DTE_LAUNCH_ENERGY_PJ = conf_dte["launch_energy_pj"];
+        if (conf_dte.contains("spm_energy_pj_per_bit"))
+            HW_DTE_SPM_ENERGY_PJ_PER_BIT =
+                conf_dte["spm_energy_pj_per_bit"];
+        if (conf_dte.contains("axi_energy_pj_per_bit"))
+            HW_DTE_AXI_ENERGY_PJ_PER_BIT =
+                conf_dte["axi_energy_pj_per_bit"];
+        if (conf_dte.contains("base_area_um2"))
+            HW_DTE_BASE_AREA_UM2 = conf_dte["base_area_um2"];
+        if (conf_dte.contains("channel_area_um2"))
+            HW_DTE_CHANNEL_AREA_UM2 = conf_dte["channel_area_um2"];
+        if (conf_dte.contains("command_slot_area_um2"))
+            HW_DTE_COMMAND_SLOT_AREA_UM2 =
+                conf_dte["command_slot_area_um2"];
+        if (conf_dte.contains("port_bit_area_um2"))
+            HW_DTE_PORT_BIT_AREA_UM2 = conf_dte["port_bit_area_um2"];
+    }
+    if (HW_DTE_GAMMA_NS < 0)
+        throw std::invalid_argument("dte.gamma_ns must be >= 0");
+    if (HW_DTE_TAU_LAUNCH_NS < 0)
+        throw std::invalid_argument("dte.tau_launch_avg_ns must be >= 0");
+    if (HW_DTE_COMMAND_SLOTS_PER_CHANNEL <= 0)
+        throw std::invalid_argument(
+            "dte.command_slots_per_channel must be > 0");
+    if (HW_DTE_PENDING_QUEUE_DEPTH < 0)
+        throw std::invalid_argument("dte.pending_queue_depth must be >= 0");
+    if (HW_DTE_SPM_READ_WIDTH_BITS <= 0 ||
+        HW_DTE_SPM_WRITE_WIDTH_BITS <= 0 ||
+        HW_DTE_AXI_READ_WIDTH_BITS <= 0 ||
+        HW_DTE_AXI_WRITE_WIDTH_BITS <= 0)
+        throw std::invalid_argument(
+            "dte SPM/AXI port widths must all be > 0");
+    const double dte_nonnegative[] = {
+        HW_DTE_LAUNCH_ENERGY_PJ, HW_DTE_SPM_ENERGY_PJ_PER_BIT,
+        HW_DTE_AXI_ENERGY_PJ_PER_BIT, HW_DTE_BASE_AREA_UM2,
+        HW_DTE_CHANNEL_AREA_UM2, HW_DTE_COMMAND_SLOT_AREA_UM2,
+        HW_DTE_PORT_BIT_AREA_UM2};
+    for (double value : dte_nonnegative)
+        if (!std::isfinite(value) || value < 0.0)
+            throw std::invalid_argument(
+                "dte energy/area coefficients must be finite and >= 0");
+
     if (j.contains("operand")) {
         auto conf_operand = j["operand"];
         if (conf_operand.contains("core_credit"))
@@ -124,7 +187,9 @@ void ParseHardwareConfig(json j) {
                 new VectorConfig(sample.vec->x_dims, sample.vec->count);
             g_core_hw_config.push_back(make_pair(
                 i, new CoreHWConfig(i, exu, sfu, vec, sample.dram_config,
-                                    sample.dram_bw, sample.sram_bitwidth)));
+                                    sample.dram_bw, sample.sram_bitwidth,
+                                    sample.dte_channel_count,
+                                    sample.dte_bit_width)));
         }
 
         ExuConfig *exu = new ExuConfig(MAC_Array, c.exu->x_dims, c.exu->count);
@@ -132,7 +197,9 @@ void ParseHardwareConfig(json j) {
         VectorConfig *vec = new VectorConfig(c.vec->x_dims, c.vec->count);
         g_core_hw_config.push_back(
             make_pair(c.id, new CoreHWConfig(c.id, exu, sfu, vec, c.dram_config,
-                                             c.dram_bw, c.sram_bitwidth)));
+                                             c.dram_bw, c.sram_bitwidth,
+                                             c.dte_channel_count,
+                                             c.dte_bit_width)));
 
         delete sample.exu;
         delete sample.sfu;
@@ -151,7 +218,9 @@ void ParseHardwareConfig(json j) {
             new VectorConfig(sample.vec->x_dims, sample.vec->count);
         g_core_hw_config.push_back(make_pair(
             i, new CoreHWConfig(i, exu, sfu, vec, sample.dram_config,
-                                sample.dram_bw, sample.sram_bitwidth)));
+                                sample.dram_bw, sample.sram_bitwidth,
+                                sample.dte_channel_count,
+                                sample.dte_bit_width)));
     }
 
     for (auto core : g_core_hw_config)
@@ -203,6 +272,84 @@ void ParseSimulationConfig(json j) {
         if (conf_noc.contains("send_recv_parallel"))
             SPEC_SEND_RECV_PARALLEL = conf_noc["send_recv_parallel"];
     }
+
+    if (j.contains("dte")) {
+        auto conf_dte = j["dte"];
+        if (conf_dte.contains("use_beha_dte"))
+            SPEC_USE_BEHA_DTE = conf_dte["use_beha_dte"];
+        if (conf_dte.contains("streaming"))
+            SPEC_DTE_STREAMING = conf_dte["streaming"];
+        if (conf_dte.contains("async"))
+            SPEC_DTE_ASYNC = conf_dte["async"];
+        if (conf_dte.contains("aggregation"))
+            SPEC_DTE_AGGREGATION = conf_dte["aggregation"];
+        if (conf_dte.contains("fine_grained_resources"))
+            SPEC_DTE_V4_RESOURCES = conf_dte["fine_grained_resources"];
+        if (conf_dte.contains("aggregation_max_descriptors"))
+            DTE_AGGREGATION_MAX_DESCRIPTORS =
+                conf_dte["aggregation_max_descriptors"];
+        if (conf_dte.contains("aggregation_max_bytes"))
+            DTE_AGGREGATION_MAX_BYTES =
+                conf_dte["aggregation_max_bytes"];
+        if (conf_dte.contains("aggregation_timeout_ns"))
+            DTE_AGGREGATION_TIMEOUT_NS =
+                conf_dte["aggregation_timeout_ns"];
+        if (conf_dte.contains("aggregation_address_block_bytes"))
+            DTE_AGGREGATION_ADDRESS_BLOCK_BYTES =
+                conf_dte["aggregation_address_block_bytes"];
+    }
+    if (SPEC_DTE_STREAMING && !SPEC_USE_BEHA_DTE)
+        throw std::invalid_argument(
+            "dte.streaming requires dte.use_beha_dte=true");
+    if (SPEC_DTE_STREAMING && SYSTEM_MODE != SIM_DATAFLOW)
+        throw std::invalid_argument(
+            "DTE V2b streaming is supported only for dataflow workloads");
+    if (SPEC_DTE_STREAMING && SPEC_SEND_RECV_PARALLEL)
+        throw std::invalid_argument(
+            "DTE V2b streaming does not yet support the parallel dispatcher");
+    if (SPEC_DTE_ASYNC && !SPEC_USE_BEHA_DTE)
+        throw std::invalid_argument(
+            "dte.async requires dte.use_beha_dte=true");
+    if (SPEC_DTE_ASYNC && SYSTEM_MODE != SIM_DATAFLOW)
+        throw std::invalid_argument(
+            "DTE V3a async mode is supported only for dataflow workloads");
+    if (SPEC_DTE_ASYNC && SPEC_DTE_STREAMING)
+        throw std::invalid_argument(
+            "DTE V3a async mode and V2b streaming are mutually exclusive");
+    if (SPEC_DTE_ASYNC && SPEC_SEND_RECV_PARALLEL)
+        throw std::invalid_argument(
+            "DTE V3a async mode requires the sequential dispatcher");
+    if (SPEC_DTE_V4_RESOURCES && !SPEC_DTE_ASYNC)
+        throw std::invalid_argument(
+            "DTE V4 fine_grained_resources requires dte.async=true");
+    if (SPEC_DTE_V4_RESOURCES &&
+        HW_DTE_COMMAND_SLOTS_PER_CHANNEL != 2)
+        throw std::invalid_argument(
+            "DTE V4 requires hardware command_slots_per_channel=2");
+    if (SPEC_DTE_V4_RESOURCES && HW_DTE_PENDING_QUEUE_DEPTH <= 0)
+        throw std::invalid_argument(
+            "DTE V4 requires hardware pending_queue_depth > 0");
+    if (SPEC_DTE_AGGREGATION && !SPEC_DTE_ASYNC)
+        throw std::invalid_argument(
+            "DTE V3b aggregation requires dte.async=true");
+    if (SPEC_DTE_AGGREGATION &&
+        DTE_AGGREGATION_MAX_DESCRIPTORS < 2)
+        throw std::invalid_argument(
+            "DTE V3b aggregation_max_descriptors must be >= 2");
+    if (SPEC_DTE_AGGREGATION && DTE_AGGREGATION_MAX_BYTES <= 0)
+        throw std::invalid_argument(
+            "DTE V3b aggregation_max_bytes must be > 0");
+    if (SPEC_DTE_AGGREGATION && DTE_AGGREGATION_TIMEOUT_NS <= 0)
+        throw std::invalid_argument(
+            "DTE V3b aggregation_timeout_ns must be > 0");
+    if (SPEC_DTE_AGGREGATION &&
+        DTE_AGGREGATION_ADDRESS_BLOCK_BYTES <= 0)
+        throw std::invalid_argument(
+            "DTE V3b aggregation_address_block_bytes must be > 0");
+    if (SPEC_USE_BEHA_DTE && SPEC_SEND_RECV_PARALLEL &&
+        SYSTEM_MODE != SIM_DATAFLOW)
+        throw std::invalid_argument(
+            "DTE V2a parallel mode is supported only for dataflow workloads");
 
     if (j.contains("gpu")) {
         auto conf_gpu = j["gpu"];

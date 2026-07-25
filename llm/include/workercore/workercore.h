@@ -6,6 +6,8 @@
 #include "common/pd.h"
 #include "common/system.h"
 #include "defs/const.h"
+#include "dte/dte_async.h"
+#include "dte/dte_unit.h"
 #include "link/nb_global_memif_v2.h"
 #include "macros/macros.h"
 #include "memory/dram/Dcache.h"
@@ -15,7 +17,16 @@
 #include "memory/sram_writer.h"
 #include "trace/Event_engine.h"
 #include "unit_module/sram_manager/sram_manager.h"
+#include <cstdint>
+#include <deque>
+#include <map>
 #include <memory>
+
+struct DteFlowPayloadRound {
+    uint64_t payload_bits = 0;
+    uint8_t subflow_mask = 0;
+    int stripe_count = 1;
+};
 
 class WorkerCoreExecutor;
 
@@ -137,6 +148,12 @@ public:
     /* ------------------------------------------------- */
 
     Event_engine *event_engine;
+    std::unique_ptr<DTEUnit> dte;
+    std::unique_ptr<DteAsyncTracker> dte_async;
+    // REQUEST 可能跨迭代提前到达；每个 (source, tag) 按逻辑轮次排队，
+    // 每轮用 subflow_mask 聚合 stripe 声明，RECV_DATA 每次只消费队首一轮。
+    std::map<std::pair<int, int>, std::deque<DteFlowPayloadRound>>
+        dte_flow_payload_rounds;
 
     NB_GlobalMemIF *nb_global_mem_socket;
 
@@ -196,6 +213,7 @@ public:
     void recv_logic();
     void task_logic();
     void req_logic();
+    void execute_dte_async(Dte_async_prim *prim);
 
     void send_helper(); // 同时在send和recv中被调用
     void call_systolic_array();

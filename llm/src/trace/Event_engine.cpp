@@ -17,7 +17,9 @@ void Event_engine::dump_periodically() {
 void Event_engine::engine_run() {
     while (1) {
         wait();
-        if (Trace_event_queue_clock_engine.trace_event_queue.size() != 0) {
+        // 多个 producer 可在同一 delta cycle 内连续 add_event；sc_event 的
+        // SC_ZERO_TIME notify 会合并，因此一次唤醒必须排空队列，不能只 pop 一个。
+        while (!Trace_event_queue_clock_engine.trace_event_queue.empty()) {
             Trace_event e_temp =
                 Trace_event_queue_clock_engine.trace_event_queue.front();
             e_temp.record_time(sc_time_stamp());

@@ -60,7 +60,26 @@ sc_bv<256> SerializeMsg(Msg msg) {
     serialized_msg.range(pos + M_D_CONF_END - 1, pos) =
         flow_msg ? ((msg.subflow_ >> 1) & 1) : msg.config_end_;
     pos += M_D_CONF_END;
-    serialized_msg.range(pos + M_D_DATA - 1, pos) = msg.data_;
+    sc_bv<M_D_DATA> wire_data = msg.data_;
+    if (msg.msg_type_ == MSG_TYPE::REQUEST)
+        wire_data.range(127, 64) = sc_bv<64>(msg.dte_payload_bits_);
+    if (msg.msg_type_ == MSG_TYPE::DATA &&
+        (msg.dte_stream_source_first_ns_ != 0 ||
+         msg.dte_stream_source_done_ns_ != 0 ||
+         msg.dte_stream_network_tail_cycles_ != 0)) {
+        constexpr uint64_t kMaxStreamingNanosecond = (uint64_t(1) << 48) - 1;
+        if (msg.dte_stream_source_first_ns_ > kMaxStreamingNanosecond ||
+            msg.dte_stream_source_done_ns_ > kMaxStreamingNanosecond)
+            throw std::runtime_error(
+                "DTE V2b streaming nanosecond timestamp exceeds 48-bit wire capacity");
+        wire_data.range(47, 0) =
+            sc_bv<48>(msg.dte_stream_source_first_ns_);
+        wire_data.range(95, 48) =
+            sc_bv<48>(msg.dte_stream_source_done_ns_);
+        wire_data.range(127, 96) =
+            sc_bv<32>(msg.dte_stream_network_tail_cycles_);
+    }
+    serialized_msg.range(pos + M_D_DATA - 1, pos) = wire_data;
     pos += M_D_DATA;
     // 编码：0=未 pin（exit_port_<0），合法端口=port_id+1。
     serialized_msg.range(pos + M_D_EXIT_PORT - 1, pos) =
@@ -109,6 +128,16 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
         msg.config_end_ = false;
     }
     msg.data_ = buffer.range(pos + M_D_DATA - 1, pos);
+    if (msg.msg_type_ == MSG_TYPE::REQUEST)
+        msg.dte_payload_bits_ = msg.data_.range(127, 64).to_uint64();
+    if (msg.msg_type_ == MSG_TYPE::DATA) {
+        msg.dte_stream_source_first_ns_ =
+            msg.data_.range(47, 0).to_uint64();
+        msg.dte_stream_source_done_ns_ =
+            msg.data_.range(95, 48).to_uint64();
+        msg.dte_stream_network_tail_cycles_ =
+            static_cast<uint32_t>(msg.data_.range(127, 96).to_uint64());
+    }
     pos += M_D_DATA;
     // exit_port_ 解码：0=未 pin(-1)，否则 port_id = enc-1。
     {
@@ -120,7 +149,8 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
 }
 
 void CalculatePacketNum(int output_size, int weight, int data_byte,
-                        int &packet_num, int &end_length) {
+                        int &packet_num, int &end_length, int &packet_scale,
+                        int &packets_in_last_group) {
     int slice_size = (output_size % weight) ? (output_size / weight + 1)
                                             : (output_size / weight);
 
@@ -130,9 +160,16 @@ void CalculatePacketNum(int output_size, int weight, int data_byte,
                      : (slice_size_in_bit / M_D_DATA);
     end_length = slice_size_in_bit - (packet_num - 1) * M_D_DATA;
 
-    packet_num = packet_num % HW_NOC_PAYLOAD_PER_CYCLE
-                     ? packet_num / HW_NOC_PAYLOAD_PER_CYCLE + 1
-                     : packet_num / HW_NOC_PAYLOAD_PER_CYCLE;
+    if (HW_NOC_PAYLOAD_PER_CYCLE <= 0 ||
+        HW_NOC_PAYLOAD_PER_CYCLE > 255)
+        throw std::runtime_error(
+            "HW_NOC_PAYLOAD_PER_CYCLE must be in [1,255] for Send_prim encoding");
+    const int raw_packet_num = packet_num;
+    packet_scale = HW_NOC_PAYLOAD_PER_CYCLE;
+    packets_in_last_group =
+        raw_packet_num % packet_scale ? raw_packet_num % packet_scale
+                                      : packet_scale;
+    packet_num = (raw_packet_num + packet_scale - 1) / packet_scale;
 }
 
 bool IsBlockableMsgType(MSG_TYPE type) {

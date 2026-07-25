@@ -473,9 +473,11 @@ int RunD2DV0SelfTest() {
         m.refill_ = true;             // REQUEST 中由 V5 subflow tagged-union 覆盖
         m.config_end_ = true;
         m.flow_packets_ = 7;          // REQUEST tagged-union 24-bit flow count
+        m.dte_payload_bits_ = 0x123456789ABCDEF0ULL;
         m.subflow_ = 3;               // V5 2-bit subflow tagged-union
         m.exit_port_ = 42;            // 16-bit（V1-c0 pinned 出口端口）
         m.data_ = sc_bv<128>(0xABCD);
+        m.data_.range(127, 64) = sc_bv<64>(m.dte_payload_bits_);
         Msg r = DeserializeMsg(SerializeMsg(m));
         // 逐字段全比较（含 refill_/config_end_）
         check(r.is_end_ == m.is_end_, "round-trip: is_end_");
@@ -489,6 +491,8 @@ int RunD2DV0SelfTest() {
         check(r.subflow_ == 3 && !r.refill_ && !r.config_end_, "round-trip: V5 flow subflow tagged union");
         check(r.flow_packets_ == m.flow_packets_,
               "round-trip: REQUEST flow_packets_ tagged union");
+        check(r.dte_payload_bits_ == m.dte_payload_bits_,
+              "round-trip: REQUEST DTE payload bits tagged in data upper half");
         check(r.exit_port_ == m.exit_port_, "round-trip: exit_port_ (42)");
         check(r.data_ == m.data_, "round-trip: data_");
         // exit_port_ 编码边界（0=未 pin，port=port_id+1）：-1/0/254/255 均正确 round-trip

@@ -1,6 +1,7 @@
 #include "die/d2d_link.h"
 #include "die/behavioral.h"
 #include "die/port.h"
+#include "defs/spec.h"
 #include "monitor/watchdog.h"
 #include "utils/msg_utils.h"
 #include <stdexcept>
@@ -238,7 +239,24 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
             D2DBehavioralEstimate estimate = EstimateD2DBehavioralStriped(
                 m.source_, m.des_, m.tag_id_, meta.packets, meta.stripes,
                 behavioral.port_rate, behavioral.link_rate, latency);
-            delay += estimate.bulk_service_cycles;
+            if (SPEC_DTE_STREAMING) {
+                if (estimate.bulk_service_cycles <
+                    estimate.first_packet_service_cycles)
+                    throw std::logic_error(
+                        "behavioral D2D first service exceeds bulk service");
+                const uint64_t tail_cycles = static_cast<uint64_t>(
+                    estimate.bulk_service_cycles -
+                    estimate.first_packet_service_cycles);
+                if (tail_cycles > std::numeric_limits<uint32_t>::max())
+                    throw std::overflow_error(
+                        "DTE V2b behavioral D2D tail exceeds 32-bit wire capacity");
+                m.dte_stream_network_tail_cycles_ =
+                    static_cast<uint32_t>(tail_cycles);
+                payload = SerializeMsg(m);
+                delay += estimate.first_packet_service_cycles;
+            } else {
+                delay += estimate.bulk_service_cycles;
+            }
             g_d2d_behavioral_stats.data_flows++;
             g_d2d_behavioral_stats.logical_data_packets += meta.packets;
             g_d2d_behavioral_stats.service_cycles +=
