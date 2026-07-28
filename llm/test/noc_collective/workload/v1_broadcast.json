@@ -1,0 +1,22 @@
+{
+  "vars": {"B": 1, "T": 1},
+  "pipeline": 1,
+  "source": [],
+  "chips": [{
+    "chip_id": 0,
+    "cores": [
+      {"id": 0, "loop": 1, "worklist": []},
+      {"id": 1, "loop": 1, "worklist": []}
+    ],
+    "collectives": [{
+      "op": "broadcast",
+      "collective_id": 101,
+      "group": [0, 1],
+      "root": 0,
+      "count": 1,
+      "chunk_bits": 1024,
+      "stride_bits": 1024,
+      "terminal": true
+    }]
+  }]
+}

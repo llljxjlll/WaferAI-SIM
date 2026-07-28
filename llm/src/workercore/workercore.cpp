@@ -1,5 +1,6 @@
 #include "common/system.h"
 #include "systemc.h"
+#include <algorithm>
 #include <deque>
 #include <iostream>
 #include <memory>
@@ -9,6 +10,9 @@
 
 #include "defs/const.h"
 #include "defs/global.h"
+#include "dte/coll_latency.h"
+#include "dte/coll_multicast.h"
+#include "dte/coll_innetwork_reduce.h"
 #include "link/nb_global_memif_v2.h"
 #include "memory/dram/GPUNB_DcacheIF.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
@@ -317,7 +321,32 @@ void WorkerCoreExecutor::worker_core_execute() {
         // switch_prim_block 收到 ev_block 触发 ev_block 在 send_logic 和
         // recv_logic 中触发
 
-        if (typeid(*p) == typeid(Dte_async_prim)) {
+        if (typeid(*p) == typeid(Collective_data_prim)) {
+            auto *collective = static_cast<Collective_data_prim *>(p);
+            event_engine->add_event("Core " + ToHexString(cid),
+                                    "Collective_data_prim", "B",
+                                    Trace_event_util("router collective data"));
+            execute_collective_data(collective);
+            event_engine->add_event("Core " + ToHexString(cid),
+                                    "Collective_data_prim", "E",
+                                    Trace_event_util("router collective data"));
+        } else if (typeid(*p) == typeid(Collective_prim)) {
+            auto *collective = static_cast<Collective_prim *>(p);
+            const bool gather_arrival = collective->marker_kind ==
+                Collective_prim::MarkerKind::GATHER_ARRIVAL;
+            const bool reduce_arrival = collective->marker_kind ==
+                Collective_prim::MarkerKind::REDUCE_ARRIVAL;
+            const char *collective_event = gather_arrival ? "Gather reorder" :
+                (reduce_arrival ? "Reduce RX" : "Collective barrier");
+            event_engine->add_event("Core " + ToHexString(cid),
+                                    "Collective_prim", "B",
+                                    Trace_event_util(collective_event));
+            TaskCoreContext context = generate_context(this);
+            collective->taskCoreDefault(context);
+            event_engine->add_event("Core " + ToHexString(cid),
+                                    "Collective_prim", "E",
+                                    Trace_event_util(collective_event));
+        } else if (typeid(*p) == typeid(Dte_async_prim)) {
             auto *async_prim = static_cast<Dte_async_prim *>(p);
             const std::string op = DteAsyncOpName(async_prim->op);
             event_engine->add_event(
@@ -413,6 +442,13 @@ void WorkerCoreExecutor::worker_core_execute() {
         // 将原语重新填充到队列中
         if (prim_refill) {
             bool flag = false;
+            if (typeid(*p) == typeid(Collective_data_prim) ||
+                typeid(*p) == typeid(Collective_prim) ||
+                typeid(*p) == typeid(Reduce_compute_prim))
+                flag = true;
+            if (typeid(*p) == typeid(Send_prim) &&
+                static_cast<Send_prim *>(p)->type == SEND_DONE)
+                flag = true;
             if (typeid(*p) == typeid(Recv_prim)) {
                 Recv_prim *rp = (Recv_prim *)p;
                 if (rp->type == RECV_CONF || rp->type == RECV_WEIGHT) {
@@ -430,6 +466,125 @@ void WorkerCoreExecutor::worker_core_execute() {
         prim_queue.pop_front();
         wait(CYCLE, SC_NS);
     }
+}
+
+void WorkerCoreExecutor::execute_collective_data(Collective_data_prim *prim) {
+    if (prim == nullptr || prim->tree_id == 0)
+        throw std::invalid_argument("invalid collective data primitive");
+    auto send_raw = [&](const sc_bv<256> &wire) {
+        while (!atomic_helper_lock(sc_time_stamp(), 3) ||
+               !channel_avail_i.read())
+            wait(CYCLE, SC_NS);
+        collective_send_buffer = wire;
+        collective_send_pending = true;
+        ev_send_helper.notify(SC_ZERO_TIME);
+        wait(CYCLE, SC_NS);
+        collective_send_pending = false;
+        send_helper_write = 0;
+        ev_send_helper.notify(SC_ZERO_TIME);
+        wait(CYCLE, SC_NS);
+    };
+    if (prim->mode == Collective_data_prim::Mode::REDUCE_TX) {
+        const uint64_t width = CollDTypeBits(prim->descriptor.dtype);
+        const uint64_t per_chunk = 128 / width;
+        const uint64_t chunks = CollCeilDiv(prim->descriptor.count, per_chunk);
+        for (uint64_t chunk = 0; chunk < chunks; ++chunk) {
+            CollReduceOperand operand;
+            operand.tree_id = prim->tree_id;
+            operand.collective = prim->descriptor.key;
+            operand.phase_id = 0; operand.chunk_id = chunk;
+            operand.child_id = CENTER; operand.dtype = prim->descriptor.dtype;
+            operand.op = prim->descriptor.reduce_op;
+            operand.valid_elements = static_cast<uint16_t>(std::min<uint64_t>(
+                per_chunk, prim->descriptor.count - chunk * per_chunk));
+            for (uint16_t e = 0; e < operand.valid_elements; ++e)
+                operand.payload.range((e + 1) * width - 1, e * width) =
+                    static_cast<uint64_t>(prim->descriptor.self_rank + 1);
+            const auto wire = SerializeCollReduceOperand(operand);
+            send_raw(wire[0]); send_raw(wire[1]);
+        }
+        std::cout << "[COLL_V5_TX] tree=" << prim->tree_id
+                  << " rank=" << prim->descriptor.self_rank
+                  << " chunks=" << chunks << std::endl;
+        return;
+    }
+    if (prim->mode == Collective_data_prim::Mode::REDUCE_RX) {
+        const uint64_t width = CollDTypeBits(prim->descriptor.dtype);
+        const uint64_t chunks = CollCeilDiv(prim->descriptor.count, 128 / width);
+        for (uint64_t chunk = 0; chunk < chunks; ++chunk) {
+            while (collective_reduce_buffer.size() < 2)
+                wait(ev_collective_data);
+            std::vector<sc_bv<256>> wire{
+                collective_reduce_buffer.front()};
+            collective_reduce_buffer.pop();
+            wire.push_back(collective_reduce_buffer.front());
+            collective_reduce_buffer.pop();
+            const auto result = DeserializeCollReduceOperand(wire);
+            if (result.tree_id != prim->tree_id ||
+                !(result.collective == prim->descriptor.key) ||
+                result.chunk_id != chunk)
+                throw std::runtime_error("root reduce result identity mismatch");
+            const uint64_t expected = prim->descriptor.reduce_op ==
+                    CollReduceOp::SUM
+                ? uint64_t(prim->descriptor.group.size()) *
+                      (prim->descriptor.group.size() + 1) / 2
+                : uint64_t(prim->descriptor.group.size());
+            const uint64_t mask = width == 64 ? UINT64_MAX
+                                               : (uint64_t(1) << width) - 1;
+            for (uint16_t e = 0; e < result.valid_elements; ++e)
+                if (result.payload.range((e + 1) * width - 1,
+                                         e * width).to_uint64() !=
+                    (expected & mask))
+                    throw std::runtime_error(
+                        "root reduce result value mismatch");
+            ev_msg_process_end.notify(SC_ZERO_TIME);
+        }
+        std::cout << "[COLL_V5_RESULT] tree=" << prim->tree_id
+                  << " chunks=" << chunks << " value=verified" << std::endl;
+        return;
+    }
+    const uint64_t packets = CollCeilDiv(prim->descriptor.chunk_bits, 128);
+    if (packets == 0 || packets > 0xffffffu)
+        throw std::overflow_error("collective data packet count exceeds wire");
+    if (prim->mode == Collective_data_prim::Mode::BROADCAST_TX) {
+        for (uint64_t seq = 1; seq <= packets; ++seq) {
+            CollDataHeader h;
+            h.tree_id = prim->tree_id;
+            h.packet.collective = prim->descriptor.key;
+            h.packet.phase_id = 0;
+            h.packet.chunk_id = 0;
+            h.packet.src_rank = prim->descriptor.root_rank;
+            h.packet.dst_rank = 0xffffu;
+            h.seq_id = static_cast<uint32_t>(seq);
+            const uint64_t remaining =
+                prim->descriptor.chunk_bits - (seq - 1) * 128;
+            h.length_bits = static_cast<uint8_t>(
+                std::min<uint64_t>(128, remaining));
+            h.is_end = seq == packets;
+            send_raw(SerializeCollData(h));
+        }
+        std::cout << "[COLL_V4_TX] tree=" << prim->tree_id
+                  << " packets=" << packets << std::endl;
+        return;
+    }
+    uint64_t expected_seq = 1;
+    while (expected_seq <= packets) {
+        while (collective_data_buffer.empty()) wait(ev_collective_data);
+        const auto h = DeserializeCollData(collective_data_buffer.front());
+        if (h.tree_id != prim->tree_id ||
+            !(h.packet.collective == prim->descriptor.key) ||
+            h.seq_id != expected_seq)
+            throw std::runtime_error(
+                "collective RX packet identity/order mismatch");
+        collective_data_buffer.pop();
+        ev_msg_process_end.notify(SC_ZERO_TIME);
+        if (h.is_end != (expected_seq == packets))
+            throw std::runtime_error("collective RX tail mismatch");
+        ++expected_seq;
+    }
+    std::cout << "[COLL_V4_RX] tree=" << prim->tree_id
+              << " rank=" << prim->descriptor.self_rank
+              << " packets=" << packets << std::endl;
 }
 
 void WorkerCoreExecutor::switch_prim_block() {
@@ -456,10 +611,20 @@ PrimBase *WorkerCoreExecutor::parse_prim(vector<sc_bv<128>> segments) {
 // 数据信道接收
 void WorkerCoreExecutor::poll_buffer_i() {
     MSG_TYPE block_mark = MSG_TYPE::MSG_TYPE_NUM;
+    bool collective_blocked = false;
 
     while (true) {
         if (!data_sent_i.read()) {
-            if (block_mark < MSG_TYPE::MSG_TYPE_NUM) {
+            if (collective_blocked) {
+                if (collective_data_buffer.size() < MAX_BUFFER_PACKET_SIZE &&
+                    collective_reduce_buffer.size() < MAX_BUFFER_PACKET_SIZE) {
+                    collective_blocked = false;
+                    core_busy_o.write(false);
+                    continue;
+                }
+                wait(ev_msg_process_end);
+                continue;
+            } else if (block_mark < MSG_TYPE::MSG_TYPE_NUM) {
                 if (msg_buffer_[block_mark].size() < MAX_BUFFER_PACKET_SIZE) {
                     block_mark = MSG_TYPE::MSG_TYPE_NUM;
                     core_busy_o.write(false);
@@ -473,7 +638,30 @@ void WorkerCoreExecutor::poll_buffer_i() {
             }
         }
 
-        Msg m = DeserializeMsg(channel_i.read());
+        const sc_bv<256> wire = channel_i.read();
+        if (IsCollDataWire(wire)) {
+            (void)DeserializeCollData(wire);
+            collective_data_buffer.push(wire);
+            ev_collective_data.notify(SC_ZERO_TIME);
+            core_busy_o.write(collective_data_buffer.size() >=
+                              MAX_BUFFER_PACKET_SIZE);
+            collective_blocked = collective_data_buffer.size() >=
+                                 MAX_BUFFER_PACKET_SIZE;
+            wait(CYCLE, SC_NS);
+            continue;
+        }
+        if (IsCollReduceHeaderWire(wire) ||
+            IsCollReducePayloadWire(wire)) {
+            collective_reduce_buffer.push(wire);
+            ev_collective_data.notify(SC_ZERO_TIME);
+            core_busy_o.write(collective_reduce_buffer.size() >=
+                              MAX_BUFFER_PACKET_SIZE);
+            collective_blocked = collective_reduce_buffer.size() >=
+                                 MAX_BUFFER_PACKET_SIZE;
+            wait(CYCLE, SC_NS);
+            continue;
+        }
+        Msg m = DeserializeMsg(wire);
         msg_buffer_[m.msg_type_].push(m);
         ev_recv_msg_type_[m.msg_type_].notify(0, SC_NS);
 
@@ -656,9 +844,11 @@ void WorkerCoreExecutor::send_helper() {
                                      : (send_helper_write >= 2);
 
         if (flag) {
-            auto ser = SerializeMsg(send_buffer);
+            auto ser = collective_send_pending
+                           ? collective_send_buffer
+                           : SerializeMsg(send_buffer);
             // 根据消息类型选择信道
-            if (send_buffer.IsControlMsg()) {
+            if (!collective_send_pending && send_buffer.IsControlMsg()) {
                 // 控制消息走控制信道
                 ctrl_channel_o.write(ser);
                 ctrl_sent_o.write(true);

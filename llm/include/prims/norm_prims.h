@@ -4,6 +4,7 @@
 #include "common/memory.h"
 #include "common/pd.h"
 #include "dte/dte_async_types.h"
+#include "dte/coll_types.h"
 #include "prims/base.h"
 
 class Clear_sram : public PrimBase {
@@ -54,6 +55,56 @@ public:
 
     Dte_async_prim() { name = "Dte_async"; }
 };
+
+class Collective_prim : public PrimBase {
+public:
+    enum class MarkerKind : uint8_t {
+        BARRIER = 0, GATHER_ARRIVAL = 1, REDUCE_ARRIVAL = 2
+    };
+    CollDescriptor descriptor;
+    uint16_t phase_id = 0;
+    MarkerKind marker_kind = MarkerKind::BARRIER;
+    uint16_t release_tree_id = 0;
+
+    int taskCoreDefault(TaskCoreContext &context);
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> segments);
+    void parseJson(json j);
+    void printSelf();
+
+    Collective_prim() { name = "Collective_prim"; }
+};
+
+class Reduce_compute_prim : public PrimBase {
+public:
+    CollDescriptor descriptor;
+
+    int taskCoreDefault(TaskCoreContext &context);
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> segments);
+    void printSelf();
+
+    Reduce_compute_prim() { name = "Reduce_compute_prim"; }
+};
+
+class Collective_data_prim : public PrimBase {
+public:
+    enum class Mode : uint8_t {
+        BROADCAST_TX = 0, BROADCAST_RX = 1,
+        REDUCE_TX = 2, REDUCE_RX = 3
+    };
+    CollDescriptor descriptor;
+    uint16_t tree_id = 0;
+    Mode mode = Mode::BROADCAST_RX;
+
+    int taskCoreDefault(TaskCoreContext &context);
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> segments);
+    void printSelf();
+
+    Collective_data_prim() { name = "Collective_data_prim"; }
+};
+
 
 class Recv_prim : public PrimBase {
 public:

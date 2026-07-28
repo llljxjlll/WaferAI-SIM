@@ -6,6 +6,8 @@
 #include "common/msg.h"
 #include "defs/const.h"
 #include "defs/global.h"
+#include "dte/coll_multicast.h"
+#include "dte/coll_innetwork_reduce.h"
 #include "macros/macros.h"
 #include "trace/Event_engine.h"
 #include "utils/memory_utils.h"
@@ -65,6 +67,21 @@ public:
     int input_lock_ref[5];
     int output_lock[5];
     int output_lock_ref[5];
+    AtomicMulticastFork collective_fork;
+    bool reduce_header_pending[DIRECTIONS] = {};
+    sc_bv<256> reduce_header_wire[DIRECTIONS];
+    CollOperandMatchBuffer reduce_match{16, 64};
+    std::map<CollReduceMatchKey, CollReduceOperand> reduce_active;
+    struct ScheduledReduce {
+        sc_time ready;
+        Directions output;
+        CollReduceOperand operand;
+    };
+    std::deque<ScheduledReduce> reduce_scheduled;
+    sc_time reduce_dca_available = SC_ZERO_TIME;
+    int collective_rr_start = 0;
+    bool collective_output_cooldown[DIRECTIONS] = {};
+    bool center_collective_armed = true;
 
     /* -----------------Host-Interface------------------ */
     // 只有位置最靠边缘的router才会注册这些端口

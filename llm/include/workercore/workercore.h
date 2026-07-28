@@ -21,6 +21,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <queue>
 
 struct DteFlowPayloadRound {
     uint64_t payload_bits = 0;
@@ -84,10 +85,15 @@ public:
     sc_event ev_systolic;
 
     Msg send_buffer; // 每一次调用write helper，从这里获取要发送的msg
+    sc_bv<256> collective_send_buffer = 0;
+    bool collective_send_pending = false;
 
     sc_event ev_recv_msg_type_
         [MSG_TYPE::MSG_TYPE_NUM]; // 使用统一数组存储接收数据包后触发的event
     queue<Msg> msg_buffer_[MSG_TYPE::MSG_TYPE_NUM]; // 使用统一数组存储数据包
+    queue<sc_bv<256>> collective_data_buffer;
+    queue<sc_bv<256>> collective_reduce_buffer;
+    sc_event ev_collective_data;
 
     sc_event ev_prim_recv_notice; // 当执行recv_data时触发
     sc_event
@@ -214,6 +220,7 @@ public:
     void task_logic();
     void req_logic();
     void execute_dte_async(Dte_async_prim *prim);
+    void execute_collective_data(Collective_data_prim *prim);
 
     void send_helper(); // 同时在send和recv中被调用
     void call_systolic_array();
@@ -223,4 +230,13 @@ public:
     PrimBase *parse_prim(vector<sc_bv<128>> buffer);
 
     void end_of_elaboration();
+
+    size_t CollectiveEndpointResidual() const {
+        return collective_data_buffer.size() +
+               collective_reduce_buffer.size() +
+               (collective_send_pending ? 1u : 0u);
+    }
+    size_t DteOutstandingCount() const {
+        return dte_async ? dte_async->OutstandingCount() : 0;
+    }
 };

@@ -1,0 +1,25 @@
+{
+  "vars": {"B": 1, "T": 4, "C": 16, "OC": 16, "BTP": 64, "matmul_data": 0},
+  "pipeline": 1,
+  "source": [{"dest": 2, "size": "BTP"}],
+  "chips": [{
+    "chip_id": 0,
+    "cores": [
+      {"id": 0, "loop": 1, "worklist": []},
+      {"id": 1, "loop": 1, "worklist": []},
+      {"id": 2, "loop": 1, "worklist": [{
+        "recv_cnt": 1,
+        "prims": [{"type": "Matmul_f", "B": "B", "T": "T", "C": "C", "OC": "OC",
+          "sram_address": {"indata": "_input_label", "outdata": "mixed_out"},
+          "dram_address": {"data": "matmul_data"}}],
+        "cast": [{"dest": 3, "tag": 3}]
+      }]},
+      {"id": 3, "loop": 1, "worklist": [{"recv_cnt": 1, "recv_tag": 3, "cast": []}]}
+    ],
+    "collectives": [{
+      "op": "broadcast", "collective_id": 501,
+      "group": [0, 1], "root": 0, "count": 1,
+      "chunk_bits": 65536, "stride_bits": 65536, "terminal": true
+    }]
+  }]
+}

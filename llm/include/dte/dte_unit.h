@@ -91,4 +91,11 @@ private:
 };
 
 int RunDTEV0SelfTest();
+int RunCollV0SelfTest();
+int RunCollV1SelfTest();
+int RunCollV2SelfTest();
+int RunCollV3SelfTest();
+int RunCollV4SelfTest();
+int RunCollV5SelfTest();
+int RunCollV6SelfTest();
 int RunDTEV4SelfTest();

@@ -271,6 +271,11 @@ void ParseSimulationConfig(json j) {
             SPEC_FAST_WARMUP = conf_noc["fast_warmup"];
         if (conf_noc.contains("send_recv_parallel"))
             SPEC_SEND_RECV_PARALLEL = conf_noc["send_recv_parallel"];
+        if (conf_noc.contains("collective")) {
+            const auto &coll = conf_noc["collective"];
+            if (coll.contains("enabled")) SPEC_NOC_COLL_ENABLED = coll["enabled"];
+            if (coll.contains("tier")) SPEC_NOC_COLL_TIER = coll["tier"];
+        }
     }
 
     if (j.contains("dte")) {
@@ -298,6 +303,13 @@ void ParseSimulationConfig(json j) {
             DTE_AGGREGATION_ADDRESS_BLOCK_BYTES =
                 conf_dte["aggregation_address_block_bytes"];
     }
+    if (SPEC_NOC_COLL_TIER < 0 || SPEC_NOC_COLL_TIER > 2)
+        throw std::invalid_argument("noc.collective.tier must be in [0,2]");
+    if (SPEC_NOC_COLL_ENABLED && !SPEC_USE_BEHA_DTE)
+        throw std::invalid_argument("NoC collective V1 requires dte.use_beha_dte=true");
+    if (SPEC_NOC_COLL_ENABLED && SPEC_SEND_RECV_PARALLEL)
+        throw std::invalid_argument("NoC collective V1 requires sequential dispatcher");
+
     if (SPEC_DTE_STREAMING && !SPEC_USE_BEHA_DTE)
         throw std::invalid_argument(
             "dte.streaming requires dte.use_beha_dte=true");

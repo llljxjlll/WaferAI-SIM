@@ -2,12 +2,18 @@
 #include <SFML/Graphics.hpp>
 #include <algorithm>
 #include <sstream>
+#include <set>
+#include <tuple>
 #include <stdexcept>
 #include <string>
 
 #include "common/system.h"
 #include "defs/spec.h"
 #include "die/port.h"
+#include "dte/coll_plan.h"
+#include "dte/coll_latency.h"
+#include "dte/coll_multicast.h"
+#include "dte/coll_innetwork_reduce.h"
 #include "monitor/config_helper_core.h"
 #include "monitor/host_envelope.h"
 #include "monitor/workload_normalize.h"
@@ -16,9 +22,255 @@
 #include "utils/display_utils.h"
 #include "utils/msg_utils.h"
 #include "utils/prim_utils.h"
+#include "utils/router_utils.h"
 #include "utils/system_utils.h"
 
 using json = nlohmann::json;
+
+namespace {
+CollOp ParseGlobalCollOp(const std::string &v) {
+    if (v == "p2p") return CollOp::P2P;
+    if (v == "scatter") return CollOp::SCATTER;
+    if (v == "gather") return CollOp::GATHER;
+    if (v == "broadcast") return CollOp::BROADCAST;
+    if (v == "alltoall") return CollOp::ALLTOALL;
+    if (v == "allgather") return CollOp::ALLGATHER;
+    if (v == "reduce") return CollOp::REDUCE;
+    if (v == "reducescatter") return CollOp::REDUCESCATTER;
+    if (v == "allreduce") return CollOp::ALLREDUCE;
+    throw std::invalid_argument("unsupported collective op: " + v);
+}
+CollDType ParseGlobalCollDType(const std::string &v) {
+    if (v == "uint8") return CollDType::UINT8;
+    if (v == "int32") return CollDType::INT32;
+    if (v == "int64") return CollDType::INT64;
+    if (v == "fp32") return CollDType::FP32;
+    throw std::invalid_argument("unsupported collective dtype: " + v);
+}
+CollReduceOp ParseGlobalReduceOp(const std::string &v) {
+    if (v == "none") return CollReduceOp::NONE;
+    if (v == "sum") return CollReduceOp::SUM;
+    if (v == "max") return CollReduceOp::MAX;
+    throw std::invalid_argument("unsupported collective reduce_op: " + v);
+}
+CollAlgorithm GlobalCollAlgorithm(CollOp op) {
+    if (op == CollOp::REDUCESCATTER)
+        return CollAlgorithm::REDUCE_ROOT_SCATTER;
+    if (op == CollOp::ALLREDUCE)
+        return CollAlgorithm::REDUCE_ROOT_BROADCAST;
+    return CollAlgorithm::DIRECT;
+}
+uint32_t StableGroupId(const std::vector<uint16_t> &group) {
+    uint32_t hash = 2166136261u;
+    for (uint16_t id : group) { hash ^= id; hash *= 16777619u; }
+    return hash;
+}
+int CollectiveFlowTag(const CollDescriptor &d, uint16_t phase, uint16_t dst_rank) {
+    uint32_t hash = 2166136261u;
+    auto mix = [&](uint32_t v) { hash ^= v; hash *= 16777619u; };
+    mix(d.key.group_id); mix(d.key.collective_id); mix(d.key.epoch);
+    mix(phase); mix(d.group[dst_rank]);
+    return static_cast<int>(COLL_TAG_BASE +
+        (hash % (uint32_t(COLL_TAG_MAX) - COLL_TAG_BASE + 1u)));
+}
+uint16_t CollectiveTreeId(const CollDescriptor &d) {
+    uint32_t hash = 2166136261u;
+    auto mix = [&](uint32_t v) { hash ^= v; hash *= 16777619u; };
+    mix(d.key.group_id); mix(d.key.collective_id); mix(d.key.epoch);
+    return static_cast<uint16_t>(1u + hash % 0xffffu);
+}
+Directions OppositeDirection(Directions d) {
+    if (d == WEST) return EAST;
+    if (d == EAST) return WEST;
+    if (d == NORTH) return SOUTH;
+    if (d == SOUTH) return NORTH;
+    throw std::invalid_argument("CENTER has no tree-link opposite");
+}
+Directions StepDirection(int from, int to) {
+    if (to == from - 1) return WEST;
+    if (to == from + 1) return EAST;
+    if (to == from - GRID_X) return SOUTH;
+    if (to == from + GRID_X) return NORTH;
+    throw std::invalid_argument("collective tree contains a non-neighbor edge");
+}
+void ProgramBroadcastTree(const CollDescriptor &d) {
+    const int root = d.group[d.root_rank];
+    for (uint16_t core : d.group)
+        if (DieOfGlobal(core) != DieOfGlobal(root))
+            throw std::invalid_argument("Tier1/Tier2 collective cannot cross dies");
+    std::map<int, int> parent;
+    std::map<int, uint8_t> outputs;
+    for (uint16_t target : d.group) {
+        if (target == root) continue;
+        int cur = root;
+        while (cur % GRID_X != target % GRID_X) {
+            int next = cur + ((target % GRID_X > cur % GRID_X) ? 1 : -1);
+            auto inserted = parent.emplace(next, cur);
+            if (!inserted.second && inserted.first->second != cur)
+                throw std::runtime_error("XY collective tree has multiple parents");
+            outputs[cur] |= 1u << StepDirection(cur, next); cur = next;
+        }
+        while (cur != target) {
+            int next = cur + (target > cur ? GRID_X : -GRID_X);
+            auto inserted = parent.emplace(next, cur);
+            if (!inserted.second && inserted.first->second != cur)
+                throw std::runtime_error("XY collective tree has multiple parents");
+            outputs[cur] |= 1u << StepDirection(cur, next); cur = next;
+        }
+        outputs[target] |= 1u << CENTER;
+    }
+    const uint16_t tree = CollectiveTreeId(d);
+    for (const auto &node : outputs) {
+        Directions ingress = CENTER;
+        if (node.first != root)
+            ingress = OppositeDirection(StepDirection(parent.at(node.first),
+                                                       node.first));
+        ProgramCollectiveTreeEntry(
+            {tree, static_cast<uint16_t>(node.first),
+             static_cast<uint8_t>(ingress)}, node.second);
+    }
+    if (CollIsReduction(d.op)) {
+        const std::set<uint16_t> members(d.group.begin(), d.group.end());
+        for (const auto &node : outputs) {
+            uint8_t expected = node.second & ~(1u << CENTER);
+            if (members.count(static_cast<uint16_t>(node.first)))
+                expected |= 1u << CENTER;
+            Directions parent_output = CENTER;
+            if (node.first != root)
+                parent_output = StepDirection(node.first,
+                                              parent.at(node.first));
+            ProgramCollectiveReduceNode(
+                tree, static_cast<uint16_t>(node.first),
+                {expected, parent_output});
+        }
+    }
+    ValidateCollectiveTree(tree, static_cast<uint16_t>(root), d.group);
+}
+void SetCollectiveFlowSize(Send_prim *prim, uint64_t bits) {
+    if (bits == 0) throw std::invalid_argument("collective flow payload must be positive");
+    const uint64_t raw = CollCeilDiv(bits, M_D_DATA);
+    const uint64_t scale = static_cast<uint64_t>(HW_NOC_PAYLOAD_PER_CYCLE);
+    if (scale == 0 || scale > 255) throw std::invalid_argument("invalid NoC payload scale");
+    const uint64_t grouped = CollCeilDiv(raw, scale);
+    if (grouped > M_D_FLOW_PACKETS_MAX) throw std::overflow_error("collective flow exceeds REQUEST wire capacity");
+    prim->max_packet = static_cast<int>(grouped);
+    prim->packet_scale = static_cast<int>(scale);
+    prim->packets_in_last_group = static_cast<int>(raw % scale ? raw % scale : scale);
+    prim->end_length = static_cast<int>(bits - (raw - 1) * M_D_DATA);
+}
+void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescriptor &d) {
+    if (SPEC_NOC_COLL_TIER == 2 && CollIsReduction(d.op)) {
+        const uint16_t tree = CollectiveTreeId(d);
+        auto *tx = new Collective_data_prim();
+        tx->descriptor = d; tx->tree_id = tree;
+        tx->mode = Collective_data_prim::Mode::REDUCE_TX;
+        prims.push_back(tx);
+        if (d.self_rank == d.root_rank) {
+            auto *rx = new Collective_data_prim();
+            rx->descriptor = d; rx->tree_id = tree;
+            rx->mode = Collective_data_prim::Mode::REDUCE_RX;
+            prims.push_back(rx);
+        }
+        auto append_barrier = [&](uint16_t phase, bool release) {
+            auto *barrier = new Collective_prim();
+            barrier->descriptor = d; barrier->phase_id = phase;
+            barrier->release_tree_id = release ? tree : 0;
+            prims.push_back(barrier);
+        };
+        append_barrier(0, d.op == CollOp::REDUCE);
+        if (d.op == CollOp::ALLREDUCE) {
+            auto *data = new Collective_data_prim();
+            data->descriptor = d; data->tree_id = tree;
+            data->mode = d.self_rank == d.root_rank
+                ? Collective_data_prim::Mode::BROADCAST_TX
+                : Collective_data_prim::Mode::BROADCAST_RX;
+            prims.push_back(data); append_barrier(1, true);
+        } else if (d.op == CollOp::REDUCESCATTER) {
+            const uint16_t n = static_cast<uint16_t>(d.group.size());
+            for (uint16_t dst = 0; dst < n; ++dst) {
+                if (dst == d.root_rank) continue;
+                const auto part = CollRankCountOffset(d.count, n, dst);
+                const uint64_t bits = part.first * CollDTypeBits(d.dtype);
+                const int tag = CollectiveFlowTag(d, 1, dst);
+                if (d.self_rank == d.root_rank) {
+                    auto *req = new Send_prim(SEND_TYPE::SEND_REQ,
+                                              d.group[dst], tag);
+                    auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+                    auto *data = new Send_prim(SEND_TYPE::SEND_DATA,
+                                               d.group[dst], tag);
+                    SetCollectiveFlowSize(req, bits);
+                    SetCollectiveFlowSize(data, bits);
+                    data->output_label = "collective_v5";
+                    prims.push_back(req); prims.push_back(ack);
+                    prims.push_back(data);
+                } else if (d.self_rank == dst) {
+                    prims.push_back(new Recv_prim(RECV_TYPE::RECV_DATA,
+                                                  tag, 1));
+                }
+            }
+            append_barrier(1, true);
+        }
+        return;
+    }
+    if (SPEC_NOC_COLL_TIER >= 1 && d.op == CollOp::BROADCAST) {
+        auto *data = new Collective_data_prim();
+        data->descriptor = d; data->tree_id = CollectiveTreeId(d);
+        data->mode = d.self_rank == d.root_rank
+            ? Collective_data_prim::Mode::BROADCAST_TX
+            : Collective_data_prim::Mode::BROADCAST_RX;
+        prims.push_back(data);
+        auto *barrier = new Collective_prim();
+        barrier->descriptor = d; barrier->phase_id = 0;
+        barrier->release_tree_id = data->tree_id;
+        prims.push_back(barrier);
+        return;
+    }
+    for (const CollAction &action : PlanTier0Collective(d, d.self_rank)) {
+        if (action.kind == CollActionKind::SEND) {
+            const int dest = d.group[action.peer_rank];
+            const int tag = CollectiveFlowTag(d, action.phase_id, action.peer_rank);
+            auto *req = new Send_prim(SEND_TYPE::SEND_REQ, dest, tag);
+            auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+            auto *data = new Send_prim(SEND_TYPE::SEND_DATA, dest, tag);
+            SetCollectiveFlowSize(req, action.payload_bits);
+            SetCollectiveFlowSize(data, action.payload_bits);
+            data->output_label = "collective_v1";
+            prims.push_back(req); prims.push_back(ack); prims.push_back(data);
+        } else if (action.kind == CollActionKind::RECV) {
+            const int tag = CollectiveFlowTag(d, action.phase_id, d.self_rank);
+            prims.push_back(new Recv_prim(RECV_TYPE::RECV_DATA, tag, 1));
+            if (d.gather_reorder_depth != 0 &&
+                (d.op == CollOp::GATHER || d.op == CollOp::ALLGATHER ||
+                 d.op == CollOp::ALLTOALL)) {
+                auto *arrival = new Collective_prim();
+                arrival->descriptor = d;
+                arrival->phase_id = action.phase_id;
+                arrival->marker_kind =
+                    Collective_prim::MarkerKind::GATHER_ARRIVAL;
+                prims.push_back(arrival);
+            }
+            if (CollIsReduction(d.op) && action.phase_id < d.group.size()) {
+                auto *arrival = new Collective_prim();
+                arrival->descriptor = d;
+                arrival->phase_id = action.phase_id;
+                arrival->marker_kind =
+                    Collective_prim::MarkerKind::REDUCE_ARRIVAL;
+                prims.push_back(arrival);
+            }
+        } else if (action.kind == CollActionKind::REDUCE_COMPUTE) {
+            auto *compute = new Reduce_compute_prim();
+            compute->descriptor = d;
+            prims.push_back(compute);
+        } else {
+            auto *barrier = new Collective_prim();
+            barrier->descriptor = d;
+            barrier->phase_id = action.phase_id;
+            prims.push_back(barrier);
+        }
+    }
+}
+}
+
 
 CoreConfig *config_helper_core::get_core(int id) {
     for (int i = 0; i < coreconfigs.size(); i++) {
@@ -222,6 +474,102 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
         }
     }
 
+    if (j["chips"][config_chip_id].contains("collectives") &&
+        !SPEC_NOC_COLL_ENABLED)
+        throw std::invalid_argument("workload collectives require noc.collective.enabled=true");
+    if (j["chips"][config_chip_id].contains("collectives")) {
+        ResetCollectiveFabric();
+        ResetCollectiveReduceFabric();
+        for (const auto &config : coreconfigs) {
+            for (const auto &work : config.worklist) {
+                if (work.recv_cnt > 0 && work.recv_tag >= COLL_TAG_BASE)
+                    throw std::invalid_argument("regular recv_tag overlaps collective-reserved tag range");
+                for (const auto &cast : work.cast)
+                    if (cast.dest >= 0 && cast.tag >= COLL_TAG_BASE)
+                        throw std::invalid_argument("regular send tag overlaps collective-reserved tag range");
+            }
+        }
+        const auto &decls = j["chips"][config_chip_id]["collectives"];
+        std::set<std::tuple<uint32_t, uint32_t, uint32_t>> collective_keys;
+        std::set<std::pair<int, int>> collective_flow_tags;
+        std::set<uint16_t> collective_tree_ids;
+        for (size_t ci = 0; ci < decls.size(); ++ci) {
+            const auto &decl = decls[ci];
+            CollDescriptor base;
+            base.op = ParseGlobalCollOp(decl.at("op").get<std::string>());
+            base.algorithm = GlobalCollAlgorithm(base.op);
+            base.dtype = ParseGlobalCollDType(
+                decl.value("dtype", std::string("uint8")));
+            base.reduce_op = ParseGlobalReduceOp(
+                decl.value("reduce_op", std::string("none")));
+            base.group = decl.at("group").get<std::vector<uint16_t>>();
+            base.key.group_id = decl.value("group_id", StableGroupId(base.group));
+            base.key.collective_id = decl.value("collective_id", static_cast<uint32_t>(ci));
+            base.key.epoch = decl.value("epoch", uint32_t(0));
+            if (!collective_keys.insert({base.key.group_id, base.key.collective_id, base.key.epoch}).second)
+                throw std::invalid_argument("duplicate collective instance key");
+            base.count = decl.value("count", uint64_t(1));
+            base.chunk_bits = decl.at("chunk_bits").get<uint64_t>();
+            base.stride_bits = decl.value("stride_bits", base.chunk_bits);
+            base.src_addr = decl.value("src_addr", uint64_t(0));
+            base.dst_addr = decl.value("dst_addr", uint64_t(0));
+            base.gather_reorder_depth = decl.value("gather_reorder_depth", uint32_t(0));
+            if (base.gather_reorder_depth != 0 &&
+                base.op != CollOp::GATHER && base.op != CollOp::ALLGATHER &&
+                base.op != CollOp::ALLTOALL)
+                throw std::invalid_argument(
+                    "gather_reorder_depth is only valid for Gather RX operations");
+            if (CollIsReduction(base.op))
+                ValidateTier0ReductionDescriptor(base);
+            const uint16_t root_core = decl.value("root", base.group.front());
+            auto root_it = std::find(base.group.begin(), base.group.end(), root_core);
+            if (root_it == base.group.end()) throw std::invalid_argument("collective root is not in group");
+            base.root_rank = static_cast<uint16_t>(root_it - base.group.begin());
+            if (SPEC_NOC_COLL_TIER >= 1) {
+                const int root_die = DieOfGlobal(root_core);
+                for (uint16_t core : base.group)
+                    if (DieOfGlobal(core) != root_die)
+                        throw std::invalid_argument(
+                            "Tier1/Tier2 collective cannot cross dies");
+            }
+            if (SPEC_NOC_COLL_TIER >= 1 &&
+                (base.op == CollOp::BROADCAST ||
+                 (SPEC_NOC_COLL_TIER == 2 && CollIsReduction(base.op)))) {
+                const uint16_t tree_id = CollectiveTreeId(base);
+                if (!collective_tree_ids.insert(tree_id).second)
+                    throw std::invalid_argument(
+                        "collective tree_id hash collision");
+                ProgramBroadcastTree(base);
+            }
+            for (uint16_t probe_rank = 0; probe_rank < base.group.size(); ++probe_rank) {
+                CollDescriptor probe = base; probe.self_rank = probe_rank;
+                ValidateCollDescriptor(probe);
+                for (const auto &action : PlanTier0Collective(probe, probe_rank)) {
+                    if (action.kind != CollActionKind::SEND) continue;
+                    const int dest = base.group[action.peer_rank];
+                    const int tag = CollectiveFlowTag(base, action.phase_id, action.peer_rank);
+                    if (!collective_flow_tags.insert({dest, tag}).second)
+                        throw std::invalid_argument("collective flow tag collision");
+                }
+            }
+            const bool terminal = decl.value("terminal", false);
+            for (uint16_t rank = 0; rank < base.group.size(); ++rank) {
+                CoreConfig *core = get_core(base.group[rank]);
+                if (!core) throw std::invalid_argument("collective group core is absent from workload");
+                if (core->loop != 1)
+                    throw std::invalid_argument("V1 collective requires core loop=1; express epochs as declarations");
+                CollDescriptor local = base;
+                local.self_rank = rank;
+                ValidateCollDescriptor(local);
+                CoreJob job;
+                job.recv_cnt = 0; job.recv_tag = core->id; job.recv_stripe = 1;
+                job.collectives.push_back(local);
+                job.collective_terminal = terminal && rank == base.root_rank;
+                core->worklist.push_back(job);
+            }
+        }
+    }
+
     end_cores = 0;
     g_recv_ack_cnt = 0;
     g_recv_done_cnt = 0;
@@ -281,8 +629,10 @@ std::vector<HostEnvelope> config_helper_core::BuildConfigMessages() {
         };
 
         // RECV_WEIGHT
+        const int recv_weight_tag = config.worklist.empty()
+            ? config.id : config.worklist.front().recv_tag;
         PrimBase *recv_weight = new Recv_prim(RECV_TYPE::RECV_WEIGHT,
-                                              config.worklist[0].recv_tag, 0);
+                                              recv_weight_tag, 0);
         push_msg(Msg(false, MSG_TYPE::CONFIG, 0, config.id,
                      recv_weight->serialize()[0]));
 
@@ -308,9 +658,16 @@ std::vector<HostEnvelope> config_helper_core::BuildConfigMessages() {
             }
             // 默认执行最后一个循环
             auto segments = set_batch->serialize();
-            for (int seg = 0; seg < segments.size(); seg++)
-                push_msg(Msg(false, MSG_TYPE::CONFIG, 0, config.id,
-                             seg == segments.size() - 1, segments[seg]));
+            for (int seg = 0; seg < segments.size(); seg++) {
+                Msg m(false, MSG_TYPE::CONFIG, 0, config.id,
+                      seg == segments.size() - 1, segments[seg]);
+                if (last_loop.empty() && j == pipeline - 1 &&
+                    seg == segments.size() - 1) {
+                    m.refill_ = true;
+                    m.is_end_ = true;
+                }
+                push_msg(m);
+            }
 
             for (size_t k = 0; k < last_loop.size(); k++) {
                 Msg m = last_loop[k];
@@ -384,6 +741,17 @@ void config_helper_core::generate_prims(int i) {
 
     for (int w = 0; w < c->worklist.size(); w++) {
         auto &work = c->worklist[w];
+        if (!work.collectives.empty()) {
+            for (const auto &coll : work.collectives) {
+                AppendCollectiveActions(work.prims_in_loop, coll);
+                AppendCollectiveActions(work.prims_last_loop, coll);
+            }
+            if (work.collective_terminal) {
+                work.prims_last_loop.push_back(new Send_prim(SEND_TYPE::SEND_DONE));
+                ++end_cores;
+            }
+            continue;
+        }
         bool is_end = judge_is_end_work(work);
         if (is_end)
             end_cores++;
@@ -422,6 +790,7 @@ void config_helper_core::calculate_address(bool do_loop) {
     // 自动设置 send 和 receive 的地址
     for (int i = 0; i < coreconfigs.size(); i++) {
         for (auto &work : coreconfigs[i].worklist) {
+            if (!work.collectives.empty()) continue;
             // 遍历每一个核中的send原语
             vector<PrimBase *> *v = nullptr;
             if (do_loop)

@@ -5,6 +5,9 @@
 #include "die/port.h"
 #include "dte/dte_async.h"
 #include "dte/dte_unit.h"
+#include "dte/coll_runtime.h"
+#include "dte/coll_multicast.h"
+#include "dte/coll_innetwork_reduce.h"
 #include "monitor/monitor.h"
 #include "monitor/watchdog.h"
 #include "router/router.h"
@@ -13,6 +16,7 @@
 #include "utils/print_utils.h"
 #include "utils/simple_flags.h"
 #include "utils/system_utils.h"
+#include "workercore/workercore.h"
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -50,6 +54,27 @@ Define_bool_opt("--d2d-link-selftest", g_flag_d2d_link_selftest, false,
 
 Define_bool_opt("--dte-v0-selftest", g_flag_dte_v0_selftest, false,
                 "run DTE V0 payload/resource SystemC self-test and exit");
+
+Define_bool_opt("--coll-v0-selftest", g_flag_coll_v0_selftest, false,
+                "run NoC collective V0 contract self-test and exit");
+
+Define_bool_opt("--coll-v1-selftest", g_flag_coll_v1_selftest, false,
+                "run NoC collective V1 planner/barrier self-test and exit");
+
+Define_bool_opt("--coll-v2-selftest", g_flag_coll_v2_selftest, false,
+                "run NoC collective V2 finite Gather reorder self-test and exit");
+
+Define_bool_opt("--coll-v3-selftest", g_flag_coll_v3_selftest, false,
+                "run NoC collective V3 Tier0 reduction self-test and exit");
+
+Define_bool_opt("--coll-v4-selftest", g_flag_coll_v4_selftest, false,
+                "run NoC collective V4 multicast contract self-test and exit");
+
+Define_bool_opt("--coll-v5-selftest", g_flag_coll_v5_selftest, false,
+                "run NoC collective V5 in-network reduce contract self-test and exit");
+
+Define_bool_opt("--coll-v6-selftest", g_flag_coll_v6_selftest, false,
+                "run NoC collective V6 integration/lifecycle self-test and exit");
 
 Define_bool_opt("--dte-v3-selftest", g_flag_dte_v3_selftest, false,
                 "run DTE V3a async token/dependency SystemC self-test and exit");
@@ -97,6 +122,34 @@ int sc_main(int argc, char *argv[]) {
     // DTE V0：bit/payload 纯函数 + 有界 channel/shared-bus SystemC 自测。
     if (g_flag_dte_v0_selftest) {
         int fails = RunDTEV0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v0_selftest) {
+        int fails = RunCollV0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v1_selftest) {
+        int fails = RunCollV1SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v2_selftest) {
+        int fails = RunCollV2SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v3_selftest) {
+        int fails = RunCollV3SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v4_selftest) {
+        int fails = RunCollV4SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v5_selftest) {
+        int fails = RunCollV5SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_v6_selftest) {
+        int fails = RunCollV6SelfTest();
         return fails == 0 ? 0 : 1;
     }
     if (g_flag_dte_v3_selftest) {
@@ -310,6 +363,44 @@ int sc_main(int argc, char *argv[]) {
                              << g_saf_admission_successes
                              << " reject=" << g_saf_admission_rejects;
         }
+    }
+
+    {
+        for (const auto &stat : CollectiveFabricLinkStats()) {
+            LOG_INFO(SYSTEM)
+                << "[COLL_LINK] tree=" << stat.tree_id
+                << " router=" << stat.router_id
+                << " output=" << static_cast<unsigned>(stat.output)
+                << " flits=" << stat.committed_flits
+                << " stalls=" << stat.stalled_attempts;
+        }
+        for (const auto &stat : CollectiveSharedLinkStats()) {
+            LOG_INFO(SYSTEM)
+                << "[COLL_SHARED] router=" << stat.router_id
+                << " output=" << static_cast<unsigned>(stat.output)
+                << " normal_flits=" << stat.normal_flits
+                << " collective_flits=" << stat.collective_flits;
+        }
+        size_t endpoint_residual = 0, dte_tokens = 0;
+        std::function<void(const std::vector<sc_object *> &)> coll_drain =
+            [&](const std::vector<sc_object *> &objs) {
+            for (auto *o : objs) {
+                if (auto *core = dynamic_cast<WorkerCoreExecutor *>(o)) {
+                    endpoint_residual += core->CollectiveEndpointResidual();
+                    dte_tokens += core->DteOutstandingCount();
+                }
+                coll_drain(o->get_child_objects());
+            }
+        };
+        coll_drain(sc_get_top_level_objects());
+        LOG_INFO(SYSTEM)
+            << "[COLL_DRAIN] tree_entries=" << CollectiveTreeEntryCount()
+            << " reduce_nodes=" << CollectiveReduceNodeCount()
+            << " barriers=" << CollectiveBarrierStateCount()
+            << " gather=" << CollectiveGatherReorderStateCount()
+            << " reduce_rx=" << CollectiveReduceRxStateCount()
+            << " endpoints=" << endpoint_residual
+            << " dte_tokens=" << dte_tokens;
     }
 
     // 结束态 drain 不变量（V1 验收）：遍历 SystemC 层级，累加所有 RouterUnit 的残留

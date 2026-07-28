@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "defs/enums.h"
+#include "dte/coll_types.h"
 #include "prims/base.h"
 
 
@@ -66,6 +67,9 @@ public:
     vector<PrimBase *> prims;
     vector<PrimBase *> prims_last_loop;
     vector<PrimBase *> prims_in_loop;
+
+    vector<CollDescriptor> collectives;
+    bool collective_terminal = false;
 
     void printSelf();
     CoreJob() {}

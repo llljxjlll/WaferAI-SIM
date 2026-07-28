@@ -91,6 +91,7 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
     sensitive << data_sent_i[WEST].pos() << data_sent_i[EAST].pos()
               << data_sent_i[CENTER].pos() << data_sent_i[SOUTH].pos()
               << data_sent_i[NORTH].pos();
+    sensitive << data_sent_i[CENTER].neg();
     if (IsHostAttachTile(rid))
         sensitive << host_data_sent_i->pos();
     sensitive << channel_avail_i[WEST].pos() << channel_avail_i[EAST].pos()
@@ -166,6 +167,18 @@ void RouterUnit::router_execute() {
     while (true) {
         bool flag_trigger = false;
 
+        for (auto it = reduce_scheduled.begin();
+             it != reduce_scheduled.end();) {
+            if (it->ready > sc_time_stamp()) { ++it; continue; }
+            auto &outq = buffer_o[it->output];
+            if (outq.size() + 2 > MAX_BUFFER_PACKET_SIZE) {
+                ++it; continue;
+            }
+            const auto wire = SerializeCollReduceOperand(it->operand);
+            outq.emplace(wire[0]); outq.emplace(wire[1]);
+            it = reduce_scheduled.erase(it); flag_trigger = true;
+        }
+
         for (int i = 0; i < DIRECTIONS - 1; ++i) {
             bool data_event = d2d_data_credit_i[i].read();
             if (d2d_data_credit_enabled[i] &&
@@ -200,19 +213,26 @@ void RouterUnit::router_execute() {
             if (data_sent_i[i].read()) {
                 // move the data into the buffer
                 sc_bv<256> temp = channel_i[i].read();
+                const bool collective_wire = IsCollDataWire(temp) ||
+                    IsCollReduceHeaderWire(temp) ||
+                    IsCollReducePayloadWire(temp);
+                if (i == CENTER && collective_wire &&
+                    !center_collective_armed)
+                    continue;
+                if (i == CENTER && collective_wire)
+                    center_collective_armed = false;
                 // V2-b：该方向是 peer-connected C2C 边 ⇒ 本包刚跨 link 进入本 die，
                 // 入口处清除上一跳 pin 并按本 die 重新 pin（见 RepinOnC2CIngress）。
                 bool from_c2c = IsC2CEgressEdge(rid, Directions(i));
                 if (from_c2c)
                     temp = RepinOnC2CIngress(temp);
-                Msg tt = DeserializeMsg(temp);
                 CountDieRouterPkt(i, from_c2c); // V2-c：本 die NoC 活动
 
                 buffer_i[i].emplace(temp);
 
                 // need trigger again
                 flag_trigger = true;
-            }
+            } else if (i == CENTER) center_collective_armed = true;
         }
 
         // ==================== 控制信道输入 ====================
@@ -275,16 +295,37 @@ void RouterUnit::router_execute() {
             if (!buffer_o[i].size())
                 continue;
 
+            if (collective_output_cooldown[i]) {
+                collective_output_cooldown[i] = false;
+                flag_trigger = true;
+                continue;
+            }
+
             sc_bv<256> temp = buffer_o[i].front();
             buffer_o[i].pop();
 
-            Msg tt = DeserializeMsg(temp);
-
             channel_o[i].write(temp);
             data_sent_o[i].write(true);
+            const bool collective_wire = IsCollDataWire(temp) ||
+                IsCollReduceHeaderWire(temp) ||
+                IsCollReducePayloadWire(temp);
+            if (collective_wire)
+                collective_output_cooldown[i] = true;
+            if (collective_wire) {
+                if (SPEC_NOC_COLL_ENABLED)
+                    RecordCollectiveSharedOutput(
+                        static_cast<uint16_t>(rid),
+                        static_cast<uint8_t>(i), true);
+            } else {
+                const Msg normal_msg = DeserializeMsg(temp);
+                if (SPEC_NOC_COLL_ENABLED && normal_msg.msg_type_ == DATA)
+                    RecordCollectiveSharedOutput(
+                        static_cast<uint16_t>(rid),
+                        static_cast<uint8_t>(i), false);
+                MaybeReleaseV5DynamicPin(normal_msg, rid, Directions(i));
+            }
             if (d2d_data_credit_enabled[i])
                 d2d_data_credits[i]--;
-            MaybeReleaseV5DynamicPin(tt, rid, Directions(i));
             int d = DieOfGlobal(rid);
             if (!IsC2CEgressEdge(rid, Directions(i)) && d >= 0 &&
                 d < (int)g_die_noc_sends.size())
@@ -365,16 +406,20 @@ void RouterUnit::router_execute() {
         // 输出到本地core内的buffer非空
         if (buffer_o[CENTER].size()) {
             // core内部的接受队列是否满
-            if (!core_busy_i.read()) {
+            if (collective_output_cooldown[CENTER]) {
+                collective_output_cooldown[CENTER] = false;
+                flag_trigger = true;
+            } else if (!core_busy_i.read()) {
                 // move the data out of the buffer
                 sc_bv<256> temp = buffer_o[CENTER].front();
 
                 buffer_o[CENTER].pop();
 
-                Msg tt = DeserializeMsg(temp);
-
                 channel_o[CENTER].write(temp);
                 data_sent_o[CENTER].write(true);
+                if (IsCollDataWire(temp) || IsCollReduceHeaderWire(temp) ||
+                    IsCollReducePayloadWire(temp))
+                    collective_output_cooldown[CENTER] = true;
             }
 
             // need trigger again
@@ -459,11 +504,94 @@ void RouterUnit::router_execute() {
         // ==================== 数据信道路由 ====================
         // FIX input -> output 的仲裁
         // [input -> output] 4方向+core - 数据信道
-        for (int i = 0; i < DIRECTIONS; i++) {
+        for (int coll_step = 0; coll_step < DIRECTIONS; ++coll_step) {
+            const int i = (collective_rr_start + coll_step) % DIRECTIONS;
             if (!buffer_i[i].size())
                 continue;
 
             sc_bv<256> temp = buffer_i[i].front();
+            if (IsCollReduceHeaderWire(temp)) {
+                if (reduce_header_pending[i])
+                    throw std::runtime_error(
+                        "second reduce header arrived before payload");
+                reduce_header_pending[i] = true;
+                reduce_header_wire[i] = temp;
+                buffer_i[i].pop(); flag_trigger = true;
+                continue;
+            }
+            if (IsCollReducePayloadWire(temp)) {
+                if (!reduce_header_pending[i])
+                    throw std::runtime_error("reduce payload arrived without header");
+                if (reduce_scheduled.size() >= 16)
+                    continue;
+                CollReduceOperand operand = DeserializeCollReduceOperand(
+                    {reduce_header_wire[i], temp});
+                operand.child_id = static_cast<uint16_t>(i);
+                const CollReduceMatchKey key{operand.collective,
+                                             operand.phase_id,
+                                             operand.chunk_id};
+                const auto node = LookupCollectiveReduceNode(
+                    operand.tree_id, static_cast<uint16_t>(rid));
+                if (!reduce_active.count(key)) {
+                    if (!reduce_match.Open(key, node.expected_inputs,
+                                           operand.dtype, operand.op,
+                                           operand.valid_elements))
+                        continue;
+                    reduce_active.emplace(key, operand);
+                }
+                const auto status = reduce_match.Accept(
+                    key, operand.child_id, operand.dtype, operand.op,
+                    operand.valid_elements, operand.payload);
+                if (status == CollOperandStatus::BACKPRESSURE)
+                    continue;
+                if (status == CollOperandStatus::DUPLICATE ||
+                    status == CollOperandStatus::UNEXPECTED ||
+                    status == CollOperandStatus::MISMATCH)
+                    throw std::runtime_error("invalid in-network reduce operand");
+                buffer_i[i].pop(); reduce_header_pending[i] = false;
+                if (status == CollOperandStatus::READY) {
+                    CollDcaResult result = reduce_match.Consume(key);
+                    CollReduceOperand reinject = reduce_active.at(key);
+                    reduce_active.erase(key); reinject.payload = result.payload;
+                    reinject.child_id = static_cast<uint16_t>(rid);
+                    const sc_time start = std::max(sc_time_stamp(),
+                                                   reduce_dca_available);
+                    reduce_dca_available = start +
+                        sc_time(result.service_cycles * CYCLE, SC_NS);
+                    reduce_scheduled.push_back({
+                        reduce_dca_available,
+                        node.parent_output, reinject});
+                }
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
+            if (IsCollDataWire(temp)) {
+                const CollDataHeader h = DeserializeCollData(temp);
+                const uint8_t outputs = LookupCollectiveTreeEntry(
+                    {h.tree_id, static_cast<uint16_t>(rid),
+                     static_cast<uint8_t>(i)});
+                bool available[DIRECTIONS] = {};
+                for (int d = 0; d < DIRECTIONS; ++d)
+                    available[d] = buffer_o[d].size() < MAX_BUFFER_PACKET_SIZE;
+                const CollBranchLockKey lock_key{
+                    h.tree_id, h.packet.collective, h.packet.phase_id,
+                    h.packet.chunk_id};
+                const bool can_commit = collective_fork.CanCommit(
+                    outputs, available, lock_key);
+                RecordCollectiveForkAttempt(
+                    h.tree_id, static_cast<uint16_t>(rid), outputs,
+                    can_commit);
+                if (!can_commit) continue;
+                collective_fork.Commit(outputs, h.seq_id == 1, h.is_end,
+                                       lock_key);
+                buffer_i[i].pop();
+                for (int d = 0; d < DIRECTIONS; ++d)
+                    if (outputs & (1u << d)) buffer_o[d].emplace(temp);
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
             Msg m = DeserializeMsg(temp);
             // core 目的 DATA：跨 die 时消费 SEND_DATA 原语一次选定、随所有包携带的
             // exit_port；进入目标 die 后退回片内 XY。HOST 目的仍使用 source anchor。
@@ -601,6 +729,7 @@ void RouterUnit::router_execute() {
         }
 
         // trigger again
+        if (!reduce_scheduled.empty()) flag_trigger = true;
         if (flag_trigger)
             need_next_trigger.notify(CYCLE, SC_NS);
 
@@ -651,7 +780,13 @@ sc_bv<256> RouterUnit::RepinOnC2CIngress(const sc_bv<256> &payload) const {
 }
 
 long RouterUnit::residual() const {
-    long r = 0;
+    const long reduce_match_residual =
+        static_cast<long>(reduce_match.Residual());
+    long r = static_cast<long>(collective_fork.Residual());
+    r += reduce_match_residual + static_cast<long>(reduce_active.size() +
+                                                   reduce_scheduled.size());
+    for (int i = 0; i < DIRECTIONS; ++i)
+        if (reduce_header_pending[i]) ++r;
     for (int i = 0; i < DIRECTIONS; i++) {
         if (input_lock_ref[i] > 0)
             r += input_lock_ref[i];
