@@ -8,6 +8,7 @@
 #include "defs/global.h"
 #include "dte/coll_multicast.h"
 #include "dte/coll_innetwork_reduce.h"
+#include "memory/hbm_mem_wire.h"
 #include "macros/macros.h"
 #include "trace/Event_engine.h"
 #include "utils/memory_utils.h"
@@ -135,6 +136,8 @@ public:
 
     // 触发execute函数的信号
     sc_event need_next_trigger;
+    sc_event mem_data_space_event;
+    sc_event mem_ctrl_space_event;
 
     Event_engine *event_engine;
 
@@ -153,6 +156,13 @@ public:
     void EnableD2DCtrlCredit(Directions dir, int initial_credit);
     bool D2DDataCreditsBalanced() const;
     bool D2DCtrlCreditsBalanced() const;
+
+    // R4 in-process endpoint injection. These methods are called only from
+    // SystemC threads and obey the same finite CENTER input queues as core IO.
+    void InjectMemRequestFlit(const MemWireFlit &wire,
+                              uint64_t *stall_counter = nullptr);
+    void InjectMemResponseFlit(const MemWireFlit &wire,
+                               uint64_t *stall_counter = nullptr);
 
     // 结束态残留量（drain 不变量）：所有 in/out lock ref + 各方向 data/ctrl buffer +
     // host buffer 的总占用。仿真正常结束时应为 0（无未释放锁、无滞留包）。

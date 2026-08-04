@@ -13,6 +13,8 @@
 #include "memory/sram_writer.h"
 #include "link/nb_global_memif_v2.h"
 
+class CoreMemAdapter;
+
 using namespace std;
 
 class AddrDatapassLabel {
@@ -49,6 +51,7 @@ public:
 class TaskCoreContext {
 public:
     int cid;
+    CoreMemAdapter *hbm_adapter = nullptr;
 
     mem_access_unit *mau;
     high_bw_mem_access_unit *hmau;

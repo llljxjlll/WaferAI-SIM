@@ -3,6 +3,11 @@
 #include "defs/spec.h"
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "memory/hbm_r0_selftest.h"
+#include "memory/hbm_r1_selftest.h"
+#include "memory/hbm_r2_selftest.h"
+#include "memory/hbm_r3_selftest.h"
+#include "memory/hbm_r4_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_unit.h"
 #include "dte/coll_runtime.h"
@@ -75,6 +80,28 @@ Define_bool_opt("--coll-v5-selftest", g_flag_coll_v5_selftest, false,
 
 Define_bool_opt("--coll-v6-selftest", g_flag_coll_v6_selftest, false,
                 "run NoC collective V6 integration/lifecycle self-test and exit");
+
+Define_bool_opt("--hbm-r0-selftest", g_flag_hbm_r0_selftest, false,
+                "run distributed HBM R0 config/topology self-test and exit");
+Define_bool_opt("--hbm-r1-selftest", g_flag_hbm_r1_selftest, false,
+                "run distributed HBM R1 synthetic-request self-test and exit");
+Define_bool_opt("--hbm-r2-selftest", g_flag_hbm_r2_selftest, false,
+                "run distributed HBM R2 bandwidth/queueing self-test and exit");
+Define_bool_opt("--hbm-r3-selftest", g_flag_hbm_r3_selftest, false,
+                "run distributed HBM R3 DRAMSys-backend self-test and exit");
+Define_bool_opt("--hbm-r4-selftest", g_flag_hbm_r4_selftest, false,
+                "run distributed HBM R4 Router/NUMA integration self-test and exit");
+Define_bool_opt("--hbm-contention-experiment",
+                g_flag_hbm_contention_experiment, false,
+                "run distributed HBM port/contention experiment and exit");
+Define_string_opt("--hbm-experiment-port", g_flag_hbm_experiment_port, "N0",
+                  "HBM experiment attachment port: N0..N3/S0..S3/E0..E3/W0..W3");
+Define_int64_opt("--hbm-experiment-cores", g_flag_hbm_experiment_cores, 1,
+                 "HBM experiment concurrent core count (1..8)");
+Define_int64_opt("--hbm-experiment-pairs", g_flag_hbm_experiment_pairs, 8,
+                 "HBM experiment write/read pairs per core");
+Define_int64_opt("--hbm-experiment-bytes", g_flag_hbm_experiment_bytes, 1024,
+                 "HBM experiment bytes per read or write");
 
 Define_bool_opt("--dte-v3-selftest", g_flag_dte_v3_selftest, false,
                 "run DTE V3a async token/dependency SystemC self-test and exit");
@@ -150,6 +177,34 @@ int sc_main(int argc, char *argv[]) {
     }
     if (g_flag_coll_v6_selftest) {
         int fails = RunCollV6SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_hbm_r0_selftest) {
+        int fails = RunHbmR0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_hbm_r1_selftest) {
+        int fails = RunHbmR1SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_hbm_r2_selftest) {
+        int fails = RunHbmR2SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_hbm_r3_selftest) {
+        int fails = RunHbmR3SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_hbm_r4_selftest) {
+        int fails = RunHbmR4SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_hbm_contention_experiment) {
+        int fails = RunHbmContentionExperiment(
+            g_flag_hbm_experiment_port,
+            static_cast<int>(g_flag_hbm_experiment_cores),
+            static_cast<int>(g_flag_hbm_experiment_pairs),
+            static_cast<int>(g_flag_hbm_experiment_bytes));
         return fails == 0 ? 0 : 1;
     }
     if (g_flag_dte_v3_selftest) {

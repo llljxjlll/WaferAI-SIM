@@ -6,6 +6,8 @@
 #include "monitor/config_helper_gpu.h"
 #include "monitor/config_helper_gpu_pd.h"
 #include "utils/system_utils.h"
+#include "memory/hbm_runtime.h"
+#include "memory/hbm_network.h"
 
 // 独立统计 SystemC 层级中的 RouterUnit / WorkerCore 实例数（按类型 dynamic_cast，
 // 不依赖自报计数），供多 die 实例化验收独立核对模块数量。
@@ -77,6 +79,8 @@ Monitor::~Monitor() {
     delete[] host_ctrl_sent_i;
     delete[] host_ctrl_channel_i;
 
+    delete hbmNetwork;
+    delete hbmRuntime;
     delete routerMonitor;
     // WorkerCore 对象当前有意“泄漏”（不逐个析构）：其析构链存在既有 teardown 隐患
     // （SystemC 拆解顺序 / 成员释放），启用逐个 delete 会在退出时段错误（已实测）。
@@ -90,6 +94,13 @@ Monitor::~Monitor() {
 
 void Monitor::init() {
     routerMonitor = new RouterMonitor("router-monitor", this->event_engine);
+    if (g_memory_system_active &&
+        g_memory_topology == MemoryTopology::kDistributedHbm) {
+        auto runtime = BuildHBMBackends();
+        hbmRuntime = runtime.release();
+        hbmNetwork = new HBMNetwork("hbm-network", *routerMonitor,
+                                    *hbmRuntime);
+    }
     workerCores = new WorkerCore *[TOTAL_CORES];
     g_dram_kvtable = new DramKVTable *[TOTAL_CORES];
 
@@ -138,17 +149,22 @@ void Monitor::init() {
 
 #if USE_L1L2_CACHE == 1
     // GPU
-    vector<L1Cache *> l1caches;
-    vector<GPUNB_dcacheIF *> processors;
-    for (int i = 0; i < TOTAL_CORES; i++) {
-        l1caches.push_back(workerCores[i]->executor->core_lv1_cache);
-        processors.push_back(workerCores[i]->executor->gpunb_dcache_if);
+    const bool distributed = g_memory_system_active &&
+        g_memory_topology == MemoryTopology::kDistributedHbm;
+    if (!distributed) {
+        vector<L1Cache *> l1caches;
+        vector<GPUNB_dcacheIF *> processors;
+        for (int i = 0; i < TOTAL_CORES; i++) {
+            l1caches.push_back(workerCores[i]->executor->core_lv1_cache);
+            processors.push_back(workerCores[i]->executor->gpunb_dcache_if);
+        }
+
+        cacheSystem = new L1L2CacheSystem(
+            "l1l2-cache_system", TOTAL_CORES, l1caches, processors,
+            GPU_DRAM_CONFIG_FILE, "../DRAMSys/configs");
     }
 
-    cacheSystem = new L1L2CacheSystem("l1l2-cache_system", TOTAL_CORES, l1caches,
-                                      processors, GPU_DRAM_CONFIG_FILE,
-                                      "../DRAMSys/configs");
-
+    // 地址/对象位置元数据仍由 GPU 原语使用；它不属于旧 DRAM cache 旁路。
     if (SYSTEM_MODE == SIM_GPU) {
         gpu_pos_locator = new GpuPosLocator();
         ((config_helper_gpu *)memInterface->config_helper)->gpu_pos_locator =

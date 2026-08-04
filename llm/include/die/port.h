@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -366,6 +367,94 @@ extern std::map<V5SubflowProbeKey, V5SubflowStat> g_v5_subflow_stats;
 // **same 是本计数器存在的理由**：该情形下「已重新 pin」与「沿用旧值」路由结果完全相同，
 // 只能靠计数证明入口重写确实执行了，不能靠端到端是否送达来推断。
 extern long g_d2d_repin_total, g_d2d_repin_changed, g_d2d_repin_same;
+
+// ==================================================================
+// R0：分布式 HBM —— stack/profile/channel 配置与 per-die MEM 挂载
+// 详见 notes/extensions/DRAM/HBM建模计划.md（修订版）。R0 只建立结构与校验，
+// 不改变运行时：不新建 SystemC 模块，不接入 executor 请求路径。
+//
+// 与 g_die_ports 的关系：g_die_ports 是所有 compute die 共用的同构模板（HOST/C2C/
+// 遗留 ROLE_MEM 端口位于其中，语义不变、不受本节影响）。hbm_stacks 是完全独立的第二
+// 张表，按 compute_die_id 单独指定每颗 stack 的挂载边，用来表达"只有部分 die 挂 HBM"
+// 这种同构模板表达不了的非对称拓扑；不复用、不修改 g_die_ports 里已有的 ROLE_MEM 端口。
+// ==================================================================
+
+// stack 的 DRAMSys 后端实例化粒度：kChannel=一个 DRAMSys instance 对应一个 HBM
+// channel（其 memspec 必须描述单 channel）；kStack=一个 DRAMSys instance 对应整颗
+// stack，由 DRAMSys 内部 address decoder 选 channel。二者不能在同一颗 stack 上混用。
+enum class HBMBackendGranularity { kChannel, kStack };
+enum class HBMBackendKind { kBehavioral, kDRAMSys };
+
+enum class HBMPortGranularity { kChannel, kAggregated };
+enum class MemoryTopology { kLegacyPrivate, kDistributedHbm };
+enum class MemoryCachePolicy { kNone, kLegacyPrivate };
+
+// 代际级参数：按 profile 名索引，多颗同代 stack 共用一份，不在每个 stack 里重复填写。
+struct HBMProfile {
+    std::string generation; // "HBM2"/"HBM3"，与 resolved memspec 的 memoryType 核对
+    int channels_per_stack = 0;
+    int pseudo_channels_per_channel = 0;
+    double data_rate_gbps_per_pin = 0.0;
+    int stack_bus_width_bits = 0;
+
+    // 先验理论带宽（GB/s）：B_stack = data_rate_gbps_per_pin * stack_bus_width_bits / 8。
+    // 仅用于拓扑层早期估算；真实实例带宽以 resolved memspec 计算为准（见
+    // memory/hbm_memspec.h），两者在 ValidateHbmMemSpecConsistency() 里做一致性核对。
+    double NominalStackBandwidthGBps() const {
+        return data_rate_gbps_per_pin * stack_bus_width_bits / 8.0;
+    }
+};
+
+// 一颗物理 HBM stack 在某个具体 compute die 边缘的挂载描述。
+struct HBMStackConfig {
+    int stack_id = -1;       // 全局唯一，单一真源；不允许由端口数事后反推
+    int compute_die_id = -1; // 局部 die id，范围 [0, DIE_COUNT)
+    std::string profile;     // 索引 g_hbm_profiles
+    Directions side = CENTER; // 物理边 N/S/E/W；PHY 短距总线，摆放方向即 HBM die 方向
+    int start_idx = 0;        // 该边上的起始 tile 局部序号（沿边连续区间起点）
+    int phy_span_tiles = 0;   // keep-out 跨度（tile 数），必须连续、不跨边
+    unsigned long long capacity_bytes = 0; // 暴露容量；不能超过 backend 实际容量
+    HBMBackendGranularity backend_granularity = HBMBackendGranularity::kChannel;
+    HBMBackendKind backend_kind = HBMBackendKind::kDRAMSys;
+    HBMPortGranularity port_granularity = HBMPortGranularity::kChannel;
+    // 一个逻辑 MEM port 聚合的物理 channel 数。port_granularity==kChannel 时恒为 1；
+    // kAggregated 时必须显式配置，禁止根据带宽自动猜测端口拓扑。
+    int channels_per_mem_port = 1;
+    std::string channel_dram_config; // 该 stack 使用的 DRAMSys 顶层配置文件路径
+    double bandwidth_cap_GBps = -1.0; // <0 = 未手动限速，使用 resolved memspec 理论值
+    double behavioral_efficiency = 1.0;
+    double behavioral_base_latency_ns = 0.0;
+    double behavioral_read_to_write_ns = 0.0;
+    double behavioral_write_to_read_ns = 0.0;
+};
+
+// 一颗 stack 内某个 channel 的 MEM 端口落位结果（BuildMemAttach 的产出）。
+struct HBMChannelConfig {
+    int stack_id = -1;
+    int channel_id = -1; // 0..channels_per_stack-1（kStack 粒度下恒为 0）
+    int mem_tile = -1;   // 落位的局部 tile（与 compute_die_id 组合得到全局 tile）
+};
+
+extern bool g_memory_system_active; // 无 "memory_system" 配置时为 false，全部走 legacy_private
+extern MemoryTopology g_memory_topology;
+extern MemoryCachePolicy g_memory_cache_policy;
+extern std::unordered_map<std::string, HBMProfile> g_hbm_profiles;
+extern std::vector<HBMStackConfig> g_hbm_stacks;
+extern std::vector<HBMChannelConfig> g_hbm_channels; // BuildMemAttach() 产出，按 stack_id 分组连续
+
+// 解析顶层 "memory_system"（profiles/hbm_stacks/cache_policy/topology + 委派
+// address_policy 给 memory/hbm_address_map.h 的 ParseAddressPolicy）。不含该 key 时
+// g_memory_system_active=false，行为与改造前逐位一致。非法配置抛 std::runtime_error。
+void ParseMemorySystem(const D2DJson &hw_json);
+
+// 从 g_hbm_stacks 构造 g_hbm_channels（每颗 stack 的 channel -> tile 落位）。
+// 纯构造，不做校验（校验见 ValidateMemAttach），供测试单独触发。
+void BuildMemAttach();
+
+// 结构/物理校验：stack_id 唯一、profile 引用存在、phy_span_tiles 覆盖足够的 channel
+// 数、每颗 stack 的 tile 区间在边界内、同 die 内不与 g_die_ports 模板端口或其他 stack
+// 的区间重叠（含 corner tile 双重占用）。非法即抛 std::runtime_error。
+void ValidateMemAttach();
 
 // ---- V2-c：逐条有向 link 归因 + 每 die NoC 活动 ----
 // 全局 [D2D_TYPE] 只有总数，无法回答「究竟经过了哪几条 link、方向序列是什么、每个包跳了几跳」。

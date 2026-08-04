@@ -4,6 +4,7 @@
 #include "defs/global.h"
 #include "macros/macros.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
+#include "memory/core_mem_adapter.h"
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
@@ -13,6 +14,22 @@
 #include <tlm_utils/peq_with_cb_and_phase.h>
 #include <tlm_utils/simple_initiator_socket.h>
 #include <tlm_utils/simple_target_socket.h>
+
+namespace {
+void DistributedHBMAccess(TaskCoreContext &context, MemCommand command,
+                          uint64_t address, int bytes) {
+    if (!context.hbm_adapter || bytes <= 0) return;
+    int offset = 0;
+    while (offset < bytes) {
+        int chunk = std::min(bytes - offset, kMemMsgMaxPayloadBytes);
+        std::vector<uint8_t> data;
+        if (command == MemCommand::kWrite)
+            data.assign(chunk, 0);
+        context.hbm_adapter->Access(command, address + offset, chunk, data);
+        offset += chunk;
+    }
+}
+} // namespace
 
 
 void sram_write(TaskCoreContext &context, int dma_read_count,
@@ -175,6 +192,24 @@ void sram_first_write_generic(TaskCoreContext &context, int data_size_in_byte,
     assert(sram_pos_locator->validateTotalSize() &&
            "sram_pos_locator is not equal sram_manager");
 #endif
+    if (context.hbm_adapter) {
+        if (!dummy_alloc) {
+            const sc_time begin = sc_time_stamp();
+            DistributedHBMAccess(context, MemCommand::kRead, inp_global_addr,
+                                 aligned_data_byte);
+            if (!SPEC_USE_BEHA_SRAM) {
+                context.sram_writer->trigger_write(
+                    hmau, sram_manager_, dma_read_count + single_read_count,
+                    sram_addr_temp, alloc_id, sram_bitw, use_manager);
+                wait(*context.e_sram);
+            } else {
+                wait((dma_read_count + single_read_count) * RAM_WRITE_LATENCY,
+                     SC_NS);
+            }
+            dram_time += (sc_time_stamp() - begin).to_seconds() * 1e9;
+        }
+        return;
+    }
     if (dummy_alloc == false) {
 #if USE_NB_DRAMSYS == 1
 #if DRAM_BURST_BYTE > 0
@@ -455,6 +490,17 @@ void sram_first_write_generic(TaskCoreContext &context, int data_size_in_byte,
 
 void sram_spill_back_generic(TaskCoreContext &context, int data_size_in_byte,
                              u_int64_t global_addr, u_int64_t &dram_time) {
+    if (context.hbm_adapter) {
+        const sc_time begin = sc_time_stamp();
+        const int rows = CeilingDivision(
+            data_size_in_byte * 8,
+            GetCoreHWConfig(context.cid)->sram_bitwidth * SRAM_BANKS);
+        if (rows > 0) wait(rows * RAM_READ_LATENCY, SC_NS);
+        DistributedHBMAccess(context, MemCommand::kWrite, global_addr,
+                             data_size_in_byte);
+        dram_time += (sc_time_stamp() - begin).to_seconds() * 1e9;
+        return;
+    }
     int sram_bitw = GetCoreHWConfig(context.cid)->sram_bitwidth;
     // assert(false);
     int dma_read_count = data_size_in_byte * 8 / (int)(sram_bitw * SRAM_BANKS);
@@ -1390,6 +1436,14 @@ void sram_write_back_temp(TaskCoreContext &context, int data_size_in_byte,
 void gpu_read_generic(TaskCoreContext &context, uint64_t global_addr,
                       int data_size_in_byte, int &mem_time, bool cache_read) {
 
+    if (context.hbm_adapter) {
+        const sc_time begin = sc_time_stamp();
+        DistributedHBMAccess(context, MemCommand::kRead, global_addr,
+                             data_size_in_byte);
+        mem_time += (sc_time_stamp() - begin).to_seconds() * 1e9;
+        return;
+    }
+
     uint64_t inp_global_addr =
         (global_addr / GPU_DRAM_ALIGNED) *
         GPU_DRAM_ALIGNED; // 向下取整到dram 取址的整数倍，这里是32
@@ -1470,6 +1524,14 @@ void gpu_read_generic(TaskCoreContext &context, uint64_t global_addr,
 
 void gpu_write_generic(TaskCoreContext &context, uint64_t global_addr,
                        int data_size_in_byte, int &mem_time, bool cache_write) {
+
+    if (context.hbm_adapter) {
+        const sc_time begin = sc_time_stamp();
+        DistributedHBMAccess(context, MemCommand::kWrite, global_addr,
+                             data_size_in_byte);
+        mem_time += (sc_time_stamp() - begin).to_seconds() * 1e9;
+        return;
+    }
 
     uint64_t inp_global_addr =
         (global_addr / GPU_DRAM_ALIGNED) *
@@ -1577,6 +1639,7 @@ TaskCoreContext generate_context(WorkerCoreExecutor *workercore) {
                            end_global_event);
 
     context.cid = workercore->cid;
+    context.hbm_adapter = workercore->hbm_adapter;
 
 #if USE_L1L2_CACHE == 1
     context.gpunb_dcache_if = workercore->gpunb_dcache_if;

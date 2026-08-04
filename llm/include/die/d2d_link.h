@@ -13,6 +13,7 @@
 #include "defs/const.h"
 #include "die/port.h"
 #include "macros/macros.h"
+#include "memory/hbm_mem_wire.h"
 #include <deque>
 #include <map>
 #include <utility>
@@ -104,7 +105,7 @@ public:
         for (const auto &kv : saf_flows_)
             saf_packets += (long)kv.second.packets.size();
         return (long)fifo_.size() + (long)cfifo_.size() +
-               (long)rx_fifo_.size() + saf_packets +
+               (long)rx_fifo_.size() + (long)mem_saf_fifo_.size() + saf_packets +
                (long)saf_expected_.size() + CreditResidual() +
                (long)behavioral_data_events_.size() +
                (long)behavioral_ctrl_events_.size();
@@ -149,6 +150,10 @@ private:
     std::map<FlowKey, int> saf_expected_;
     std::map<FlowKey, SafFlowBuffer> saf_flows_;
     std::deque<FlowKey> saf_ready_;
+    // MEM transactions are already packetized and do not use the legacy
+    // REQUEST-whole-flow reservation protocol. They still occupy the finite SAF
+    // stage and the same port/link token service.
+    std::deque<sc_bv<256>> mem_saf_fifo_;
     std::deque<sc_bv<256>> rx_fifo_;
 
     // 只存真实包 {ready_cycle, payload}（不每周期存 bubble）。ready_cycle=capture_cycle+latency；
@@ -162,6 +167,7 @@ private:
     // Behavioral 不把聚合服务占用解释成有限队列；事件表仅保存代表消息的到达时刻。
     std::multimap<long, sc_bv<256>> behavioral_data_events_;
     std::multimap<long, sc_bv<256>> behavioral_ctrl_events_;
+    long behavioral_mem_data_next_ = 0;
 
     // sc_signal pulse 在写出后的一个调度周期内仍是在途信用；纳入 residual，避免过早宣布 drain。
     bool data_credit_active_ = false;

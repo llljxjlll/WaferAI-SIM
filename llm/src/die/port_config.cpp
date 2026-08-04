@@ -1,6 +1,7 @@
 #include "die/port.h"
 #include "defs/spec.h"
 #include "macros/macros.h"
+#include "memory/hbm_address_map.h"
 #include "utils/print_utils.h"
 #include "utils/router_utils.h"
 #include <algorithm>
@@ -1371,4 +1372,321 @@ int HostLaneOfTile(int global_tile) {
 
 bool IsHostAttachTile(int global_tile) {
     return HostLaneOfTile(global_tile) >= 0;
+}
+
+// ==================================================================
+// R0：分布式 HBM —— memory_system 配置解析、per-die MEM 挂载与结构校验。
+// 详见 notes/extensions/DRAM/HBM建模计划.md（修订版）。不改变运行时：这里只构造/
+// 校验数据结构，不新建 SystemC 模块，不接入 executor 请求路径。
+// ==================================================================
+
+bool g_memory_system_active = false;
+MemoryTopology g_memory_topology = MemoryTopology::kLegacyPrivate;
+MemoryCachePolicy g_memory_cache_policy = MemoryCachePolicy::kLegacyPrivate;
+std::unordered_map<std::string, HBMProfile> g_hbm_profiles;
+std::vector<HBMStackConfig> g_hbm_stacks;
+std::vector<HBMChannelConfig> g_hbm_channels;
+
+namespace {
+
+HBMBackendGranularity GranularityFromStr(const std::string &s) {
+    if (s == "channel")
+        return HBMBackendGranularity::kChannel;
+    if (s == "stack")
+        return HBMBackendGranularity::kStack;
+    throw std::runtime_error("memory_system: unknown backend_granularity '" +
+                             s + "'");
+}
+
+HBMBackendKind BackendKindFromStr(const std::string &s) {
+    if (s == "behavioral")
+        return HBMBackendKind::kBehavioral;
+    if (s == "dramsys")
+        return HBMBackendKind::kDRAMSys;
+    throw std::runtime_error("memory_system: unknown backend '" + s + "'");
+}
+
+HBMPortGranularity PortGranularityFromStr(const std::string &s) {
+    if (s == "channel")
+        return HBMPortGranularity::kChannel;
+    if (s == "aggregated")
+        return HBMPortGranularity::kAggregated;
+    throw std::runtime_error("memory_system: unknown port_granularity '" + s +
+                             "'");
+}
+
+} // namespace
+
+void ParseMemorySystem(const D2DJson &hw_json) {
+    g_memory_system_active = false;
+    g_memory_topology = MemoryTopology::kLegacyPrivate;
+    g_memory_cache_policy = MemoryCachePolicy::kLegacyPrivate;
+    g_hbm_profiles.clear();
+    g_hbm_stacks.clear();
+    g_hbm_channels.clear();
+    // 未配置 memory_system：分布式 HBM 子系统整体关闭，legacy_private 行为与改造前
+    // 逐位一致；同时复位 address_policy，避免上一次解析的残留状态泄漏到本次。
+    ParseAddressPolicy(D2DJson::object());
+    if (!hw_json.contains("memory_system"))
+        return;
+
+    const D2DJson &ms = hw_json.at("memory_system");
+    std::string topology = ms.value("topology", "distributed_hbm");
+    if (topology == "legacy_private") {
+        if (ms.contains("hbm_stacks") || ms.contains("address_policy"))
+            throw std::runtime_error(
+                "memory_system: legacy_private topology cannot declare "
+                "hbm_stacks/address_policy");
+        return;
+    }
+    if (topology != "distributed_hbm")
+        throw std::runtime_error("memory_system: unknown topology '" +
+                                 topology + "'");
+    g_memory_topology = MemoryTopology::kDistributedHbm;
+
+    std::string cache_policy = ms.value("cache_policy", "none");
+    if (cache_policy != "none")
+        throw std::runtime_error(
+            "memory_system: distributed_hbm currently requires "
+            "cache_policy='none'");
+    g_memory_cache_policy = MemoryCachePolicy::kNone;
+    g_memory_system_active = true;
+
+    if (ms.contains("profiles")) {
+        for (auto it = ms.at("profiles").begin();
+             it != ms.at("profiles").end(); ++it) {
+            const D2DJson &pj = it.value();
+            HBMProfile p;
+            p.generation = pj.at("generation").get<std::string>();
+            p.channels_per_stack = pj.at("channels_per_stack").get<int>();
+            p.pseudo_channels_per_channel =
+                pj.at("pseudo_channels_per_channel").get<int>();
+            p.data_rate_gbps_per_pin =
+                pj.at("data_rate_gbps_per_pin").get<double>();
+            p.stack_bus_width_bits = pj.at("stack_bus_width_bits").get<int>();
+            if (p.channels_per_stack <= 0)
+                throw std::runtime_error("memory_system.profiles['" +
+                                         it.key() +
+                                         "']: channels_per_stack must be > 0");
+            if (p.pseudo_channels_per_channel <= 0)
+                throw std::runtime_error(
+                    "memory_system.profiles['" + it.key() +
+                    "']: pseudo_channels_per_channel must be > 0");
+            if (p.data_rate_gbps_per_pin <= 0)
+                throw std::runtime_error(
+                    "memory_system.profiles['" + it.key() +
+                    "']: data_rate_gbps_per_pin must be > 0");
+            if (p.stack_bus_width_bits <= 0)
+                throw std::runtime_error(
+                    "memory_system.profiles['" + it.key() +
+                    "']: stack_bus_width_bits must be > 0");
+            g_hbm_profiles[it.key()] = p;
+        }
+    }
+
+    if (ms.contains("hbm_stacks")) {
+        for (const auto &sj : ms.at("hbm_stacks")) {
+            HBMStackConfig s;
+            s.stack_id = sj.at("stack_id").get<int>();
+            s.compute_die_id = sj.at("compute_die_id").get<int>();
+            s.profile = sj.at("profile").get<std::string>();
+            s.side = SideFromStr(sj.at("side").get<std::string>());
+            s.start_idx = sj.at("start_idx").get<int>();
+            s.phy_span_tiles = sj.at("phy_span_tiles").get<int>();
+            s.capacity_bytes =
+                sj.at("capacity_bytes").get<unsigned long long>();
+            s.backend_granularity =
+                sj.contains("backend_granularity")
+                    ? GranularityFromStr(
+                          sj.at("backend_granularity").get<std::string>())
+                    : HBMBackendGranularity::kChannel;
+            s.backend_kind = sj.contains("backend")
+                                 ? BackendKindFromStr(
+                                       sj.at("backend").get<std::string>())
+                                 : HBMBackendKind::kDRAMSys;
+            s.port_granularity =
+                sj.contains("port_granularity")
+                    ? PortGranularityFromStr(
+                          sj.at("port_granularity").get<std::string>())
+                    : HBMPortGranularity::kChannel;
+            s.channels_per_mem_port =
+                sj.value("channels_per_mem_port", 1);
+            s.channel_dram_config =
+                sj.at("channel_dram_config").get<std::string>();
+            if (sj.contains("bandwidth_cap_GBps"))
+                s.bandwidth_cap_GBps = sj.at("bandwidth_cap_GBps").get<double>();
+            s.behavioral_efficiency = sj.value("behavioral_efficiency", 1.0);
+            s.behavioral_base_latency_ns =
+                sj.value("behavioral_base_latency_ns", 0.0);
+            s.behavioral_read_to_write_ns =
+                sj.value("behavioral_read_to_write_ns", 0.0);
+            s.behavioral_write_to_read_ns =
+                sj.value("behavioral_write_to_read_ns", 0.0);
+
+            if (s.stack_id < 0)
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: stack_id must be >= 0");
+            if (s.compute_die_id < 0 || s.compute_die_id >= DIE_COUNT)
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: compute_die_id out of range "
+                    "for stack " +
+                    std::to_string(s.stack_id));
+            if (!g_hbm_profiles.count(s.profile))
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: stack " +
+                    std::to_string(s.stack_id) +
+                    " references unknown profile '" + s.profile + "'");
+            if (s.phy_span_tiles <= 0)
+                throw std::runtime_error("memory_system.hbm_stacks: stack " +
+                                         std::to_string(s.stack_id) +
+                                         " phy_span_tiles must be > 0");
+            if (s.capacity_bytes == 0)
+                throw std::runtime_error("memory_system.hbm_stacks: stack " +
+                                         std::to_string(s.stack_id) +
+                                         " capacity_bytes must be > 0");
+            if (s.channel_dram_config.empty())
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: stack " +
+                    std::to_string(s.stack_id) +
+                    " channel_dram_config must not be empty");
+            if (!(s.behavioral_efficiency > 0.0 &&
+                  s.behavioral_efficiency <= 1.0) ||
+                s.behavioral_base_latency_ns < 0.0 ||
+                s.behavioral_read_to_write_ns < 0.0 ||
+                s.behavioral_write_to_read_ns < 0.0)
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: behavioral efficiency must "
+                    "be in (0,1] and latency/turnaround values must be >= 0");
+            if (s.channels_per_mem_port <= 0)
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: channels_per_mem_port must "
+                    "be > 0");
+            if (s.port_granularity == HBMPortGranularity::kChannel &&
+                s.channels_per_mem_port != 1)
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: port_granularity='channel' "
+                    "requires channels_per_mem_port=1");
+            const int profile_channels =
+                g_hbm_profiles.at(s.profile).channels_per_stack;
+            if (s.port_granularity == HBMPortGranularity::kAggregated &&
+                (s.channels_per_mem_port <= 1 ||
+                 s.channels_per_mem_port > profile_channels))
+                throw std::runtime_error(
+                    "memory_system.hbm_stacks: port_granularity='aggregated' "
+                    "requires channels_per_mem_port in [2, " +
+                    std::to_string(profile_channels) + "]");
+
+            for (const auto &prev : g_hbm_stacks)
+                if (prev.stack_id == s.stack_id)
+                    throw std::runtime_error(
+                        "memory_system.hbm_stacks: duplicate stack_id " +
+                        std::to_string(s.stack_id));
+
+            g_hbm_stacks.push_back(s);
+        }
+    }
+
+    ParseAddressPolicy(ms);
+}
+
+void BuildMemAttach() {
+    g_hbm_channels.clear();
+    if (!g_memory_system_active)
+        return;
+    for (const auto &s : g_hbm_stacks) {
+        auto pit = g_hbm_profiles.find(s.profile);
+        if (pit == g_hbm_profiles.end())
+            continue; // ParseMemorySystem 已保证不会发生，这里只是防御
+        int n_channels = s.backend_granularity == HBMBackendGranularity::kChannel
+                             ? pit->second.channels_per_stack
+                             : 1;
+        for (int c = 0; c < n_channels; c++) {
+            HBMChannelConfig hc;
+            hc.stack_id = s.stack_id;
+            hc.channel_id = c;
+            hc.mem_tile =
+                TileFor(s.side, s.start_idx + c / s.channels_per_mem_port);
+            g_hbm_channels.push_back(hc);
+        }
+    }
+}
+
+void ValidateMemAttach() {
+    if (!g_memory_system_active)
+        return;
+
+    // stack_id 全局唯一：单一真源，不允许由端口数事后反推（ParseMemorySystem 解析期
+    // 已查重，这里是独立触发路径——例如测试直接调用本函数——的兜底）。
+    std::set<int> seen_ids;
+    for (const auto &s : g_hbm_stacks) {
+        if (!seen_ids.insert(s.stack_id).second)
+            throw std::runtime_error("memory_system: duplicate stack_id " +
+                                     std::to_string(s.stack_id));
+        if (!g_hbm_profiles.count(s.profile))
+            throw std::runtime_error(
+                "memory_system: stack " + std::to_string(s.stack_id) +
+                " references unknown profile '" + s.profile + "'");
+    }
+
+    // 逐 die 做 keep-out 检查：g_die_ports 是所有 die 共用的同构模板，先收集该模板
+    // 里任意角色（HOST/C2C/遗留 ROLE_MEM）已占用的 tile，再核对每颗挂在该 die 上的
+    // stack 的物理区间——边界内、彼此不重叠、且不与模板端口占用的 tile 冲突（含
+    // corner tile 同属两条边时的双重占用）。
+    for (int die = 0; die < DIE_COUNT; die++) {
+        std::map<int, std::string> occupied; // local tile -> 占用来源（报错用）
+        if (g_die_ports.active) {
+            for (const auto &p : g_die_ports.ports)
+                occupied[p.tile] =
+                    "die_ports template port " + std::to_string(p.port_id);
+        }
+
+        for (const auto &s : g_hbm_stacks) {
+            if (s.compute_die_id != die)
+                continue;
+
+            // 前一个循环已对全部 stack 做过 profile 引用校验（未通过会在那里抛
+            // std::runtime_error），这里改用 find 而非 at()，避免在这个不可能
+            // 触发的分支上意外抛出类型不一致的 std::out_of_range。
+            auto profile_it = g_hbm_profiles.find(s.profile);
+            if (profile_it == g_hbm_profiles.end())
+                throw std::runtime_error(
+                    "memory_system: stack " + std::to_string(s.stack_id) +
+                    " references unknown profile '" + s.profile + "'");
+            const HBMProfile &profile = profile_it->second;
+            // 物理 keep-out 跨度只取决于这颗 stack 真实有多少个 channel（硬件事
+            // 实），与 backend_granularity 无关——后者是"用几个 DRAMSys 实例去模
+            // 拟"这个纯软件/仿真粒度的选择：kStack 下虽然只建一个 DRAMSys 实例、
+            // BuildMemAttach 也只产出一个路由用的代表 tile，但那颗 stack 在
+            // interposer 上依然实打实占用 channels_per_stack 个物理 PHY 位置，
+            // keep-out 不能因为软件合并了实例就跟着收窄。
+            int expected_ports =
+                (profile.channels_per_stack + s.channels_per_mem_port - 1) /
+                s.channels_per_mem_port;
+            if (s.phy_span_tiles < expected_ports)
+                throw std::runtime_error(
+                    "memory_system: stack " + std::to_string(s.stack_id) +
+                    " phy_span_tiles=" + std::to_string(s.phy_span_tiles) +
+                    " too small for " + std::to_string(expected_ports) +
+                    " logical MEM port(s)");
+
+            int edge_len = EdgeLen(s.side);
+            if (s.start_idx < 0 || s.start_idx + s.phy_span_tiles > edge_len)
+                throw std::runtime_error(
+                    "memory_system: stack " + std::to_string(s.stack_id) +
+                    " tile span [" + std::to_string(s.start_idx) + ", " +
+                    std::to_string(s.start_idx + s.phy_span_tiles) +
+                    ") exceeds edge extent " + std::to_string(edge_len));
+
+            for (int i = 0; i < s.phy_span_tiles; i++) {
+                int tile = TileFor(s.side, s.start_idx + i);
+                auto it = occupied.find(tile);
+                if (it != occupied.end())
+                    throw std::runtime_error(
+                        "memory_system: stack " + std::to_string(s.stack_id) +
+                        " tile " + std::to_string(tile) +
+                        " conflicts with " + it->second);
+                occupied[tile] = "stack " + std::to_string(s.stack_id);
+            }
+        }
+    }
 }

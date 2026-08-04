@@ -10,6 +10,7 @@
 
 #include "defs/const.h"
 #include "defs/global.h"
+#include "die/port.h"
 #include "dte/coll_latency.h"
 #include "dte/coll_multicast.h"
 #include "dte/coll_innetwork_reduce.h"
@@ -29,24 +30,32 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 #include "workercore/workercore.h"
+#include "memory/hbm_network.h"
+#include "memory/hbm_address_map.h"
 
 using namespace std;
 
 // workercore
 WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
                        Event_engine *event_engine, string dram_config_name)
-    : sc_module(n), cid(s_cid), event_engine(event_engine) {
+    : sc_module(n), cid(s_cid), event_engine(event_engine), dcache(nullptr),
+      hbm_adapter(nullptr) {
+    const bool distributed = g_memory_system_active &&
+        g_memory_topology == MemoryTopology::kDistributedHbm;
     // systolic_config = new HardwareTaskConfig();
     // other_config = new HardwareTaskConfig();
-    dcache = new DCache(sc_gen_unique_name("dcache"), cid, (int)cid / GRID_X,
-                        (int)cid % GRID_X, this->event_engine, dram_config_name,
-                        "../DRAMSys/configs");
+    if (!distributed)
+        dcache = new DCache(sc_gen_unique_name("dcache"), cid,
+                            (int)cid / GRID_X, (int)cid % GRID_X,
+                            this->event_engine, dram_config_name,
+                            "../DRAMSys/configs");
 
     LOG_DEBUG(SYSTEM) << "Core " << cid << " dram config path "
                       << dram_config_name;
-    LOG_DEBUG(SYSTEM)
-        << " max address "
-        << dcache->dramSysWrapper->dramsys->getAddressDecoder().maxAddress();
+    if (dcache)
+        LOG_DEBUG(SYSTEM)
+            << " max address "
+            << dcache->dramSysWrapper->dramsys->getAddressDecoder().maxAddress();
 
     auto sram_bitw = GetCoreHWConfig(cid)->sram_bitwidth;
     ram_array = new DynamicBandwidthRamRow<sc_bv<SRAM_BITWIDTH>, SRAM_BANKS>(
@@ -65,22 +74,41 @@ WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
                                       cid, this->event_engine);
     // executor->MaxDramAddr =
     //     dcache->dramSysWrapper->dramsys->getAddressDecoder().maxAddress();
-    executor->MaxDramAddr =
-        dcache->dramSysWrapper->dramsys->getMemSpec().memorySizeBytes;
-    executor->defaultDataLength =
-        dcache->dramSysWrapper->dramsys->getMemSpec().defaultBytesPerBurst;
+    if (distributed) {
+        if (!ActiveHBMNetwork())
+            throw std::runtime_error(
+                "distributed_hbm WorkerCore requires an elaborated HBMNetwork");
+        hbm_adapter = new CoreMemAdapter(sc_gen_unique_name("core-hbm-adapter"),
+                                         cid);
+        hbm_adapter->BindTransport(ActiveHBMNetwork());
+        executor->hbm_adapter = hbm_adapter;
+        uint64_t exposed = 0;
+        for (const auto &range : g_address_policy.home_ranges)
+            exposed = std::max<uint64_t>(exposed, range.base + range.size_bytes);
+        if (exposed == 0)
+            for (const auto &stack : g_hbm_stacks)
+                exposed += stack.capacity_bytes;
+        executor->MaxDramAddr = exposed;
+        executor->defaultDataLength = 32;
+    } else {
+        executor->MaxDramAddr =
+            dcache->dramSysWrapper->dramsys->getMemSpec().memorySizeBytes;
+        executor->defaultDataLength =
+            dcache->dramSysWrapper->dramsys->getMemSpec().defaultBytesPerBurst;
+    }
     if (SYSTEM_MODE != SIM_GPU && SYSTEM_MODE != SIM_GPU_PD) {
         GPU_DRAM_ALIGNED = executor->defaultDataLength;
     }
-    assert(dataset_words_per_tile <
-           dcache->dramSysWrapper->dramsys->getMemSpec().memorySizeBytes);
+    assert(dataset_words_per_tile < executor->MaxDramAddr);
     g_dram_kvtable[cid] =
         new DramKVTable(executor->MaxDramAddr, (uint64_t)50 * 1024 * 1024, 20);
+    if (!distributed) {
 #if USE_NB_DRAMSYS == 1
-    executor->nb_dcache_socket->socket.bind(dcache->socket);
+        executor->nb_dcache_socket->socket.bind(dcache->socket);
 #else
-    executor->dcache_socket->isocket.bind(dcache->socket);
+        executor->dcache_socket->isocket.bind(dcache->socket);
 #endif
+    }
     executor->mem_access_port->mem_read_port(*ram_array);
     executor->mem_access_port->mem_write_port(*ram_array);
     executor->high_bw_mem_access_port->mem_read_port(*ram_array);
@@ -93,6 +121,7 @@ WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
 WorkerCore::~WorkerCore() {
     delete executor;
     delete dcache;
+    delete hbm_adapter;
     delete ram_array;
     delete temp_ram_array;
 }
@@ -101,6 +130,8 @@ WorkerCore::~WorkerCore() {
 WorkerCoreExecutor::WorkerCoreExecutor(const sc_module_name &n, int s_cid,
                                        Event_engine *event_engine)
     : sc_module(n), cid(s_cid), event_engine(event_engine) {
+    const bool distributed = g_memory_system_active &&
+        g_memory_topology == MemoryTopology::kDistributedHbm;
     const CoreHWConfig *hw = GetCoreHWConfig(cid);
     DTEConfig dte_config =
         MakeDTEConfig(static_cast<uint32_t>(hw->dte_channel_count),
@@ -228,19 +259,23 @@ WorkerCoreExecutor::WorkerCoreExecutor(const sc_module_name &n, int s_cid,
     end_nb_gpu_dram_event = new sc_event();
 
     sram_writer = new SRAMWriteModule("sram_writer", end_sram_event);
+    if (!distributed) {
 #if USE_NB_DRAMSYS == 1
-    nb_dcache_socket =
-        new NB_DcacheIF(cid, sc_gen_unique_name("nb_dcache"),
-                        start_nb_dram_event, end_nb_dram_event, event_engine);
+        nb_dcache_socket =
+            new NB_DcacheIF(cid, sc_gen_unique_name("nb_dcache"),
+                            start_nb_dram_event, end_nb_dram_event, event_engine);
 #else
-    dcache_socket = new DcacheCore(sc_gen_unique_name("dcache"), event_engine);
+        dcache_socket = new DcacheCore(sc_gen_unique_name("dcache"), event_engine);
 #endif
+    }
 #if USE_L1L2_CACHE == 1
-    core_lv1_cache = new L1Cache(("l1_cache_" + to_string(cid)).c_str(), cid,
-                                 L1CACHESIZE, L1CACHELINESIZE, 4, 8);
-    gpunb_dcache_if = new GPUNB_dcacheIF(sc_gen_unique_name("nb_dcache_if"),
-                                         cid, start_nb_gpu_dram_event,
-                                         end_nb_gpu_dram_event, event_engine);
+    if (!distributed) {
+        core_lv1_cache = new L1Cache(("l1_cache_" + to_string(cid)).c_str(), cid,
+                                     L1CACHESIZE, L1CACHELINESIZE, 4, 8);
+        gpunb_dcache_if = new GPUNB_dcacheIF(sc_gen_unique_name("nb_dcache_if"),
+                                             cid, start_nb_gpu_dram_event,
+                                             end_nb_gpu_dram_event, event_engine);
+    }
 #else
 #endif
     mem_access_port = new mem_access_unit(sc_gen_unique_name("mem_access_unit"),

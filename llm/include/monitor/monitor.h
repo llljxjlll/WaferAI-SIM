@@ -9,6 +9,7 @@
 #include "monitor/mem_interface.h"
 #include "trace/Event_engine.h"
 #include "link/global_mem_interface.h"
+#include "memory/hbm_network.h"
 
 using namespace std;
 
@@ -52,6 +53,8 @@ public:
 
     // components
     RouterMonitor *routerMonitor;
+    HBMRuntime *hbmRuntime = nullptr;
+    HBMNetwork *hbmNetwork = nullptr;
     WorkerCore **workerCores;
     MemInterface *memInterface;
     
@@ -59,8 +62,8 @@ public:
     // ChipGlobalMemory *chipGlobalMemory;
 
 #if USE_L1L2_CACHE == 1
-    L1L2CacheSystem *cacheSystem;
-    GpuPosLocator *gpu_pos_locator;
+    L1L2CacheSystem *cacheSystem = nullptr;
+    GpuPosLocator *gpu_pos_locator = nullptr;
 #else
 #endif
 

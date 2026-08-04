@@ -12,6 +12,7 @@
 #include "macros/macros.h"
 #include "memory/dram/Dcache.h"
 #include "memory/dram/DummyDcache.h"
+#include "memory/core_mem_adapter.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
 #include "memory/sram/dynamic_bandwidth_ram_row.h"
 #include "memory/sram_writer.h"
@@ -38,6 +39,7 @@ public:
 
     WorkerCoreExecutor *executor;
     DCache *dcache;
+    CoreMemAdapter *hbm_adapter;
     // SystolicArray *systolic;
     // DynamicBandwidthRamRow<sc_bv<256>, column_num> ram_array("ram_array", 0,
     // bank_depth, 2, 1, port_num + column_num * high_bw_port_num, port_num,
@@ -67,6 +69,7 @@ public:
 
     uint64_t MaxDramAddr; // 当前核最大的 dram 地址
     unsigned int defaultDataLength;
+    CoreMemAdapter *hbm_adapter = nullptr;
     int cid;
     bool prim_refill;    // 是否通过原语重填的方式实现循环
     int loop_cnt;        // 如果开启prim_refill，表明现在是第几个循环
@@ -161,18 +164,18 @@ public:
     std::map<std::pair<int, int>, std::deque<DteFlowPayloadRound>>
         dte_flow_payload_rounds;
 
-    NB_GlobalMemIF *nb_global_mem_socket;
+    NB_GlobalMemIF *nb_global_mem_socket = nullptr;
 
 #if USE_NB_DRAMSYS == 1
-    NB_DcacheIF *nb_dcache_socket;
+    NB_DcacheIF *nb_dcache_socket = nullptr;
 #else
-    DcacheCore *dcache_socket;
+    DcacheCore *dcache_socket = nullptr;
 #endif
 #if USE_L1L2_CACHE == 1
-    L1Cache *core_lv1_cache;
+    L1Cache *core_lv1_cache = nullptr;
     // Processor *cache_processor;
-    GPUNB_dcacheIF *gpunb_dcache_if;
-    GpuPosLocator *gpu_pos_locator;
+    GPUNB_dcacheIF *gpunb_dcache_if = nullptr;
+    GpuPosLocator *gpu_pos_locator = nullptr;
 #else
 #endif
     mem_access_unit *mem_access_port;

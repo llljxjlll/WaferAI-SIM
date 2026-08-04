@@ -5,6 +5,8 @@
 #include "defs/global.h"
 #include "defs/spec.h"
 #include "die/port.h"
+#include "memory/hbm_address_map.h"
+#include "memory/hbm_memspec.h"
 #include "utils/config_utils.h"
 #include "utils/print_utils.h"
 
@@ -234,6 +236,15 @@ void ParseHardwareConfig(json j) {
     BuildHostAttach();
     HOST_LANES = g_host_attach.n_lanes;
     ValidateHostAttach(); // 启动期结构校验（尺寸/tile/同 die/HOST_LANES 一致）
+
+    // R0：分布式 HBM memory_system（无该 key 时 g_memory_system_active=false，
+    // 行为与改造前逐位一致；不新建 SystemC 模块，不改变运行时）。须在 g_die_ports
+    // 就绪后解析，keep-out 校验需要读取 die_ports 模板的既有端口占用。
+    ParseMemorySystem(j);
+    BuildMemAttach();
+    ValidateMemAttach();
+    ValidateAddressPolicy();
+    ValidateHbmMemSpecConsistency();
 }
 
 void ParseSimulationConfig(json j) {

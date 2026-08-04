@@ -6,6 +6,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 定义项目名称
 project(npusim_project LANGUAGES CXX)
 
+include(CTest)
+
 # 设置C++标准
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,7 +36,7 @@ include_directories(
 add_subdirectory(DRAMSys)
 
 # 搜索所有.cpp文件
-file(GLOB_RECURSE SRC_FILES ./llm/*.cpp)
+file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS ./llm/*.cpp)
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/unittest/.*")
 # Remove 'test_dramsys.cpp' from the list of sources
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/test_dramsys\\.cpp$")
@@ -129,6 +131,15 @@ function(add_test_executable target_name test_main_file)
 endfunction()
 
 add_test_executable(npusim       "./llm/unittest/npusim.cpp")
+if(BUILD_TESTING)
+    foreach(hbm_stage RANGE 0 4)
+        add_test(NAME hbm_r${hbm_stage}_selftest
+                 COMMAND npusim --hbm-r${hbm_stage}-selftest)
+        set_tests_properties(hbm_r${hbm_stage}_selftest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            LABELS "hbm;distributed-memory")
+    endforeach()
+endif()
 # add_test_executable(load_config  "./llm/unittest/load_config.cpp")      
 # add_test_executable(global_chip_test  "./llm/unittest/global_chip_test.cpp")
 
@@ -189,4 +200,3 @@ add_test_executable(npusim       "./llm/unittest/npusim.cpp")
 set_directory_properties(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES "npusim;npusim_debug;load_config;load_config_debug")# add_library(systemc INTERFACE)
 
 # add_library(SystemC::systemc ALIAS systemc)
-

@@ -1,6 +1,7 @@
 #include "router/router.h"
 #include "die/port.h"
 #include "monitor/watchdog.h"
+#include "memory/hbm_network.h"
 #include "utils/print_utils.h"
 
 long g_max_output_lock_ref = 0;
@@ -115,6 +116,33 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
     dont_initialize();
 }
 
+void RouterUnit::InjectMemRequestFlit(const MemWireFlit &wire,
+                                      uint64_t *stall_counter) {
+    if (!IsMemWireFlit(wire) || !InspectMemWireFlit(wire).request_direction)
+        throw std::runtime_error("InjectMemRequestFlit: not a request flit");
+    while (buffer_i[CENTER].size() >= MAX_BUFFER_PACKET_SIZE) {
+        if (stall_counter) ++*stall_counter;
+        wait(mem_data_space_event);
+    }
+    buffer_i[CENTER].push(wire);
+    // A router has one physical transfer opportunity per cycle. A zero-time
+    // notification here can re-enter router_execute several times at the same
+    // timestamp and overwrite multiple flits on one sc_signal.
+    need_next_trigger.notify(CYCLE, SC_NS);
+}
+
+void RouterUnit::InjectMemResponseFlit(const MemWireFlit &wire,
+                                       uint64_t *stall_counter) {
+    if (!IsMemWireFlit(wire) || InspectMemWireFlit(wire).request_direction)
+        throw std::runtime_error("InjectMemResponseFlit: not a response flit");
+    while (ctrl_buffer_i[CENTER].size() >= MAX_BUFFER_PACKET_SIZE) {
+        if (stall_counter) ++*stall_counter;
+        wait(mem_ctrl_space_event);
+    }
+    ctrl_buffer_i[CENTER].push(wire);
+    need_next_trigger.notify(CYCLE, SC_NS);
+}
+
 void RouterUnit::EnableD2DDataCredit(Directions dir, int initial_credit) {
     if (dir < WEST || dir >= CENTER || initial_credit < 1)
         throw std::runtime_error("invalid D2D data credit configuration");
@@ -224,7 +252,7 @@ void RouterUnit::router_execute() {
                 // V2-b：该方向是 peer-connected C2C 边 ⇒ 本包刚跨 link 进入本 die，
                 // 入口处清除上一跳 pin 并按本 die 重新 pin（见 RepinOnC2CIngress）。
                 bool from_c2c = IsC2CEgressEdge(rid, Directions(i));
-                if (from_c2c)
+                if (from_c2c && !IsMemWireFlit(temp))
                     temp = RepinOnC2CIngress(temp);
                 CountDieRouterPkt(i, from_c2c); // V2-c：本 die NoC 活动
 
@@ -243,9 +271,8 @@ void RouterUnit::router_execute() {
                 sc_bv<256> temp = ctrl_channel_i[i].read();
                 // V2-b：控制包（REQUEST/ACK）与 DATA 一样，跨 link 进入本 die 后必须重新 pin。
                 bool from_c2c = IsC2CEgressEdge(rid, Directions(i));
-                if (from_c2c)
+                if (from_c2c && !IsMemWireFlit(temp))
                     temp = RepinOnC2CIngress(temp);
-                Msg tt = DeserializeMsg(temp);
                 CountDieRouterPkt(i, from_c2c); // V2-c：本 die NoC 活动
 
                 ctrl_buffer_i[i].emplace(temp);
@@ -316,6 +343,9 @@ void RouterUnit::router_execute() {
                     RecordCollectiveSharedOutput(
                         static_cast<uint16_t>(rid),
                         static_cast<uint8_t>(i), true);
+            } else if (IsMemWireFlit(temp)) {
+                if (ActiveHBMNetwork())
+                    ActiveHBMNetwork()->RecordHop(rid, i, temp);
             } else {
                 const Msg normal_msg = DeserializeMsg(temp);
                 if (SPEC_NOC_COLL_ENABLED && normal_msg.msg_type_ == DATA)
@@ -354,13 +384,17 @@ void RouterUnit::router_execute() {
             sc_bv<256> temp = ctrl_buffer_o[i].front();
             ctrl_buffer_o[i].pop();
 
-            Msg tt = DeserializeMsg(temp);
-
             ctrl_channel_o[i].write(temp);
             ctrl_sent_o[i].write(true);
             if (d2d_ctrl_credit_enabled[i])
                 d2d_ctrl_credits[i]--;
-            MaybeReleaseV5DynamicPin(tt, rid, Directions(i));
+            if (IsMemWireFlit(temp)) {
+                if (ActiveHBMNetwork())
+                    ActiveHBMNetwork()->RecordHop(rid, i, temp);
+            } else {
+                Msg tt = DeserializeMsg(temp);
+                MaybeReleaseV5DynamicPin(tt, rid, Directions(i));
+            }
 
             // need trigger again
             flag_trigger = true;
@@ -405,6 +439,15 @@ void RouterUnit::router_execute() {
         data_sent_o[CENTER].write(false);
         // 输出到本地core内的buffer非空
         if (buffer_o[CENTER].size()) {
+            sc_bv<256> front = buffer_o[CENTER].front();
+            if (IsMemWireFlit(front)) {
+                if (!ActiveHBMNetwork())
+                    throw std::runtime_error("MEM request reached core without HBMNetwork");
+                if (ActiveHBMNetwork()->TryAcceptRequestFlit(rid, front)) {
+                    buffer_o[CENTER].pop();
+                    flag_trigger = true;
+                }
+            } else
             // core内部的接受队列是否满
             if (collective_output_cooldown[CENTER]) {
                 collective_output_cooldown[CENTER] = false;
@@ -431,6 +474,15 @@ void RouterUnit::router_execute() {
         ctrl_sent_o[CENTER].write(false);
         // 控制信道输出到本地core内的buffer非空
         if (ctrl_buffer_o[CENTER].size()) {
+            sc_bv<256> front = ctrl_buffer_o[CENTER].front();
+            if (IsMemWireFlit(front)) {
+                if (!ActiveHBMNetwork())
+                    throw std::runtime_error("MEM response reached core without HBMNetwork");
+                if (ActiveHBMNetwork()->TryAcceptResponseFlit(rid, front)) {
+                    ctrl_buffer_o[CENTER].pop();
+                    flag_trigger = true;
+                }
+            } else
             // 控制信道的core接受队列是否满（独立于数据信道）
             if (!ctrl_core_busy_i.read()) {
                 // move the ctrl data out of the buffer
@@ -472,6 +524,20 @@ void RouterUnit::router_execute() {
                 continue;
 
             sc_bv<256> temp = ctrl_buffer_i[i].front();
+            if (IsMemWireFlit(temp)) {
+                Directions out = MemFlitNextHop(temp, rid);
+                if (ctrl_buffer_o[out].size() >= MAX_BUFFER_PACKET_SIZE)
+                    continue;
+                if (!ctrl_buffer_o[out].empty() &&
+                    !IsMemWireFlit(ctrl_buffer_o[out].front()) &&
+                    ActiveHBMNetwork())
+                    ActiveHBMNetwork()->RecordSharedNocContention();
+                ctrl_buffer_i[i].pop();
+                ctrl_buffer_o[out].push(temp);
+                if (i == CENTER) mem_ctrl_space_event.notify(SC_ZERO_TIME);
+                flag_trigger = true;
+                continue;
+            }
             Msg m = DeserializeMsg(temp);
             // core 目的：跨 die 时消费源核选定并随包携带的固定 exit_port；进入目标 die
             // 后退回片内 XY。HOST 目的仍以消息 source 作为 egress anchor。
@@ -588,6 +654,23 @@ void RouterUnit::router_execute() {
                 buffer_i[i].pop();
                 for (int d = 0; d < DIRECTIONS; ++d)
                     if (outputs & (1u << d)) buffer_o[d].emplace(temp);
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
+            if (IsMemWireFlit(temp)) {
+                Directions out = MemFlitNextHop(temp, rid);
+                if (buffer_o[out].size() >= MAX_BUFFER_PACKET_SIZE)
+                    continue;
+                if (!buffer_o[out].empty() && ActiveHBMNetwork()) {
+                    if (IsMemWireFlit(buffer_o[out].front()))
+                        ActiveHBMNetwork()->RecordMemNocContention();
+                    else
+                        ActiveHBMNetwork()->RecordSharedNocContention();
+                }
+                buffer_i[i].pop();
+                buffer_o[out].push(temp);
+                if (i == CENTER) mem_data_space_event.notify(SC_ZERO_TIME);
                 collective_rr_start = (i + 1) % DIRECTIONS;
                 flag_trigger = true;
                 continue;

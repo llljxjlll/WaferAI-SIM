@@ -3,12 +3,14 @@
 #include "die/port.h"
 #include "defs/spec.h"
 #include "monitor/watchdog.h"
+#include "memory/hbm_mem_wire.h"
 #include "utils/msg_utils.h"
 #include <stdexcept>
 
 namespace {
 inline void MixWord(unsigned long long &h, unsigned long long w);
 void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
+    if (IsMemWireFlit(payload)) return;
     int type = static_cast<int>(DeserializeMsg(payload).msg_type_);
     if (type >= 0 && type < MSG_TYPE_NUM)
         counts[type]++;
@@ -16,6 +18,7 @@ void CountType(long (&counts)[MSG_TYPE_NUM], const sc_bv<256> &payload) {
 
 // V2-c：按有向 link 下标分类计数（下标越界/未归因则跳过）。
 void CountLink(int idx, bool is_in, const sc_bv<256> &payload) {
+    if (IsMemWireFlit(payload)) return;
     if (idx < 0 || idx >= (int)g_d2d_link_stats.size())
         return;
     int type = static_cast<int>(DeserializeMsg(payload).msg_type_);
@@ -63,6 +66,7 @@ inline void MixWord(unsigned long long &h, unsigned long long w) {
 // 对 DATA 型包更新完整性探针：seqhash 吸收 seq_id，csum 吸收完整 256-bit payload（含 data 段），
 // out 侧另记 canonical 形状（inorder / endseq / maxseq）。非 DATA 包不触碰探针。
 void ProbeData(D2DDataProbe &p, const sc_bv<256> &payload, long long cycle) {
+    if (IsMemWireFlit(payload)) return;
     Msg m = DeserializeMsg(payload);
     if (m.msg_type_ != DATA)
         return;
@@ -218,6 +222,20 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
 
     if (in_sent.read()) {
         sc_bv<256> payload = in_channel.read();
+        if (IsMemWireFlit(payload)) {
+            const long service = std::max<long>(
+                1, std::max(
+                    (behavioral.port_rate.den + behavioral.port_rate.num - 1) /
+                        behavioral.port_rate.num,
+                    (behavioral.link_rate.den + behavioral.link_rate.num - 1) /
+                        behavioral.link_rate.num));
+            const long start = std::max(cyc, behavioral_mem_data_next_);
+            behavioral_mem_data_next_ = start + service;
+            behavioral_data_events_.emplace(
+                behavioral_mem_data_next_ + latency, payload);
+            g_d2d_link_in_pkts++;
+            CountLink(link_idx, true, payload);
+        } else {
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ != DATA)
             throw std::runtime_error(
@@ -271,9 +289,11 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
         CountType(g_d2d_link_in_by_type, payload);
         CountLink(link_idx, true, payload);
         ProbeData(g_d2d_data_in, payload, cyc);
+        }
     }
     if (in_ctrl_sent.read()) {
         sc_bv<256> payload = in_ctrl_channel.read();
+        if (!IsMemWireFlit(payload)) {
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ != REQUEST && m.msg_type_ != ACK)
             throw std::runtime_error(
@@ -284,6 +304,7 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
         behavioral_ctrl_events_.emplace(cyc + latency, payload);
         if (m.subflow_ == 0)
             g_d2d_behavioral_stats.fixed_cycles += latency;
+        }
         g_d2d_link_in_pkts++;
         CountType(g_d2d_link_in_by_type, payload);
         CountLink(link_idx, true, payload);
@@ -481,13 +502,25 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
     }
 
     // 3. A complete SAF flow may enter the finite physical link; incomplete flows never leave SAF.
-    bool ready = !saf_ready_.empty();
+    bool mem_ready = !mem_saf_fifo_.empty();
+    bool ready = mem_ready || !saf_ready_.empty();
     bool port_ok = port_tokens >= bound.port_rate.den;
     bool link_ok = tokens >= bound.rate.den;
     bool inflight_room = (int)fifo_.size() < bound.data_depth;
     bool group_request = ready && port_ok && link_ok && inflight_room;
     bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
     if (group_request && group_ok) {
+        if (mem_ready) {
+            sc_bv<256> payload = mem_saf_fifo_.front();
+            mem_saf_fifo_.pop_front();
+            fifo_.push_back({cyc + latency, payload});
+            CountLink(link_idx, true, payload);
+            g_d2d_link_in_pkts++;
+            port_tokens -= bound.port_rate.den;
+            tokens -= bound.rate.den;
+            data_credit_toggle_ = !data_credit_toggle_;
+            data_credit_return.write(data_credit_toggle_);
+        } else {
         FlowKey key = saf_ready_.front();
         auto fit = saf_flows_.find(key);
         if (fit == saf_flows_.end() || !fit->second.complete || fit->second.packets.empty())
@@ -510,6 +543,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
             saf_flows_.erase(fit);
             saf_expected_.erase(key);
             saf_ready_.pop_front();
+        }
         }
     } else if (ready) {
         if (!port_ok)
@@ -550,6 +584,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
             throw std::runtime_error("bounded CTRL producer exceeded advertised capacity");
         }
         sc_bv<256> payload = in_ctrl_channel.read();
+        if (!IsMemWireFlit(payload)) {
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ == REQUEST) {
             FlowKey key{m.source_, m.tag_id_, m.subflow_};
@@ -558,6 +593,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
             if (saf_expected_.count(key) || saf_flows_.count(key))
                 throw std::runtime_error("bounded SAF duplicate REQUEST on active link");
             saf_expected_[key] = m.flow_packets_;
+        }
         }
         cfifo_.push_back({cyc + latency, payload});
         CountType(g_d2d_link_in_by_type, payload);
@@ -571,11 +607,15 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
         long occupied = 0;
         for (const auto &kv : saf_flows_)
             occupied += (long)kv.second.packets.size();
+        occupied += (long)mem_saf_fifo_.size();
         if (occupied >= bound.saf_depth) {
             upstream_blocked++;
             throw std::runtime_error("bounded SAF stage overflow despite path reservation");
         }
         sc_bv<256> payload = in_channel.read();
+        if (IsMemWireFlit(payload)) {
+            mem_saf_fifo_.push_back(payload);
+        } else {
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ != DATA)
             throw std::runtime_error("bounded SAF DATA channel received a non-DATA packet");
@@ -597,12 +637,14 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
             flow.complete = true;
             saf_ready_.push_back(key);
         }
+        }
     }
 
     // 6. Occupancy/backpressure diagnostics after all state transitions.
     long saf_occ = 0;
     for (const auto &kv : saf_flows_)
         saf_occ += (long)kv.second.packets.size();
+    saf_occ += (long)mem_saf_fifo_.size();
     if (saf_occ > saf_occ_max) saf_occ_max = saf_occ;
     if ((long)fifo_.size() > inflight_occ_max) inflight_occ_max = (long)fifo_.size();
     if ((long)rx_fifo_.size() > rx_occ_max) rx_occ_max = (long)rx_fifo_.size();
