@@ -13,6 +13,10 @@
 #include "memory/dram/Dcache.h"
 #include "memory/dram/DummyDcache.h"
 #include "memory/core_mem_adapter.h"
+#include "memory/core_lsu_unit.h"
+#include "memory/hbm_byte_transport.h"
+#include "memory/sram/sram_access_unit.h"
+#include "memory/sram/compute_timeline.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
 #include "memory/sram/dynamic_bandwidth_ram_row.h"
 #include "memory/sram_writer.h"
@@ -49,6 +53,13 @@ public:
     // BANK_PORT_NUM, BANK_HIGH_READ_PORT_NUM, event_engine);
     DynamicBandwidthRamRow<sc_bv<SRAM_BITWIDTH>, SRAM_BANKS> *ram_array;
     DynamicBandwidthRamRow<sc_bv<SRAM_BITWIDTH>, SRAM_BANKS> *temp_ram_array;
+    std::unique_ptr<sram::RegionTable> sram_regions;
+    std::unique_ptr<sram::Storage> sram_storage;
+    std::unique_ptr<sram::AccessUnit> sram_access;
+    std::unique_ptr<sram::ComputeTimeline> compute_timeline;
+    std::unique_ptr<sram::HbmByteTransport> hbm_byte_transport;
+    std::unique_ptr<sram::CoreLsuUnit> lsu_memory;
+    std::unique_ptr<DteMemoryBridge> dte_memory_bridge;
 
     // HardwareTaskConfig *systolic_config;
     // HardwareTaskConfig *other_config;
@@ -70,6 +81,11 @@ public:
     uint64_t MaxDramAddr; // 当前核最大的 dram 地址
     unsigned int defaultDataLength;
     CoreMemAdapter *hbm_adapter = nullptr;
+    sram::CoreLsuUnit *lsu_memory = nullptr;
+    sram::RegionTable *sram_regions = nullptr;
+    sram::AccessUnit *sram_access = nullptr;
+    sram::Storage *sram_storage = nullptr;
+    sram::ComputeTimeline *compute_timeline = nullptr;
     int cid;
     bool prim_refill;    // 是否通过原语重填的方式实现循环
     int loop_cnt;        // 如果开启prim_refill，表明现在是第几个循环

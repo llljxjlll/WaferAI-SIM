@@ -3,6 +3,7 @@
 #include "prims/base.h"
 #include "prims/norm_prims.h"
 #include "utils/prim_utils.h"
+#include <stdexcept>
 
 REGISTER_PRIM(Store_prim);
 
@@ -30,4 +31,11 @@ vector<sc_bv<128>> Store_prim::serialize() {
 
     return segments;
 }
-int Store_prim::taskCoreDefault(TaskCoreContext &context) { return 0; }
+int Store_prim::taskCoreDefault(TaskCoreContext &context) {
+    if (size == 0) return 0;
+    if (!context.lsu_memory)
+        throw std::runtime_error(
+            "Store_prim transfer requires memory.sram.real_data_path=true");
+    context.lsu_memory->Store(sram_addr, dram_addr, size);
+    return 0;
+}

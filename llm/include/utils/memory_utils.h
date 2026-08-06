@@ -11,7 +11,8 @@ void sram_first_write_generic(TaskCoreContext &context, int data_size_in_byte,
                               bool dummy_alloc = false,
                               bool add_dram_addr = true);
 void sram_spill_back_generic(TaskCoreContext &context, int data_size_in_byte,
-                             u_int64_t global_addr, u_int64_t &dram_time);
+                             u_int64_t global_addr, u_int64_t &dram_time,
+                             int sram_addr_offset = 0);
 void sram_read_generic_temp(TaskCoreContext &context, int data_size_in_byte,
                             int sram_addr_offset, u_int64_t &dram_time);
 void sram_read_generic(TaskCoreContext &context, int data_size_in_byte,
@@ -48,6 +49,14 @@ void gpu_write_generic(TaskCoreContext &context, uint64_t addr, int size,
 #endif
 
 TaskCoreContext generate_context(WorkerCoreExecutor *workercore);
+
+// Legacy labels and the compatibility cursor use SRAM words. Unified SRAM
+// requests use byte addresses; keep the conversion explicit at that boundary.
+uint64_t LegacySramWordBytes(const TaskCoreContext &context);
+uint64_t LegacySramByteAddress(const TaskCoreContext &context,
+                               uint64_t word_address);
+uint64_t LegacySramWordAddressCeil(const TaskCoreContext &context,
+                                   uint64_t byte_address);
 
 // 在内存层级中使用
 uint64_t get_bank_index(uint64_t address);

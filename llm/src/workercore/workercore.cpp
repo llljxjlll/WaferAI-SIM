@@ -57,18 +57,29 @@ WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
             << " max address "
             << dcache->dramSysWrapper->dramsys->getAddressDecoder().maxAddress();
 
+    const auto &sram_config =
+        sram::ConfigRegistry::Instance().ForCore(cid);
     auto sram_bitw = GetCoreHWConfig(cid)->sram_bitwidth;
+    const uint64_t legacy_sram_rows =
+        sram_config.real_data_path
+            ? 1
+            : HW_SRAM_SIZE * 8 / sram_bitw / SRAM_BANKS;
     ram_array = new DynamicBandwidthRamRow<sc_bv<SRAM_BITWIDTH>, SRAM_BANKS>(
         sc_gen_unique_name("ram_array"), 0,
-        HW_SRAM_SIZE * 8 / sram_bitw / SRAM_BANKS, SIMU_READ_PORT,
+        legacy_sram_rows, SIMU_READ_PORT,
         SIMU_WRITE_PORT, BANK_PORT_NUM + SRAM_BANKS, BANK_PORT_NUM,
         BANK_HIGH_READ_PORT_NUM, event_engine);
-    temp_ram_array =
-        new DynamicBandwidthRamRow<sc_bv<SRAM_BITWIDTH>, SRAM_BANKS>(
-            sc_gen_unique_name("temp_ram_array"), 0,
-            HW_SRAM_SIZE * 8 / sram_bitw / SRAM_BANKS, SIMU_READ_PORT,
-            SIMU_WRITE_PORT, BANK_PORT_NUM + SRAM_BANKS, BANK_PORT_NUM,
-            BANK_HIGH_READ_PORT_NUM, event_engine);
+    temp_ram_array = nullptr;
+    if (!sram_config.real_data_path) {
+        temp_ram_array =
+            new DynamicBandwidthRamRow<sc_bv<SRAM_BITWIDTH>, SRAM_BANKS>(
+                sc_gen_unique_name("temp_ram_array"), 0, legacy_sram_rows,
+                SIMU_READ_PORT, SIMU_WRITE_PORT,
+                BANK_PORT_NUM + SRAM_BANKS, BANK_PORT_NUM,
+                BANK_HIGH_READ_PORT_NUM, event_engine);
+    }
+    sram_regions = std::make_unique<sram::RegionTable>(
+        sram_config, event_engine, cid);
 
     executor = new WorkerCoreExecutor(sc_gen_unique_name("workercore-exec"),
                                       cid, this->event_engine);
@@ -96,6 +107,46 @@ WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
         executor->defaultDataLength =
             dcache->dramSysWrapper->dramsys->getMemSpec().defaultBytesPerBurst;
     }
+
+    executor->sram_regions = sram_regions.get();
+    executor->core_context->sram_pos_locator_->BindRegionTable(
+        sram_regions.get());
+    if (sram_config.real_data_path) {
+        if (distributed && !hbm_adapter)
+            throw std::runtime_error(
+                "distributed real SRAM data path requires an HBM adapter");
+        if (!distributed && !dcache)
+            throw std::runtime_error(
+                "legacy_private real SRAM data path requires a DCache");
+        sram_storage = std::make_unique<sram::Storage>(
+            sram_config.capacity_bytes, true);
+        sram_access = std::make_unique<sram::AccessUnit>(
+            sc_gen_unique_name("sram-access"), *sram_regions, *sram_storage,
+            event_engine, cid);
+        compute_timeline =
+            std::make_unique<sram::ComputeTimeline>(*sram_access, event_engine, cid);
+        if (distributed)
+            hbm_byte_transport =
+                std::make_unique<sram::CoreMemByteTransport>(*hbm_adapter);
+        else
+            hbm_byte_transport =
+                std::make_unique<sram::LegacyPrivateByteTransport>(*dcache);
+        lsu_memory = std::make_unique<sram::CoreLsuUnit>(
+            sc_gen_unique_name("core-lsu"), *sram_regions, *sram_access,
+            *hbm_byte_transport, sram_config.lsu_queue_depth,
+            sram_config.lsu_max_outstanding,
+            sram_config.lsu_issue_latency_ns, event_engine, cid);
+        dte_memory_bridge = std::make_unique<DteMemoryBridge>(
+            sc_gen_unique_name("dte-memory-bridge"), *sram_regions,
+            *sram_access, *hbm_byte_transport,
+            sram_config.dte_memory_queue_depth,
+            sram_config.dte_memory_workers, event_engine, cid);
+        executor->dte_async->BindMemoryBridge(dte_memory_bridge.get());
+        executor->sram_storage = sram_storage.get();
+        executor->sram_access = sram_access.get();
+        executor->compute_timeline = compute_timeline.get();
+        executor->lsu_memory = lsu_memory.get();
+    }
     if (SYSTEM_MODE != SIM_GPU && SYSTEM_MODE != SIM_GPU_PD) {
         GPU_DRAM_ALIGNED = executor->defaultDataLength;
     }
@@ -113,9 +164,10 @@ WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
     executor->mem_access_port->mem_write_port(*ram_array);
     executor->high_bw_mem_access_port->mem_read_port(*ram_array);
 
-    executor->temp_mem_access_port->mem_read_port(*temp_ram_array);
-    executor->temp_mem_access_port->mem_write_port(*temp_ram_array);
-    executor->high_bw_temp_mem_access_port->mem_read_port(*temp_ram_array);
+    auto *temp_port_target = temp_ram_array ? temp_ram_array : ram_array;
+    executor->temp_mem_access_port->mem_read_port(*temp_port_target);
+    executor->temp_mem_access_port->mem_write_port(*temp_port_target);
+    executor->high_bw_temp_mem_access_port->mem_read_port(*temp_port_target);
 }
 
 WorkerCore::~WorkerCore() {
@@ -310,12 +362,25 @@ void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
             "Dte_async primitive requires dte.async=true");
 
     switch (prim->op) {
-    case DteAsyncOp::ISSUE:
+    case DteAsyncOp::ISSUE: {
+        uint64_t spm_addr = prim->spm_addr;
+        if (!prim->sram_region.empty()) {
+            if (sram_regions == nullptr)
+                throw std::runtime_error(
+                    "Dte_async named region requires SRAM region table");
+            const auto command = prim->direction == DteDir::DRAM_TO_SPM
+                                     ? sram::Command::kWrite
+                                     : sram::Command::kRead;
+            spm_addr = sram_regions->Resolve(
+                prim->sram_region, prim->sram_offset, prim->spm_size,
+                sram::Initiator::kDte, command).address;
+        }
         dte_async->IssueToken(
             prim->token, prim->payload_bits, prim->direction,
-            prim->spm_addr, prim->spm_size, prim->remote_peer,
+            spm_addr, prim->spm_size, prim->remote_peer,
             prim->remote_addr, prim->address_block);
         break;
+    }
     case DteAsyncOp::WAIT:
         dte_async->WaitToken(prim->token);
         break;
@@ -341,6 +406,10 @@ void WorkerCoreExecutor::worker_core_execute() {
                 throw std::runtime_error(
                     "DTE V3a primitive queue drained with outstanding tokens; "
                     "an explicit wait/fence is required");
+            if (lsu_memory && lsu_memory->OutstandingCount() != 0)
+                throw std::runtime_error(
+                    "primitive queue drained with outstanding LSU tokens; "
+                    "an explicit Lsu_mem wait/fence is required");
             // 队列中没有指令，意味着现在是初始状态或者所有原语都被执行完了（假设所有原语只做一轮），默认作recv，直到config发进来
             // 显式 tag=0、recv_cnt=0：CONFIG ACK tag 契约固定为 0（不依赖未初始化值）。
             p = new Recv_prim(RECV_TYPE::RECV_CONF, /*tag=*/0, /*recv_cnt=*/0);

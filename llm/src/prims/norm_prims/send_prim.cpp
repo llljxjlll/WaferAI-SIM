@@ -5,6 +5,8 @@
 #include "prims/norm_prims.h"
 #include "utils/prim_utils.h"
 #include "utils/print_utils.h"
+#include "utils/system_utils.h"
+#include <stdexcept>
 
 REGISTER_PRIM(Send_prim);
 
@@ -108,16 +110,25 @@ int Send_prim::taskCoreDefault(TaskCoreContext &context) {
         AddrPosKey sc_key;
         int flag =
             prim_context->sram_pos_locator_->findPair(output_label, sc_key);
-        sc_key.pos = 0;
-
+        if (context.sram_access) {
+            const int sram_bits = GetCoreHWConfig(context.cid)->sram_bitwidth;
+            if ((sram_bits % 8) != 0)
+                throw std::runtime_error(
+                    "Send_prim requires byte-addressable SRAM bitwidth");
+            sram::Request request;
+            request.initiator = sram::Initiator::kCompute;
+            request.command = sram::Command::kRead;
+            request.address =
+                static_cast<uint64_t>(sc_key.pos) * (sram_bits / 8);
+            request.size_bytes = 16;
+            context.sram_access->Access(request);
+        } else {
 #if USE_SRAM_MANAGER == 1
-        mau->mem_read_port->read(0, msg_data, elapsed_time);
+            mau->mem_read_port->read(0, msg_data, elapsed_time);
 #else
-        // ERROT SRAM BITWIDTH
-        for (int i = 0; i < 1; i++) {
             wait(CYCLE, SC_NS);
-        }
 #endif
+        }
         if (need_delete)
             prim_context->sram_pos_locator_->deletePair(output_label);
     }

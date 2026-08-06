@@ -40,6 +40,7 @@ public:
     int tX;
     int tY;
     int cid;
+    bool real_data_mode = false;
 
     SC_HAS_PROCESS(DCache);
     DCache(const sc_module_name &n, int cid, int idX, int idY,
@@ -60,6 +61,7 @@ public:
                                                  &DCache::nb_transport_bw);
     }
     ~DCache() {}
+    void EnableRealDataMode() { real_data_mode = true; }
     void check_freq(std::unordered_map<u_int64_t, u_int16_t> &freq,
                     u_int64_t *tags, u_int32_t set, u_int64_t elem_tag) {
         if (freq[elem_tag] == CACHE_MAX_FREQ) {
@@ -150,6 +152,12 @@ public:
 
     // 处理传输的回调函数
     void b_transport(tlm_generic_payload &trans, sc_time &delay) {
+        if (real_data_mode) {
+            sc_time downstream = SC_ZERO_TIME;
+            initiatorSocket->b_transport(trans, downstream);
+            delay += downstream;
+            return;
+        }
         // std::cout << "DCache: " << sc_time_stamp() << " " <<
         // trans.get_command()
         // << " " << trans.get_address() << std::endl;

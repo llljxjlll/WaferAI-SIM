@@ -112,6 +112,25 @@ public:
 };
 
 
+// Experiment primitive for a manually partitioned SRAM GEMM + direct
+// Reduce-Scatter schedule. mode=0 produces a GEMM chunk and binds its
+// swizzled send buffer; mode=1 models the owner-side reduction.
+class Gemm_rs_swizzle : public NpuBase {
+public:
+    void taskCore(TaskCoreContext &context, string prim_name,
+                  u_int64_t &dram_time, u_int64_t &exu_ops,
+                  u_int64_t &sfu_ops, u_int64_t &vec_ops);
+    void initialize();
+
+    Gemm_rs_swizzle() {
+        name = "Gemm_rs_swizzle";
+        param_name.insert(param_name.end(),
+                          {"mode", "chunk", "tile_bytes", "comm_bytes",
+                           "compute_cycles", "reduce_cycles", "hbm_base",
+                           "participants"});
+    }
+};
+
 class Matmul_f_mla : public NpuBase {
 public:
     void taskCore(TaskCoreContext &context, string prim_name,

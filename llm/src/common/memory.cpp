@@ -2,10 +2,132 @@
 #include "utils/memory_utils.h"
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
+#include "memory/sram/sram_region.h"
 
 #include <iostream>
 
 using namespace std;
+
+namespace {
+bool HasRegion(const sram::RegionTable &regions, const std::string &name) {
+    if (name.empty()) return false;
+    try {
+        (void)regions.RegionId(name);
+        return true;
+    } catch (const std::out_of_range &) {
+        return false;
+    }
+}
+
+void AnnotateRealSramKey(AddrPosKey &key, TaskCoreContext &context,
+                         const std::string &label) {
+    if (context.sram_storage == nullptr || context.sram_regions == nullptr ||
+        key.pos < 0 || key.size <= 0)
+        return;
+    if (label.rfind(ETERNAL_PREFIX, 0) == 0)
+        key.allocation_lifetime = sram::AllocationLifetime::kPersistent;
+
+    const uint64_t word_bytes = LegacySramWordBytes(context);
+    const uint64_t old_address = LegacySramByteAddress(
+        context, static_cast<uint64_t>(key.pos));
+    if (key.region_allocation_id != 0) {
+        const auto &allocation =
+            context.sram_regions->FindAllocation(key.region_allocation_id);
+        if (allocation.range.size_bytes < static_cast<uint64_t>(key.size))
+            context.sram_regions->ResizeAllocation(
+                key.region_allocation_id, static_cast<uint64_t>(key.size));
+        const auto &updated =
+            context.sram_regions->FindAllocation(key.region_allocation_id);
+        if (updated.range.address % word_bytes != 0)
+            throw std::invalid_argument(
+                "SRAM label allocation is not legacy-word aligned");
+        key.pos = static_cast<int>(updated.range.address / word_bytes);
+        key.region_id = updated.range.region_id;
+        key.spillable =
+            context.sram_regions->Region(updated.range.region_id).spillable;
+        return;
+    }
+
+    if (HasRegion(*context.sram_regions, key.preferred_region)) {
+        const auto &target =
+            context.sram_regions->Region(key.preferred_region);
+        if (target.allocator != sram::AllocatorKind::kBlock)
+            throw std::invalid_argument(
+                "production SRAM labels require a block region");
+        const auto allocation = context.sram_regions->Allocate(
+            target.name, static_cast<uint64_t>(key.size), label,
+            key.allocation_lifetime);
+        if (allocation.range.address % word_bytes != 0)
+            throw std::invalid_argument(
+                "SRAM label allocation is not legacy-word aligned");
+        if (key.valid && old_address != allocation.range.address) {
+            if (context.sram_access == nullptr)
+                throw std::runtime_error(
+                    "SRAM label relocation requires the unified access unit");
+            sram::Request read;
+            read.initiator = sram::Initiator::kCompute;
+            read.command = sram::Command::kRead;
+            read.address = old_address;
+            read.size_bytes = static_cast<uint64_t>(key.size);
+            const auto payload = context.sram_access->Access(read).payload;
+            sram::Request write;
+            write.initiator = sram::Initiator::kCompute;
+            write.command = sram::Command::kWrite;
+            write.address = allocation.range.address;
+            write.size_bytes = static_cast<uint64_t>(key.size);
+            write.payload = payload;
+            context.sram_access->Access(write);
+        }
+        key.pos = static_cast<int>(allocation.range.address / word_bytes);
+        key.region_id = allocation.range.region_id;
+        key.region_allocation_id = allocation.id;
+        key.spillable = target.spillable;
+        return;
+    }
+
+    const auto resolved = context.sram_regions->LocateAbsolute(
+        old_address, static_cast<uint64_t>(key.size));
+    const auto &region = context.sram_regions->Region(resolved.region_id);
+    key.region_id = resolved.region_id;
+    key.spillable = region.spillable;
+    if (region.allocator != sram::AllocatorKind::kBlock) return;
+    const auto allocation = context.sram_regions->AllocateAt(
+        region.name, old_address - region.base_bytes,
+        static_cast<uint64_t>(key.size), label, key.allocation_lifetime);
+    key.region_allocation_id = allocation.id;
+}
+
+void TraceLabelLifecycle(TaskCoreContext &context, const char *event_name,
+                         const char *phase, const std::string &label,
+                         const AddrPosKey &key, uint64_t size_bytes) {
+    if (context.sram_regions == nullptr) return;
+    const uint64_t address = LegacySramByteAddress(
+        context, static_cast<uint64_t>(key.pos));
+    context.sram_regions->TraceLifecycle(
+        event_name, phase, key.region_allocation_id, address, size_bytes,
+        label);
+}
+
+uint64_t EnsureSpillBacking(int cid, const std::string &label,
+                            AddrPosKey &key) {
+    if (key.dram_addr != 0) return key.dram_addr;
+    if (cid < 0 || cid >= TOTAL_CORES || g_dram_kvtable == nullptr ||
+        g_dram_kvtable[cid] == nullptr)
+        throw std::runtime_error(
+            "spillable SRAM label has no HBM backing allocator");
+    auto address = g_dram_kvtable[cid]->get(label);
+    if (!address.has_value()) {
+        if (!g_dram_kvtable[cid]->add(label))
+            throw std::runtime_error(
+                "failed to allocate HBM backing for SRAM spill");
+        address = g_dram_kvtable[cid]->get(label);
+    }
+    if (!address.has_value())
+        throw std::logic_error("HBM spill backing allocation disappeared");
+    key.dram_addr = *address;
+    return key.dram_addr;
+}
+} // namespace
 
 int AddrLabelTable::addRecord(const std::string &key) {
 
@@ -38,9 +160,15 @@ void SramPosLocator::addPair(std::string &key, AddrPosKey value,
     } else {
         AddrPosKey old_key;
 
-        findPair(key, old_key);
-
-        value.dram_addr = old_key.dram_addr;
+        if (findPair(key, old_key) != -1) {
+            value.dram_addr = old_key.dram_addr;
+            value.region_id = old_key.region_id;
+            value.region_allocation_id = old_key.region_allocation_id;
+            value.spillable = old_key.spillable;
+            value.allocation_lifetime = old_key.allocation_lifetime;
+            if (value.preferred_region.empty())
+                value.preferred_region = old_key.preferred_region;
+        }
 
         data_map[key] = value;
     }
@@ -49,12 +177,16 @@ void SramPosLocator::addPair(std::string &key, AddrPosKey value,
 void SramPosLocator::addPairByTile(std::string &key, AddrPosKey value,
                                    TaskCoreContext &context,
                                    u_int64_t &dram_time) {
-    visit += 1;
-    value.record = visit;
-
     // 需要检查原先是否有这个标签
     AddrPosKey old_key;
     int res = findPair(key, old_key);
+    if (res != -1 && value.region_allocation_id == 0) {
+        value.region_allocation_id = old_key.region_allocation_id;
+        value.allocation_lifetime = old_key.allocation_lifetime;
+    }
+    AnnotateRealSramKey(value, context, key);
+    visit += 1;
+    value.record = visit;
     int old_size = 0;
 
     if (res == -1) {
@@ -97,7 +229,14 @@ void SramPosLocator::addPairByTile(std::string &key, AddrPosKey value,
             << "Core " << cid << " load tile bigger than 64*1024";
 
     int spill_limit = 64 * 1024;
+    int spill_pos = data_map[key].pos;
+    string victim_label = key;
     if (old_size > 0) {
+        if (!data_map[key].spillable) {
+            LOG_ERROR(memory.cpp)
+                << "cannot spill non-spillable SRAM label " << key;
+            return;
+        }
         data_map[key].valid = false;
         data_map[key].spill_size += spill_limit;
         LOG_DEBUG(MEMORY) << "Core " << cid << " spill " << key << " to dram";
@@ -109,6 +248,8 @@ void SramPosLocator::addPairByTile(std::string &key, AddrPosKey value,
         for (auto pair : data_map) {
             if (pair.first == key)
                 continue; // 不能spill自己
+            if (!pair.second.spillable)
+                continue; // non-spillable region is never a victim
             if (!pair.second.valid &&
                 pair.second.spill_size == pair.second.size)
                 continue; // 已经全部spill到dram中去了
@@ -125,6 +266,8 @@ void SramPosLocator::addPairByTile(std::string &key, AddrPosKey value,
             return;
         }
 
+        victim_label = max_label;
+        spill_pos = data_map[max_label].pos;
         data_map[max_label].valid = false;
         data_map[max_label].spill_size += spill_limit;
         data_map[key].valid = true;
@@ -133,7 +276,14 @@ void SramPosLocator::addPairByTile(std::string &key, AddrPosKey value,
                           << " to dram";
     }
 
-    sram_spill_back_generic(context, spill_limit, 1024, dram_time);
+    const uint64_t backing = EnsureSpillBacking(
+        cid, victim_label, data_map[victim_label]);
+    TraceLabelLifecycle(context, "SRAM_region_spill", "B",
+                        victim_label, data_map[victim_label], spill_limit);
+    sram_spill_back_generic(context, spill_limit, backing, dram_time,
+                            spill_pos);
+    TraceLabelLifecycle(context, "SRAM_region_spill", "E",
+                        victim_label, data_map[victim_label], spill_limit);
 }
 
 
@@ -163,6 +313,25 @@ bool SramPosLocator::validateTotalSize() const {
 void SramPosLocator::addPair(std::string &key, AddrPosKey value,
                              TaskCoreContext &context, u_int64_t &dram_time,
                              bool update_key) {
+    const auto existing = data_map.find(key);
+    const bool reloading = existing != data_map.end() &&
+                           !existing->second.valid &&
+                           value.spill_size == 0;
+    if (reloading) value.valid = true;
+    if (existing != data_map.end() && value.region_allocation_id == 0) {
+        value.region_allocation_id =
+            existing->second.region_allocation_id;
+        value.allocation_lifetime = existing->second.allocation_lifetime;
+        if (value.preferred_region.empty())
+            value.preferred_region = existing->second.preferred_region;
+    }
+    AnnotateRealSramKey(value, context, key);
+    if (reloading) {
+        TraceLabelLifecycle(context, "SRAM_region_reload", "B", key, value,
+                            static_cast<uint64_t>(value.size));
+        TraceLabelLifecycle(context, "SRAM_region_reload", "E", key, value,
+                            static_cast<uint64_t>(value.size));
+    }
     // 先放入sram
 
     visit += 1;
@@ -172,9 +341,15 @@ void SramPosLocator::addPair(std::string &key, AddrPosKey value,
     } else {
         AddrPosKey old_key;
 
-        findPair(key, old_key);
-
-        value.dram_addr = old_key.dram_addr;
+        if (findPair(key, old_key) != -1) {
+            value.dram_addr = old_key.dram_addr;
+            value.region_id = old_key.region_id;
+            value.region_allocation_id = old_key.region_allocation_id;
+            value.spillable = old_key.spillable;
+            value.allocation_lifetime = old_key.allocation_lifetime;
+            if (value.preferred_region.empty())
+                value.preferred_region = old_key.preferred_region;
+        }
 
         data_map[key] = value;
     }
@@ -214,6 +389,8 @@ void SramPosLocator::addPair(std::string &key, AddrPosKey value,
         for (auto pair : data_map) {
             if (pair.first == key)
                 continue; // 不能spill自己
+            if (!pair.second.spillable)
+                continue; // non-spillable region is never a victim
             if (!pair.second.valid &&
                 pair.second.spill_size == pair.second.size)
                 continue; // 已经全部spill到dram中去了
@@ -265,8 +442,10 @@ void SramPosLocator::addPair(std::string &key, AddrPosKey value,
         int spill_size = upper_spill_limit;
         used -= spill_size;
         data_map[min_label].spill_size += spill_size;
+        int spill_pos = data_map[min_label].pos;
         // data_map[min_label].size -= spill_size;
 #if USE_SRAM_MANAGER == 1
+        spill_pos = sram_manager_->get_address_index(sram_id);
         LOG_DEBUG(MEMORY) << "Core " << cid << " add pair to SRAM manager"
                           << key;
         sram_manager_->deallocate(sram_id);
@@ -278,12 +457,21 @@ void SramPosLocator::addPair(std::string &key, AddrPosKey value,
         // spill in nb_dcache utils
         LOG_DEBUG(MEMORY) << "Core " << cid << " spill to address "
                           << data_map[min_label].dram_addr;
-        sram_spill_back_generic(context, spill_size,
-                                data_map[min_label].dram_addr, dram_time);
+        const uint64_t backing = EnsureSpillBacking(
+            cid, min_label, data_map[min_label]);
+        TraceLabelLifecycle(context, "SRAM_region_spill", "B",
+                            min_label, data_map[min_label], spill_size);
+        sram_spill_back_generic(context, spill_size, backing, dram_time,
+                                spill_pos);
+        TraceLabelLifecycle(context, "SRAM_region_spill", "E",
+                            min_label, data_map[min_label], spill_size);
 #else
         std::string tail = min_label.substr(min_label.size() - 2);
         if (tail != "_w" && tail != "_b")
-            sram_spill_back_generic(context, spill_size, 1024, dram_time);
+            sram_spill_back_generic(
+                context, spill_size,
+                EnsureSpillBacking(cid, min_label, data_map[min_label]),
+                dram_time, spill_pos);
 #endif
     }
     sc_time end_nbdram = sc_time_stamp();
@@ -419,6 +607,9 @@ void SramPosLocator::changePairName(std::string &old_key,
         data_map.erase(it);
     }
 
+    if (region_table_ != nullptr && result.region_allocation_id != 0)
+        region_table_->RenameAllocation(result.region_allocation_id, new_key);
+
     data_map[new_key] = result;
 }
 
@@ -457,6 +648,10 @@ void SramPosLocator::deletePair(std::string &key) {
 #if USE_SRAM_MANAGER
         sram_manager_->deallocate(it->second.alloc_id); // 释放 SRAM
 #endif
+        if (region_table_ != nullptr &&
+            it->second.region_allocation_id != 0)
+            region_table_->Free(it->second.region_allocation_id,
+                                it->second.allocation_lifetime);
         data_map.erase(it);
     }
 }

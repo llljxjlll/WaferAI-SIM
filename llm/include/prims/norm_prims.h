@@ -5,6 +5,7 @@
 #include "common/pd.h"
 #include "dte/dte_async_types.h"
 #include "dte/coll_types.h"
+#include "memory/core_lsu_unit.h"
 #include "prims/base.h"
 
 class Clear_sram : public PrimBase {
@@ -21,6 +22,10 @@ public:
 
 class Load_prim : public PrimBase {
 public:
+    int dram_addr = 0;
+    int sram_addr = 0;
+    int size = 0;
+
     int taskCoreDefault(TaskCoreContext &context);
 
     vector<sc_bv<128>> serialize();
@@ -31,6 +36,57 @@ public:
 };
 
 
+enum class LsuMemOp : uint8_t {
+    ISSUE = 0, WAIT, POLL, FENCE, CANCEL, LOAD_BLOCKING, STORE_BLOCKING
+};
+
+class Lsu_mem_prim : public PrimBase {
+public:
+    LsuMemOp op = LsuMemOp::ISSUE;
+    uint64_t token = 0;
+    sram::LsuDirection direction = sram::LsuDirection::kHbmToSram;
+    uint64_t hbm_addr = 0;
+    uint64_t sram_addr = 0;
+    uint64_t sram_offset = 0;
+    uint64_t size_bytes = 0;
+    std::string sram_region;
+    bool absolute_sram = false;
+    bool poll_complete = false;
+
+    int taskCoreDefault(TaskCoreContext &context);
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> segments);
+    void parseJson(json j);
+    void printSelf();
+
+    Lsu_mem_prim() { name = "Lsu_mem"; }
+};
+
+enum class SramPipelineEngine : uint8_t { kLsu = 0, kDte = 1 };
+
+class Sram_pipeline_prim : public PrimBase {
+public:
+    SramPipelineEngine engine = SramPipelineEngine::kLsu;
+    bool double_buffer = true;
+    uint32_t tile_count = 4;
+    uint64_t tile_bytes = 256;
+    uint64_t compute_cycles = 32;
+    uint64_t input_hbm_base = 0x10000;
+    uint64_t output_hbm_base = 0x20000;
+    uint32_t token_base = 1000;
+    uint8_t transform_xor = 0x5a;
+    std::string region_a = "double_a";
+    std::string region_b = "double_b";
+
+    int taskCoreDefault(TaskCoreContext &context);
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> segments);
+    void parseJson(json j);
+    void printSelf();
+
+    Sram_pipeline_prim() { name = "Sram_pipeline"; }
+};
+
 class Dte_async_prim : public PrimBase {
 public:
     DteAsyncOp op = DteAsyncOp::ISSUE;
@@ -39,6 +95,8 @@ public:
     DteDir direction = DteDir::SPM_TO_REMOTE;
     uint64_t spm_addr = 0;
     uint64_t spm_size = 0; // byte
+    std::string sram_region;
+    uint64_t sram_offset = 0;
     // V3b aggregation compatibility metadata. Legacy V3a workloads may omit it
     // while aggregation is disabled.
     uint32_t remote_peer = DTE_ASYNC_INVALID_REMOTE_PEER;

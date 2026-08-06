@@ -1,4 +1,5 @@
 #include "prims/base.h"
+#include "memory/sram/sram_region.h"
 #include "utils/config_utils.h"
 #include "utils/memory_utils.h"
 #include "utils/prim_utils.h"
@@ -181,6 +182,10 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
         initializeDefault();
     }
 
+    const bool manual_memory_schedule =
+        context.sram_regions != nullptr &&
+        context.sram_regions->config().manual_memory_schedule;
+
     // 所用时间
     u_int64_t dram_time = 0;
     u_int64_t overlap_time = 0;
@@ -205,7 +210,7 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
         prefix = prim_context->datapass_label_->outdata;
 
     // 读入input数据
-    if (!skip_input)
+    if (!manual_memory_schedule && !skip_input)
         checkInputData(context, dram_time, inp_offset, data_size_input);
 
     u_int64_t exu_flops = 0;
@@ -217,7 +222,8 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
         taskCore(context, prefix, dram_time, exu_flops, sfu_flops, vec_flops);
 
         // 删除标签
-        for (int i = 0; i < data_size_input.size(); i++) {
+        if (!manual_memory_schedule)
+            for (int i = 0; i < data_size_input.size(); i++) {
             if (!input_reuse[i] &&
                 prim_context->datapass_label_->indata[i] != UNSET_LABEL)
                 prim_context->sram_pos_locator_->deletePair(
@@ -227,7 +233,7 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
 #endif
 
     // 计算overlap并写回output数据
-    if (!skip_output)
+    if (!manual_memory_schedule && !skip_output)
         writeOutputData(context, exu_flops, sfu_flops, vec_flops, dram_time,
                         overlap_time, out_size, data_chunk_addr["output"]);
 
@@ -276,10 +282,13 @@ void NpuBase::checkInputData(TaskCoreContext &context, uint64_t &dram_time,
                                      prim_context->datapass_label_->indata[p],
                                      true, prim_context->sram_pos_locator_);
 #else
+            const int input_sram_start = *sram_addr;
             sram_first_write_generic(context, data_byte * data_size_input[p],
                                      inp_global_addr, dram_time, dram_start);
             AddrPosKey inp_key =
-                AddrPosKey(*sram_addr, data_byte * data_size_input[p]);
+                AddrPosKey(input_sram_start, data_byte * data_size_input[p],
+                           inp_global_addr);
+            inp_key.preferred_region = "input";
             prim_context->sram_pos_locator_->addPair(
                 prim_context->datapass_label_->indata[p], inp_key, context,
                 dram_time);
@@ -513,7 +522,12 @@ void NpuBase::checkStaticData(TaskCoreContext &context, uint64_t &dram_time,
         sram_first_write_generic(context, data_byte * data_size_label,
                                  label_global_addr, dram_time, dram_start);
 
-        sc_key = AddrPosKey(*sram_addr, data_byte * data_size_label);
+        sc_key = AddrPosKey(sram_offset, data_byte * data_size_label,
+                            label_global_addr);
+        sc_key.preferred_region = "input";
+        if (SPEC_LOAD_STATIC == "layer")
+            sc_key.allocation_lifetime =
+                sram::AllocationLifetime::kLayer;
         prim_context->sram_pos_locator_->addPair(label_name, sc_key, context,
                                                  dram_time);
 #endif
@@ -583,7 +597,11 @@ void NpuBase::checkStaticDataTile(TaskCoreContext &context, uint64_t &dram_time,
                                      label_global_addr, dram_time, dram_start);
             size += load_size * data_byte;
 
-            sc_key = AddrPosKey(*sram_addr, size);
+            sc_key = AddrPosKey(sram_offset, size, label_global_addr);
+            sc_key.preferred_region = "input";
+            if (SPEC_LOAD_STATIC == "layer")
+                sc_key.allocation_lifetime =
+                    sram::AllocationLifetime::kLayer;
             prim_context->sram_pos_locator_->addPairByTile(label_name, sc_key,
                                                            context, dram_time);
         }
@@ -679,7 +697,10 @@ void NpuBase::writeOutputData(TaskCoreContext &context, uint64_t exu_flops,
     for (int i = 0; i < out_labels.size(); i++) {
         AddrPosKey out_key =
             AddrPosKey(static_cast<int>(temp_out_sram_offset + i * interval),
-                       data_byte * data_size_out / out_labels.size());
+                       data_byte * data_size_out / out_labels.size(),
+                       out_global_addr +
+                           i * data_byte * data_size_out / out_labels.size());
+        out_key.preferred_region = "intermediate";
         // already wait in addPair do not add overlap_time
         prim_context->sram_pos_locator_->addPair(out_labels[i], out_key,
                                                  context, dram_time);

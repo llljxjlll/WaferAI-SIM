@@ -1,0 +1,419 @@
+{
+  "vars": {
+    "B": 1,
+    "T": 1
+  },
+  "pipeline": 1,
+  "source": [],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 0,
+          "loop": 1,
+          "worklist": [
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 3,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 128,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_0"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 0,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_core0_chunk0"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 3,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 0,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_0"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 1,
+              "recv_tag": 7000,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 1,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_0"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 0,
+                  "chunk": 1,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_core0_chunk1"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": 1,
+                  "tag": 7001
+                }
+              ]
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 2,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_0"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": 1,
+                  "tag": 8000
+                }
+              ]
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 3,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 8192,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_0"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 2,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 65536,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_0"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "loop": 1,
+          "worklist": [
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 0,
+                  "chunk": 0,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 131072,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_core1_chunk0"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": 0,
+                  "tag": 7000
+                }
+              ]
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 0,
+                  "chunk": 1,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 131072,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_core1_chunk1"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 3,
+                  "chunk": 1,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 131072,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_1"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 1,
+              "recv_tag": 7001,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 1,
+                  "chunk": 1,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 131072,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_1"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 1,
+              "recv_tag": 8000,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 2,
+                  "chunk": 1,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 131072,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_1"
+                  }
+                }
+              ],
+              "cast": []
+            },
+            {
+              "recv_cnt": 0,
+              "prims": [
+                {
+                  "type": "Gemm_rs_swizzle",
+                  "mode": 2,
+                  "chunk": 1,
+                  "tile_bytes": 4096,
+                  "comm_bytes": 512,
+                  "compute_cycles": 512,
+                  "reduce_cycles": 32,
+                  "hbm_base": 131072,
+                  "participants": 2,
+                  "dram_address": {
+                    "input": 0,
+                    "data": 0,
+                    "output": 0
+                  },
+                  "sram_address": {
+                    "indata": "_manual_input",
+                    "outdata": "rs_final_1"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

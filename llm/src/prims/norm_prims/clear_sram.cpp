@@ -2,9 +2,12 @@
 #include <string>
 
 #include "common/memory.h"
+#include "memory/sram/sram_access_unit.h"
+#include "memory/sram/sram_region.h"
 #include "prims/base.h"
 #include "prims/norm_prims.h"
 #include "utils/prim_utils.h"
+#include "utils/memory_utils.h"
 #include "utils/system_utils.h"
 
 REGISTER_PRIM(Clear_sram);
@@ -26,8 +29,57 @@ vector<sc_bv<128>> Clear_sram::serialize() {
 }
 
 int Clear_sram::taskCoreDefault(TaskCoreContext &context) {
+    if (prim_context == nullptr)
+        throw std::runtime_error("Clear_sram requires primitive context");
     LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
                     << " SRAM top address: " << *(context.sram_addr);
+
+    if (context.sram_access != nullptr &&
+        context.sram_regions != nullptr &&
+        context.sram_storage != nullptr) {
+        if (prim_context->sram_pos_locator_ == nullptr)
+            throw std::runtime_error(
+                "real Clear_sram requires an SRAM label table");
+        std::vector<std::string> erase_labels;
+        uint64_t high_water = 0;
+        for (const auto &[label, key] :
+             prim_context->sram_pos_locator_->data_map) {
+            if (key.size <= 0 || key.pos < 0) continue;
+            const uint64_t byte_address = LegacySramByteAddress(
+                context, static_cast<uint64_t>(key.pos));
+            const auto resolved = context.sram_regions->LocateAbsolute(
+                byte_address, static_cast<uint64_t>(key.size));
+            const auto &region =
+                context.sram_regions->Region(resolved.region_id);
+            const bool persistent_label =
+                label.rfind(ETERNAL_PREFIX, 0) == 0 ||
+                key.allocation_lifetime !=
+                    sram::AllocationLifetime::kTask;
+            if (!region.spillable || persistent_label) {
+                high_water = std::max<uint64_t>(
+                    high_water, resolved.address + resolved.size_bytes);
+                continue;
+            }
+            if (key.valid) {
+                sram::Request clear;
+                clear.initiator = sram::Initiator::kCompute;
+                clear.command = sram::Command::kClear;
+                clear.address = resolved.address;
+                clear.size_bytes = resolved.size_bytes;
+                context.sram_access->Access(clear);
+            }
+            if (key.region_allocation_id != 0)
+                context.sram_regions->Free(
+                    key.region_allocation_id,
+                    sram::AllocationLifetime::kTask);
+            erase_labels.push_back(label);
+        }
+        for (const auto &label : erase_labels)
+            prim_context->sram_pos_locator_->data_map.erase(label);
+        *(context.sram_addr) = static_cast<int>(
+            LegacySramWordAddressCeil(context, high_water));
+        return 0;
+    }
 #if USE_SRAM_MANAGER == 0
     vector<pair<string, AddrPosKey>> temp_list;
 
@@ -35,16 +87,8 @@ int Clear_sram::taskCoreDefault(TaskCoreContext &context) {
         if (!record.second.valid)
             continue;
 
-        bool flag = true;
-
         // clear output last layer in core and reuse input
-        string eternal = ETERNAL_PREFIX;
-        for (int i = 0; i < eternal.length(); i++) {
-            if (eternal[i] != record.first[i]) {
-                flag = false;
-                break;
-            }
-        }
+        const bool flag = record.first.rfind(ETERNAL_PREFIX, 0) == 0;
 
         if (flag) {
             temp_list.push_back(record);

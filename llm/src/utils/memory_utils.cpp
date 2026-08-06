@@ -5,17 +5,85 @@
 #include "macros/macros.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
 #include "memory/core_mem_adapter.h"
+#include "memory/core_lsu_unit.h"
+#include "memory/sram/sram_access_unit.h"
+#include "memory/sram/sram_region.h"
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
 
 #include "systemc.h"
+#include <limits>
 #include <tlm>
 #include <tlm_utils/peq_with_cb_and_phase.h>
 #include <tlm_utils/simple_initiator_socket.h>
 #include <tlm_utils/simple_target_socket.h>
 
+uint64_t LegacySramWordBytes(const TaskCoreContext &context) {
+    const int bits = GetCoreHWConfig(context.cid)->sram_bitwidth;
+    if (bits <= 0 || (bits % 8) != 0)
+        throw std::runtime_error("legacy SRAM bitwidth is not byte-addressable");
+    return static_cast<uint64_t>(bits / 8);
+}
+
+uint64_t LegacySramByteAddress(const TaskCoreContext &context,
+                               uint64_t word_address) {
+    const uint64_t word_bytes = LegacySramWordBytes(context);
+    if (word_address > std::numeric_limits<uint64_t>::max() / word_bytes)
+        throw std::overflow_error("legacy SRAM word address overflows bytes");
+    return word_address * word_bytes;
+}
+
+uint64_t LegacySramWordAddressCeil(const TaskCoreContext &context,
+                                   uint64_t byte_address) {
+    const uint64_t word_bytes = LegacySramWordBytes(context);
+    return byte_address / word_bytes + (byte_address % word_bytes != 0);
+}
+
 namespace {
+
+sram::ResolvedRange ResolveCompatibilityRange(
+    TaskCoreContext &context, uint64_t word_address, uint64_t size_bytes,
+    sram::Initiator initiator, sram::Command command,
+    const char *preferred_region = nullptr) {
+    if (!context.sram_regions)
+        throw std::runtime_error("unified SRAM region table is unavailable");
+    const uint64_t byte_address =
+        LegacySramByteAddress(context, word_address);
+    if (preferred_region != nullptr) {
+        bool has_preferred = true;
+        try {
+            context.sram_regions->RegionId(preferred_region);
+        } catch (const std::out_of_range &) {
+            has_preferred = false;
+        }
+        if (has_preferred)
+            return context.sram_regions->Resolve(
+                preferred_region, byte_address, size_bytes, initiator, command);
+    }
+    return context.sram_regions->ResolveAbsolute(
+        byte_address, size_bytes, initiator, command);
+}
+
+void UnifiedSramAccess(TaskCoreContext &context, sram::Initiator initiator,
+                       sram::Command command, uint64_t word_address,
+                       uint64_t size_bytes, u_int64_t &time_ns,
+                       const char *preferred_region = nullptr) {
+    const auto range = ResolveCompatibilityRange(
+        context, word_address, size_bytes, initiator, command,
+        preferred_region);
+    sram::Request request;
+    request.initiator = initiator;
+    request.command = command;
+    request.address = range.address;
+    request.size_bytes = range.size_bytes;
+    if (command == sram::Command::kWrite)
+        request.payload.assign(size_bytes, 0);
+    const sc_time begin = sc_time_stamp();
+    context.sram_access->Access(request);
+    time_ns += (sc_time_stamp() - begin).to_seconds() * 1e9;
+}
+
 void DistributedHBMAccess(TaskCoreContext &context, MemCommand command,
                           uint64_t address, int bytes) {
     if (!context.hbm_adapter || bytes <= 0) return;
@@ -159,6 +227,7 @@ void sram_first_write_generic(TaskCoreContext &context, int data_size_in_byte,
                "sram_pos_locator is not equal sram_manager");
 #endif
         AddrPosKey inp_key = AddrPosKey(swa);
+        inp_key.preferred_region = "input";
         u_int64_t dram_time_tmp = 0;
         sram_pos_locator->addPair(label_name, inp_key, context, dram_time_tmp,
                                   add_dram_addr);
@@ -192,22 +261,36 @@ void sram_first_write_generic(TaskCoreContext &context, int data_size_in_byte,
     assert(sram_pos_locator->validateTotalSize() &&
            "sram_pos_locator is not equal sram_manager");
 #endif
-    if (context.hbm_adapter) {
+    if (context.lsu_memory || context.hbm_adapter) {
         if (!dummy_alloc) {
             const sc_time begin = sc_time_stamp();
-            DistributedHBMAccess(context, MemCommand::kRead, inp_global_addr,
-                                 aligned_data_byte);
-            if (!SPEC_USE_BEHA_SRAM) {
-                context.sram_writer->trigger_write(
-                    hmau, sram_manager_, dma_read_count + single_read_count,
-                    sram_addr_temp, alloc_id, sram_bitw, use_manager);
-                wait(*context.e_sram);
+            if (context.lsu_memory) {
+                const auto target = ResolveCompatibilityRange(
+                    context, sram_addr_temp, data_size_in_byte,
+                    sram::Initiator::kLsu, sram::Command::kWrite);
+                context.lsu_memory->Load(inp_global_addr, target.address,
+                                         target.size_bytes);
             } else {
-                wait((dma_read_count + single_read_count) * RAM_WRITE_LATENCY,
-                     SC_NS);
+                DistributedHBMAccess(context, MemCommand::kRead,
+                                     inp_global_addr, aligned_data_byte);
+                if (!SPEC_USE_BEHA_SRAM) {
+                    context.sram_writer->trigger_write(
+                        hmau, sram_manager_,
+                        dma_read_count + single_read_count, sram_addr_temp,
+                        alloc_id, sram_bitw, use_manager);
+                    wait(*context.e_sram);
+                } else {
+                    wait((dma_read_count + single_read_count) *
+                             RAM_WRITE_LATENCY,
+                         SC_NS);
+                }
             }
             dram_time += (sc_time_stamp() - begin).to_seconds() * 1e9;
         }
+        if (!use_manager)
+            *sram_addr = static_cast<int>(
+                sram_addr_temp + LegacySramWordAddressCeil(
+                                     context, aligned_data_byte));
         return;
     }
     if (dummy_alloc == false) {
@@ -489,15 +572,24 @@ void sram_first_write_generic(TaskCoreContext &context, int data_size_in_byte,
 // no need to revise context.sram_addr value
 
 void sram_spill_back_generic(TaskCoreContext &context, int data_size_in_byte,
-                             u_int64_t global_addr, u_int64_t &dram_time) {
-    if (context.hbm_adapter) {
+                             u_int64_t global_addr, u_int64_t &dram_time,
+                             int sram_addr_offset) {
+    if (context.lsu_memory || context.hbm_adapter) {
         const sc_time begin = sc_time_stamp();
-        const int rows = CeilingDivision(
-            data_size_in_byte * 8,
-            GetCoreHWConfig(context.cid)->sram_bitwidth * SRAM_BANKS);
-        if (rows > 0) wait(rows * RAM_READ_LATENCY, SC_NS);
-        DistributedHBMAccess(context, MemCommand::kWrite, global_addr,
-                             data_size_in_byte);
+        if (context.lsu_memory) {
+            const auto source = ResolveCompatibilityRange(
+                context, sram_addr_offset, data_size_in_byte,
+                sram::Initiator::kLsu, sram::Command::kRead);
+            context.lsu_memory->Store(source.address, global_addr,
+                                      source.size_bytes);
+        } else {
+            const int rows = CeilingDivision(
+                data_size_in_byte * 8,
+                GetCoreHWConfig(context.cid)->sram_bitwidth * SRAM_BANKS);
+            if (rows > 0) wait(rows * RAM_READ_LATENCY, SC_NS);
+            DistributedHBMAccess(context, MemCommand::kWrite, global_addr,
+                                 data_size_in_byte);
+        }
         dram_time += (sc_time_stamp() - begin).to_seconds() * 1e9;
         return;
     }
@@ -785,6 +877,13 @@ void sram_read_generic(TaskCoreContext &context, int data_size_in_byte,
     assert(read_bytes <= sram_cap_bytes);
 #endif
 
+    if (context.sram_access) {
+        UnifiedSramAccess(context, sram::Initiator::kCompute,
+                          sram::Command::kRead, sram_addr_offset,
+                          data_size_in_byte, dram_time);
+        return;
+    }
+
     int sram_time = 0;
     for (int i = 0; i < dma_read_count; i++) {
         if (i != 0) {
@@ -880,6 +979,13 @@ void sram_read_generic_temp(TaskCoreContext &context, int data_size_in_byte,
 
     auto mau = context.temp_mau;
     auto hmau = context.temp_hmau;
+
+    if (context.sram_access) {
+        UnifiedSramAccess(context, sram::Initiator::kCompute,
+                          sram::Command::kRead, sram_addr_offset,
+                          data_size_in_byte, dram_time, "temp");
+        return;
+    }
 
     vector<sc_bv<SRAM_BITWIDTH>> data_tmp(SRAM_BANKS);
     for (int i = 0; i < SRAM_BANKS; i++) {
@@ -1009,6 +1115,7 @@ void sram_write_append_generic(TaskCoreContext &context, int data_size_in_byte,
         SizeWAddr swa(aligned_data_byte, global_addr);
 
         AddrPosKey inp_key = AddrPosKey(swa);
+        inp_key.preferred_region = "intermediate";
         u_int64_t dram_time_tmp = 0;
 #if ASSERT == 1
         assert(sram_pos_locator->validateTotalSize());
@@ -1046,6 +1153,19 @@ void sram_write_append_generic(TaskCoreContext &context, int data_size_in_byte,
         }
     }
 #endif
+
+    if (context.sram_access) {
+        UnifiedSramAccess(context, sram::Initiator::kCompute,
+                          sram::Command::kWrite, sram_addr_temp,
+                          aligned_data_byte, dram_time);
+        if (!use_manager) {
+            const uint64_t words =
+                (aligned_data_byte + LegacySramWordBytes(context) - 1) /
+                LegacySramWordBytes(context);
+            *sram_addr = sram_addr_temp + words;
+        }
+        return;
+    }
 
     vector<sc_bv<SRAM_BITWIDTH>> data_tmp(SRAM_BANKS);
     for (int i = 0; i < SRAM_BANKS; i++) {
@@ -1150,6 +1270,17 @@ void sram_write_back_temp(TaskCoreContext &context, int data_size_in_byte,
 #endif
     auto mau = context.temp_mau;
     auto hmau = context.temp_hmau;
+
+    if (context.sram_access) {
+        UnifiedSramAccess(context, sram::Initiator::kCompute,
+                          sram::Command::kWrite, temp_sram_addr,
+                          data_size_in_byte, dram_time, "temp");
+        const uint64_t words =
+            (data_size_in_byte + LegacySramWordBytes(context) - 1) /
+            LegacySramWordBytes(context);
+        temp_sram_addr += words;
+        return;
+    }
 
     vector<sc_bv<SRAM_BITWIDTH>> data_tmp(SRAM_BANKS);
     for (int i = 0; i < SRAM_BANKS; i++) {
@@ -1640,6 +1771,12 @@ TaskCoreContext generate_context(WorkerCoreExecutor *workercore) {
 
     context.cid = workercore->cid;
     context.hbm_adapter = workercore->hbm_adapter;
+    context.lsu_memory = workercore->lsu_memory;
+    context.dte_memory = workercore->dte_async.get();
+    context.sram_regions = workercore->sram_regions;
+    context.sram_access = workercore->sram_access;
+    context.sram_storage = workercore->sram_storage;
+    context.compute_timeline = workercore->compute_timeline;
 
 #if USE_L1L2_CACHE == 1
     context.gpunb_dcache_if = workercore->gpunb_dcache_if;

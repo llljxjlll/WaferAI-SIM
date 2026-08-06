@@ -8,6 +8,7 @@
 #include "defs/spec.h"
 #include "macros/macros.h"
 #include "unit_module/sram_manager/sram_manager.h"
+#include "memory/sram/sram_types.h"
 
 using namespace std;
 
@@ -34,14 +35,20 @@ public:
 
 class AddrPosKey {
 public:
-    int pos;
-    int left_byte;
-    AllocationID alloc_id;
-    int size;
-    u_int64_t dram_addr;
-    bool valid;     // 是否已经被evict到DRAM上了
-    int spill_size; // 已经spill到DRAM上的大小
-    int record;     // 根据LRU策略记录的访问时间，越大表示访问时间越靠近现在
+    int pos = 0;
+    int left_byte = 0;
+    AllocationID alloc_id = 0;
+    int size = 0;
+    u_int64_t dram_addr = 0;
+    int region_id = -1;
+    uint64_t region_allocation_id = 0;
+    bool spillable = true;
+    std::string preferred_region;
+    sram::AllocationLifetime allocation_lifetime =
+        sram::AllocationLifetime::kTask;
+    bool valid = true;     // 是否已经被evict到DRAM上了
+    int spill_size = 0; // 已经spill到DRAM上的大小
+    int record = 0;     // 根据LRU策略记录的访问时间，越大表示访问时间越靠近现在
     AddrPosKey() {
         valid = true;
         record = 0;
@@ -91,6 +98,7 @@ public:
     int visit;
     int cid; // 属于哪一个核
     SramManager *sram_manager_;
+    sram::RegionTable *region_table_ = nullptr;
 
     SramPosLocator(int id) {
         cid = id;
@@ -102,6 +110,10 @@ public:
           visit(1),
           max_sram_size(HW_SRAM_SIZE),
           sram_manager_(sram_mgr) {}
+
+    void BindRegionTable(sram::RegionTable *regions) {
+        region_table_ = regions;
+    }
 
     void addPair(std::string &key, AddrPosKey value, TaskCoreContext &context,
                  u_int64_t &dram_time, bool update_key = false);

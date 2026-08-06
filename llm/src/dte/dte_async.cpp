@@ -43,6 +43,17 @@ DteAsyncTracker::DteAsyncTracker(
     SC_THREAD(timeoutWorker);
 }
 
+void DteAsyncTracker::BindMemoryBridge(DteMemoryBridge *bridge) {
+    if (bridge == nullptr)
+        throw std::invalid_argument("cannot bind a null DTE memory bridge");
+    if (memory_bridge_ != nullptr)
+        throw std::logic_error("DTE memory bridge is already bound");
+    if (!records_.empty())
+        throw std::logic_error(
+            "DTE memory bridge must be bound before issuing tokens");
+    memory_bridge_ = bridge;
+}
+
 DteAsyncAccess DteAsyncTracker::AccessForDirection(DteDir dir) {
     switch (dir) {
     case DteDir::SPM_TO_REMOTE:
@@ -149,6 +160,17 @@ void DteAsyncTracker::ValidateIssue(
         remote_peer == DTE_ASYNC_INVALID_REMOTE_PEER)
         throw std::invalid_argument(
             "DRAM_TO_REMOTE requires remote_peer");
+
+    if (memory_bridge_ &&
+        (dir == DteDir::DRAM_TO_SPM || dir == DteDir::SPM_TO_DRAM ||
+         dir == DteDir::SPM_TO_SPM)) {
+        if ((payload_bits % 8) != 0 || payload_bytes != spm_size)
+            throw std::invalid_argument(
+                "real-memory DTE requires a byte-aligned payload whose "
+                "size equals spm_size");
+        memory_bridge_->Validate(token, dir, remote_addr, spm_addr,
+                                 spm_size);
+    }
 
     if (!aggregation_.enabled)
         return;
@@ -343,9 +365,16 @@ uint64_t DteAsyncTracker::IssueToken(
     PopulateSpmRanges(incoming);
     std::vector<std::pair<uint64_t, uint32_t>> conflicts;
     for (const auto &[other_token, record] : records_) {
-        const bool complete =
+        const bool endpoint_complete =
             record.context != nullptr &&
             record.context->state == DteTransferState::COMPLETED;
+        const bool memory_complete =
+            memory_bridge_ == nullptr ||
+            (record.direction != DteDir::DRAM_TO_SPM &&
+             record.direction != DteDir::SPM_TO_DRAM &&
+             record.direction != DteDir::SPM_TO_SPM) ||
+            memory_bridge_->Poll(other_token);
+        const bool complete = endpoint_complete && memory_complete;
         if (!complete && HasHazard(record, incoming))
             conflicts.emplace_back(record.issue_sequence, other_token);
     }
@@ -361,6 +390,16 @@ uint64_t DteAsyncTracker::IssueToken(
               "depends_on=" + std::to_string(other_token));
     }
 
+    const bool has_memory = memory_bridge_ != nullptr &&
+        (dir == DteDir::DRAM_TO_SPM || dir == DteDir::SPM_TO_DRAM ||
+         dir == DteDir::SPM_TO_SPM);
+    bool memory_reserved = false;
+    if (has_memory) {
+        memory_bridge_->Reserve(token, dir, remote_addr, spm_addr, spm_size);
+        memory_reserved = true;
+    }
+
+    try {
     DteAsyncRecord record;
     record.token = token;
     record.payload_bits = payload_bits;
@@ -425,9 +464,23 @@ uint64_t DteAsyncTracker::IssueToken(
         }
     }
 
+    if (has_memory) {
+        memory_bridge_->Commit(token);
+        memory_reserved = false;
+    }
+
     Trace("DTE_async_issue", "B", token, xfer, issue_extra);
     Trace("DTE_async_issue", "E", token, xfer, issue_extra);
     return xfer;
+    } catch (...) {
+        if (memory_reserved) {
+            try {
+                memory_bridge_->Abort(token);
+            } catch (...) {
+            }
+        }
+        throw;
+    }
 }
 
 void DteAsyncTracker::WaitForCompletion(uint32_t token, bool trace_wait) {
@@ -449,6 +502,11 @@ void DteAsyncTracker::WaitForCompletion(uint32_t token, bool trace_wait) {
     if (record.context->state != DteTransferState::COMPLETED)
         throw std::logic_error(
             "DTE async wait woke without a completed transfer");
+    if (memory_bridge_ &&
+        (record.direction == DteDir::DRAM_TO_SPM ||
+         record.direction == DteDir::SPM_TO_DRAM ||
+         record.direction == DteDir::SPM_TO_SPM))
+        memory_bridge_->Wait(token);
 }
 
 void DteAsyncTracker::WaitAndRelease(uint32_t token, bool trace_wait) {
@@ -463,7 +521,13 @@ void DteAsyncTracker::WaitAndRelease(uint32_t token, bool trace_wait) {
         batch_it->second.remaining_tokens == 0)
         throw std::logic_error("DTE async physical batch accounting is corrupt");
 
+    const DteDir direction = records_.at(token).direction;
     records_.erase(token);
+    if (memory_bridge_ &&
+        (direction == DteDir::DRAM_TO_SPM ||
+         direction == DteDir::SPM_TO_DRAM ||
+         direction == DteDir::SPM_TO_SPM))
+        memory_bridge_->Release(token);
     --batch_it->second.remaining_tokens;
     if (batch_it->second.remaining_tokens == 0) {
         if (!unit_.Release(xfer_id))
@@ -498,8 +562,15 @@ bool DteAsyncTracker::PollToken(uint32_t token) {
     if (record.context == nullptr ||
         record.context->xfer_id != record.xfer_id)
         throw std::logic_error("DTE async token/context mapping is corrupt");
-    const bool complete =
+    const bool endpoint_complete =
         record.context->state == DteTransferState::COMPLETED;
+    const bool memory_complete =
+        memory_bridge_ == nullptr ||
+        (record.direction != DteDir::DRAM_TO_SPM &&
+         record.direction != DteDir::SPM_TO_DRAM &&
+         record.direction != DteDir::SPM_TO_SPM) ||
+        memory_bridge_->Poll(token);
+    const bool complete = endpoint_complete && memory_complete;
     const std::string extra = std::string("complete=") +
                               (complete ? "1" : "0");
     Trace("DTE_async_poll", "B", token, record.xfer_id, extra);
@@ -572,14 +643,23 @@ void DteAsyncTracker::CancelToken(uint32_t token) {
         throw std::runtime_error(
             "DTE V3b cannot cancel one token from an issued compound "
             "descriptor");
+    const bool has_memory = memory_bridge_ &&
+        (it->second.direction == DteDir::DRAM_TO_SPM ||
+         it->second.direction == DteDir::SPM_TO_DRAM ||
+         it->second.direction == DteDir::SPM_TO_SPM);
+    if (has_memory && !memory_bridge_->CanCancel(token))
+        throw std::runtime_error(
+            "DTE memory transfer has already started");
     if (!unit_.Cancel(xfer_id))
         throw std::runtime_error(
             "DTE async can cancel only a pending transfer");
+    if (has_memory) memory_bridge_->Cancel(token);
     if (!unit_.Release(xfer_id))
         throw std::logic_error(
             "DTE async cancelled transfer context could not be released");
     physical_batches_.erase(batch_it);
     records_.erase(it);
+    if (has_memory) memory_bridge_->Release(token);
     Trace("DTE_async_cancel", "E", token, xfer_id);
 }
 

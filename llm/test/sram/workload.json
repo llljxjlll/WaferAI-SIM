@@ -1,0 +1,22 @@
+{
+  "vars": {"loop": 1, "X": 1},
+  "pipeline": 1,
+  "source": [{"dest": 0, "size": "X"}],
+  "chips": [{
+    "chip_id": 0,
+    "cores": [{
+      "id": 0,
+      "loop": "loop",
+      "worklist": [{
+        "recv_cnt": 1,
+        "prims": [
+          {"type": "Sram_pipeline", "engine": "lsu", "schedule": "blocking", "tile_count": 4, "tile_bytes": 256, "compute_cycles": 128, "input_hbm_base": 65536, "output_hbm_base": 131072, "transform_xor": 90},
+          {"type": "Sram_pipeline", "engine": "lsu", "schedule": "double_buffer", "tile_count": 4, "tile_bytes": 256, "compute_cycles": 128, "input_hbm_base": 196608, "output_hbm_base": 262144, "transform_xor": 90},
+          {"type": "Sram_pipeline", "engine": "dte", "schedule": "blocking", "tile_count": 4, "tile_bytes": 256, "compute_cycles": 128, "input_hbm_base": 327680, "output_hbm_base": 393216, "token_base": 1000, "transform_xor": 90},
+          {"type": "Sram_pipeline", "engine": "dte", "schedule": "double_buffer", "tile_count": 4, "tile_bytes": 256, "compute_cycles": 128, "input_hbm_base": 458752, "output_hbm_base": 524288, "token_base": 2000, "transform_xor": 90}
+        ],
+        "cast": [{"dest": -1, "loopout": "true"}]
+      }]
+    }]
+  }]
+}

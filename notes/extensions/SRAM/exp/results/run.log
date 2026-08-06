@@ -1,0 +1,240 @@
+
+        SystemC 2.3.3-Accellera --- Jan  6 2026 03:02:18
+        Copyright (c) 1996-2018 by all Contributors,
+        ALL RIGHTS RESERVED
+[32m[32m[INFO][0m[92m[SYSTEM][0m        System running in simulation mode SIM_DATAFLOW.                                                                | [36m0 s[0m
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+[INFO][0m[92m[SYSTEM][0m             Address mapping with n=8 saved to ../DRAMSys/configs/addressmapping/am_ddr4_8x4Gbx8_df.json.                   | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Address mapping with n=8 saved to ../DRAMSys/configs/addressmapping/am_hbm2_gpu.json.                          | [36m0 s[0m
+[INFO][0m[92m[CONFIG][0m             Loading config file /workspace/notes/extensions/SRAM/exp/results/workload.generated.json.                      | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Image saved as 'core_data_flow.png'.                                                                           | [36m0 s[0m
+Loading chip config /workspace/notes/extensions/SRAM/exp/results/workload.generated.json
+<ChipConfigHelper>
+	chip id: 0
+	<instr_list>
+	</instr_list>
+</ChipConfigHelper>
+===========================================================================
+Memory Configuration:
+
+ Memory type:           DDR4
+ Memory size in bytes:  4294967296
+ Channels:              1
+ Ranks per channel:     1
+ Bank groups per rank:  4
+ Banks per rank:        16
+ Rows per bank:         32768
+ Columns per row:       1024
+ Device width in bits:  8
+ Device size in bits:   4294967296
+ Device size in bytes:  536870912
+ Devices per rank:      8
+
+===========================================================================
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+[INFO][0m[92m[GLOBAL_MEMORY][0m      Global link not initialized.                                                                                   | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Instantiated cores=4 routers=4 workers=4 dies=1 (CORES_PER_DIE=4, GRID=2x2, expect 4).                         | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D] link_sites=0 link_units=0.                                                                               | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Components initialize complete, prepare to start..                                                             | [36m0 s[0m
+
+Info: (I702) default timescale unit used for tracing: 1 ps (Cchip_1.vcd)
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 3 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 2 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_CONF.                                                                           | [36m190 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_WEIGHT.                                                                    | [36m196 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m316 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End config distribution.                                                                                       | [36m316 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_CONF.                                                                           | [36m328 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_WEIGHT.                                                                    | [36m334 ns[0m
+[INFO][0m[92m[NETWORK][0m            Config helper received all ACK.                                                                                | [36m336 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m340 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m344 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End data distribution.                                                                                         | [36m344 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_WEIGHT.                                                                         | [36m348 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_WEIGHT.                                                                         | [36m354 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_batch.                                                                      | [36m354 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_batch.                                                                        | [36m354 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m360 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_batch.                                                                      | [36m360 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_batch.                                                                        | [36m360 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m362 ns[0m
+[INFO][0m[92m[NETWORK][0m            Config helper received all ACK.                                                                                | [36m362 ns[0m
+[INFO][0m[92m[NETWORK][0m            Config helper start START data distribution.                                                                   | [36m364 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m366 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m366 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m366 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m368 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m368 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m368 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m374 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_addr.                                                                       | [36m374 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_addr.                                                                         | [36m374 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Gemm_rs_swizzle.                                                                | [36m380 ns[0m
+[GEMM_RS_OWNER_WINDOW] core=0 chunk=0 wait_ns=256
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m630 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m636 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m638 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m644 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m644 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m650 ns[0m
+[GEMM_RS_TILE] core=1 chunk=0 owner=0 slot=rs_send_a hbm_store_ns=3715 hbm_load_ns=4305 weight_ns=4835 gemm_ns=1806 swizzle_ns=36 checksum=65536 ready_ns=13791
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Gemm_rs_swizzle.                                                                  | [36m13791 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m13797 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start parallel send primitive SEND_REQ.                                                                 | [36m13797 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start parallel recv primitive RECV_ACK.                                                                 | [36m13799 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m13799 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_addr.                                                                       | [36m13805 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_addr.                                                                         | [36m13805 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Gemm_rs_swizzle.                                                                | [36m13811 ns[0m
+[GEMM_RS_TILE] core=0 chunk=0 owner=0 slot=rs_send_a hbm_store_ns=3973 hbm_load_ns=3855 weight_ns=4939 gemm_ns=1804 swizzle_ns=36 checksum=64512 ready_ns=13973
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m13973 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m13979 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m13981 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m13987 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m13987 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m13993 ns[0m
+[GEMM_RS_OWNER_WINDOW] core=0 chunk=0 wait_ns=0
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m13993 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m13999 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start parallel send primitive SEND_DATA.                                                                | [36m14011 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m14345 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m14351 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m14351 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m14357 ns[0m
+[GEMM_RS_REDUCE] core=0 chunk=0 contributors=2 reduce_ns=208 checksum=65280 done_ns=14565
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m14565 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m14571 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m14573 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m14579 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m14579 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m14585 ns[0m
+[GEMM_RS_TILE] core=1 chunk=1 owner=1 slot=rs_send_b hbm_store_ns=0 hbm_load_ns=0 weight_ns=0 gemm_ns=1906 swizzle_ns=36 checksum=64512 ready_ns=16103
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Gemm_rs_swizzle.                                                                  | [36m16103 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m16109 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m16111 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_addr.                                                                       | [36m16117 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_addr.                                                                         | [36m16117 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Gemm_rs_swizzle.                                                                | [36m16123 ns[0m
+[GEMM_RS_TILE] core=0 chunk=1 owner=1 slot=rs_send_b hbm_store_ns=0 hbm_load_ns=0 weight_ns=0 gemm_ns=1804 swizzle_ns=36 checksum=65536 ready_ns=16685
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m16685 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel send primitive SEND_REQ.                                                                 | [36m16691 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m16691 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel recv primitive RECV_ACK.                                                                 | [36m16693 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m16693 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m16699 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m16699 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m16705 ns[0m
+[GEMM_RS_TERMINAL] core=0 checksum=65280 done_ns=16741
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m16741 ns[0m
+[GEMM_RS_OWNER_WINDOW] core=1 chunk=1 wait_ns=1024
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Gemm_rs_swizzle.                                                                  | [36m17147 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m17153 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel send primitive SEND_DATA.                                                                | [36m17165 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m17423 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel send primitive SEND_REQ.                                                                 | [36m17423 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel recv primitive RECV_ACK.                                                                 | [36m17425 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m17425 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m17431 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m17431 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m17431 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_addr.                                                                       | [36m17437 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m17437 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_addr.                                                                         | [36m17437 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Gemm_rs_swizzle.                                                                | [36m17443 ns[0m
+[GEMM_RS_REDUCE] core=1 chunk=1 contributors=2 reduce_ns=208 checksum=65280 done_ns=17651
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Gemm_rs_swizzle.                                                                  | [36m17651 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m17657 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel send primitive SEND_DATA.                                                                | [36m17671 ns[0m
+[GEMM_RS_OWNER_WINDOW] core=0 chunk=0 wait_ns=16384
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m33821 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m33827 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m33829 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m33835 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m33835 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m33841 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m33843 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_addr.                                                                       | [36m33849 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_addr.                                                                         | [36m33849 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Gemm_rs_swizzle.                                                                | [36m33855 ns[0m
+[GEMM_RS_TERMINAL] core=0 checksum=65280 done_ns=33877
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Gemm_rs_swizzle.                                                                  | [36m33877 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_batch.                                                                      | [36m33883 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start parallel send primitive SEND_DONE.                                                                | [36m33883 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_batch.                                                                        | [36m33883 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_DATA.                                                                      | [36m33889 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End DONE reception.                                                                                            | [36m33889 ns[0m
+[GEMM_RS_TERMINAL] core=1 checksum=65280 done_ns=33891
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_DATA.                                                                           | [36m33891 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Gemm_rs_swizzle.                                                                  | [36m33891 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m33897 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Set_addr.                                                                       | [36m33897 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Set_addr.                                                                         | [36m33897 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m33899 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Gemm_rs_swizzle.                                                                | [36m33903 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_addr.                                                                       | [36m33905 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_addr.                                                                         | [36m33905 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Gemm_rs_swizzle.                                                                | [36m33911 ns[0m
+[GEMM_RS_TERMINAL] core=1 checksum=65280 done_ns=33947
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Gemm_rs_swizzle.                                                                  | [36m33947 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start parallel send primitive SEND_DONE.                                                                | [36m33953 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start compute primitive Set_batch.                                                                      | [36m33953 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end compute primitive Set_batch.                                                                        | [36m33953 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_DATA.                                                                      | [36m33959 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 end recv primitive RECV_DATA.                                                                           | [36m33961 ns[0m
+[INFO][0m[92m[SYSTEM][0m             All requests finished.                                                                                         | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m               end_cores: 2, total pipe: 1, end_count_sources: 0.                                                           | [36m33963 ns[0m
+[INFO][0m[92m[CATCH_TEST][0m         Catch test finished.                                                                                           | [36m33963 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End DONE reception.                                                                                            | [36m33963 ns[0m
+
+Info: /OSCI/SystemC: Simulation stopped by user.
+[INFO][0m[92m[SYSTEM][0m             [D2D] in_pkts=0 out_pkts=0 busy_cycles=0 stall_cycles=0.                                                       | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_TYPE] request_in=0 request_out=0 ack_in=0 ack_out=0 data_in=0 data_out=0.                                 | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_DATA] in_pkts=0 out_pkts=0 in_seqhash=1469598103934665603 out_seqhash=1469598103934665603 in_csum=1469598103934665603 out_csum=1469598103934665603 out_inorder=1 out_minseq=-1 out_maxseq=-1 out_endseq=-1 out_end_count=0 out_end_length=-1 in_first_cycle=-1 in_last_cycle=-1 out_first_cycle=-1 out_last_cycle=-1. | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_REPIN] total=0 changed=0 same=0.                                                                          | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [SAF] reserved_packets=0 group_reserved_packets=0.                                                             | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DIE_ACT] router_pkts=5591 mesh_pkts=5483.                                                                     | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [NOC_ACT] sends=2819 stalls=153 d2d_source_stalls=0.                                                           | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [FLOW_DONE] 0:7001:1@8714,0:8000:1@16920,1:7000:0@7171.                                                        | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [SAF_ADMIT] success=0 reject=0.                                                                                | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [COLL_DRAIN] tree_entries=0 reduce_nodes=0 barriers=0 gather=0 reduce_rx=0 endpoints=0 dte_tokens=0.           | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DRAIN] router_residual=0.                                                                                     | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [CREDIT] data_balanced=1 ctrl_balanced=1.                                                                      | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DRAIN] d2d_link_residual=0.                                                                                   | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [START_DATA] enqueued=0 injected=0 accepted=0 delivered=0 consumed=0 completed=0.                              | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [LOCK] max_output_ref=1.                                                                                       | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [HOSTLANE] done_total=2 ack_total=4 mismatch=0 per_lane_done=2,0.                                              | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [HOSTSIG] done=0:1,1:1, ack=0:0:2,1:0:1,1:1:1,.                                                                | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Total Real-time Cost: 0.489954s.                                                                               | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Cleanup monitor components.                                                                                    | [36m33963 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Cleanup memory interface components.                                                                           | [36m33963 ns[0m

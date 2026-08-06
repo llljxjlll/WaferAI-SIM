@@ -57,11 +57,17 @@ void from_json(const json &j, CoreJob &c) {
                     "workload contains an unknown primitive: " + type);
             if (auto *async_prim = dynamic_cast<Dte_async_prim *>(base))
                 async_prim->parseJson(prim);
+            else if (auto *lsu_prim = dynamic_cast<Lsu_mem_prim *>(base))
+                lsu_prim->parseJson(prim);
+            else if (auto *pipeline =
+                         dynamic_cast<Sram_pipeline_prim *>(base))
+                pipeline->parseJson(prim);
             else if (auto *comp = dynamic_cast<CompBase *>(base))
                 comp->parseJson(prim);
             else
                 throw std::invalid_argument(
-                    "workload prims supports only compute or Dte_async "
+                    "workload prims supports only compute, Dte_async, Lsu_mem, "
+                    "or Sram_pipeline "
                     "primitives, got: " + type);
 
             c.prims.push_back(base);

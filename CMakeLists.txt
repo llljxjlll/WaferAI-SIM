@@ -139,6 +139,14 @@ if(BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
             LABELS "hbm;distributed-memory")
     endforeach()
+    foreach(sram_stage RANGE 0 6)
+        add_test(NAME sram_r${sram_stage}_selftest
+                 COMMAND npusim --sram-r${sram_stage}-selftest)
+        set_tests_properties(sram_r${sram_stage}_selftest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            LABELS "sram;on-chip-memory")
+    endforeach()
+
 endif()
 # add_test_executable(load_config  "./llm/unittest/load_config.cpp")      
 # add_test_executable(global_chip_test  "./llm/unittest/global_chip_test.cpp")

@@ -8,6 +8,7 @@
 #include "memory/hbm_r2_selftest.h"
 #include "memory/hbm_r3_selftest.h"
 #include "memory/hbm_r4_selftest.h"
+#include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_unit.h"
 #include "dte/coll_runtime.h"
@@ -91,6 +92,20 @@ Define_bool_opt("--hbm-r3-selftest", g_flag_hbm_r3_selftest, false,
                 "run distributed HBM R3 DRAMSys-backend self-test and exit");
 Define_bool_opt("--hbm-r4-selftest", g_flag_hbm_r4_selftest, false,
                 "run distributed HBM R4 Router/NUMA integration self-test and exit");
+Define_bool_opt("--sram-r0-selftest", g_flag_sram_r0_selftest, false,
+                "run SRAM R0 configuration contract self-test and exit");
+Define_bool_opt("--sram-r1-selftest", g_flag_sram_r1_selftest, false,
+                "run SRAM R1 storage/region self-test and exit");
+Define_bool_opt("--sram-r2-selftest", g_flag_sram_r2_selftest, false,
+                "run SRAM R2 arbitration/hazard self-test and exit");
+Define_bool_opt("--sram-r3-selftest", g_flag_sram_r3_selftest, false,
+                "run SRAM R3 LSU HBM round-trip self-test and exit");
+Define_bool_opt("--sram-r4-selftest", g_flag_sram_r4_selftest, false,
+                "run SRAM R4 DTE HBM round-trip self-test and exit");
+Define_bool_opt("--sram-r5-selftest", g_flag_sram_r5_selftest, false,
+                "run SRAM R5 manual double-buffer self-test and exit");
+Define_bool_opt("--sram-r6-selftest", g_flag_sram_r6_selftest, false,
+                "run SRAM R6 compatibility migration self-test and exit");
 Define_bool_opt("--hbm-contention-experiment",
                 g_flag_hbm_contention_experiment, false,
                 "run distributed HBM port/contention experiment and exit");
@@ -197,6 +212,34 @@ int sc_main(int argc, char *argv[]) {
     }
     if (g_flag_hbm_r4_selftest) {
         int fails = RunHbmR4SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r0_selftest) {
+        int fails = RunSramR0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r1_selftest) {
+        int fails = RunSramR1SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r2_selftest) {
+        int fails = RunSramR2SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r3_selftest) {
+        int fails = RunSramR3SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r4_selftest) {
+        int fails = RunSramR4SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r5_selftest) {
+        int fails = RunSramR5SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_sram_r6_selftest) {
+        int fails = RunSramR6SelfTest();
         return fails == 0 ? 0 : 1;
     }
     if (g_flag_hbm_contention_experiment) {

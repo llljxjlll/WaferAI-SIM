@@ -7,6 +7,7 @@
 #include "die/port.h"
 #include "memory/hbm_address_map.h"
 #include "memory/hbm_memspec.h"
+#include "memory/sram/sram_region.h"
 #include "utils/config_utils.h"
 #include "utils/print_utils.h"
 
@@ -165,6 +166,8 @@ void ParseHardwareConfig(json j) {
         if (conf_memory.contains("beha_dram_util"))
             HW_BEHA_DRAM_UTIL = conf_memory["beha_dram_util"];
     }
+
+    sram::ConfigRegistry::Instance().Configure(j, TOTAL_CORES);
 
     if (j.contains("gpu")) {
         auto conf_gpu = j["gpu"];

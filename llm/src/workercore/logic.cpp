@@ -903,6 +903,7 @@ void WorkerCoreExecutor::recv_logic() {
                         // 对于每一个核的第一算子的input来自与send
                         // 核的输出，并且已经会由router保存在sram上
                         AddrPosKey inp_key = AddrPosKey(*sram_addr, 0);
+                        inp_key.preferred_region = "comm";
                         string input_label = INPUT_LABEL;
 
                         core_context->sram_pos_locator_->addPair(input_label,

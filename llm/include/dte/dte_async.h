@@ -3,6 +3,7 @@
 #include "dte/dte_async_types.h"
 #include "dte/dte_coalescing.h"
 #include "dte/dte_unit.h"
+#include "dte/dte_memory_bridge.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -55,6 +56,7 @@ public:
     bool PollToken(uint32_t token);
     void Fence();
     void CancelToken(uint32_t token);
+    void BindMemoryBridge(DteMemoryBridge *bridge);
 
     size_t OutstandingCount() const { return records_.size(); }
     size_t OpenGroupCount() const { return open_groups_.size(); }
@@ -120,6 +122,7 @@ private:
     DteAggregationConfig aggregation_;
     int core_id_;
     Event_engine *event_engine_;
+    DteMemoryBridge *memory_bridge_ = nullptr;
     RecordMap records_;
     std::map<uint64_t, OpenGroup> open_groups_;
     std::map<GroupKey, uint64_t> group_by_key_;

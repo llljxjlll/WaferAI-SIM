@@ -1,0 +1,195 @@
+{
+  "status": "PASS",
+  "makespan_ns": 33957.0,
+  "tile_markers": 4,
+  "reduce_markers": 2,
+  "data_flows": 2,
+  "completion_flows": 1,
+  "compute_spans": 6,
+  "drain_marker": "router_residual=0; credits balanced",
+  "trace_balanced": true,
+  "occupancy": {
+    "capacity_bytes": 40960,
+    "reserved_bytes": 34816,
+    "reserved_pct": 85.0,
+    "free_bytes": 6144,
+    "free_pct": 15.0,
+    "peak_live_bytes": 22528,
+    "peak_live_pct": 55.00000000000001,
+    "peak_of_reserved_pct": 64.70588235294117,
+    "regions": [
+      {
+        "name": "gemm_input_a",
+        "base": 0,
+        "end": 8191,
+        "bytes": 8192,
+        "reserved_pct": 20.0,
+        "purpose": "even GEMM input/prefetch"
+      },
+      {
+        "name": "gemm_input_b",
+        "base": 8192,
+        "end": 16383,
+        "bytes": 8192,
+        "reserved_pct": 20.0,
+        "purpose": "odd GEMM input/prefetch"
+      },
+      {
+        "name": "gemm_weight_b",
+        "base": 16384,
+        "end": 24575,
+        "bytes": 8192,
+        "reserved_pct": 20.0,
+        "purpose": "resident weight"
+      },
+      {
+        "name": "gemm_accum",
+        "base": 24576,
+        "end": 32767,
+        "bytes": 8192,
+        "reserved_pct": 20.0,
+        "purpose": "2 intermediate chunks"
+      },
+      {
+        "name": "rs_send_a",
+        "base": 32768,
+        "end": 33279,
+        "bytes": 512,
+        "reserved_pct": 1.25,
+        "purpose": "even communication buffer"
+      },
+      {
+        "name": "rs_send_b",
+        "base": 33280,
+        "end": 33791,
+        "bytes": 512,
+        "reserved_pct": 1.25,
+        "purpose": "odd communication buffer"
+      },
+      {
+        "name": "rs_recv",
+        "base": 33792,
+        "end": 34303,
+        "bytes": 512,
+        "reserved_pct": 1.25,
+        "purpose": "owner receive/reduce buffer"
+      },
+      {
+        "name": "scratch",
+        "base": 34304,
+        "end": 34815,
+        "bytes": 512,
+        "reserved_pct": 1.25,
+        "purpose": "final local RS chunk"
+      }
+    ]
+  },
+  "operation_breakdown_ns": {
+    "HBM store": {
+      "count": 2,
+      "mean": 3844.0,
+      "p95": 3973.0,
+      "total": 7688.0
+    },
+    "HBM load/prefetch": {
+      "count": 2,
+      "mean": 4080.0,
+      "p95": 4305.0,
+      "total": 8160.0
+    },
+    "weight round-trip": {
+      "count": 2,
+      "mean": 4887.0,
+      "p95": 4939.0,
+      "total": 9774.0
+    },
+    "GEMM": {
+      "count": 4,
+      "mean": 1830.0,
+      "p95": 1906.0,
+      "total": 7320.0
+    },
+    "swizzle+label": {
+      "count": 4,
+      "mean": 36.0,
+      "p95": 36.0,
+      "total": 144.0
+    },
+    "owner reduce": {
+      "count": 2,
+      "mean": 208.0,
+      "p95": 208.0,
+      "total": 416.0
+    },
+    "schedule windows": {
+      "count": 4,
+      "mean": 4416.0,
+      "p95": 16384.0,
+      "total": 17664.0
+    }
+  },
+  "communication_breakdown_ns": {
+    "RS_REQUEST": {
+      "count": 2,
+      "mean": 2.0,
+      "p95": 2.0,
+      "total": 4.0
+    },
+    "COMPLETION_REQUEST": {
+      "count": 1,
+      "mean": 2.0,
+      "p95": 2.0,
+      "total": 2.0
+    },
+    "RS_ACK": {
+      "count": 2,
+      "mean": 342.0,
+      "p95": 472.0,
+      "total": 684.0
+    },
+    "COMPLETION_ACK": {
+      "count": 1,
+      "mean": 246.0,
+      "p95": 246.0,
+      "total": 246.0
+    },
+    "RS_DATA": {
+      "count": 2,
+      "mean": 290.0,
+      "p95": 324.0,
+      "total": 580.0
+    },
+    "COMPLETION_DATA": {
+      "count": 1,
+      "mean": 16162.0,
+      "p95": 16162.0,
+      "total": 16162.0
+    },
+    "OWNER_RECV": {
+      "count": 3,
+      "mean": 5607.333333333333,
+      "p95": 16190.0,
+      "total": 16822.0
+    }
+  },
+  "overlap": {
+    "eligible_flows": 1,
+    "overlapped_flows": 1,
+    "total_overlap_ns": 174.0,
+    "payload_overlapped_flows": 1
+  },
+  "overlap_by_core": {
+    "0": {
+      "eligible_flows": 0,
+      "overlapped_flows": 0,
+      "overlap_ns": 0.0,
+      "payload_overlapped_flows": 0
+    },
+    "1": {
+      "eligible_flows": 1,
+      "overlapped_flows": 1,
+      "overlap_ns": 174.0,
+      "payload_overlapped_flows": 1
+    }
+  }
+}

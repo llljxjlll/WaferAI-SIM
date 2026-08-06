@@ -14,6 +14,14 @@
 #include "link/nb_global_memif_v2.h"
 
 class CoreMemAdapter;
+class DteAsyncTracker;
+namespace sram {
+class CoreLsuUnit;
+class RegionTable;
+class AccessUnit;
+class Storage;
+class ComputeTimeline;
+}
 
 using namespace std;
 
@@ -52,6 +60,12 @@ class TaskCoreContext {
 public:
     int cid;
     CoreMemAdapter *hbm_adapter = nullptr;
+    sram::CoreLsuUnit *lsu_memory = nullptr;
+    DteAsyncTracker *dte_memory = nullptr;
+    sram::RegionTable *sram_regions = nullptr;
+    sram::AccessUnit *sram_access = nullptr;
+    sram::Storage *sram_storage = nullptr;
+    sram::ComputeTimeline *compute_timeline = nullptr;
 
     mem_access_unit *mau;
     high_bw_mem_access_unit *hmau;
