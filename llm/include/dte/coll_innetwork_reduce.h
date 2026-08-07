@@ -43,7 +43,9 @@ struct CollReduceOperand {
 };
 
 inline std::vector<sc_bv<256>> SerializeCollReduceOperand(const CollReduceOperand &o) {
-    if (o.tree_id == 0 || o.op == CollReduceOp::NONE || o.dtype == CollDType::FP32)
+    if (o.tree_id == 0 || o.op == CollReduceOp::NONE ||
+        o.dtype == CollDType::FP32 || o.dtype == CollDType::FP16 ||
+        o.dtype == CollDType::FP8)
         throw std::invalid_argument("invalid in-network reduce operand mode");
     const uint64_t width = CollDTypeBits(o.dtype);
     if (o.valid_elements == 0 || uint64_t(o.valid_elements) * width > 128)
@@ -81,7 +83,7 @@ inline CollReduceOperand DeserializeCollReduceOperand(const std::vector<sc_bv<25
     o.child_id = w[0].range(199, 184).to_uint();
     const unsigned dtype = w[0].range(207, 200).to_uint();
     const unsigned op = w[0].range(215, 208).to_uint();
-    if (dtype > unsigned(CollDType::FP32) || op > unsigned(CollReduceOp::MAX))
+    if (dtype > unsigned(CollDType::FP8) || op > unsigned(CollReduceOp::MAX))
         throw std::invalid_argument("in-network reduce enum out of range");
     o.dtype = static_cast<CollDType>(dtype); o.op = static_cast<CollReduceOp>(op);
     o.valid_elements = w[0].range(231, 216).to_uint(); o.payload = w[1].range(127, 0);
@@ -99,7 +101,9 @@ struct CollReduceMatchKey {
 inline sc_bv<128> ReduceIntegerOperands(const std::vector<sc_bv<128>> &values,
                                         CollDType dtype, CollReduceOp op,
                                         uint16_t count) {
-    if (values.empty() || dtype == CollDType::FP32 || op == CollReduceOp::NONE)
+    if (values.empty() || dtype == CollDType::FP32 ||
+        dtype == CollDType::FP16 || dtype == CollDType::FP8 ||
+        op == CollReduceOp::NONE)
         throw std::invalid_argument("unsupported integer reduction");
     const unsigned width = CollDTypeBits(dtype);
     if (count == 0 || uint64_t(count) * width > 128) throw std::invalid_argument("invalid reduction count");
@@ -134,7 +138,8 @@ public:
     bool Open(const CollReduceMatchKey &key, uint64_t expected_children,
               CollDType dtype, CollReduceOp op, uint16_t count) {
         if (!expected_children || states_.count(key)) throw std::invalid_argument("invalid/duplicate match open");
-        if (dtype == CollDType::FP32 || op == CollReduceOp::NONE || count == 0 ||
+        if (dtype == CollDType::FP32 || dtype == CollDType::FP16 ||
+            dtype == CollDType::FP8 || op == CollReduceOp::NONE || count == 0 ||
             uint64_t(count) * CollDTypeBits(dtype) > 128)
             throw std::invalid_argument("unsupported match reduction mode");
         if (states_.size() == hcap_) return false;

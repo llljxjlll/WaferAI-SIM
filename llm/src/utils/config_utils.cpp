@@ -252,6 +252,10 @@ void ParseHardwareConfig(json j) {
 
 void ParseSimulationConfig(json j) {
     // 设置仿真相关参数
+    SPEC_NOC_COLL_CONFIG = ParseNocCollectiveConfig(
+        j.contains("noc") ? j.at("noc") : json::object());
+    SPEC_NOC_COLL_ENABLED = SPEC_NOC_COLL_CONFIG.enabled;
+
     if (j.contains("ttf_file"))
         SPEC_TTF_FILE = j["ttf_file"];
 
@@ -285,11 +289,6 @@ void ParseSimulationConfig(json j) {
             SPEC_FAST_WARMUP = conf_noc["fast_warmup"];
         if (conf_noc.contains("send_recv_parallel"))
             SPEC_SEND_RECV_PARALLEL = conf_noc["send_recv_parallel"];
-        if (conf_noc.contains("collective")) {
-            const auto &coll = conf_noc["collective"];
-            if (coll.contains("enabled")) SPEC_NOC_COLL_ENABLED = coll["enabled"];
-            if (coll.contains("tier")) SPEC_NOC_COLL_TIER = coll["tier"];
-        }
     }
 
     if (j.contains("dte")) {
@@ -317,12 +316,38 @@ void ParseSimulationConfig(json j) {
             DTE_AGGREGATION_ADDRESS_BLOCK_BYTES =
                 conf_dte["aggregation_address_block_bytes"];
     }
-    if (SPEC_NOC_COLL_TIER < 0 || SPEC_NOC_COLL_TIER > 2)
-        throw std::invalid_argument("noc.collective.tier must be in [0,2]");
     if (SPEC_NOC_COLL_ENABLED && !SPEC_USE_BEHA_DTE)
         throw std::invalid_argument("NoC collective V1 requires dte.use_beha_dte=true");
     if (SPEC_NOC_COLL_ENABLED && SPEC_SEND_RECV_PARALLEL)
         throw std::invalid_argument("NoC collective V1 requires sequential dispatcher");
+    if (SPEC_NOC_COLL_ENABLED) {
+        LOG_INFO(SYSTEM)
+            << "NoC collective profile="
+            << NocCollProfileName(SPEC_NOC_COLL_CONFIG.profile)
+            << " broadcast_backend="
+            << NocCollBroadcastBackendName(
+                   SPEC_NOC_COLL_CONFIG.broadcast_backend)
+            << " reduce_backend="
+            << NocCollReduceBackendName(SPEC_NOC_COLL_CONFIG.reduce_backend)
+            << " reduce_wire="
+            << NocCollReduceWireName(SPEC_NOC_COLL_CONFIG.reduce_wire)
+            << " transport=" << SPEC_NOC_COLL_CONFIG.transport;
+        if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload()) {
+            LOG_INFO(SYSTEM)
+                << "NoC DCA vector_bits="
+                << SPEC_NOC_COLL_CONFIG.dca.vector_bits
+                << " slice_bits=" << SPEC_NOC_COLL_CONFIG.dca.slice_bits
+                << " slices=" << SPEC_NOC_COLL_CONFIG.dca.slices_per_tile
+                << " fifo="
+                << SPEC_NOC_COLL_CONFIG.dca.header_fifo_depth << "/"
+                << SPEC_NOC_COLL_CONFIG.dca.operand_fifo_depth << "/"
+                << SPEC_NOC_COLL_CONFIG.dca.result_fifo_depth
+                << " arbitration=" << NocCollDcaArbitrationName(
+                       SPEC_NOC_COLL_CONFIG.dca.arbitration)
+                << " value_mode=" << NocCollValueModeName(
+                       SPEC_NOC_COLL_CONFIG.dca.value_mode);
+        }
+    }
 
     if (SPEC_DTE_STREAMING && !SPEC_USE_BEHA_DTE)
         throw std::invalid_argument(

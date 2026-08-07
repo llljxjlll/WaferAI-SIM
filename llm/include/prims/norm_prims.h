@@ -149,10 +149,16 @@ class Collective_data_prim : public PrimBase {
 public:
     enum class Mode : uint8_t {
         BROADCAST_TX = 0, BROADCAST_RX = 1,
-        REDUCE_TX = 2, REDUCE_RX = 3
+        REDUCE_TX = 2, REDUCE_RX = 3,
+        REDUCE_STREAM_RX_START = 4,
+        REDUCE_STREAM_TX = 5,
+        REDUCE_STREAM_RX_WAIT = 6,
+        CORE_VECTOR_START = 7,
+        CORE_VECTOR_WAIT = 8
     };
     CollDescriptor descriptor;
     uint16_t tree_id = 0;
+    uint32_t core_vector_beats = 0;
     Mode mode = Mode::BROADCAST_RX;
 
     int taskCoreDefault(TaskCoreContext &context);

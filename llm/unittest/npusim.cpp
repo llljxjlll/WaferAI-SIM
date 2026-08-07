@@ -93,12 +93,42 @@ Define_bool_opt("--coll-v5-selftest", g_flag_coll_v5_selftest, false,
 Define_bool_opt("--coll-v6-selftest", g_flag_coll_v6_selftest, false,
                 "run NoC collective V6 integration/lifecycle self-test and exit");
 
+Define_bool_opt("--coll-r0-selftest", g_flag_coll_r0_selftest, false,
+                "run NoC collective refactor R0 contract self-test and exit");
+
+Define_bool_opt("--coll-r1-selftest", g_flag_coll_r1_selftest, false,
+                "run NoC collective refactor R1 config self-test and exit");
+
+Define_bool_opt("--coll-r2-selftest", g_flag_coll_r2_selftest, false,
+                "run NoC collective refactor R2 DCA ComputePool self-test and exit");
+
+Define_bool_opt("--coll-r3-selftest", g_flag_coll_r3_selftest, false,
+                "run NoC collective refactor R3 stream/state self-test and exit");
+
+Define_bool_opt("--coll-r4-selftest", g_flag_coll_r4_selftest, false,
+                "run NoC collective refactor R4 Router stream engine self-test and exit");
+
+Define_bool_opt("--coll-r5-selftest", g_flag_coll_r5_selftest, false,
+                "run NoC collective refactor R5 shared vector/FP self-test and exit");
+
+Define_bool_opt("--coll-r6-selftest", g_flag_coll_r6_selftest, false,
+                "run NoC collective refactor R6 reduce-only self-test and exit");
+
+Define_bool_opt("--coll-r7-selftest", g_flag_coll_r7_selftest, false,
+                "run NoC collective refactor R7 reduce+broadcast self-test and exit");
+
+Define_bool_opt("--coll-r8-selftest", g_flag_coll_r8_selftest, false,
+                "run NoC collective refactor R8 performance-oracle self-test and exit");
+
 Define_bool_opt("--hbm-r0-selftest", g_flag_hbm_r0_selftest, false,
                 "run distributed HBM R0 config/topology self-test and exit");
+
 Define_bool_opt("--hbm-r1-selftest", g_flag_hbm_r1_selftest, false,
                 "run distributed HBM R1 synthetic-request self-test and exit");
+
 Define_bool_opt("--hbm-r2-selftest", g_flag_hbm_r2_selftest, false,
                 "run distributed HBM R2 bandwidth/queueing self-test and exit");
+
 Define_bool_opt("--hbm-r3-selftest", g_flag_hbm_r3_selftest, false,
                 "run distributed HBM R3 DRAMSys-backend self-test and exit");
 Define_bool_opt("--hbm-r4-selftest", g_flag_hbm_r4_selftest, false,
@@ -209,6 +239,38 @@ int sc_main(int argc, char *argv[]) {
         int fails = RunCollV6SelfTest();
         return fails == 0 ? 0 : 1;
     }
+    if (g_flag_coll_r0_selftest) {
+        int fails = RunCollR0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r1_selftest) {
+        int fails = RunCollR1SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r2_selftest) {
+        int fails = RunCollR2SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r3_selftest) {
+        int fails = RunCollR3SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r4_selftest) {
+        int fails = RunCollR4SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r5_selftest) {
+        int fails = RunCollR5SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r6_selftest) {
+        int fails = RunCollR6SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r7_selftest) {
+        int fails = RunCollR7SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
     if (g_flag_hbm_r0_selftest) {
         int fails = RunHbmR0SelfTest();
         return fails == 0 ? 0 : 1;
@@ -263,6 +325,10 @@ int sc_main(int argc, char *argv[]) {
             static_cast<int>(g_flag_hbm_experiment_cores),
             static_cast<int>(g_flag_hbm_experiment_pairs),
             static_cast<int>(g_flag_hbm_experiment_bytes));
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_coll_r8_selftest) {
+        int fails = RunCollR8SelfTest();
         return fails == 0 ? 0 : 1;
     }
     if (g_flag_dte_v3_selftest) {
@@ -520,6 +586,36 @@ int sc_main(int argc, char *argv[]) {
                 if (auto *core = dynamic_cast<WorkerCoreExecutor *>(o)) {
                     endpoint_residual += core->CollectiveEndpointResidual();
                     dte_tokens += core->DteOutstandingCount();
+                }
+                if (auto *router = dynamic_cast<RouterUnit *>(o)) {
+                    if (router->reduce_stream_engine) {
+                        const auto &stream =
+                            router->reduce_stream_engine->Stats();
+                        const auto &dca =
+                            router->reduce_stream_engine->DcaStats();
+                        LOG_INFO(SYSTEM)
+                            << "[COLL_STREAM] router=" << router->rid
+                            << " headers_in=" << stream.headers_in
+                            << " data_in=" << stream.data_in
+                            << " headers_out=" << stream.headers_out
+                            << " data_out=" << stream.data_out
+                            << " assembler_stalls="
+                            << stream.assembler_backpressure
+                            << " issue_stalls=" << stream.issue_backpressure
+                            << " egress_stalls=" << stream.egress_backpressure;
+                        LOG_INFO(SYSTEM)
+                            << "[COLL_DCA] router=" << router->rid
+                            << " core_issues=" << dca.core_issued
+                            << " dca_issues=" << dca.dca_issued
+                            << " completions=" << dca.completions
+                            << " core_stalls=" << dca.core_wait_cycles
+                            << " dca_stalls=" << dca.dca_wait_cycles
+                            << " submit_stalls="
+                            << dca.issue_queue_backpressure
+                            << " inflight_peak=" << dca.inflight_peak
+                            << " result_stalls="
+                            << dca.result_backpressure_cycles;
+                    }
                 }
                 coll_drain(o->get_child_objects());
             }

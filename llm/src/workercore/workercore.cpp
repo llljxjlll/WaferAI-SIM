@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <queue>
 #include <string>
@@ -14,6 +15,7 @@
 #include "dte/coll_latency.h"
 #include "dte/coll_multicast.h"
 #include "dte/coll_innetwork_reduce.h"
+#include "dte/coll_stream_engine.h"
 #include "link/nb_global_memif_v2.h"
 #include "memory/dram/GPUNB_DcacheIF.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
@@ -589,6 +591,180 @@ void WorkerCoreExecutor::execute_collective_data(Collective_data_prim *prim) {
         ev_send_helper.notify(SC_ZERO_TIME);
         wait(CYCLE, SC_NS);
     };
+    if (prim->mode ==
+            Collective_data_prim::Mode::REDUCE_STREAM_RX_START) {
+        if (prim->descriptor.self_rank != prim->descriptor.root_rank)
+            throw std::invalid_argument(
+                "only reduce root may arm a stream RX session");
+        if (reduce_stream_sessions.count(prim->tree_id))
+            throw std::invalid_argument(
+                "duplicate endpoint reduce stream session");
+        EndpointReduceStreamSession session;
+        session.descriptor = prim->descriptor;
+        session.tree_id = prim->tree_id;
+        reduce_stream_sessions.emplace(prim->tree_id,
+                                       std::move(session));
+        std::cout << "[COLL_STREAM_ARM] tree=" << prim->tree_id
+                  << " root=" << cid << std::endl;
+        return;
+    }
+    if (prim->mode == Collective_data_prim::Mode::CORE_VECTOR_START) {
+        if (prim->descriptor.self_rank != prim->descriptor.root_rank ||
+            prim->core_vector_beats == 0)
+            throw std::invalid_argument(
+                "shared CORE vector start must execute at reduce root");
+        auto *engine = coll_refactor::LookupProductionReduceStreamEngine(
+            static_cast<uint16_t>(cid));
+        if (!engine)
+            throw std::runtime_error(
+                "shared CORE vector start has no production tile pool");
+        if (core_vector_sessions.count(prim->tree_id))
+            throw std::invalid_argument(
+                "duplicate shared CORE vector session");
+        auto inserted = core_vector_sessions.emplace(
+            prim->tree_id, EndpointCoreVectorSession{});
+        auto &session = inserted.first->second;
+        auto consume_ready = [&] {
+            for (uint64_t tag : session.tags) {
+                auto result = engine->TakeCoreResult(tag);
+                if (!result) continue;
+                if (result->source !=
+                    coll_refactor::DcaRequestSource::CORE)
+                    throw std::logic_error(
+                        "shared CORE session received DCA result");
+                ++session.completed;
+            }
+        };
+        const uint64_t dtype_bits =
+            CollDTypeBits(prim->descriptor.dtype);
+        const uint64_t lanes =
+            SPEC_NOC_COLL_CONFIG.dca.vector_bits / dtype_bits;
+        for (uint32_t beat = 0; beat < prim->core_vector_beats; ++beat) {
+            coll_refactor::DcaPoolRequest request;
+            request.request.key = {
+                {prim->descriptor.key, 0,
+                 static_cast<uint32_t>(0x800000u + beat)},
+                0, beat};
+            request.request.op = prim->descriptor.reduce_op;
+            coll_refactor::VectorBeat geometry{
+                prim->descriptor.dtype,
+                SPEC_NOC_COLL_CONFIG.dca.vector_bits, {lanes, lanes}};
+            request.request.operands = {geometry, geometry};
+            if (SPEC_NOC_COLL_CONFIG.dca.value_mode !=
+                    NocCollValueMode::TIMING_ONLY) {
+                const uint64_t one =
+                    prim->descriptor.dtype == CollDType::FP32
+                        ? coll_refactor::CollFp32Bits(1.0f) : 1;
+                request.operand_values[0].assign(lanes, one);
+                request.operand_values[1].assign(lanes, one);
+            }
+            while (true) {
+                consume_ready();
+                auto tag = engine->TrySubmitCore(request);
+                if (tag) {
+                    session.tags.push_back(*tag);
+                    break;
+                }
+                wait(engine->CoreProgressEvent());
+            }
+        }
+        consume_ready();
+        std::cout << "[COLL_CORE_START] tree=" << prim->tree_id
+                  << " beats=" << prim->core_vector_beats
+                  << " completed=" << session.completed << std::endl;
+        return;
+    }
+    if (prim->mode == Collective_data_prim::Mode::CORE_VECTOR_WAIT) {
+        auto *engine = coll_refactor::LookupProductionReduceStreamEngine(
+            static_cast<uint16_t>(cid));
+        auto session = core_vector_sessions.find(prim->tree_id);
+        if (!engine || session == core_vector_sessions.end() ||
+            session->second.tags.size() != prim->core_vector_beats)
+            throw std::invalid_argument(
+                "shared CORE vector wait session mismatch");
+        while (session->second.completed < session->second.tags.size()) {
+            bool progress = false;
+            for (uint64_t tag : session->second.tags) {
+                auto result = engine->TakeCoreResult(tag);
+                if (!result) continue;
+                ++session->second.completed;
+                progress = true;
+            }
+            if (!progress) wait(engine->CoreProgressEvent());
+        }
+        std::cout << "[COLL_CORE_DONE] tree=" << prim->tree_id
+                  << " beats=" << session->second.completed << std::endl;
+        core_vector_sessions.erase(session);
+        return;
+    }
+    if (prim->mode == Collective_data_prim::Mode::REDUCE_STREAM_TX) {
+        const auto &dca = SPEC_NOC_COLL_CONFIG.dca;
+        const uint64_t vector_bits = dca.vector_bits;
+        const uint64_t dtype_bits = CollDTypeBits(prim->descriptor.dtype);
+        coll_refactor::ReduceStreamWireHeader header;
+        header.stream.tree_id = prim->tree_id;
+        header.stream.key = {prim->descriptor.key, 0, 1};
+        header.stream.dtype = prim->descriptor.dtype;
+        header.stream.op = prim->descriptor.reduce_op;
+        header.stream.total_elements = prim->descriptor.count;
+        header.stream.physical_data_flits = CollCeilDiv(
+            CollCheckedMul(prim->descriptor.count, dtype_bits), 128);
+        const auto work = coll_refactor::ComputeVectorWork(
+            prim->descriptor.count, 1, vector_bits,
+            prim->descriptor.dtype);
+        header.stream.vector_beats = work.vector_beats;
+        header.source_id = static_cast<uint16_t>(cid);
+        header.tail_valid_lanes = work.tail_valid_lanes;
+        header.Validate(128, vector_bits);
+        send_raw(coll_refactor::SerializeReduceStreamHeader(
+            header, vector_bits));
+        for (uint64_t beat_id = 0; beat_id < work.vector_beats;
+             ++beat_id) {
+            const bool final = beat_id + 1 == work.vector_beats;
+            coll_refactor::VectorBeat geometry{
+                prim->descriptor.dtype, vector_bits,
+                {work.lanes,
+                 final ? work.tail_valid_lanes : work.lanes}};
+            const uint64_t rank_value =
+                prim->descriptor.dtype == CollDType::FP32
+                    ? coll_refactor::CollFp32Bits(static_cast<float>(
+                          prim->descriptor.self_rank + 1))
+                    : static_cast<uint64_t>(
+                          prim->descriptor.self_rank + 1);
+            std::vector<uint64_t> values(work.lanes, rank_value);
+            const auto beat = coll_refactor::PackReduceVectorValues(
+                {header.stream.key, header.reduce_stage_id, beat_id},
+                geometry, values);
+            for (const auto &data : coll_refactor::SplitReduceVectorBeat(
+                     header, beat, 128, vector_bits))
+                send_raw(coll_refactor::SerializeReduceStreamData(data));
+        }
+        std::cout << "[COLL_STREAM_TX] tree=" << prim->tree_id
+                  << " rank=" << prim->descriptor.self_rank
+                  << " header=1 data="
+                  << header.stream.physical_data_flits
+                  << " beats=" << header.stream.vector_beats << std::endl;
+        return;
+    }
+    if (prim->mode ==
+            Collective_data_prim::Mode::REDUCE_STREAM_RX_WAIT) {
+        auto session = reduce_stream_sessions.find(prim->tree_id);
+        if (session == reduce_stream_sessions.end())
+            throw std::invalid_argument(
+                "wait for unknown endpoint reduce stream session");
+        while (!session->second.complete)
+            wait(ev_reduce_stream_progress);
+        const uint64_t values = session->second.values_seen;
+        reduce_stream_sessions.erase(session);
+        std::cout << "[COLL_STREAM_RESULT] tree=" << prim->tree_id
+                  << " elements=" << values
+                  << " value="
+                  << (SPEC_NOC_COLL_CONFIG.dca.value_mode ==
+                              NocCollValueMode::TIMING_ONLY
+                          ? "timing-only" : "verified")
+                  << std::endl;
+        return;
+    }
     if (prim->mode == Collective_data_prim::Mode::REDUCE_TX) {
         const uint64_t width = CollDTypeBits(prim->descriptor.dtype);
         const uint64_t per_chunk = 128 / width;
@@ -692,6 +868,94 @@ void WorkerCoreExecutor::execute_collective_data(Collective_data_prim *prim) {
               << " packets=" << packets << std::endl;
 }
 
+void WorkerCoreExecutor::handle_reduce_stream_header(
+    const sc_bv<256> &wire) {
+    const auto header = coll_refactor::DeserializeReduceStreamHeader(
+        wire, SPEC_NOC_COLL_CONFIG.dca.vector_bits);
+    auto session = reduce_stream_sessions.find(header.stream.tree_id);
+    if (session == reduce_stream_sessions.end())
+        throw std::runtime_error(
+            "reduce stream result arrived before root RX arm");
+    auto &state = session->second;
+    if (state.header || state.complete)
+        throw std::runtime_error(
+            "duplicate reduce stream result header");
+    if (!(header.stream.key.collective == state.descriptor.key) ||
+        header.stream.dtype != state.descriptor.dtype ||
+        header.stream.op != state.descriptor.reduce_op ||
+        header.stream.total_elements != state.descriptor.count)
+        throw std::runtime_error(
+            "endpoint reduce stream header identity mismatch");
+    state.header = header;
+    state.assembler = std::make_unique<
+        coll_refactor::ReduceStreamAssembler>(
+            header,
+            static_cast<size_t>(
+                SPEC_NOC_COLL_CONFIG.dca.result_fifo_depth),
+            128, SPEC_NOC_COLL_CONFIG.dca.vector_bits);
+    if (!reduce_stream_routes.emplace(header.Route(),
+                                      header.stream.tree_id).second)
+        throw std::runtime_error(
+            "endpoint reduce stream compact-route collision");
+    ev_reduce_stream_progress.notify(SC_ZERO_TIME);
+}
+
+void WorkerCoreExecutor::handle_reduce_stream_data(
+    const sc_bv<256> &wire) {
+    const auto data = coll_refactor::DeserializeReduceStreamData(wire);
+    auto route = reduce_stream_routes.find(data.route);
+    if (route == reduce_stream_routes.end())
+        throw std::runtime_error(
+            "endpoint reduce data arrived without active result header");
+    auto session = reduce_stream_sessions.find(route->second);
+    if (session == reduce_stream_sessions.end() ||
+        !session->second.assembler)
+        throw std::logic_error(
+            "endpoint reduce stream route lost its session");
+    auto &state = session->second;
+    const auto status = state.assembler->Accept(data);
+    if (status == coll_refactor::ReduceStreamAcceptStatus::BACKPRESSURE)
+        throw std::logic_error(
+            "endpoint consumes every ready beat and must not backpressure");
+    while (auto beat = state.assembler->PopBeat()) {
+        const auto values = coll_refactor::UnpackReduceVectorValues(*beat);
+        const uint64_t scalar_expected = state.descriptor.reduce_op ==
+                CollReduceOp::SUM
+            ? uint64_t(state.descriptor.group.size()) *
+                  (state.descriptor.group.size() + 1) / 2
+            : uint64_t(state.descriptor.group.size());
+        const uint64_t expected = state.descriptor.dtype == CollDType::FP32
+            ? coll_refactor::CollFp32Bits(
+                  static_cast<float>(scalar_expected))
+            : scalar_expected;
+        const uint64_t width = CollDTypeBits(state.descriptor.dtype);
+        const uint64_t mask = width == 64
+            ? std::numeric_limits<uint64_t>::max()
+            : ((uint64_t{1} << width) - 1);
+        for (uint64_t lane = 0;
+             lane < beat->geometry.lane_mask.valid_lanes; ++lane) {
+            if (SPEC_NOC_COLL_CONFIG.dca.value_mode !=
+                    NocCollValueMode::TIMING_ONLY &&
+                values[lane] != (expected & mask))
+                throw std::runtime_error(
+                    "endpoint stream reduce value mismatch");
+            ++state.values_seen;
+        }
+    }
+    if (status == coll_refactor::
+            ReduceStreamAcceptStatus::STREAM_COMPLETE) {
+        state.assembler->Finish();
+        if (state.assembler->Residual() != 0 ||
+            state.values_seen != state.descriptor.count)
+            throw std::runtime_error(
+                "endpoint reduce stream completed with residual data");
+        state.complete = true;
+        reduce_stream_routes.erase(route);
+        ev_reduce_stream_progress.notify(SC_ZERO_TIME);
+    }
+    ev_msg_process_end.notify(SC_ZERO_TIME);
+}
+
 void WorkerCoreExecutor::switch_prim_block() {
     while (true) {
         prim_block.write(true);
@@ -744,6 +1008,20 @@ void WorkerCoreExecutor::poll_buffer_i() {
         }
 
         const sc_bv<256> wire = channel_i.read();
+        if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload() &&
+            coll_refactor::IsReduceStreamHeaderWire(wire)) {
+            handle_reduce_stream_header(wire);
+            core_busy_o.write(false);
+            wait(CYCLE, SC_NS);
+            continue;
+        }
+        if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload() &&
+            coll_refactor::IsReduceStreamDataWire(wire)) {
+            handle_reduce_stream_data(wire);
+            core_busy_o.write(false);
+            wait(CYCLE, SC_NS);
+            continue;
+        }
         if (IsCollDataWire(wire)) {
             (void)DeserializeCollData(wire);
             collective_data_buffer.push(wire);

@@ -45,6 +45,8 @@ CollDType ParseGlobalCollDType(const std::string &v) {
     if (v == "int32") return CollDType::INT32;
     if (v == "int64") return CollDType::INT64;
     if (v == "fp32") return CollDType::FP32;
+    if (v == "fp16") return CollDType::FP16;
+    if (v == "fp8") return CollDType::FP8;
     throw std::invalid_argument("unsupported collective dtype: " + v);
 }
 CollReduceOp ParseGlobalReduceOp(const std::string &v) {
@@ -79,6 +81,14 @@ uint16_t CollectiveTreeId(const CollDescriptor &d) {
     mix(d.key.group_id); mix(d.key.collective_id); mix(d.key.epoch);
     return static_cast<uint16_t>(1u + hash % 0xffffu);
 }
+uint16_t CollectiveTreeIdForSource(const CollDescriptor &d,
+                                   uint16_t source_rank) {
+    uint32_t hash = 2166136261u;
+    auto mix = [&](uint32_t v) { hash ^= v; hash *= 16777619u; };
+    mix(d.key.group_id); mix(d.key.collective_id); mix(d.key.epoch);
+    mix(0xa11a6a7eu); mix(source_rank);
+    return static_cast<uint16_t>(1u + hash % 0xffffu);
+}
 Directions OppositeDirection(Directions d) {
     if (d == WEST) return EAST;
     if (d == EAST) return WEST;
@@ -93,13 +103,19 @@ Directions StepDirection(int from, int to) {
     if (to == from + GRID_X) return NORTH;
     throw std::invalid_argument("collective tree contains a non-neighbor edge");
 }
-void ProgramBroadcastTree(const CollDescriptor &d) {
+void ProgramCollectiveTopology(const CollDescriptor &d,
+                               bool program_multicast,
+                               bool program_reduce,
+                               uint16_t explicit_tree = 0) {
     const int root = d.group[d.root_rank];
     for (uint16_t core : d.group)
         if (DieOfGlobal(core) != DieOfGlobal(root))
             throw std::invalid_argument("Tier1/Tier2 collective cannot cross dies");
     std::map<int, int> parent;
     std::map<int, uint8_t> outputs;
+    // A single-member reduce still needs a CENTER->CENTER bypass node.
+    // Single-member multicast is handled as a no-op and is never programmed.
+    outputs[root] = 0;
     for (uint16_t target : d.group) {
         if (target == root) continue;
         int cur = root;
@@ -119,22 +135,32 @@ void ProgramBroadcastTree(const CollDescriptor &d) {
         }
         outputs[target] |= 1u << CENTER;
     }
-    const uint16_t tree = CollectiveTreeId(d);
-    for (const auto &node : outputs) {
-        Directions ingress = CENTER;
-        if (node.first != root)
-            ingress = OppositeDirection(StepDirection(parent.at(node.first),
-                                                       node.first));
-        ProgramCollectiveTreeEntry(
-            {tree, static_cast<uint16_t>(node.first),
-             static_cast<uint8_t>(ingress)}, node.second);
+    const uint16_t tree = explicit_tree ? explicit_tree : CollectiveTreeId(d);
+    if (program_multicast) {
+        for (const auto &node : outputs) {
+            Directions ingress = CENTER;
+            if (node.first != root)
+                ingress = OppositeDirection(
+                    StepDirection(parent.at(node.first), node.first));
+            ProgramCollectiveTreeEntry(
+                {tree, static_cast<uint16_t>(node.first),
+                 static_cast<uint8_t>(ingress)}, node.second);
+        }
     }
-    if (CollIsReduction(d.op)) {
+    if (program_reduce) {
         const std::set<uint16_t> members(d.group.begin(), d.group.end());
         for (const auto &node : outputs) {
             uint8_t expected = node.second & ~(1u << CENTER);
             if (members.count(static_cast<uint16_t>(node.first)))
                 expected |= 1u << CENTER;
+            if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload()) {
+                const uint64_t fanin = static_cast<uint64_t>(
+                    __builtin_popcount(static_cast<unsigned>(expected)));
+                if (fanin > SPEC_NOC_COLL_CONFIG.dca.header_fifo_depth ||
+                    fanin > SPEC_NOC_COLL_CONFIG.dca.operand_fifo_depth)
+                    throw std::invalid_argument(
+                        "DCA header/operand FIFO is smaller than tree fan-in");
+            }
             Directions parent_output = CENTER;
             if (node.first != root)
                 parent_output = StepDirection(node.first,
@@ -144,7 +170,8 @@ void ProgramBroadcastTree(const CollDescriptor &d) {
                 {expected, parent_output});
         }
     }
-    ValidateCollectiveTree(tree, static_cast<uint16_t>(root), d.group);
+    if (program_multicast)
+        ValidateCollectiveTree(tree, static_cast<uint16_t>(root), d.group);
 }
 void SetCollectiveFlowSize(Send_prim *prim, uint64_t bits) {
     if (bits == 0) throw std::invalid_argument("collective flow payload must be positive");
@@ -159,7 +186,7 @@ void SetCollectiveFlowSize(Send_prim *prim, uint64_t bits) {
     prim->end_length = static_cast<int>(bits - (raw - 1) * M_D_DATA);
 }
 void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescriptor &d) {
-    if (SPEC_NOC_COLL_TIER == 2 && CollIsReduction(d.op)) {
+    if (SPEC_NOC_COLL_CONFIG.UsesLegacyReduce() && CollIsReduction(d.op)) {
         const uint16_t tree = CollectiveTreeId(d);
         auto *tx = new Collective_data_prim();
         tx->descriptor = d; tx->tree_id = tree;
@@ -212,7 +239,102 @@ void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescripto
         }
         return;
     }
-    if (SPEC_NOC_COLL_TIER >= 1 && d.op == CollOp::BROADCAST) {
+    if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload() && CollIsReduction(d.op)) {
+        const uint16_t tree = CollectiveTreeId(d);
+        if (d.self_rank == d.root_rank) {
+            auto *start = new Collective_data_prim();
+            start->descriptor = d;
+            start->tree_id = tree;
+            start->mode = Collective_data_prim::Mode::
+                REDUCE_STREAM_RX_START;
+            prims.push_back(start);
+            if (d.core_contention_beats != 0) {
+                auto *core_start = new Collective_data_prim();
+                core_start->descriptor = d;
+                core_start->tree_id = tree;
+                core_start->mode =
+                    Collective_data_prim::Mode::CORE_VECTOR_START;
+                core_start->core_vector_beats = d.core_contention_beats;
+                prims.push_back(core_start);
+            }
+        }
+        auto *tx = new Collective_data_prim();
+        tx->descriptor = d;
+        tx->tree_id = tree;
+        tx->mode = Collective_data_prim::Mode::REDUCE_STREAM_TX;
+        prims.push_back(tx);
+        if (d.self_rank == d.root_rank) {
+            auto *wait = new Collective_data_prim();
+            wait->descriptor = d;
+            wait->tree_id = tree;
+            wait->mode = Collective_data_prim::Mode::
+                REDUCE_STREAM_RX_WAIT;
+            prims.push_back(wait);
+            if (d.core_contention_beats != 0) {
+                auto *core_wait = new Collective_data_prim();
+                core_wait->descriptor = d;
+                core_wait->tree_id = tree;
+                core_wait->mode =
+                    Collective_data_prim::Mode::CORE_VECTOR_WAIT;
+                core_wait->core_vector_beats = d.core_contention_beats;
+                prims.push_back(core_wait);
+            }
+        }
+        auto append_barrier = [&](uint16_t phase, bool release) {
+            auto *barrier = new Collective_prim();
+            barrier->descriptor = d;
+            barrier->phase_id = phase;
+            barrier->release_tree_id = release ? tree : 0;
+            prims.push_back(barrier);
+        };
+        append_barrier(0, d.op == CollOp::REDUCE);
+
+        if (d.op == CollOp::ALLREDUCE &&
+            SPEC_NOC_COLL_CONFIG.UsesMulticast()) {
+            auto *data = new Collective_data_prim();
+            data->descriptor = d;
+            data->tree_id = tree;
+            data->mode = d.self_rank == d.root_rank
+                ? Collective_data_prim::Mode::BROADCAST_TX
+                : Collective_data_prim::Mode::BROADCAST_RX;
+            prims.push_back(data);
+            append_barrier(1, true);
+        } else if (d.op == CollOp::ALLREDUCE ||
+                   d.op == CollOp::REDUCESCATTER) {
+            const uint16_t n = static_cast<uint16_t>(d.group.size());
+            for (uint16_t dst = 0; dst < n; ++dst) {
+                if (dst == d.root_rank) continue;
+                uint64_t bits = d.chunk_bits;
+                if (d.op == CollOp::REDUCESCATTER) {
+                    const auto part = CollRankCountOffset(
+                        d.count, n, dst);
+                    bits = part.first * CollDTypeBits(d.dtype);
+                }
+                const int tag = CollectiveFlowTag(d, 1, dst);
+                if (d.self_rank == d.root_rank) {
+                    auto *req = new Send_prim(SEND_TYPE::SEND_REQ,
+                                              d.group[dst], tag);
+                    auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+                    auto *data = new Send_prim(SEND_TYPE::SEND_DATA,
+                                               d.group[dst], tag);
+                    SetCollectiveFlowSize(req, bits);
+                    SetCollectiveFlowSize(data, bits);
+                    data->output_label = "collective_r6";
+                    prims.push_back(req);
+                    prims.push_back(ack);
+                    prims.push_back(data);
+                } else if (d.self_rank == dst) {
+                    prims.push_back(new Recv_prim(
+                        RECV_TYPE::RECV_DATA, tag, 1));
+                }
+            }
+            append_barrier(1, true);
+        }
+        return;
+    }
+    if (SPEC_NOC_COLL_CONFIG.UsesMulticast() &&
+        d.op == CollOp::BROADCAST) {
+        if (d.group.size() == 1) return;
         auto *data = new Collective_data_prim();
         data->descriptor = d; data->tree_id = CollectiveTreeId(d);
         data->mode = d.self_rank == d.root_rank
@@ -223,6 +345,35 @@ void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescripto
         barrier->descriptor = d; barrier->phase_id = 0;
         barrier->release_tree_id = data->tree_id;
         prims.push_back(barrier);
+        return;
+    }
+    if (SPEC_NOC_COLL_CONFIG.UsesMulticast() &&
+        d.op == CollOp::ALLGATHER) {
+        if (d.group.size() == 1) return;
+        for (uint16_t source = 0; source < d.group.size(); ++source) {
+            CollDescriptor phase = d;
+            phase.root_rank = source;
+            auto *data = new Collective_data_prim();
+            data->descriptor = phase;
+            data->tree_id = CollectiveTreeIdForSource(d, source);
+            data->mode = d.self_rank == source
+                ? Collective_data_prim::Mode::BROADCAST_TX
+                : Collective_data_prim::Mode::BROADCAST_RX;
+            prims.push_back(data);
+            if (d.self_rank != source && d.gather_reorder_depth != 0) {
+                auto *arrival = new Collective_prim();
+                arrival->descriptor = d;
+                arrival->phase_id = source;
+                arrival->marker_kind =
+                    Collective_prim::MarkerKind::GATHER_ARRIVAL;
+                prims.push_back(arrival);
+            }
+            auto *barrier = new Collective_prim();
+            barrier->descriptor = d;
+            barrier->phase_id = source;
+            barrier->release_tree_id = data->tree_id;
+            prims.push_back(barrier);
+        }
         return;
     }
     for (const CollAction &action : PlanTier0Collective(d, d.self_rank)) {
@@ -504,7 +655,23 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
             base.reduce_op = ParseGlobalReduceOp(
                 decl.value("reduce_op", std::string("none")));
             base.group = decl.at("group").get<std::vector<uint16_t>>();
-            base.key.group_id = decl.value("group_id", StableGroupId(base.group));
+            if (decl.contains("group_id")) {
+                base.key.group_id = decl.at("group_id").get<uint32_t>();
+            } else {
+                const uint32_t stable_group_id = StableGroupId(base.group);
+                // STREAM_V2 freezes a compact 24-bit group field. Preserve
+                // the legacy 32-bit id outside DCA profiles, while making the
+                // default DCA id encodable without silently truncating an
+                // explicitly supplied id.
+                base.key.group_id =
+                    SPEC_NOC_COLL_CONFIG.UsesDcaOffload()
+                        ? (stable_group_id & 0x00ffffffu)
+                        : stable_group_id;
+            }
+            if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload() &&
+                base.key.group_id > 0x00ffffffu)
+                throw std::invalid_argument(
+                    "stream_v2 group_id exceeds 24-bit wire range");
             base.key.collective_id = decl.value("collective_id", static_cast<uint32_t>(ci));
             base.key.epoch = decl.value("epoch", uint32_t(0));
             if (!collective_keys.insert({base.key.group_id, base.key.collective_id, base.key.epoch}).second)
@@ -515,36 +682,92 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
             base.src_addr = decl.value("src_addr", uint64_t(0));
             base.dst_addr = decl.value("dst_addr", uint64_t(0));
             base.gather_reorder_depth = decl.value("gather_reorder_depth", uint32_t(0));
+            base.core_contention_beats =
+                decl.value("core_contention_beats", uint32_t(0));
+            if (base.core_contention_beats != 0 &&
+                (!CollIsReduction(base.op) ||
+                 !SPEC_NOC_COLL_CONFIG.UsesDcaOffload()))
+                throw std::invalid_argument(
+                    "core_contention_beats requires a DCA reduction");
             if (base.gather_reorder_depth != 0 &&
                 base.op != CollOp::GATHER && base.op != CollOp::ALLGATHER &&
                 base.op != CollOp::ALLTOALL)
                 throw std::invalid_argument(
                     "gather_reorder_depth is only valid for Gather RX operations");
-            if (CollIsReduction(base.op))
+            if (CollIsReduction(base.op) &&
+                SPEC_NOC_COLL_CONFIG.UsesDcaOffload()) {
+                ValidateCollDescriptor(base);
+                const uint64_t bits = CollDTypeBits(base.dtype);
+                if (base.count > UINT64_MAX / bits ||
+                    base.chunk_bits != base.count * bits)
+                    throw std::invalid_argument(
+                        "DCA reduction chunk_bits must equal count*dtype_bits");
+                const uint64_t align_bytes = bits / 8;
+                if (base.src_addr % align_bytes != 0 ||
+                    base.dst_addr % align_bytes != 0)
+                    throw std::invalid_argument(
+                        "DCA reduction address is not dtype aligned");
+                SPEC_NOC_COLL_CONFIG.dca.ValidateForDtype(base.dtype);
+            } else if (CollIsReduction(base.op)) {
                 ValidateTier0ReductionDescriptor(base);
+            }
             const uint16_t root_core = decl.value("root", base.group.front());
             auto root_it = std::find(base.group.begin(), base.group.end(), root_core);
             if (root_it == base.group.end()) throw std::invalid_argument("collective root is not in group");
             base.root_rank = static_cast<uint16_t>(root_it - base.group.begin());
-            if (SPEC_NOC_COLL_TIER >= 1) {
+            const NocCollTreeUse tree_use =
+                NocCollTreeUseFor(SPEC_NOC_COLL_CONFIG, base.op);
+            if ((tree_use.multicast || tree_use.reduce) &&
+                base.group.size() > 1) {
                 const int root_die = DieOfGlobal(root_core);
                 for (uint16_t core : base.group)
                     if (DieOfGlobal(core) != root_die)
                         throw std::invalid_argument(
-                            "Tier1/Tier2 collective cannot cross dies");
+                            "multicast/DCA collective cannot cross dies");
             }
-            if (SPEC_NOC_COLL_TIER >= 1 &&
-                (base.op == CollOp::BROADCAST ||
-                 (SPEC_NOC_COLL_TIER == 2 && CollIsReduction(base.op)))) {
+            if (tree_use.multicast && base.op == CollOp::ALLGATHER &&
+                base.group.size() > 1) {
+                for (uint16_t source = 0; source < base.group.size();
+                     ++source) {
+                    CollDescriptor rooted = base;
+                    rooted.root_rank = source;
+                    const uint16_t tree_id =
+                        CollectiveTreeIdForSource(base, source);
+                    if (!collective_tree_ids.insert(tree_id).second)
+                        throw std::invalid_argument(
+                            "collective tree_id hash collision");
+                    ProgramCollectiveTopology(rooted, true, false, tree_id);
+                }
+            } else if (tree_use.reduce ||
+                       (tree_use.multicast && base.group.size() > 1)) {
                 const uint16_t tree_id = CollectiveTreeId(base);
                 if (!collective_tree_ids.insert(tree_id).second)
                     throw std::invalid_argument(
                         "collective tree_id hash collision");
-                ProgramBroadcastTree(base);
+                ProgramCollectiveTopology(base,
+                                          tree_use.multicast &&
+                                              base.group.size() > 1,
+                                          tree_use.reduce);
             }
             for (uint16_t probe_rank = 0; probe_rank < base.group.size(); ++probe_rank) {
                 CollDescriptor probe = base; probe.self_rank = probe_rank;
                 ValidateCollDescriptor(probe);
+                if (SPEC_NOC_COLL_CONFIG.UsesDcaOffload() &&
+                    CollIsReduction(base.op)) {
+                    if (probe_rank == base.root_rank &&
+                        (base.op == CollOp::ALLREDUCE ||
+                         base.op == CollOp::REDUCESCATTER)) {
+                        for (uint16_t dst = 0; dst < base.group.size(); ++dst) {
+                            if (dst == base.root_rank) continue;
+                            const int dest = base.group[dst];
+                            const int tag = CollectiveFlowTag(base, 1, dst);
+                            if (!collective_flow_tags.insert({dest, tag}).second)
+                                throw std::invalid_argument(
+                                    "collective flow tag collision");
+                        }
+                    }
+                    continue;
+                }
                 for (const auto &action : PlanTier0Collective(probe, probe_rank)) {
                     if (action.kind != CollActionKind::SEND) continue;
                     const int dest = base.group[action.peer_rank];

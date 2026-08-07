@@ -1,5 +1,6 @@
 #pragma once
 #include "defs/enums.h"
+#include "dte/coll_config.h"
 #include <string>
 
 // 模拟模式
@@ -33,7 +34,7 @@ extern bool SPEC_FAST_WARMUP;         // 是否跳过初始数据发送
 extern bool SPEC_ROUTER_PIPE;         // 是否开启路由并行
 extern bool SPEC_SEND_RECV_PARALLEL;  // 发送与接收原语是否同时进行
 extern bool SPEC_NOC_COLL_ENABLED;    // NoC collective top-level declarations
-extern int SPEC_NOC_COLL_TIER;         // 0=unicast, 1=multicast, 2=multicast+reduce
+extern NocCollectiveConfig SPEC_NOC_COLL_CONFIG;
 extern bool SPEC_USE_BEHA_DTE;        // 是否启用行为级 DTE（V1 接入 workload）
 extern bool SPEC_DTE_STREAMING;       // V2b：端点 DTE 与网络数据阶段流水重叠
 extern bool SPEC_DTE_ASYNC;           // V3a：显式 issue/wait/poll/fence/cancel

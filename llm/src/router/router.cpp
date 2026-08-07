@@ -1,6 +1,7 @@
 #include "router/router.h"
 #include "die/port.h"
 #include "monitor/watchdog.h"
+#include "monitor/start_data_tracker.h"
 #include "memory/hbm_network.h"
 #include "utils/print_utils.h"
 
@@ -43,6 +44,14 @@ RouterMonitor::~RouterMonitor() {
 RouterUnit::RouterUnit(const sc_module_name &n, int rid,
                        Event_engine *event_engine)
     : sc_module(n), rid(rid), event_engine(event_engine) {
+    if (SPEC_NOC_COLL_ENABLED &&
+        SPEC_NOC_COLL_CONFIG.UsesDcaOffload()) {
+        reduce_stream_engine = std::make_unique<
+            coll_refactor::RouterReduceStreamEngine>(
+                static_cast<uint16_t>(rid), SPEC_NOC_COLL_CONFIG.dca);
+        coll_refactor::RegisterProductionReduceStreamEngine(
+            static_cast<uint16_t>(rid), reduce_stream_engine.get());
+    }
    
     host_data_sent_i = nullptr;
     host_data_sent_o = nullptr;
@@ -98,6 +107,8 @@ RouterUnit::RouterUnit(const sc_module_name &n, int rid,
     sensitive << channel_avail_i[WEST].pos() << channel_avail_i[EAST].pos()
               << channel_avail_i[SOUTH].pos() << channel_avail_i[NORTH].pos();
     sensitive << core_busy_i.neg();
+    if (reduce_stream_engine)
+        sensitive << reduce_stream_engine->ActivityEvent();
     // 控制信道触发信号
     sensitive << ctrl_sent_i[WEST].pos() << ctrl_sent_i[EAST].pos()
               << ctrl_sent_i[CENTER].pos() << ctrl_sent_i[SOUTH].pos()
@@ -194,6 +205,30 @@ void RouterUnit::end_of_elaboration() {
 void RouterUnit::router_execute() {
     while (true) {
         bool flag_trigger = false;
+        const auto is_stream_wire = [&](const sc_bv<256> &wire) {
+            return reduce_stream_engine &&
+                (coll_refactor::IsReduceStreamHeaderWire(wire) ||
+                 coll_refactor::IsReduceStreamDataWire(wire));
+        };
+
+        if (reduce_stream_engine) {
+            const uint64_t cycle = sc_time_stamp().value() /
+                sc_time(CYCLE, SC_NS).value();
+            if (!reduce_stream_ticked || cycle > reduce_stream_last_cycle) {
+                reduce_stream_engine->Tick(cycle);
+                reduce_stream_ticked = true;
+                reduce_stream_last_cycle = cycle;
+            }
+            if (const auto *egress =
+                    reduce_stream_engine->FrontEgress()) {
+                auto &output = buffer_o[egress->output];
+                if (output.size() < MAX_BUFFER_PACKET_SIZE) {
+                    output.push(egress->wire);
+                    reduce_stream_engine->PopEgress();
+                    flag_trigger = true;
+                }
+            }
+        }
 
         for (auto it = reduce_scheduled.begin();
              it != reduce_scheduled.end();) {
@@ -243,7 +278,8 @@ void RouterUnit::router_execute() {
                 sc_bv<256> temp = channel_i[i].read();
                 const bool collective_wire = IsCollDataWire(temp) ||
                     IsCollReduceHeaderWire(temp) ||
-                    IsCollReducePayloadWire(temp);
+                    IsCollReducePayloadWire(temp) ||
+                    is_stream_wire(temp);
                 if (i == CENTER && collective_wire &&
                     !center_collective_armed)
                     continue;
@@ -291,6 +327,8 @@ void RouterUnit::router_execute() {
                 sc_bv<256> temp = host_channel_i->read();
 
                 Msg tt = DeserializeMsg(temp);
+                if (tt.msg_type_ == MSG_TYPE::S_DATA)
+                    RecordStartDataStage(StartDataStage::ROUTER_ACCEPTED, tt);
 
                 host_buffer_i->emplace(temp);
 
@@ -335,7 +373,8 @@ void RouterUnit::router_execute() {
             data_sent_o[i].write(true);
             const bool collective_wire = IsCollDataWire(temp) ||
                 IsCollReduceHeaderWire(temp) ||
-                IsCollReducePayloadWire(temp);
+                IsCollReducePayloadWire(temp) ||
+                is_stream_wire(temp);
             if (collective_wire)
                 collective_output_cooldown[i] = true;
             if (collective_wire) {
@@ -461,7 +500,8 @@ void RouterUnit::router_execute() {
                 channel_o[CENTER].write(temp);
                 data_sent_o[CENTER].write(true);
                 if (IsCollDataWire(temp) || IsCollReduceHeaderWire(temp) ||
-                    IsCollReducePayloadWire(temp))
+                    IsCollReducePayloadWire(temp) ||
+                    is_stream_wire(temp))
                     collective_output_cooldown[CENTER] = true;
             }
 
@@ -576,6 +616,33 @@ void RouterUnit::router_execute() {
                 continue;
 
             sc_bv<256> temp = buffer_i[i].front();
+            if (reduce_stream_engine &&
+                coll_refactor::IsReduceStreamHeaderWire(temp)) {
+                const auto header =
+                    coll_refactor::DeserializeReduceStreamHeader(
+                        temp, SPEC_NOC_COLL_CONFIG.dca.vector_bits);
+                if (!reduce_stream_engine->TryAcceptHeader(
+                        static_cast<Directions>(i), header))
+                    continue;
+                buffer_i[i].pop();
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
+            if (reduce_stream_engine &&
+                coll_refactor::IsReduceStreamDataWire(temp)) {
+                const auto data =
+                    coll_refactor::DeserializeReduceStreamData(temp);
+                const auto status = reduce_stream_engine->TryAcceptData(
+                    static_cast<Directions>(i), data);
+                if (status == coll_refactor::
+                        ReduceStreamAcceptStatus::BACKPRESSURE)
+                    continue;
+                buffer_i[i].pop();
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
             if (IsCollReduceHeaderWire(temp)) {
                 if (reduce_header_pending[i])
                     throw std::runtime_error(
@@ -813,6 +880,8 @@ void RouterUnit::router_execute() {
 
         // trigger again
         if (!reduce_scheduled.empty()) flag_trigger = true;
+        if (reduce_stream_engine && !reduce_stream_engine->Drained())
+            flag_trigger = true;
         if (flag_trigger)
             need_next_trigger.notify(CYCLE, SC_NS);
 
@@ -868,6 +937,8 @@ long RouterUnit::residual() const {
     long r = static_cast<long>(collective_fork.Residual());
     r += reduce_match_residual + static_cast<long>(reduce_active.size() +
                                                    reduce_scheduled.size());
+    if (reduce_stream_engine)
+        r += static_cast<long>(reduce_stream_engine->Residual());
     for (int i = 0; i < DIRECTIONS; ++i)
         if (reduce_header_pending[i]) ++r;
     for (int i = 0; i < DIRECTIONS; i++) {
@@ -888,6 +959,9 @@ long RouterUnit::residual() const {
 }
 
 RouterUnit::~RouterUnit() {
+    if (reduce_stream_engine)
+        coll_refactor::UnregisterProductionReduceStreamEngine(
+            static_cast<uint16_t>(rid), reduce_stream_engine.get());
     if (host_buffer_i) {
         delete host_buffer_i;
         delete host_buffer_o;

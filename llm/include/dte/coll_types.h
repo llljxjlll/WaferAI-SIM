@@ -16,7 +16,9 @@ enum class CollOp : uint8_t {
 };
 enum class CollAlgorithm : uint8_t { DIRECT = 0, REDUCE_ROOT_SCATTER = 1, REDUCE_ROOT_BROADCAST = 2 };
 enum class CollReduceOp : uint8_t { NONE = 0, SUM = 1, MAX = 2 };
-enum class CollDType : uint8_t { UINT8 = 0, INT32 = 1, INT64 = 2, FP32 = 3 };
+enum class CollDType : uint8_t {
+    UINT8 = 0, INT32 = 1, INT64 = 2, FP32 = 3, FP16 = 4, FP8 = 5
+};
 
 constexpr uint16_t COLL_TAG_BASE = 0x8000u;
 constexpr uint16_t COLL_TAG_MAX = 0xfffeu;
@@ -63,6 +65,10 @@ struct CollDescriptor {
     uint64_t chunk_bits = 0;
     uint64_t stride_bits = 0;
     uint32_t gather_reorder_depth = 0; // 0 means ideal/unbounded.
+    // Simulation-only endpoint vector load used to exercise the R5 shared
+    // tile arbiter. It is carried by Collective_data_prim, not the frozen
+    // base descriptor wire.
+    uint32_t core_contention_beats = 0;
 };
 
 inline bool CollIsReduction(CollOp op) {
@@ -78,6 +84,8 @@ inline uint64_t CollDTypeBits(CollDType dtype) {
     case CollDType::INT32: return 32;
     case CollDType::INT64: return 64;
     case CollDType::FP32: return 32;
+    case CollDType::FP16: return 16;
+    case CollDType::FP8: return 8;
     }
     throw std::invalid_argument("unknown collective dtype");
 }
@@ -86,8 +94,10 @@ inline void ValidateTier0ReductionDescriptor(const CollDescriptor &d) {
     ValidateCollDescriptor(d);
     if (!CollIsReduction(d.op))
         throw std::invalid_argument("Tier0 reduction validator requires reduction op");
-    if (d.dtype == CollDType::FP32)
-        throw std::invalid_argument("V3 Tier0 reduction does not support fp32 semantics");
+    if (d.dtype == CollDType::FP32 || d.dtype == CollDType::FP16 ||
+        d.dtype == CollDType::FP8)
+        throw std::invalid_argument(
+            "V3 Tier0 reduction does not support floating-point semantics");
     const uint64_t bits = CollDTypeBits(d.dtype);
     if (d.count > UINT64_MAX / bits || d.chunk_bits != d.count * bits)
         throw std::invalid_argument(

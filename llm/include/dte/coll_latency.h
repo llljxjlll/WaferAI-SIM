@@ -51,6 +51,9 @@ inline uint64_t CollReduceEndpointCycles(uint64_t alignment_cycles = 1) {
     return alignment_cycles;
 }
 
+// Frozen V5/V6 legacy timing contract only. The refactored DCA model uses
+// explicit two-input vector issues with independent latency and initiation
+// interval; new code must not derive DCA service from this helper.
 inline uint64_t CollDcaServiceCycles(uint64_t payload_bits,
                                      uint64_t compute_cycles,
                                      uint64_t bits_per_cycle = 128,

@@ -8,6 +8,7 @@
 #include "defs/const.h"
 #include "dte/dte_async.h"
 #include "dte/dte_unit.h"
+#include "dte/coll_reduce_stream.h"
 #include "link/nb_global_memif_v2.h"
 #include "macros/macros.h"
 #include "memory/dram/Dcache.h"
@@ -26,6 +27,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <optional>
 #include <queue>
 
 struct DteFlowPayloadRound {
@@ -113,6 +115,24 @@ public:
     queue<sc_bv<256>> collective_data_buffer;
     queue<sc_bv<256>> collective_reduce_buffer;
     sc_event ev_collective_data;
+    struct EndpointReduceStreamSession {
+        CollDescriptor descriptor;
+        uint16_t tree_id = 0;
+        std::optional<coll_refactor::ReduceStreamWireHeader> header;
+        std::unique_ptr<coll_refactor::ReduceStreamAssembler> assembler;
+        uint64_t values_seen = 0;
+        bool complete = false;
+    };
+    std::map<uint16_t, EndpointReduceStreamSession>
+        reduce_stream_sessions;
+    std::map<coll_refactor::ReduceStreamRouteKey, uint16_t>
+        reduce_stream_routes;
+    sc_event ev_reduce_stream_progress;
+    struct EndpointCoreVectorSession {
+        std::vector<uint64_t> tags;
+        size_t completed = 0;
+    };
+    std::map<uint16_t, EndpointCoreVectorSession> core_vector_sessions;
 
     sc_event ev_prim_recv_notice; // 当执行recv_data时触发
     sc_event
@@ -240,6 +260,8 @@ public:
     void req_logic();
     void execute_dte_async(Dte_async_prim *prim);
     void execute_collective_data(Collective_data_prim *prim);
+    void handle_reduce_stream_header(const sc_bv<256> &wire);
+    void handle_reduce_stream_data(const sc_bv<256> &wire);
 
     void send_helper(); // 同时在send和recv中被调用
     void call_systolic_array();
@@ -251,9 +273,14 @@ public:
     void end_of_elaboration();
 
     size_t CollectiveEndpointResidual() const {
+        size_t stream = reduce_stream_routes.size();
+        for (const auto &entry : reduce_stream_sessions)
+            stream += 1 + (entry.second.assembler
+                ? entry.second.assembler->Residual() : 0);
         return collective_data_buffer.size() +
                collective_reduce_buffer.size() +
-               (collective_send_pending ? 1u : 0u);
+               (collective_send_pending ? 1u : 0u) + stream +
+               core_vector_sessions.size();
     }
     size_t DteOutstandingCount() const {
         return dte_async ? dte_async->OutstandingCount() : 0;

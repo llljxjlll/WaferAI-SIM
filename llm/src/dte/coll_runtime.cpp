@@ -85,7 +85,10 @@ void WaitCollectiveBarrier(const CollectiveKey &key, uint16_t phase_id,
             const size_t tree_entries = EraseCollectiveTree(tree_id);
             const size_t reduce_nodes =
                 EraseCollectiveReduceTree(tree_id);
-            if (tree_entries == 0)
+            // reduce_only intentionally has no multicast table entries: its
+            // tree exists solely in the streaming reduce registry. Treat a
+            // release as unknown only when neither registry owned the id.
+            if (tree_entries == 0 && reduce_nodes == 0)
                 throw std::runtime_error(
                     "collective final barrier released an unknown tree");
             std::cout << "[COLL_V6_RELEASE] tree=" << tree_id

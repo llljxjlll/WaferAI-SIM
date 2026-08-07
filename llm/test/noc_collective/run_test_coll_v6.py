@@ -16,7 +16,15 @@ NPUSIM = ROOT / "build" / "npusim"
 
 def sim_config(tier: int) -> dict:
     cfg = json.loads((HERE / "simulation" / "v1_cycle.json").read_text())
-    cfg["noc"]["collective"]["tier"] = tier
+    coll = cfg["noc"]["collective"]
+    if tier == 2:
+        coll.pop("tier", None)
+        coll.update(broadcast_backend="multicast",
+                    reduce_backend="legacy_router_alu",
+                    reduce_wire="legacy_two_segment",
+                    allow_legacy_backend=True)
+    else:
+        coll["tier"] = tier
     return cfg
 
 

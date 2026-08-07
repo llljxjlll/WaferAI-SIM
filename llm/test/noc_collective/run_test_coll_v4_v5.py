@@ -39,6 +39,14 @@ def drained(result: subprocess.CompletedProcess[str]) -> bool:
             "[COLL_DRAIN] tree_entries=0 reduce_nodes=0 barriers=0 "
             "gather=0 reduce_rx=0 endpoints=0 dte_tokens=0" in out)
 
+def select_legacy_tier2(sim: dict) -> None:
+    coll = sim["noc"]["collective"]
+    coll.pop("tier", None)
+    coll.update(broadcast_backend="multicast",
+                reduce_backend="legacy_router_alu",
+                reduce_wire="legacy_two_segment",
+                allow_legacy_backend=True)
+
 def main() -> int:
     tests: list[tuple[str, bool, str]] = []
     for version, checks in ((4, 13), (5, 20)):
@@ -51,7 +59,11 @@ def main() -> int:
         tmp = Path(td)
         base = json.loads((HERE / "simulation" / "v1_cycle.json").read_text())
         for tier in (1, 2):
-            sim = json.loads(json.dumps(base)); sim["noc"]["collective"]["tier"] = tier
+            sim = json.loads(json.dumps(base))
+            if tier == 2:
+                select_legacy_tier2(sim)
+            else:
+                sim["noc"]["collective"]["tier"] = tier
             (tmp / f"tier{tier}.json").write_text(json.dumps(sim))
         for backend in ("cycle", "beha"):
             sim = json.loads((HERE / "simulation" / f"v1_{backend}.json").read_text())

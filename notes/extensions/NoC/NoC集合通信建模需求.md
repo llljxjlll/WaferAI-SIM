@@ -121,7 +121,41 @@ router弹出到DTE的耗时
 
 进阶2，加速broadcast和reduce
 在加速broadcast的基础上再加速reduce
-VCT-guided + DCA-assisted In-network Reduce Router 在 router 内部加 Operand/Hdr Buffer + Sync/Match（用 expected-input bitmap 匹配各源是否到齐）+ DCA（专用计算单元），让包在经过 router 的途中就做加法。延时 t = max(comp, p/128) + 54。不再由 root 一点逐个 ALU，而是沿树边走边聚合。
+VCT-guided + DCA-assisted In-network Reduce Router 在 router 内部加 Operand/Hdr Buffer + Sync/Match（用 expected-input bitmap 匹配各源是否到齐）+ DCA（旧 V5/V6 将其解释为 Router 专用计算单元），让包在经过 router 的途中就做加法。旧版延时 `t = max(comp, p/128) + 54`。不再由 root 一点逐个 ALU，而是沿树边走边聚合。
+
+> **重构边界（R0 冻结）**：上述公式和“Router 专用计算单元”解释仅属于 V5/V6
+> legacy contract，用于重放旧测试与实验，不代表论文中的 DCA。论文对齐的新模型见
+> `NoC集合通信重构计划.md`：DCA 借用 tile/cluster 的向量/FPU 资源，每次 issue 处理
+> 两个等宽 vector operands，lane 内元素并行，多输入通过确定性的 pairwise stage
+> 分解；pipeline latency 与 initiation interval 分开建模。新生产路径不得调用 legacy
+> `max(comp,p/128)+54` 公式。
+
+R1 起配置不再用一个 `tier` 同时代表 Broadcast 和 Reduce 硬件。规范选择为
+`baseline`、`broadcast_only`、`reduce_only`、`reduce_broadcast` 四个 profile，并可
+显式指定 `broadcast_backend=unicast|multicast`、
+`reduce_backend=endpoint|dca_offload|legacy_router_alu` 与
+`reduce_wire=stream_v2|legacy_two_segment`。旧 `tier=0/1/2` 仅作为规范 profile 的
+兼容 alias；旧 V5/V6 数据面必须使用 `legacy_router_alu + legacy_two_segment +
+allow_legacy_backend=true`，不得由新 DCA 配置静默回退。
+
+配置与协议必须共用唯一的 reduce-wire 枚举定义，冻结
+`legacy_two_segment=0`、`stream_v2=1`，禁止跨层复制出数值不同的同义枚举。
+将定义从 `coll_refactor_contract.h` 提取到 `coll_wire.h`、并令配置类型成为其别名，
+按 R0 冻结契约的“唯一真源”修订管理：协议名称和冻结数值不得改变，修订必须在计划及
+R0/R2 开发日志中留痕。
+DCA 结构/value-mode 语义校验只在 collective 已启用且实际选择
+`dca_offload` 时执行；inactive DCA 配置不得使 baseline/endpoint 启动失败。
+`vector_bits%dtype_bits==0` 必须按实际 reduction workload dtype 校验。
+
+R2 起 DCA 计算资源必须建模为每 tile 一个共享 ComputePool：core 与 DCA 请求进入有限
+pending queue，经一个二输入 vector issue port 仲裁；已发射请求占用有限 inflight
+context，完成结果进入有限 result queue。一个请求的完成周期为 `issue+latency`，
+下一请求最早发射周期为 `previous_issue+II`，不得等待上一请求完成后才发射。tag 从
+submit 保持 live 直到 result 被消费，重复/未知/提前 completion 必须确定性报错。R2
+仅冻结隔离资源模型，不得绕过 R1 gate 接入 Router 或宣称端到端 DCA 性能。
+配置文件中的 dormant DCA 块与已实例化 ComputePool 必须区分：前者仅严格解析字段和
+枚举，在 `enabled && dca_offload` 时才执行资源/value-mode 语义校验；后者代表真实
+DCA 资源，构造时必须无条件执行完整 `Validate()`。
 方案流程展示：
                                 +--------------------------------------+
 Incoming Links / Local Ingress  |   CollectiveTreeTable (shared)       |
@@ -196,3 +230,14 @@ Misc blocks:
 3. Luca Colagrande, Lorenzo Leone, Chen Wu, Tim Fischer, Raphael Roth, and Luca Benini. “A Lightweight High-Throughput Collective-Capable NoC for Large-Scale ML Accelerators.”
 4. Tushar Krishna, et al., "Towards the Ideal On-Chip Fabric for 1-to-Many and Many-to-1 Communication".
 5. Si Qing Zheng, et al., "Algorithm-Hardware Codesign of Fast Parallel Round-Robin Arbiters".
+
+## 重构实现对齐状态（2026-08-03）
+
+- VCT-guided many-to-one 路径采用每 stream 一个 header、128-bit physical flit 到
+  configurable vector beat 的 assembler、确定性 binary pairwise stages 和有限背压。
+- DCA 被建模为 tile 上 CORE/DCA 共用的 vector/FPU compute pool，latency 与 II 分离，
+  允许多个 tagged inflight；固定 latency 只进入 pipeline fill，不随 chunk 重复。
+- `reduce_only` 仅加速 Reduce 族，Broadcast/AllGather/AllReduce-result 为普通 unicast；
+  `reduce_broadcast` 在相同 DCA reduce 上组合单注入 multicast。
+- integer SUM/MAX 与 FP32 exact 进行值验证；FP16/FP8 目前仅 timing-only。SMART
+  single-cycle multi-hop 与跨 die hierarchical collective 尚未实现，配置期明确拒绝。

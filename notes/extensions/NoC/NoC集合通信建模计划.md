@@ -96,9 +96,9 @@ workload 增加全局 `collectives` 声明，用户只声明一次。`config_hel
 - Tier1 Broadcast：一次源注入，完成取 multicast tree 最慢分支。
 - Gather：到齐是完成条件，不额外增加 `(N-1)` 个固定 cycle；只计 1 cycle 拼接或配置的 endpoint service。
 - Tier0 Reduce：到齐 + 1 cycle 对齐；root ALU 由显式计算原语计费。
-- Tier2 DCA：属于 NoC 服务时间，按实际 reduce packet/树级计费，不再生成 root ALU 原语。
+- Tier2 DCA（V5/V6 legacy）：属于 NoC 服务时间，按实际 reduce packet/树级计费，不再生成 root ALU 原语。
 
-需求公式 `max(comp,p/128)+54` 拆为有单位参数：`dca_pipeline_cycles=54`、`dca_bits_per_cycle=128`、`dca_compute_cycles(dtype,op,elements)`；其范围是单次 DCA service，而不是整个 collective。
+需求公式 `max(comp,p/128)+54` 拆为有单位参数：`dca_pipeline_cycles=54`、`dca_bits_per_cycle=128`、`dca_compute_cycles(dtype,op,elements)`；其范围是单次 DCA service，而不是整个 collective。该公式自 R0 起冻结为 **V5/V6 legacy contract**，只用于重放旧自测/实验，不作为论文 DCA 的新生产模型。新模型按 `NoC集合通信重构计划.md` 将二输入 vector issue、lane mask、pairwise stage、pipeline latency 和 initiation interval 分开建模，并复用 tile/cluster compute resource。
 
 ## 6. Gather RX reorder 模型
 
@@ -221,4 +221,18 @@ behavioral backend 对三级均提供闭式估算并明确标记“不建模拥�
 - behavioral Tier1/Tier2 是不含真实拥塞的闭式估算，日志必须标识 backend。
 - 首版 Tier1/Tier2 仅同 die；跨 die hierarchical collective 后续实现。
 - 首版归约族使用固定基线算法。
-- FP reduce 在定义舍入、NaN、溢出和结合顺序前不能宣称 bit-accurate。
+- legacy V5 FP reduce 仍不宣称 bit-accurate；重构后 `dca_offload` 已支持确定性 FP32
+  exact（canonical NaN/Inf/signed zero/固定结合顺序），FP16/FP8 仅 timing-only。
+
+## 12. R0～R8 重构收口（2026-08-03）
+
+论文对齐的重构已按 `NoC集合通信重构计划.md` 完成：旧 Tier2 的逐 element、逐 chunk
+固定 latency 和双段 framing 已由 binary-stage `STREAM_V2`、per-tile shared
+`DcaComputePool` 与异步 endpoint session 替换。新增四个正交 profile：baseline、
+broadcast_only、reduce_only、reduce_broadcast；`tier` 仅保留兼容 alias，旧 V5 backend
+需显式 `legacy_router_alu + legacy_two_segment + allow_legacy_backend=true`。
+
+最终证据包括 R/V 全部合同自测（新增 R6/R7/R8 独立入口 7/7、6/6、6/6）、R5～R7
+production 19/19（含同一 Router output 的普通 unicast + stream-DCA 混合流量）、四 profile
+32 KiB 压力 16/16、NoC frozen 14781/29109 与 14833/45441、D2D 67/67。OpenSMART/SMART transport
+未实现并继续在启动期拒绝；跨 die multicast/DCA 仍不在本轮范围。

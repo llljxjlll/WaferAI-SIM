@@ -1,6 +1,7 @@
 #pragma once
 #include "systemc.h"
 #include <iostream>
+#include <memory>
 #include <queue>
 
 #include "common/msg.h"
@@ -8,6 +9,7 @@
 #include "defs/global.h"
 #include "dte/coll_multicast.h"
 #include "dte/coll_innetwork_reduce.h"
+#include "dte/coll_stream_engine.h"
 #include "memory/hbm_mem_wire.h"
 #include "macros/macros.h"
 #include "trace/Event_engine.h"
@@ -83,6 +85,10 @@ public:
     int collective_rr_start = 0;
     bool collective_output_cooldown[DIRECTIONS] = {};
     bool center_collective_armed = true;
+    std::unique_ptr<coll_refactor::RouterReduceStreamEngine>
+        reduce_stream_engine;
+    bool reduce_stream_ticked = false;
+    uint64_t reduce_stream_last_cycle = 0;
 
     /* -----------------Host-Interface------------------ */
     // 只有位置最靠边缘的router才会注册这些端口

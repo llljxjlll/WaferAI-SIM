@@ -69,7 +69,7 @@ inline CollDescriptor DeserializeCollDescriptor(const std::vector<sc_bv<128>> &w
     const unsigned raw_reduce = wire[0].range(55, 48).to_uint();
     if (raw_op > static_cast<unsigned>(CollOp::ALLREDUCE) ||
         raw_algorithm > static_cast<unsigned>(CollAlgorithm::REDUCE_ROOT_BROADCAST) ||
-        raw_dtype > static_cast<unsigned>(CollDType::FP32) ||
+        raw_dtype > static_cast<unsigned>(CollDType::FP8) ||
         raw_reduce > static_cast<unsigned>(CollReduceOp::MAX))
         throw std::invalid_argument("collective descriptor enum is out of range");
     CollDescriptor d;
