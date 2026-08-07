@@ -1,4 +1,5 @@
 #include "monitor/watchdog.h"
+#include "monitor/start_data_tracker.h"
 #include "defs/const.h"
 #include "defs/spec.h"
 #include "die/d2d_link.h"
@@ -7,7 +8,11 @@
 #include "router/router.h"
 #include "utils/msg_utils.h"
 #include "utils/print_utils.h"
+#include <algorithm>
 #include <functional>
+#include <map>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -15,15 +20,30 @@ long g_protocol_progress = 0;
 bool g_protocol_stall_detected = false;
 long g_protocol_stall_cycle = -1;
 long g_protocol_last_progress = 0;
-// 默认阈值：远大于任何合法的「计算中无包移动」间隔（现有用例总时长约 1.5e4 cycle 量级，
-// 其中最长的无进展间隔远小于此值），同时又能在合理时间内抓到真正的协议环。
+// Default threshold for unplanned protocol silence. Finite payload/compute
+// service that can exceed it must hold an exact planned-idle lease; waits
+// without a bounded model remain diagnosable.
 long g_protocol_watchdog_cycles = 20000;
+
+namespace {
+struct PlannedIdle {
+    long until_cycle = 0;
+    std::string reason;
+};
+std::map<const void *, PlannedIdle> g_planned_idle;
+
+long CurrentCycle() {
+    return static_cast<long>(sc_time_stamp().value() /
+                             sc_time(CYCLE, SC_NS).value());
+}
+} // namespace
 
 void ResetProtocolWatchdog() {
     g_protocol_progress = 0;
     g_protocol_stall_detected = false;
     g_protocol_stall_cycle = -1;
     g_protocol_last_progress = 0;
+    g_planned_idle.clear();
 }
 
 namespace {
@@ -71,6 +91,51 @@ void DumpHead(int rid, const char *chan, int dir, const sc_bv<256> &payload,
                      << " seq=" << m.seq_id_ << " wait_reason=" << reason;
 }
 } // namespace
+
+void RegisterProtocolPlannedIdle(const void *owner, long cycles,
+                                 const std::string &reason) {
+    if (owner == nullptr || cycles < 0)
+        throw std::invalid_argument("invalid protocol planned-idle lease");
+    const auto inserted = g_planned_idle.emplace(
+        owner, PlannedIdle{CurrentCycle() + cycles + 1, reason});
+    if (!inserted.second)
+        throw std::logic_error(
+            "duplicate protocol planned-idle lease owner");
+}
+
+void UnregisterProtocolPlannedIdle(const void *owner) {
+    if (g_planned_idle.erase(owner) != 0)
+        g_protocol_progress++;
+}
+
+long ProtocolPlannedIdleUntil() {
+    long result = 0;
+    for (const auto &entry : g_planned_idle)
+        result = std::max(result, entry.second.until_cycle);
+    return result;
+}
+
+std::string ProtocolPlannedIdleSummary() {
+    std::ostringstream os;
+    bool first = true;
+    for (const auto &entry : g_planned_idle) {
+        if (!first)
+            os << ";";
+        first = false;
+        os << entry.second.reason << "@" << entry.second.until_cycle;
+    }
+    return first ? "none" : os.str();
+}
+
+ProtocolPlannedIdleGuard::ProtocolPlannedIdleGuard(
+    const void *owner, long cycles, const std::string &reason)
+    : owner_(owner) {
+    RegisterProtocolPlannedIdle(owner_, cycles, reason);
+}
+
+ProtocolPlannedIdleGuard::~ProtocolPlannedIdleGuard() {
+    UnregisterProtocolPlannedIdle(owner_);
+}
 
 void DumpProtocolWaitState(long cycle) {
     std::vector<RouterUnit *> routers;
@@ -124,6 +189,12 @@ void DumpProtocolWaitState(long cycle) {
             << "[PROTO_WAIT]   no in-flight packets and no held locks: "
                "wait is at the primitive/rendezvous layer (endpoints waiting "
                "on each other), not in the network";
+    LOG_WARN(SYSTEM) << "[PROTO_WAIT]   planned_idle="
+                     << ProtocolPlannedIdleSummary();
+    LOG_WARN(SYSTEM) << "[PROTO_WAIT]   start_data="
+                     << StartDataTracker::Instance().Summary()
+                     << " outstanding="
+                     << StartDataTracker::Instance().OutstandingSummary();
 }
 
 ProtocolWatchdog::ProtocolWatchdog(const sc_module_name &n) : sc_module(n) {
@@ -144,6 +215,8 @@ void ProtocolWatchdog::monitor() {
         }
         if (g_protocol_watchdog_cycles > 0 &&
             cyc - g_protocol_last_progress > g_protocol_watchdog_cycles) {
+            if (cyc <= ProtocolPlannedIdleUntil())
+                continue;
             g_protocol_stall_detected = true;
             g_protocol_stall_cycle = cyc;
             LOG_WARN(SYSTEM)

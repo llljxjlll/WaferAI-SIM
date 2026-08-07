@@ -386,6 +386,7 @@ config_helper_core::config_helper_core(string filename, int config_chip_id) {
             // 2B1：die>0 已可运行（per-die HOST attachment 就绪），移除原「die>0 不可运行」限制。
             // V1-c3：REQUEST/ACK/DATA 已接通，放行有精确双向 peer link 的相邻 die。
             ValidateWorkloadStructure(praw, config_chip_id, true);
+            ValidateWorkloadRendezvous(praw, config_chip_id);
         }
     }
 

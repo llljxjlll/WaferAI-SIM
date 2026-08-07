@@ -1,0 +1,46 @@
+{
+  "vars": {
+    "loop": 1,
+    "X": 128,
+    "N": 80
+  },
+  "pipeline": 1,
+  "source": [
+    {
+      "dest": 0,
+      "size": "X"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 0,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "prims": [
+                {
+                  "type": "Relu_f",
+                  "N": "N",
+                  "sram_address": {
+                    "indata": "_input_label",
+                    "outdata": "relu_out"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

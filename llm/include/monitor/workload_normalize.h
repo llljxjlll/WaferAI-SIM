@@ -23,3 +23,8 @@ void NormalizeWorkloadJson(WLJson &j, int die_id);
 //     （V1 仅相邻；V2 起含多跳，故不再叫 allow_adjacent_d2d）。
 void ValidateWorkloadStructure(const WLJson &j, int chip_id,
                                bool allow_d2d = false);
+
+// Validate endpoint-level producer/consumer contracts before SystemC starts.
+// Throws on missing START sources, duplicate core ids, or recv_cnt/tag pairs
+// that cannot be satisfied by either host source data or a declared cast.
+void ValidateWorkloadRendezvous(const WLJson &j, int chip_id);

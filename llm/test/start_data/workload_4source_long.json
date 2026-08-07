@@ -1,0 +1,85 @@
+{
+  "vars": {
+    "loop": 1,
+    "X": 2097152,
+    "N": 1
+  },
+  "pipeline": 1,
+  "source": [
+    {"dest": 0, "size": "X"},
+    {"dest": 1, "size": "X"},
+    {"dest": 2, "size": "X"},
+    {"dest": 3, "size": "X"}
+  ],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 0,
+          "loop": "loop",
+          "worklist": [{
+            "recv_cnt": 1,
+            "prims": [{
+              "type": "Relu_f",
+              "N": "N",
+              "sram_address": {
+                "indata": "_input_label",
+                "outdata": "relu_out_0"
+              }
+            }],
+            "cast": [{"dest": -1, "loopout": "true"}]
+          }]
+        },
+        {
+          "id": 1,
+          "loop": "loop",
+          "worklist": [{
+            "recv_cnt": 1,
+            "prims": [{
+              "type": "Relu_f",
+              "N": "N",
+              "sram_address": {
+                "indata": "_input_label",
+                "outdata": "relu_out_1"
+              }
+            }],
+            "cast": [{"dest": -1, "loopout": "true"}]
+          }]
+        },
+        {
+          "id": 2,
+          "loop": "loop",
+          "worklist": [{
+            "recv_cnt": 1,
+            "prims": [{
+              "type": "Relu_f",
+              "N": "N",
+              "sram_address": {
+                "indata": "_input_label",
+                "outdata": "relu_out_2"
+              }
+            }],
+            "cast": [{"dest": -1, "loopout": "true"}]
+          }]
+        },
+        {
+          "id": 3,
+          "loop": "loop",
+          "worklist": [{
+            "recv_cnt": 1,
+            "prims": [{
+              "type": "Relu_f",
+              "N": "N",
+              "sram_address": {
+                "indata": "_input_label",
+                "outdata": "relu_out_3"
+              }
+            }],
+            "cast": [{"dest": -1, "loopout": "true"}]
+          }]
+        }
+      ]
+    }
+  ]
+}

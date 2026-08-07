@@ -1,4 +1,5 @@
 #include "monitor/host_envelope.h"
+#include "monitor/start_data_tracker.h"
 #include "defs/spec.h"
 #include "die/port.h"
 #include <stdexcept>
@@ -12,6 +13,8 @@ void HostEnqueue(const HostEnvelope &env, std::queue<Msg> *q) {
         throw std::runtime_error("HostEnqueue: dest_global_id " +
                                  std::to_string(env.dest_global_id) +
                                  " has no valid HOST lane");
+    if (env.msg.msg_type_ == MSG_TYPE::S_DATA)
+        RecordStartDataStage(StartDataStage::ENQUEUED, env.msg);
     q[lane].push(env.msg);
 }
 

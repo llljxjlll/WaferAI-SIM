@@ -1189,32 +1189,28 @@ def main():
            f"done={mf[0]['done']} die_mesh={mf[0]['die_mesh']} "
            f"drain={mf[0]['drain']}/{mf[0]['link_drain']}")
 
-    # 3y. V2-d2：**仿真器内部**协议进展 watchdog + 已知协议依赖环的诊断。
-    #     动机：Python 的 subprocess timeout（哨兵 124）只能把「永久挂起」变成测试失败，
-    #     无法区分协议依赖环 / 路由丢包 / 网络残留，也拿不到等待状态。这里构造一个真实的
-    #     rendezvous 依赖环（core0 等 core16 的 tag0，core16 等 core0 的 tag16，双方都先等
-    #     对方），要求**仿真器自己**在 wall-clock 超时前主动诊断并非零退出。
+    # 3y. V2-d2：启动期 rendezvous 合约。该 fixture 没有 HOST source，且
+    #     core0/core16 互相先等对方；这是静态可判定的非法图，必须在 SystemC
+    #     elaboration 前以配置错误拒绝，不能依赖 wall-clock 或 runtime watchdog。
     rc, out = run([NPUSIM, "--workload-config",
                    "../llm/test/d2d_link/workload/cross_die_rendezvous_cycle.json",
                    "--hardware-config", C2C21,
                    "--simulation-config", SIM, "--mapping-config", MAP], timeout=300)
-    wd = re.search(r"\[PROTO_WAIT\] protocol_wait_cycle=(\d+) "
-                   r"last_progress_cycle=(\d+) stalled_for=(\d+) "
-                   r"router_residual=(-?\d+) d2d_link_residual=(-?\d+)", out)
-    # 必须由仿真器主动退出（专用码 3），**不是** Python 超时哨兵 124
-    wd_ok = (rc == 3 and wd is not None and
-             "protocol progress watchdog fired" in out and
-             int(wd.group(3)) > 0 and
-             # 该环是原语层 rendezvous：网络已排空（无在途包 / 无持锁），watchdog 应如实指出
-             int(wd.group(4)) == 0 and int(wd.group(5)) == 0 and
-             "wait is at the primitive/rendezvous layer" in out)
-    record("V2-d2 protocol watchdog diagnoses a rendezvous dependency cycle "
-           "(simulator exits non-zero itself, not via test-framework timeout)",
-           wd_ok,
-           f"exit={rc} (3=watchdog, 124=framework timeout) "
-           f"wait_cycle={wd.group(1) if wd else None} "
-           f"stalled_for={wd.group(3) if wd else None} "
-           f"residual=router{wd.group(4) if wd else '?'}/link{wd.group(5) if wd else '?'}")
+    # P1 startup validation now rejects this statically decidable cycle before
+    # SystemC elaboration. Runtime watchdog coverage remains in its own dynamic
+    # self/integration cases; this fixture must no longer enter simulation.
+    static_rejected = (
+        rc == 2 and
+        "Configuration preflight failed" in out and
+        "no runnable root" in out and
+        "All requests finished" not in out and
+        "[PROTO_WAIT]" not in out
+    )
+    record("V2-d2 startup validation rejects a statically invalid "
+           "rendezvous graph before simulation",
+           static_rejected,
+           f"exit={rc} (2=preflight, 124=framework timeout) "
+           f"entered_sim={'All requests finished' in out}")
 
     # 3y-2：watchdog 不得误伤合法用例——正常的两跳多流必须照常完成且不触发任何诊断。
     rc_ok, out_ok = run([NPUSIM, "--workload-config", WLMF,

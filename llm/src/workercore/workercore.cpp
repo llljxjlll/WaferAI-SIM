@@ -18,6 +18,7 @@
 #include "memory/dram/GPUNB_DcacheIF.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
 #include "memory/sram/Mem_access_unit.h"
+#include "monitor/start_data_tracker.h"
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 #include "prims/moe_prims.h"
@@ -766,6 +767,8 @@ void WorkerCoreExecutor::poll_buffer_i() {
             continue;
         }
         Msg m = DeserializeMsg(wire);
+        if (m.msg_type_ == MSG_TYPE::S_DATA)
+            RecordStartDataStage(StartDataStage::DELIVERED, m);
         msg_buffer_[m.msg_type_].push(m);
         ev_recv_msg_type_[m.msg_type_].notify(0, SC_NS);
 

@@ -8,6 +8,7 @@
 #include "monitor/config_helper_pd.h"
 #include "monitor/config_helper_pds.h"
 #include "monitor/mem_interface.h"
+#include "monitor/start_data_tracker.h"
 #include "monitor/watchdog.h"
 #include "prims/comp_prims.h"
 #include "prims/norm_prims.h"
@@ -279,19 +280,29 @@ void MemInterface::distribute_start_data() {
         event_engine->add_event(this->name(), "Send Input Data", "B",
                                 Trace_event_util());
 
+        auto &tracker = StartDataTracker::Instance();
         config_helper->fill_queue_start(write_buffer);
+        const uint64_t completion_target = tracker.Totals().enqueued;
         need_trigger_send_start = false;
 
+        event_engine->add_event(this->name(), "Inject Input Data", "B",
+                                Trace_event_util());
         ev_write.notify(CYCLE, SC_NS);
         wait(write_done.posedge_event());
-        event_engine->add_event(this->name(), "Send Input Data", "E",
+        event_engine->add_event(this->name(), "Inject Input Data", "E",
                                 Trace_event_util());
 
-        LOG_INFO(MEM_INTF) << "End start data distribution";
+        while (tracker.Totals().completed < completion_target)
+            wait(tracker.CompletedEvent());
 
-        if (need_trigger_send_start) 
+        event_engine->add_event(this->name(), "Send Input Data", "E",
+                                Trace_event_util());
+        LOG_INFO(MEM_INTF) << "End start data distribution: "
+                           << tracker.Summary();
+
+        if (need_trigger_send_start)
             ev_dis_start.notify(CYCLE, SC_NS);
-        
+
         wait();
     }
 }
@@ -419,6 +430,8 @@ void MemInterface::write_helper() {
                 // send data
                 Msg t = temp_buffer[i].front();
                 temp_buffer[i].pop();
+                if (t.msg_type_ == MSG_TYPE::S_DATA)
+                    RecordStartDataStage(StartDataStage::INJECTED, t);
                 host_channel_o[i].write(SerializeMsg(t));
                 host_data_sent_o[i].write(true);
             }

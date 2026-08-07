@@ -124,14 +124,10 @@ You can run the script directly and refer to the parameters defined within. The 
 
 ## 🚀 Quick Start
 
-Run a simulation using the pre-defined LLM test configs:
+Run the canonical smoke workload (the four configs live in `llm/test/default`):
 
 ```bash
-./npusim \
-    --workload-config ../llm/test/workload_config/gpu/pd_serving.json \
-    --simulation-config ../llm/test/simulation_config/default_spec.json \
-    --hardware-config ../llm/test/hardware_config/core_4x4.json \
-    --mapping-config ../llm/test/mapping_config/default_mapping.txt
+./npusim
 ```
 
 ---

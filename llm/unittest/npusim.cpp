@@ -16,10 +16,13 @@
 #include "dte/coll_innetwork_reduce.h"
 #include "monitor/monitor.h"
 #include "monitor/watchdog.h"
+#include "monitor/start_data_tracker.h"
+#include "monitor/workload_rendezvous_selftest.h"
 #include "router/router.h"
 #include "systemc.h"
 #include "trace/Event_engine.h"
 #include "utils/print_utils.h"
+#include "utils/config_preflight.h"
 #include "utils/simple_flags.h"
 #include "utils/system_utils.h"
 #include "workercore/workercore.h"
@@ -35,19 +38,27 @@
 #include <SFML/Graphics.hpp>
 using namespace std;
 
+#ifndef NPUSIM_SOURCE_ROOT
+#define NPUSIM_SOURCE_ROOT "."
+#endif
+
 Define_bool_opt("--help", g_flag_help, false, "show these help information");
 
 Define_string_opt("--workload-config", g_flag_workload_config,
-                  "../llm/test/workload_config/gpu/pd_serving.json",
+                  std::string(NPUSIM_SOURCE_ROOT) +
+                      "/llm/test/default/workload.json",
                   "workload config file");
 Define_string_opt("--hardware-config", g_flag_hardware_config,
-                  "../llm/test/hardware_config/core_4x4.json",
+                  std::string(NPUSIM_SOURCE_ROOT) +
+                      "/llm/test/default/hardware.json",
                   "hardware config file");
 Define_string_opt("--simulation-config", g_flag_simulation_config,
-                  "../llm/test/simulation_config/default_spec.json",
+                  std::string(NPUSIM_SOURCE_ROOT) +
+                      "/llm/test/default/simulation.json",
                   "simulation config file");
 Define_string_opt("--mapping-config", g_flag_mapping_config,
-                  "../llm/test/mapping_config/default_mapping.txt",
+                  std::string(NPUSIM_SOURCE_ROOT) +
+                      "/llm/test/default/mapping.spec",
                   "mapping config file");
 
 Define_int64_opt("--trace-window", g_flag_trace_window, 2, "Trace window size");
@@ -126,6 +137,10 @@ Define_bool_opt("--dte-v3b-selftest", g_flag_dte_v3b_selftest, false,
 
 Define_bool_opt("--dte-v4-selftest", g_flag_dte_v4_selftest, false,
                 "run DTE V4 resource SystemC self-test and exit");
+
+Define_bool_opt("--workload-rendezvous-selftest",
+                g_flag_workload_rendezvous_selftest, false,
+                "run workload rendezvous validation self-test and exit");
 
 int sc_main(int argc, char *argv[]) {
     clock_t start = clock();
@@ -262,16 +277,35 @@ int sc_main(int argc, char *argv[]) {
         int fails = RunDTEV4SelfTest();
         return fails == 0 ? 0 : 1;
     }
+    if (g_flag_workload_rendezvous_selftest) {
+        int fails = RunWorkloadRendezvousSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    try {
+        ValidateConfigInputs(g_flag_workload_config, g_flag_hardware_config,
+                             g_flag_simulation_config, g_flag_mapping_config);
+    } catch (const std::exception &error) {
+        LOG_ERROR(CONFIG) << "Configuration preflight failed: "
+                          << error.what();
+        return 2;
+    }
 
     // 清理所有上一次运行后产生的log文件
     DeleteCoreLogFiles();
     DeleteMemoryLogFiles();
 
     // 收集所有配置文件，统一解析
-    InitGrid(g_flag_workload_config, g_flag_hardware_config,
-             g_flag_simulation_config, g_flag_mapping_config);
-    InitGlobalMembers();
-    InitializeMemorySpec();
+    try {
+        InitGrid(g_flag_workload_config, g_flag_hardware_config,
+                 g_flag_simulation_config, g_flag_mapping_config);
+        InitGlobalMembers();
+        InitializeMemorySpec();
+    } catch (const std::exception &error) {
+        LOG_ERROR(CONFIG) << "Configuration initialization failed: "
+                          << error.what();
+        return 2;
+    }
 
     // init_dram_areas();
     // initialize_cache_structures();
@@ -551,6 +585,9 @@ int sc_main(int argc, char *argv[]) {
                          << resid(sc_get_top_level_objects()) +
                                 D2DBehavioralFlowResidual() + V5DynamicActivePins();
     }
+
+    LOG_INFO(SYSTEM) << "[START_DATA] "
+                     << StartDataTracker::Instance().Summary();
 
     // output_lock_ref 峰值：>=2 证明同 tag 多流共享同一把锁（多发一聚合，tag-only 核心语义）。
     LOG_INFO(SYSTEM) << "[LOCK] max_output_ref=" << g_max_output_lock_ref;

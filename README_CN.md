@@ -124,15 +124,10 @@ docker run -it -p 8000:8000 waferai-sim:latest
 
 ## 🚀 快速上手
 
-使用预定义的 LLM 测试配置运行仿真：
+运行规范的冒烟工作负载（四份配置位于 `llm/test/default`）：
 
 ```bash
-./npusim \
-    --workload-config ../llm/test/workload_config/gpu/pd_serving.json \
-    --simulation-config ../llm/test/simulation_config/default_spec.json \
-    --hardware-config ../llm/test/hardware_config/core_4x4.json \
-    --mapping-config ../llm/test/mapping_config/default_mapping.txt
-
+./npusim
 ```
 
 ---

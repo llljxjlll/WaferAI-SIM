@@ -18,6 +18,8 @@
 #include "memory/dram/GPUNB_DcacheIF.h"
 #include "memory/gpu/GPU_L1L2_Cache.h"
 #include "memory/sram/Mem_access_unit.h"
+#include "monitor/start_data_tracker.h"
+#include "monitor/watchdog.h"
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 #include "prims/moe_prims.h"
@@ -346,7 +348,19 @@ void WorkerCoreExecutor::send_logic() {
                     << "Unimplemented SEND_PRIM type " << prim->type;
             }
 
-            wait(roofline_packets * CYCLE, SC_NS);
+            // Behavioral NoC represents the complete payload with one packet,
+            // followed by a finite roofline service delay. Keep deadlock
+            // detection enabled immediately after that modeled deadline.
+            if (need_long_wait &&
+                roofline_packets > g_protocol_watchdog_cycles) {
+                ProtocolPlannedIdleGuard idle(
+                    prim, roofline_packets,
+                    "core=" + std::to_string(cid) +
+                        ",send=" + GetEnumSendType(prim->type));
+                wait(roofline_packets * CYCLE, SC_NS);
+            } else {
+                wait(roofline_packets * CYCLE, SC_NS);
+            }
 
             if (job_done) {
                 if (stream_source_xfer != nullptr) {
@@ -723,6 +737,8 @@ void WorkerCoreExecutor::recv_logic() {
         while (true) {
             bool need_long_wait = false;
             int roofline_packets = 1;
+            bool complete_start_packet = false;
+            Msg start_packet;
 
             if (atomic_helper_lock(sc_time_stamp(), 0))
                 ev_send_helper.notify(0, SC_NS);
@@ -889,10 +905,14 @@ void WorkerCoreExecutor::recv_logic() {
                         }
                     }
 
-                    if (prim->type == RECV_DATA)
+                    if (prim->type == RECV_DATA) {
                         msg_buffer_[MSG_TYPE::DATA].pop();
-                    else
+                    } else {
                         msg_buffer_[MSG_TYPE::S_DATA].pop();
+                        RecordStartDataStage(StartDataStage::CONSUMED, temp);
+                        start_packet = temp;
+                        complete_start_packet = true;
+                    }
 
                     recv_cnt++;
 
@@ -1058,8 +1078,20 @@ void WorkerCoreExecutor::recv_logic() {
                     << "Unimplemented RECV_PRIM type " << prim->type;
             }
 
-            // 等待下一个时钟周期
-            wait(roofline_packets * CYCLE, SC_NS);
+            // Long behavioral payload service is finite work, not a rendezvous
+            // deadlock. Lease only its exact modeled duration.
+            if (need_long_wait &&
+                roofline_packets > g_protocol_watchdog_cycles) {
+                ProtocolPlannedIdleGuard idle(
+                    prim, roofline_packets,
+                    "core=" + std::to_string(cid) +
+                        ",recv=" + GetEnumRecvType(prim->type));
+                wait(roofline_packets * CYCLE, SC_NS);
+            } else {
+                wait(roofline_packets * CYCLE, SC_NS);
+            }
+            if (complete_start_packet)
+                RecordStartDataStage(StartDataStage::COMPLETED, start_packet);
 
             ev_msg_process_end.notify();
             if (job_done) {
@@ -1185,7 +1217,16 @@ void WorkerCoreExecutor::task_logic() {
                        << p->name;
 
         delay = p->taskCoreDefault(context);
-        wait(sc_time(delay, SC_NS));
+        const long delay_cycles =
+            (static_cast<long>(delay) + CYCLE - 1) / CYCLE;
+        if (delay_cycles > g_protocol_watchdog_cycles) {
+            ProtocolPlannedIdleGuard idle(
+                p, delay_cycles,
+                "core=" + std::to_string(cid) + ",compute=" + p->name);
+            wait(sc_time(delay, SC_NS));
+        } else {
+            wait(sc_time(delay, SC_NS));
+        }
 
         LOG_INFO(PRIM) << "Core " << cid << " end compute primitive "
                        << p->name;

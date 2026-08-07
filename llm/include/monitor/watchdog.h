@@ -9,6 +9,7 @@
 // 判据：`当前 cycle - last_progress_cycle > 阈值` 且仿真尚未结束 ⇒ 判定协议停顿。
 // 阈值需大于任何合法的「计算中、无包移动」间隔；默认取足够宽的值，可由 spec 配置覆盖。
 #include "systemc.h"
+#include <string>
 
 // 任何协议进展都会 +1（router 入口 / link 搬运 / DONE）。
 extern long g_protocol_progress;
@@ -20,6 +21,29 @@ extern long g_protocol_last_progress;   // 最后一次观察到进展的 cycle
 extern long g_protocol_watchdog_cycles;
 
 void ResetProtocolWatchdog();
+
+// Finite operations may legitimately produce no packet movement for longer
+// than the watchdog threshold. A planned-idle lease postpones the watchdog only
+// until its explicit deadline; it cannot hide an unbounded wait.
+void RegisterProtocolPlannedIdle(const void *owner, long cycles,
+                                 const std::string &reason);
+void UnregisterProtocolPlannedIdle(const void *owner);
+long ProtocolPlannedIdleUntil();
+std::string ProtocolPlannedIdleSummary();
+
+class ProtocolPlannedIdleGuard {
+public:
+    ProtocolPlannedIdleGuard(const void *owner, long cycles,
+                             const std::string &reason);
+    ~ProtocolPlannedIdleGuard();
+
+    ProtocolPlannedIdleGuard(const ProtocolPlannedIdleGuard &) = delete;
+    ProtocolPlannedIdleGuard &operator=(const ProtocolPlannedIdleGuard &) =
+        delete;
+
+private:
+    const void *owner_;
+};
 
 // 每 cycle 采样进展计数；超过阈值仍无进展则 dump 诊断并 sc_stop()。
 class ProtocolWatchdog : public sc_module {

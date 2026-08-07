@@ -96,6 +96,7 @@ function(add_test_executable target_name test_main_file)
     target_compile_definitions(${target_name} PRIVATE
         L1CACHESIZE=${L1CACHESIZE}
         L2CACHESIZE=${L2CACHESIZE}
+        NPUSIM_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     )
 
     
@@ -126,6 +127,7 @@ function(add_test_executable target_name test_main_file)
         target_compile_definitions(${target_name}_debug PRIVATE
             L1CACHESIZE=${L1CACHESIZE}
             L2CACHESIZE=${L2CACHESIZE}
+            NPUSIM_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
         )
     endif()
 endfunction()
@@ -147,6 +149,47 @@ if(BUILD_TESTING)
             LABELS "sram;on-chip-memory")
     endforeach()
 
+    add_test(NAME workload_rendezvous_selftest
+             COMMAND npusim --workload-rendezvous-selftest)
+    set_tests_properties(workload_rendezvous_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "config;startup")
+
+    add_test(NAME default_workload_smoke COMMAND npusim --trace-window 1000000)
+    set_tests_properties(default_workload_smoke PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        TIMEOUT 60
+        LABELS "config;startup;legacy"
+        PASS_REGULAR_EXPRESSION "\\[START_DATA\\] enqueued=1 injected=1 accepted=1 delivered=1 consumed=1 completed=1"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    add_test(NAME start_data_four_source_long
+             COMMAND npusim
+                --workload-config ${CMAKE_SOURCE_DIR}/llm/test/start_data/workload_4source_long.json
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/start_data/hardware_4x4.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --trace-window 1000000)
+    set_tests_properties(start_data_four_source_long PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        TIMEOUT 60
+        LABELS "startup;host-lane;legacy"
+        PASS_REGULAR_EXPRESSION "\\[START_DATA\\] enqueued=4 injected=4 accepted=4 delivered=4 consumed=4 completed=4"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    add_test(NAME playground_legacy_baseline
+             COMMAND npusim
+                --workload-config ${CMAKE_SOURCE_DIR}/llm/test/workload_config/playground.json
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/hardware_config/default/8x8.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/simulation_config/default_spec.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/mapping_config/default_mapping.spec
+                --trace-window 1000000)
+    set_tests_properties(playground_legacy_baseline PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        TIMEOUT 120
+        LABELS "startup;legacy;full-workload"
+        PASS_REGULAR_EXPRESSION "\\[START_DATA\\] enqueued=4 injected=4 accepted=4 delivered=4 consumed=4 completed=4"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
 endif()
 # add_test_executable(load_config  "./llm/unittest/load_config.cpp")      
 # add_test_executable(global_chip_test  "./llm/unittest/global_chip_test.cpp")
