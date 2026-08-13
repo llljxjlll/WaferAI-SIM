@@ -3,6 +3,7 @@
 #include "defs/const.h"
 #include "defs/enums.h"
 #include "defs/global.h"
+#include "isa/npu_cost_model.h"
 #include "systemc.h"
 
 #include "nlohmann/json.hpp"
@@ -18,7 +19,7 @@ public:
     int prim_type;
     string name;
 
-    int sram_addr;
+    int sram_addr = 0;
     DATATYPE datatype = INT8;
 
     virtual int taskCoreDefault(TaskCoreContext &context) = 0;
@@ -28,10 +29,15 @@ public:
 
     PrimBase() {
         name = "PrimBase";
-        prim_type = NORM_PRIM;
+        prim_type = 0;
         prim_context = nullptr;
     }
     virtual ~PrimBase() = default;
+
+protected:
+    void setPrimMainCategory(int category) {
+        prim_type = WithPrimMainCategory(prim_type, category);
+    }
 };
 
 
@@ -65,16 +71,16 @@ public:
     // 打印原语信息
     virtual void printSelf() = 0;
 
-    CompBase() { prim_type |= COMP_PRIM; }
+    CompBase() { setPrimMainCategory(COMP_PRIM); }
 };
 
 
 class NpuBase : public CompBase {
 public:
     // 地址偏移信息
-    int inp_offset;  // 必填，在json文件中
-    int data_offset; // 选填，可以推算，在parseJson()中
-    int out_offset;  // 选填，可以推算，在parseJson()中
+    int inp_offset = 0;  // 必填，在json文件中
+    int data_offset = 0; // 选填，可以推算，在parseJson()中
+    int out_offset = 0;  // 选填，可以推算，在parseJson()中
 
     // 是否跳过taskCoreDefault中的输入输出流程
     bool skip_input = false;
@@ -100,6 +106,9 @@ public:
 
     // perf工具函数
     int sramUtilization(DATATYPE datatype, int cid = 0);
+    const NpuCostSnapshot &lastCostSnapshot() const noexcept {
+        return last_cost_snapshot_;
+    }
 
     // 内存存取函数
     void checkStaticData(TaskCoreContext &context, uint64_t &dram_time,
@@ -115,6 +124,8 @@ public:
     NpuBase() { prim_type |= NPU_PRIM; }
 
 private:
+    NpuCostSnapshot last_cost_snapshot_;
+
     // taskCore中的内存操作
     void checkInputData(TaskCoreContext &context, uint64_t &dram_time,
                         uint64_t inp_global_addr, vector<int> data_size_input);
@@ -134,9 +145,9 @@ private:
 class GpuBase : public CompBase {
 public:
     // 原语的算力需求
-    int req_sm;
+    int req_sm = 0;
 
-    int fetch_index; // 用于记录取权重需要偏移的offset
+    int fetch_index = 0; // 用于记录取权重需要偏移的offset
 
     virtual GpuBase *clone() = 0;
     void initializeDefault();

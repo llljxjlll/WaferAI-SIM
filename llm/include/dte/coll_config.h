@@ -6,7 +6,10 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
+
+inline constexpr uint16_t kNocCollMaxTreesPerBatch = 64;
 
 enum class NocCollProfile : uint8_t {
     BASELINE = 0,
@@ -71,6 +74,9 @@ struct NocCollectiveConfig {
     bool allow_legacy_backend = false;
     bool used_tier_alias = false;
     std::string transport = "conventional";
+    // Absent preserves the scheduler's historical unbounded K.  An explicit
+    // production value is bounded so it is representable and testable.
+    std::optional<uint16_t> max_trees_per_batch;
     NocCollDcaConfig dca;
 
     bool UsesMulticast() const {

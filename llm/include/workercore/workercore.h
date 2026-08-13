@@ -8,7 +8,10 @@
 #include "defs/const.h"
 #include "dte/dte_async.h"
 #include "dte/dte_unit.h"
+#include "dte/coll_byte_wire_v1.h"
 #include "dte/coll_reduce_stream.h"
+#include "dte/p2p_session_runtime.h"
+#include "dte/sync_runtime.h"
 #include "link/nb_global_memif_v2.h"
 #include "macros/macros.h"
 #include "memory/dram/Dcache.h"
@@ -23,12 +26,14 @@
 #include "memory/sram_writer.h"
 #include "trace/Event_engine.h"
 #include "unit_module/sram_manager/sram_manager.h"
+#include "workercore/serialized_wire_queue.h"
 #include <cstdint>
 #include <deque>
 #include <map>
 #include <memory>
 #include <optional>
 #include <queue>
+#include <set>
 
 struct DteFlowPayloadRound {
     uint64_t payload_bits = 0;
@@ -36,7 +41,65 @@ struct DteFlowPayloadRound {
     int stripe_count = 1;
 };
 
+struct CollectiveEndpointResidualSnapshot {
+    size_t collective_data = 0;
+    size_t collective_reduce = 0;
+    size_t stream_routes = 0;
+    size_t stream_sessions = 0;
+    size_t stream_assembler = 0;
+    size_t multicast_posts = 0;
+    size_t multicast_routes = 0;
+    size_t serialized_wires = 0;
+    size_t multicast_reassembly = 0;
+    size_t core_vector_sessions = 0;
+    size_t p2p = 0;
+
+    size_t Total() const noexcept {
+        return collective_data + collective_reduce + stream_routes +
+               stream_sessions + stream_assembler + multicast_posts +
+               multicast_routes + serialized_wires + multicast_reassembly +
+               core_vector_sessions + p2p;
+    }
+};
+
 class WorkerCoreExecutor;
+class Group_sync_prim;
+class Event_control_prim;
+class Dte_send_endpoint_prim;
+class Dte_recv_endpoint_prim;
+class CollectiveExecutorV1;
+class CollectiveWaveAdmissionCoordinatorV1;
+class IsaV1CollectiveProgramImage;
+class IsaV1CollectiveProfileProgramImage;
+class IsaV1CollectiveTreeRegistryBridge;
+class IsaV1CollectiveAccelerationRuntime;
+struct IsaV1CollectiveAcceleratedTree;
+struct IsaV1CollectivePlan;
+struct IsaV1LoweredCollectiveAction;
+struct CollectiveExecutorActionV1;
+
+struct P2pEndpointProductionStats {
+    uint64_t source_read_bytes = 0;
+    uint64_t sram_source_read_bytes = 0;
+    uint64_t hbm_source_read_bytes = 0;
+    uint64_t wire_bytes = 0;
+    uint64_t wire_fragments = 0;
+    uint64_t noc_rx_write_bytes = 0;
+    uint64_t tx_local_completions = 0;
+    uint64_t rx_local_completions = 0;
+    uint64_t admission_requests_sent = 0;
+    uint64_t admission_requests_received = 0;
+    uint64_t admission_acks_sent = 0;
+    uint64_t admission_acks_received = 0;
+    uint64_t duplicate_requests_suppressed = 0;
+    uint64_t request_conflicts_rejected = 0;
+    uint64_t request_aborts = 0;
+    uint64_t completion_acks_sent = 0;
+    uint64_t completion_acks_received = 0;
+    uint32_t last_source_checksum = 0;
+    uint32_t last_wire_checksum = 0;
+    uint32_t last_destination_checksum = 0;
+};
 
 class WorkerCore : public sc_module {
 public:
@@ -87,6 +150,7 @@ public:
     sram::RegionTable *sram_regions = nullptr;
     sram::AccessUnit *sram_access = nullptr;
     sram::Storage *sram_storage = nullptr;
+    sram::HbmByteTransport *hbm_byte_transport = nullptr;
     sram::ComputeTimeline *compute_timeline = nullptr;
     int cid;
     bool prim_refill;    // 是否通过原语重填的方式实现循环
@@ -103,11 +167,10 @@ public:
     sc_event ev_recv;
     sc_event ev_comp;
     sc_event ev_send_helper;
+    static constexpr size_t kSerializedWireQueueCapacity = 64;
+    SerializedWireQueue serialized_wire_queue{kSerializedWireQueueCapacity};
+    sc_event ev_serialized_wire_progress;
     sc_event ev_systolic;
-
-    Msg send_buffer; // 每一次调用write helper，从这里获取要发送的msg
-    sc_bv<256> collective_send_buffer = 0;
-    bool collective_send_pending = false;
 
     sc_event ev_recv_msg_type_
         [MSG_TYPE::MSG_TYPE_NUM]; // 使用统一数组存储接收数据包后触发的event
@@ -115,11 +178,29 @@ public:
     queue<sc_bv<256>> collective_data_buffer;
     queue<sc_bv<256>> collective_reduce_buffer;
     sc_event ev_collective_data;
+    struct EndpointMulticastPost {
+        uint64_t destination_address = 0;
+        uint32_t chunk_id = 0;
+        std::optional<IsaV1CollectiveByteLock> lock;
+        bool complete = false;
+    };
+    using EndpointMulticastPostKey =
+        std::pair<uint16_t, CollectiveKey>;
+    std::unique_ptr<IsaV1CollectiveByteReassembler>
+        multicast_byte_reassembler;
+    std::map<EndpointMulticastPostKey, EndpointMulticastPost>
+        multicast_posts;
+    std::map<IsaV1CollectiveByteLock, EndpointMulticastPostKey>
+        multicast_routes;
+    sc_event ev_multicast_progress;
     struct EndpointReduceStreamSession {
         CollDescriptor descriptor;
         uint16_t tree_id = 0;
+        uint16_t phase_id = 0;
+        uint32_t stream_id = 0;
         std::optional<coll_refactor::ReduceStreamWireHeader> header;
         std::unique_ptr<coll_refactor::ReduceStreamAssembler> assembler;
+        std::vector<coll_refactor::ReduceVectorBeat> result_beats;
         uint64_t values_seen = 0;
         bool complete = false;
     };
@@ -134,9 +215,12 @@ public:
     };
     std::map<uint16_t, EndpointCoreVectorSession> core_vector_sessions;
 
+    std::shared_ptr<GroupSyncRuntime> group_sync_runtime;
+    EventControlQueue event_control_queue;
+    EventMailbox event_mailbox;
+    sc_event ev_event_queue_space;
+
     sc_event ev_prim_recv_notice; // 当执行recv_data时触发
-    sc_event
-        ev_next_write_clear; // 当write_helper写完一次之后在下一个时钟周期触发
 
     sc_event
         ev_msg_process_end; // 当单个数据包处理结束之后触发，避免每个周期轮询
@@ -195,6 +279,54 @@ public:
     Event_engine *event_engine;
     std::unique_ptr<DTEUnit> dte;
     std::unique_ptr<DteAsyncTracker> dte_async;
+    std::unique_ptr<P2pEndpointSessionRuntime> p2p_endpoint;
+    struct P2pTxJob {
+        P2pTxIssue issue;
+        uint64_t source_first_ns = 0;
+        uint64_t source_done_ns = 0;
+    };
+    struct P2pPendingRequest {
+        Msg message;
+        P2pPayloadDeclaration declaration;
+    };
+    std::deque<P2pTxJob> p2p_tx_queue;
+    std::deque<P2pPendingRequest> p2p_pending_requests;
+    size_t p2p_pending_request_capacity = 0;
+    std::map<uint32_t, P2pEndpointHandle> p2p_async_handles;
+    std::map<uint32_t, P2pEndpointHandle> collective_p2p_handles;
+    std::map<uint32_t, uint64_t> p2p_rx_addresses;
+    std::map<P2pFlowKey, uint32_t> p2p_rx_fsm_by_flow;
+    sc_event ev_p2p_tx;
+    sc_event ev_p2p_request;
+    sc_event ev_p2p_progress;
+    sc_event ev_collective_program;
+    std::unique_ptr<CollectiveExecutorV1> collective_executor_v1;
+    std::shared_ptr<const IsaV1CollectiveProgramImage>
+        collective_program_image_v1;
+    std::shared_ptr<const IsaV1CollectiveProfileProgramImage>
+        collective_profile_program_image_v1;
+    std::shared_ptr<IsaV1CollectiveTreeRegistryBridge>
+        collective_tree_registry_bridge_v1;
+    std::shared_ptr<IsaV1CollectiveAccelerationRuntime>
+        collective_acceleration_runtime_v1;
+    struct P7TreeWorkerState {
+        std::set<uint32_t> multicast_posted;
+        std::set<uint32_t> multicast_received;
+        std::set<uint32_t> dca_root_armed;
+        std::set<uint32_t> dca_sent;
+        std::set<uint32_t> dca_complete;
+        std::set<uint32_t> multicast_sent;
+    };
+    std::set<uint32_t> p7_active_plans;
+    std::set<uint32_t> p7_observed_plans;
+    std::map<uint32_t, std::set<uint32_t>> p7_ready_chunks;
+    std::map<std::pair<uint32_t, uint16_t>, P7TreeWorkerState>
+        p7_tree_states;
+    sc_event ev_p7_acceleration;
+    uint64_t collective_action_trace_base = 0;
+    std::shared_ptr<CollectiveWaveAdmissionCoordinatorV1>
+        collective_wave_coordinator_v1;
+    P2pEndpointProductionStats p2p_stats;
     // REQUEST 可能跨迭代提前到达；每个 (source, tag) 按逻辑轮次排队，
     // 每轮用 subflow_mask 聚合 stripe 声明，RECV_DATA 每次只消费队首一轮。
     std::map<std::pair<int, int>, std::deque<DteFlowPayloadRound>>
@@ -240,7 +372,6 @@ public:
 
     void catch_channel_avail_i();
     void catch_data_sent_i();
-    void next_write_clear();
     
     // 控制信道相关方法
     void catch_ctrl_channel_avail_i();
@@ -259,9 +390,48 @@ public:
     void task_logic();
     void req_logic();
     void execute_dte_async(Dte_async_prim *prim);
+    void execute_dte_send_endpoint(Dte_send_endpoint_prim *prim);
+    void execute_dte_recv_endpoint(Dte_recv_endpoint_prim *prim);
+    void p2p_tx_worker();
+    void p2p_request_admission_worker();
+    void collective_program_worker();
+    void collective_acceleration_worker();
+    void maybe_retire_collective_wave_image();
+    void trace_collective_action_complete(
+        const CollectiveExecutorActionV1 &action);
+    bool send_p2p_message(Msg message, bool request_transition,
+                          const P2pEndpointHandle *handle = nullptr);
+    void send_serialized_wire(const sc_bv<256> &wire, bool control);
+    void commit_p2p_delivery(P2pRxDelivery delivery);
     void execute_collective_data(Collective_data_prim *prim);
+    void execute_group_sync(Group_sync_prim *prim);
+    void execute_event_control(Event_control_prim *prim);
+    void send_event_control(const EventControlMessage &message);
+    void drain_event_control_queue();
     void handle_reduce_stream_header(const sc_bv<256> &wire);
     void handle_reduce_stream_data(const sc_bv<256> &wire);
+    void handle_multicast_start(const sc_bv<256> &wire);
+    void handle_multicast_data(const sc_bv<256> &wire);
+    void arm_multicast_receive(uint16_t tree_id, const CollectiveKey &key,
+                               uint32_t chunk_id,
+                               uint64_t destination_address);
+    void wait_multicast_receive(uint16_t tree_id, const CollectiveKey &key);
+    void send_multicast_bytes(uint16_t tree_id, uint16_t session_id,
+                              const CollectiveKey &key,
+                              uint64_t source_address,
+                              uint64_t length_bytes);
+    void arm_dca_receive(const IsaV1CollectivePlan &plan,
+                         const IsaV1CollectiveAcceleratedTree &tree,
+                         uint32_t chunk_id);
+    void send_dca_bytes(const IsaV1CollectivePlan &plan,
+                        const IsaV1CollectiveAcceleratedTree &tree,
+                        uint32_t chunk_id);
+    void wait_dca_receive(const IsaV1CollectivePlan &plan,
+                          const IsaV1CollectiveAcceleratedTree &tree,
+                          uint32_t chunk_id);
+    const IsaV1LoweredCollectiveAction &collective_lowered_action(
+        uint32_t stream_index) const;
+    bool execute_p7_action(const CollectiveExecutorActionV1 &action);
 
     void send_helper(); // 同时在send和recv中被调用
     void call_systolic_array();
@@ -272,17 +442,74 @@ public:
 
     void end_of_elaboration();
 
-    size_t CollectiveEndpointResidual() const {
-        size_t stream = reduce_stream_routes.size();
+    void ConfigureCoreGroups(
+        std::shared_ptr<const CoreGroupRegistry> registry) {
+        group_sync_runtime =
+            std::make_shared<GroupSyncRuntime>(std::move(registry));
+    }
+
+    void ConfigureCollectiveProgram(
+        std::shared_ptr<const IsaV1CollectiveProgramImage> image,
+        std::shared_ptr<CollectiveWaveAdmissionCoordinatorV1> coordinator,
+        std::shared_ptr<const IsaV1CollectiveProfileProgramImage>
+            profile_image = nullptr,
+        std::shared_ptr<IsaV1CollectiveTreeRegistryBridge>
+            tree_bridge = nullptr,
+        std::shared_ptr<IsaV1CollectiveAccelerationRuntime>
+            acceleration_runtime = nullptr);
+
+    size_t CollectiveProgramResidual() const noexcept;
+
+    size_t EventResidual() const noexcept {
+        return event_control_queue.Residual() + event_mailbox.Residual();
+    }
+
+    size_t P2pEndpointResidual() const {
+        if (!p2p_endpoint) return 0;
+        const auto residual = p2p_endpoint->Residual();
+        return residual.sessions + residual.allocated_transport_tags +
+               residual.inbound_flows + residual.pending_requests +
+               residual.inflight_reassemblies +
+               residual.completed_unposted + residual.commit_ready +
+               residual.completed_sessions +
+               residual.tx_awaiting_admission + residual.tx_awaiting_ack +
+               residual.tx_awaiting_local_retire +
+               residual.reserved_rx_bytes + residual.early_data_flows +
+               residual.early_data_fragments + residual.early_data_bytes +
+               p2p_tx_queue.size() + p2p_pending_requests.size() +
+               p2p_async_handles.size() + p2p_rx_addresses.size() +
+               p2p_rx_fsm_by_flow.size();
+    }
+
+    CollectiveEndpointResidualSnapshot
+    CollectiveEndpointResidualState() const {
+        CollectiveEndpointResidualSnapshot result;
+        result.collective_data = collective_data_buffer.size();
+        result.collective_reduce = collective_reduce_buffer.size();
+        result.stream_routes = reduce_stream_routes.size();
+        result.stream_sessions = reduce_stream_sessions.size();
         for (const auto &entry : reduce_stream_sessions)
-            stream += 1 + (entry.second.assembler
-                ? entry.second.assembler->Residual() : 0);
-        return collective_data_buffer.size() +
-               collective_reduce_buffer.size() +
-               (collective_send_pending ? 1u : 0u) + stream +
-               core_vector_sessions.size();
+            result.stream_assembler += entry.second.assembler
+                ? entry.second.assembler->Residual() : 0;
+        result.multicast_posts = multicast_posts.size();
+        result.multicast_routes = multicast_routes.size();
+        result.serialized_wires = serialized_wire_queue.Size();
+        result.multicast_reassembly = multicast_byte_reassembler
+            ? multicast_byte_reassembler->InflightStreams() : 0;
+        result.core_vector_sessions = core_vector_sessions.size();
+        result.p2p = P2pEndpointResidual();
+        return result;
+    }
+
+    size_t CollectiveEndpointResidual() const {
+        return CollectiveEndpointResidualState().Total();
     }
     size_t DteOutstandingCount() const {
-        return dte_async ? dte_async->OutstandingCount() : 0;
+        return (dte_async ? dte_async->OutstandingCount() : 0) +
+               (p2p_endpoint ? p2p_endpoint->Residual().async_tokens : 0);
+    }
+
+    const P2pEndpointProductionStats &P2pStats() const noexcept {
+        return p2p_stats;
     }
 };

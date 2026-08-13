@@ -3,9 +3,9 @@
 
 覆盖：
   - L0 纯函数自测（编址/端点/矩形拓扑/端口配置校验）      -> npusim --d2d-v0-selftest
-  - 有效单 die + die_ports 端到端解析并运行，结果不变       -> 29109 ns
+  - 有效单 die + die_ports 端到端解析并运行，结果不变       -> 37295 ns
   - 非法 die_ports（2x1 缺 E 向 C2C）启动期报错             -> 非零退出
-  - 单 die 回归（noc_congestion no_congestion, cycle）不变  -> 29109 ns
+  - 单 die 回归（noc_congestion no_congestion, cycle）不变  -> 37295 ns
 
 用法（任意目录执行，自动切到 build/）：
     python3 llm/test/d2d_link/run_test_d2d_v0.py
@@ -27,7 +27,7 @@ SIM = "../llm/test/noc_congestion/sim/sim_cycle.json"
 MAP = "../llm/test/noc_congestion/mapping/identity.spec"
 
 NS_RE = re.compile(r"(\d+)\s*ns")
-EXPECT_NS = 29109  # 单 die no_congestion cycle 基线
+EXPECT_NS = 37295  # 单 die no_congestion cycle 基线
 CORES_PER_DIE = 16  # 4x4 die；die-run 用例要求本 die 全部 16 核都执行
 
 results = []
@@ -107,7 +107,7 @@ def main():
         record(f"invalid c2c param {pname}={bad} rejected at startup", rejected,
                f"exit={rc}")
 
-    # 3c. V0b-2A: 2x1/1x2/2x2 真实多 die 实例化 + die0-only workload 仍为 29109 ns
+    # 3c. V0b-2A: 2x1/1x2/2x2 真实多 die 实例化 + die0-only workload 仍为 37295 ns
     import json as _json
     import tempfile as _tf
     base2 = _json.load(open(os.path.join(HERE, "hardware", "core_4x4_die2x1.json")))
@@ -267,7 +267,7 @@ def main():
     #     （比总数强——能发现「同 source 丢一条+重一条**不同 tag**」；但同 source 同 tag 的抵消仍无法
     #      发现，且未含 seq_id/事件轨迹，故只证「每 (source[,tag]) 接收计数一致」，非严格无丢包/重复）、
     #     预期 per-lane 分布（读 GRID_X/GRID_Y）、D2D=0、无绑定错误、GRID_X*GRID_Y 核完成；
-    #     sim-time 只要求两次一致（差异符合各自 hop 变化，不强制 29109）。
+    #     sim-time 只要求两次一致（差异符合各自 hop 变化，不强制 37295）。
     HL_RE = re.compile(r"mismatch=(\d+) per_lane_done=([0-9,]+)")
     SIG_RE = re.compile(r"\[HOSTSIG\] done=([0-9:,]*) ack=([0-9:,]*)")
 
@@ -1242,8 +1242,8 @@ def main():
     rc, out, entered = run_with_c2c({"link_bw": 1, "latency": 20,
                                      "buffer_depth": 8})
     record("V3-a startup: legacy functional_v2 config still runs (V2 timing intact)",
-           rc == 0 and entered and finish_ns(out) == 398,
-           f"exit={rc} ns={finish_ns(out)} (expect 398)")
+           rc == 0 and entered and finish_ns(out) == 400,
+           f"exit={rc} ns={finish_ns(out)} (expect 400)")
 
     # (2) functional_v2 下出现 bounded-only 字段 → 启动期拒绝（不得接受后忽略）
     rc, out, entered = run_with_c2c(
@@ -1283,7 +1283,7 @@ def main():
            "(2x deterministic, integrity + drain)",
            all(x[0] == 0 and x[2] and e["bound"] is not None and e["types"] and
                e["integrity"] and e["drain"] for x, e in zip(bruns, be)) and
-           finish_ns(bruns[0][1]) == finish_ns(bruns[1][1]) == 424,
+           finish_ns(bruns[0][1]) == finish_ns(bruns[1][1]) == 426,
            f"exit={bruns[0][0]}/{bruns[1][0]} ns={finish_ns(bruns[0][1])}/"
            f"{finish_ns(bruns[1][1])} bound={be[0]['bound']}")
 
@@ -1302,7 +1302,7 @@ def main():
            "then drains reservation",
            all(x[0] == 0 and x[2] and e["types"] and e["integrity"] and e["drain"]
                for x, e in zip(exact_runs, exact_ev)) and
-           finish_ns(exact_runs[0][1]) == finish_ns(exact_runs[1][1]) == 424 and
+           finish_ns(exact_runs[0][1]) == finish_ns(exact_runs[1][1]) == 426 and
            exact_bound is not None and exact_bound[0] == 4 and exact_bound[3] > 0,
            f"exit={exact_runs[0][0]}/{exact_runs[1][0]} "
            f"ns={finish_ns(exact_runs[0][1])}/{finish_ns(exact_runs[1][1])} "

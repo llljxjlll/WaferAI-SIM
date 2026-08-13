@@ -598,19 +598,100 @@ void SramPosLocator::updateKVPair(TaskCoreContext &context, std::string &key,
 }
 
 void SramPosLocator::changePairName(std::string &old_key,
-                                    std::string &new_key) {
-    // 将旧标签名修改为新标签名
-    AddrPosKey result;
-    auto it = data_map.find(old_key);
-    if (it != data_map.end()) {
-        result = it->second;
-        data_map.erase(it);
+                                    std::string &new_key,
+                                    bool replace_existing) {
+    if (old_key.empty() || new_key.empty())
+        throw std::invalid_argument("invalid SRAM label rename");
+    if (old_key == new_key) return;
+    const auto old = data_map.find(old_key);
+    if (old == data_map.end())
+        throw std::out_of_range("unknown SRAM label: " + old_key);
+    const auto replacement = data_map.find(new_key);
+    if (replacement != data_map.end() && !replace_existing)
+        throw std::invalid_argument("duplicate SRAM label: " + new_key);
+
+    const AddrPosKey original = old->second;
+    if (replacement != data_map.end()) {
+        const AddrPosKey replaced = replacement->second;
+        const uint64_t source_allocation = original.region_allocation_id;
+        const uint64_t replaced_allocation =
+            replaced.region_allocation_id;
+        std::string source_region_label;
+        std::string replaced_region_label;
+        std::string quarantine_label;
+        bool quarantined = false;
+        bool source_renamed = false;
+
+        if (region_table_ != nullptr) {
+            if (source_allocation != 0)
+                source_region_label =
+                    region_table_->FindAllocation(source_allocation).label;
+            if (replaced_allocation != 0)
+                replaced_region_label =
+                    region_table_->FindAllocation(replaced_allocation).label;
+
+            if (source_allocation != 0 && replaced_allocation != 0 &&
+                source_allocation != replaced_allocation) {
+                const std::size_t attempts =
+                    region_table_->AllocationCount() + 1;
+                for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
+                    quarantine_label =
+                        "\x1fnpusim-legacy-replaced-" +
+                        std::to_string(replaced_allocation) + "-" +
+                        std::to_string(attempt);
+                    try {
+                        region_table_->RenameAllocation(
+                            replaced_allocation, quarantine_label);
+                        quarantined = true;
+                        break;
+                    } catch (const std::invalid_argument &) {
+                    }
+                }
+                if (!quarantined)
+                    throw std::logic_error(
+                        "failed to reserve a legacy SRAM replacement label");
+            }
+
+            try {
+                if (source_allocation != 0) {
+                    region_table_->RenameAllocation(source_allocation,
+                                                    new_key);
+                    source_renamed = true;
+                }
+                if (replaced_allocation != 0 &&
+                    replaced_allocation != source_allocation)
+                    region_table_->Free(replaced_allocation,
+                                        replaced.allocation_lifetime);
+            } catch (...) {
+                if (source_renamed)
+                    region_table_->RenameAllocation(source_allocation,
+                                                    source_region_label);
+                if (quarantined)
+                    region_table_->RenameAllocation(replaced_allocation,
+                                                    replaced_region_label);
+                throw;
+            }
+        }
+
+        AddrPosKey committed = original;
+        replacement->second = std::move(committed);
+        data_map.erase(old_key);
+        return;
     }
 
-    if (region_table_ != nullptr && result.region_allocation_id != 0)
-        region_table_->RenameAllocation(result.region_allocation_id, new_key);
-
-    data_map[new_key] = result;
+    const auto inserted = data_map.emplace(new_key, original);
+    if (!inserted.second)
+        throw std::logic_error("failed to reserve renamed SRAM label");
+    try {
+        if (region_table_ != nullptr &&
+            original.region_allocation_id != 0)
+            region_table_->RenameAllocation(
+                original.region_allocation_id, new_key);
+    } catch (...) {
+        data_map.erase(new_key);
+        throw;
+    }
+    data_map.erase(old_key);
 }
 
 // 为sram中标签为key的数据块增加size的大小。如果该数据块还不存在，则创建一个。
@@ -645,13 +726,13 @@ void SramPosLocator::deletePair(std::string &key) {
 
     auto it = data_map.find(key);
     if (it != data_map.end()) {
-#if USE_SRAM_MANAGER
-        sram_manager_->deallocate(it->second.alloc_id); // 释放 SRAM
-#endif
         if (region_table_ != nullptr &&
             it->second.region_allocation_id != 0)
             region_table_->Free(it->second.region_allocation_id,
                                 it->second.allocation_lifetime);
+#if USE_SRAM_MANAGER
+        sram_manager_->deallocate(it->second.alloc_id); // 释放 SRAM
+#endif
         data_map.erase(it);
     }
 }

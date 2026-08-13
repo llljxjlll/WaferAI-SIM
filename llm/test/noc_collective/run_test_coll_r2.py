@@ -32,8 +32,8 @@ def main() -> int:
     unit = run([str(NPUSIM), "--coll-r2-selftest"])
     tests.append((
         "finite tagged DCA ComputePool",
-        unit.returncode == 0 and "PASS (37 checks)" in unit.stdout,
-        "37 checks",
+        unit.returncode == 0 and "PASS (46 checks)" in unit.stdout,
+        "46 checks",
     ))
 
     for name, passed, detail in tests:

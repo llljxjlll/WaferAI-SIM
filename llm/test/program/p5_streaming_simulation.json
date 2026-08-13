@@ -1,0 +1,9 @@
+{
+  "ttf_file": "../font/NotoSansDisplay-Bold.ttf",
+  "operand": {"use_perf_gemm": false, "load_static_as_tile": "layer"},
+  "memory": {"use_beha_sram": true, "use_beha_dram": true, "use_dramsys": true},
+  "noc": {"use_beha_noc": false, "router_pipe": false, "fast_warmup": true, "send_recv_parallel": false},
+  "dte": {"use_beha_dte": true, "streaming": true, "async": false, "aggregation": false, "fine_grained_resources": false},
+  "gpu": {"use_inner_mm": true, "cache_log": false, "dram_config_file": "../DRAMSys/configs/hbm2-example.json"},
+  "log": {"log_level": 1, "verbose_debug": false, "colored": false}
+}

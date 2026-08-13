@@ -1,6 +1,7 @@
 #include "die/d2d_link.h"
 #include "die/behavioral.h"
 #include "die/port.h"
+#include "dte/p2p_payload.h"
 #include "defs/spec.h"
 #include "monitor/watchdog.h"
 #include "memory/hbm_mem_wire.h"
@@ -102,6 +103,9 @@ D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_,
         throw std::runtime_error(
             "D2DLinkUnit: bounded and behavioral modes are mutually exclusive");
     if (behavioral.enabled) {
+        if (behavioral.endpoint_event_capacity == 0)
+            throw std::runtime_error(
+                "D2DLinkUnit: behavioral endpoint capacity must be non-zero");
         if (!behavioral.port_rate.Valid() || !behavioral.link_rate.Valid())
             throw std::runtime_error(
                 "D2DLinkUnit: behavioral rates must satisfy 0 < num/den <= 1");
@@ -170,10 +174,11 @@ void D2DLinkUnit::forward() {
             ProbeData(g_d2d_data_in, payload, cyc);
         }
         if (in_ctrl_sent.read()) {
-            cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
+            const sc_bv<256> payload = in_ctrl_channel.read();
+            cfifo_.push_back({cyc + latency, payload});
             g_d2d_link_in_pkts++;
-            CountType(g_d2d_link_in_by_type, in_ctrl_channel.read());
-            CountLink(link_idx, true, in_ctrl_channel.read());
+            CountType(g_d2d_link_in_by_type, payload);
+            CountLink(link_idx, true, payload);
         }
 
         bool group_request =
@@ -211,10 +216,19 @@ void D2DLinkUnit::forward() {
 // V4 Behavioral 生产路径。REQUEST/ACK/DATA 各保留一个代表消息穿过真实 Router；控制消息
 // 每 hop 只加固定 link latency。DATA 在源 die 的第一条有向 link 上额外加一次 end-to-end
 // 聚合服务 ceil(F/min(1,port_rate,link_rate))，后续 hop 只加 latency，因此多跳是 pipelined
-// min-cut，而不是逐 hop 重复 bulk serialization。事件表无容量上限、无跨-flow资源争用。
+// min-cut，而不是逐 hop 重复 bulk serialization。legacy 代表事件表无容量上限；
+// endpoint 逐 fragment 事件表由 registered ready/backpressure 有界。
 void D2DLinkUnit::forward_behavioral(long cyc) {
-    in_avail.write(true);
-    in_ctrl_avail.write(true);
+    // Both ready and valid are sc_signals written by clocked threads. A ready
+    // grant is therefore consumed by the sender one cycle later and its valid
+    // reaches this link another cycle later. Keep the delayed grant used by the
+    // current input and reserve one slot for the newer advertised grant.
+    const bool endpoint_data_room =
+        behavioral_endpoint_data_events_.size() <
+        behavioral.endpoint_event_capacity;
+    const bool endpoint_ctrl_room =
+        behavioral_endpoint_ctrl_events_.size() <
+        behavioral.endpoint_event_capacity;
     data_credit_return.write(false);
     ctrl_credit_return.write(false);
     data_credit_active_ = false;
@@ -244,11 +258,31 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
             throw std::runtime_error(
                 "V4 Behavioral DATA requires roofline_packets >= 1");
         long long delay = latency;
+        const bool endpoint_fragment =
+            m.p2p_endpoint_ &&
+            m.offset_ == P2P_ENDPOINT_MSG_MARKER;
         bool first_link = false;
         if (link_idx >= 0 && link_idx < (int)g_d2d_links.size())
             first_link =
                 g_d2d_links[link_idx].local_die == DieOfGlobal(m.source_);
-        if (first_link && m.subflow_ == 0) {
+        if (endpoint_fragment) {
+            if (m.roofline_packets_ != 1 || m.subflow_ != 0)
+                throw std::runtime_error(
+                    "P2P endpoint DATA must use one physical fragment per "
+                    "behavioral service");
+            const long service = std::max<long>(
+                1, std::max(
+                    (behavioral.port_rate.den + behavioral.port_rate.num - 1) /
+                        behavioral.port_rate.num,
+                    (behavioral.link_rate.den + behavioral.link_rate.num - 1) /
+                        behavioral.link_rate.num));
+            const long start = std::max(cyc, behavioral_endpoint_data_next_);
+            if (service > std::numeric_limits<long>::max() - start)
+                throw std::overflow_error(
+                    "P2P behavioral fragment service cycle overflows");
+            behavioral_endpoint_data_next_ = start + service;
+            delay += behavioral_endpoint_data_next_ - cyc;
+        } else if (first_link && m.subflow_ == 0) {
             D2DBehavioralFlowMeta meta =
                 ConsumeD2DBehavioralFlow(m.source_, m.tag_id_);
             if (meta.dest_global != m.des_)
@@ -282,7 +316,16 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
         }
         if (delay > std::numeric_limits<long>::max() - cyc)
             throw std::runtime_error("V4 Behavioral ready-cycle overflow");
-        behavioral_data_events_.emplace(cyc + (long)delay, payload);
+        if (endpoint_fragment) {
+            if (!behavioral_endpoint_data_input_granted_ ||
+                !endpoint_data_room)
+                throw std::runtime_error(
+                    "behavioral P2P endpoint DATA exceeded advertised capacity");
+            behavioral_endpoint_data_events_.emplace(
+                cyc + (long)delay, payload);
+        } else {
+            behavioral_data_events_.emplace(cyc + (long)delay, payload);
+        }
         if (m.subflow_ == 0)
             g_d2d_behavioral_stats.fixed_cycles += latency;
         g_d2d_link_in_pkts++;
@@ -301,7 +344,17 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
         if (latency > std::numeric_limits<long>::max() - cyc)
             throw std::runtime_error(
                 "V4 Behavioral control ready-cycle overflow");
-        behavioral_ctrl_events_.emplace(cyc + latency, payload);
+        if (m.p2p_endpoint_ &&
+            m.offset_ == P2P_ENDPOINT_MSG_MARKER) {
+            if (!behavioral_endpoint_ctrl_input_granted_ ||
+                !endpoint_ctrl_room)
+                throw std::runtime_error(
+                    "behavioral P2P endpoint control exceeded advertised capacity");
+            behavioral_endpoint_ctrl_events_.emplace(
+                cyc + latency, payload);
+        } else {
+            behavioral_ctrl_events_.emplace(cyc + latency, payload);
+        }
         if (m.subflow_ == 0)
             g_d2d_behavioral_stats.fixed_cycles += latency;
         }
@@ -310,33 +363,93 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
         CountLink(link_idx, true, payload);
     }
 
+    behavioral_endpoint_data_occ_max = std::max(
+        behavioral_endpoint_data_occ_max,
+        behavioral_endpoint_data_events_.size());
+    behavioral_endpoint_ctrl_occ_max = std::max(
+        behavioral_endpoint_ctrl_occ_max,
+        behavioral_endpoint_ctrl_events_.size());
+
     auto data = behavioral_data_events_.begin();
-    if (data != behavioral_data_events_.end() && data->first <= cyc &&
-        out_avail.read()) {
-        out_channel.write(data->second);
+    auto endpoint_data = behavioral_endpoint_data_events_.begin();
+    const bool endpoint_data_first =
+        endpoint_data != behavioral_endpoint_data_events_.end() &&
+        (data == behavioral_data_events_.end() ||
+         endpoint_data->first < data->first);
+    const bool data_ready = endpoint_data_first
+        ? endpoint_data->first <= cyc
+        : data != behavioral_data_events_.end() && data->first <= cyc;
+    if (data_ready && out_avail.read()) {
+        const sc_bv<256> payload = endpoint_data_first
+            ? endpoint_data->second : data->second;
+        out_channel.write(payload);
         out_sent.write(true);
-        CountType(g_d2d_link_out_by_type, data->second);
-        CountLink(link_idx, false, data->second);
-        ProbeData(g_d2d_data_out, data->second, cyc);
-        behavioral_data_events_.erase(data);
+        CountType(g_d2d_link_out_by_type, payload);
+        CountLink(link_idx, false, payload);
+        ProbeData(g_d2d_data_out, payload, cyc);
+        if (endpoint_data_first)
+            behavioral_endpoint_data_events_.erase(endpoint_data);
+        else
+            behavioral_data_events_.erase(data);
         g_d2d_link_out_pkts++;
         g_protocol_progress++;
     } else {
         out_sent.write(false);
     }
     auto ctrl = behavioral_ctrl_events_.begin();
-    if (ctrl != behavioral_ctrl_events_.end() && ctrl->first <= cyc &&
-        out_ctrl_avail.read()) {
-        out_ctrl_channel.write(ctrl->second);
+    auto endpoint_ctrl = behavioral_endpoint_ctrl_events_.begin();
+    const bool endpoint_ctrl_first =
+        endpoint_ctrl != behavioral_endpoint_ctrl_events_.end() &&
+        (ctrl == behavioral_ctrl_events_.end() ||
+         endpoint_ctrl->first < ctrl->first);
+    const bool ctrl_ready = endpoint_ctrl_first
+        ? endpoint_ctrl->first <= cyc
+        : ctrl != behavioral_ctrl_events_.end() && ctrl->first <= cyc;
+    if (ctrl_ready && out_ctrl_avail.read()) {
+        const sc_bv<256> payload = endpoint_ctrl_first
+            ? endpoint_ctrl->second : ctrl->second;
+        out_ctrl_channel.write(payload);
         out_ctrl_sent.write(true);
-        CountType(g_d2d_link_out_by_type, ctrl->second);
-        CountLink(link_idx, false, ctrl->second);
-        behavioral_ctrl_events_.erase(ctrl);
+        CountType(g_d2d_link_out_by_type, payload);
+        CountLink(link_idx, false, payload);
+        if (endpoint_ctrl_first)
+            behavioral_endpoint_ctrl_events_.erase(endpoint_ctrl);
+        else
+            behavioral_ctrl_events_.erase(ctrl);
         g_d2d_link_out_pkts++;
         g_protocol_progress++;
     } else {
         out_ctrl_sent.write(false);
     }
+
+    if (behavioral_endpoint_data_events_.size() ==
+        behavioral.endpoint_event_capacity)
+        ++behavioral_endpoint_data_full_cycles;
+    if (behavioral_endpoint_ctrl_events_.size() ==
+        behavioral.endpoint_event_capacity)
+        ++behavioral_endpoint_ctrl_full_cycles;
+
+    // Reserve a slot for the ready value already visible to the sender in this
+    // cycle. It may become valid at this link on the next cycle even though the
+    // ready signal published below has already gone low.
+    const size_t data_occupancy = behavioral_endpoint_data_events_.size();
+    const size_t ctrl_occupancy = behavioral_endpoint_ctrl_events_.size();
+    const bool next_data_advertised =
+        data_occupancy < behavioral.endpoint_event_capacity &&
+        behavioral.endpoint_event_capacity - data_occupancy >
+            (behavioral_endpoint_data_last_advertised_ ? 1U : 0U);
+    const bool next_ctrl_advertised =
+        ctrl_occupancy < behavioral.endpoint_event_capacity &&
+        behavioral.endpoint_event_capacity - ctrl_occupancy >
+            (behavioral_endpoint_ctrl_last_advertised_ ? 1U : 0U);
+    in_avail.write(next_data_advertised);
+    in_ctrl_avail.write(next_ctrl_advertised);
+    behavioral_endpoint_data_input_granted_ =
+        behavioral_endpoint_data_last_advertised_;
+    behavioral_endpoint_ctrl_input_granted_ =
+        behavioral_endpoint_ctrl_last_advertised_;
+    behavioral_endpoint_data_last_advertised_ = next_data_advertised;
+    behavioral_endpoint_ctrl_last_advertised_ = next_ctrl_advertised;
 }
 
 // V3-b bounded 路径：有限 FIFO + token-bucket 速率 + 信用式 flow control。
@@ -434,10 +547,11 @@ void D2DLinkUnit::forward_bounded(long cyc) {
     bool has_croom = (int)cfifo_.size() < bound.ctrl_depth;
     if (in_ctrl_sent.read()) {
         if (has_croom) {
-            cfifo_.push_back({cyc + latency, in_ctrl_channel.read()});
+            const sc_bv<256> payload = in_ctrl_channel.read();
+            cfifo_.push_back({cyc + latency, payload});
             g_d2d_link_in_pkts++;
-            CountType(g_d2d_link_in_by_type, in_ctrl_channel.read());
-            CountLink(link_idx, true, in_ctrl_channel.read());
+            CountType(g_d2d_link_in_by_type, payload);
+            CountLink(link_idx, true, payload);
         } else {
             ctrl_upstream_blocked++;
         }
@@ -514,6 +628,10 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
             sc_bv<256> payload = mem_saf_fifo_.front();
             mem_saf_fifo_.pop_front();
             fifo_.push_back({cyc + latency, payload});
+            if (!IsMemWireFlit(payload)) {
+                CountType(g_d2d_link_in_by_type, payload);
+                ProbeData(g_d2d_data_in, payload, cyc);
+            }
             CountLink(link_idx, true, payload);
             g_d2d_link_in_pkts++;
             port_tokens -= bound.port_rate.den;
@@ -586,7 +704,9 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
         sc_bv<256> payload = in_ctrl_channel.read();
         if (!IsMemWireFlit(payload)) {
         Msg m = DeserializeMsg(payload);
-        if (m.msg_type_ == REQUEST) {
+        if (m.msg_type_ == REQUEST &&
+            !(m.p2p_endpoint_ &&
+              m.offset_ == P2P_ENDPOINT_MSG_MARKER)) {
             FlowKey key{m.source_, m.tag_id_, m.subflow_};
             if (m.flow_packets_ <= 0 || m.flow_packets_ > bound.saf_depth)
                 throw std::runtime_error("bounded SAF REQUEST has invalid flow_packets");
@@ -619,6 +739,13 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
         Msg m = DeserializeMsg(payload);
         if (m.msg_type_ != DATA)
             throw std::runtime_error("bounded SAF DATA channel received a non-DATA packet");
+        if (m.p2p_endpoint_ &&
+            m.offset_ == P2P_ENDPOINT_MSG_MARKER) {
+            if (m.roofline_packets_ != 1 || m.subflow_ != 0)
+                throw std::runtime_error(
+                    "P2P endpoint bounded DATA must be one physical fragment");
+            mem_saf_fifo_.push_back(payload);
+        } else {
         FlowKey key{m.source_, m.tag_id_, m.subflow_};
         auto eit = saf_expected_.find(key);
         if (eit == saf_expected_.end())
@@ -636,6 +763,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
                 throw std::runtime_error("bounded SAF DATA tail does not match REQUEST flow_packets");
             flow.complete = true;
             saf_ready_.push_back(key);
+        }
         }
         }
     }

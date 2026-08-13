@@ -165,6 +165,16 @@ void DumpProtocolWaitState(long cycle) {
                     << "[PROTO_WAIT]   router=" << r->rid << " output_lock["
                     << DIRN[d] << "] tag=" << r->output_lock[d]
                     << " ref=" << r->output_lock_ref[d];
+            if (r->endpoint_output_lock[d].Active()) {
+                const auto &owner = r->endpoint_output_lock[d].Owner();
+                LOG_WARN(SYSTEM)
+                    << "[PROTO_WAIT]   router=" << r->rid
+                    << " endpoint_output_owner[" << DIRN[d]
+                    << "] source=" << owner.source
+                    << " destination=" << owner.destination
+                    << " transport_tag=" << owner.transport_tag
+                    << " subflow=" << owner.subflow;
+            }
         }
         // 滞留在输入侧的包：它们正等待某个输出方向可用
         for (int d = 0; d < DIRECTIONS; d++) {

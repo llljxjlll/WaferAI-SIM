@@ -3,7 +3,7 @@
 #include "utils/prim_utils.h"
 #include <stdexcept>
 
-REGISTER_PRIM(Lsu_mem_prim);
+REGISTER_PRIM(Lsu_mem_prim, PrimId::LSU_MEM);
 
 namespace {
 
@@ -30,6 +30,9 @@ bool IsTransfer(LsuMemOp op) {
 }
 
 void ValidateLsuPrim(const Lsu_mem_prim &prim) {
+    if (static_cast<uint8_t>(prim.direction) >
+        static_cast<uint8_t>(sram::LsuDirection::kSramToHbm))
+        throw std::invalid_argument("Lsu_mem direction encoding is invalid");
     if (static_cast<uint8_t>(prim.op) >
         static_cast<uint8_t>(LsuMemOp::STORE_BLOCKING))
         throw std::invalid_argument("Lsu_mem op encoding is invalid");
@@ -37,15 +40,23 @@ void ValidateLsuPrim(const Lsu_mem_prim &prim) {
         if (prim.size_bytes == 0)
             throw std::invalid_argument(
                 "Lsu_mem transfer size_bytes must be non-zero");
-        if (!prim.absolute_sram && prim.sram_region.empty())
+        if (prim.absolute_sram) {
+            if (!prim.sram_region.empty() || prim.sram_offset != 0)
+                throw std::invalid_argument(
+                    "Lsu_mem absolute form carries region metadata");
+        } else if (prim.sram_region.empty() || prim.sram_addr != 0) {
             throw std::invalid_argument(
-                "Lsu_mem transfer requires sram_region or sram_addr");
+                "Lsu_mem region form is incomplete or carries sram_addr");
+        }
         if (prim.sram_region.size() > 64)
             throw std::invalid_argument(
                 "Lsu_mem sram_region exceeds the 64-byte wire limit");
         if (prim.op == LsuMemOp::ISSUE && prim.token == 0)
             throw std::invalid_argument(
                 "Lsu_mem asynchronous issue requires a non-zero token");
+        if (prim.op != LsuMemOp::ISSUE && prim.token != 0)
+            throw std::invalid_argument(
+                "Lsu_mem blocking transfer token must be zero");
         if (prim.op == LsuMemOp::LOAD_BLOCKING &&
             prim.direction != sram::LsuDirection::kHbmToSram)
             throw std::invalid_argument(
@@ -65,12 +76,17 @@ void ValidateLsuPrim(const Lsu_mem_prim &prim) {
     }
     if (prim.hbm_addr != 0 || prim.sram_addr != 0 ||
         prim.sram_offset != 0 || prim.size_bytes != 0 ||
-        !prim.sram_region.empty())
+        !prim.sram_region.empty() || prim.absolute_sram ||
+        prim.direction != sram::LsuDirection::kHbmToSram)
         throw std::invalid_argument(
             "Lsu_mem non-transfer op carries address metadata");
 }
 
 } // namespace
+void Lsu_mem_prim::refreshPrimType() {
+    setPrimMainCategory(IsTransfer(op) ? MEM_PRIM : SYNC_PRIM);
+}
+
 
 void Lsu_mem_prim::parseJson(json j) {
     if (!j.contains("op"))
@@ -114,10 +130,12 @@ void Lsu_mem_prim::parseJson(json j) {
         }
     }
     ValidateLsuPrim(*this);
+    refreshPrimType();
 }
 
 std::vector<sc_bv<128>> Lsu_mem_prim::serialize() {
     ValidateLsuPrim(*this);
+    refreshPrimType();
     sc_bv<128> metadata = 0;
     metadata.range(7, 0) =
         sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
@@ -147,16 +165,23 @@ std::vector<sc_bv<128>> Lsu_mem_prim::serialize() {
                 sc_bv<8>(static_cast<uint8_t>(sram_region[base + i]));
         result.push_back(text);
     }
-    return result;
+    return prim_wire::WrapSegments(std::move(result), name);
 }
 
 void Lsu_mem_prim::deserialize(std::vector<sc_bv<128>> segments) {
+    segments = prim_wire::UnwrapSegments(segments, name);
     if (segments.size() < 3)
         throw std::invalid_argument(
             "Lsu_mem wire encoding requires at least three segments");
     const uint64_t raw_op = segments[0].range(10, 8).to_uint64();
     if (raw_op > static_cast<uint8_t>(LsuMemOp::STORE_BLOCKING))
         throw std::invalid_argument("Lsu_mem wire op is invalid");
+    if (segments[0].range(127, 77).or_reduce())
+        throw std::invalid_argument(
+            "Lsu_mem wire metadata reserved bits are non-zero");
+    if (segments[2].range(127, 80).or_reduce())
+        throw std::invalid_argument(
+            "Lsu_mem wire details reserved bits are non-zero");
     op = static_cast<LsuMemOp>(raw_op);
     direction = segments[0][11].to_bool()
                     ? sram::LsuDirection::kSramToHbm
@@ -181,11 +206,18 @@ void Lsu_mem_prim::deserialize(std::vector<sc_bv<128>> segments) {
         sram_region.push_back(
             static_cast<char>(text.range(lo + 7, lo).to_uint()));
     }
+    const size_t used = name_size % 16;
+    if (used != 0 &&
+        segments.back().range(127, static_cast<int>(used * 8)).or_reduce())
+        throw std::invalid_argument(
+            "Lsu_mem wire region-name padding is non-zero");
     poll_complete = false;
     ValidateLsuPrim(*this);
+    refreshPrimType();
 }
 
 int Lsu_mem_prim::taskCoreDefault(TaskCoreContext &context) {
+    refreshPrimType();
     if (!context.lsu_memory || !context.sram_regions)
         throw std::runtime_error(
             "Lsu_mem requires memory.sram.real_data_path=true");

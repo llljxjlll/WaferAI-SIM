@@ -153,6 +153,7 @@ public:
     switch_data() {
         name = "switch_data";
         param_name.insert(param_name.end(), {"IN", "OUT"});
+        setPrimMainCategory(MEM_PRIM);
         skip_input = true;
     }
 };
@@ -324,6 +325,7 @@ public:
                           {"type", "enable", "des_id", "des_offset",
                            "local_offset", "max_packet", "tag_id",
                            "end_length"});
+        setPrimMainCategory(MEM_PRIM);
     }
 };
 
@@ -337,6 +339,7 @@ public:
     Recv_global_memory() {
         name = "Recv_global_memory";
         param_name.insert(param_name.end(), {"type", "tag_id", "recv_cnt"});
+        setPrimMainCategory(MEM_PRIM);
     }
 };
 
@@ -350,6 +353,7 @@ public:
     parse_input() {
         name = "parse_input";
         param_name.insert(param_name.end(), {"size"});
+        setPrimMainCategory(MEM_PRIM);
         skip_input = true;
     }
 };
@@ -364,6 +368,7 @@ public:
     parse_output() {
         name = "parse_output";
         param_name.insert(param_name.end(), {"size"});
+        setPrimMainCategory(MEM_PRIM);
         skip_input = true;
     }
 };

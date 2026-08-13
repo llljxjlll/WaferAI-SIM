@@ -34,10 +34,12 @@ struct D2DLinkBound {
     D2DRate rate;       // 链路速率（包/cycle，0<r<=1）；token bucket 表达 <1
 };
 
-// V4 Behavioral：无有限 FIFO/credit/backpressure/跨 flow 争用。每个逻辑 DATA flow
-// 只让一个代表包穿过 Router；首条有向 link 额外承担 ceil(F/min(port,link)) 的聚合服务。
+// V4 Behavioral：legacy 逻辑 DATA flow 无有限 FIFO/credit/跨 flow 争用，
+// 只让一个代表包穿过 Router；P2P endpoint 则逐 fragment 传输，并用
+// endpoint_event_capacity 的 registered ready/backpressure 限制事件表。
 struct D2DLinkBehavioral {
     bool enabled = false;
+    size_t endpoint_event_capacity = MAX_BUFFER_PACKET_SIZE;
     D2DRate port_rate;
     D2DRate link_rate;
 };
@@ -89,6 +91,10 @@ public:
     long saf_full_cycles = 0, inflight_full_cycles = 0, rx_full_cycles = 0;
     long port_rate_stall = 0, link_rate_stall = 0, rx_backpressure_stall = 0;
     long link_group_stall = 0;
+    size_t behavioral_endpoint_data_occ_max = 0;
+    size_t behavioral_endpoint_ctrl_occ_max = 0;
+    long behavioral_endpoint_data_full_cycles = 0;
+    long behavioral_endpoint_ctrl_full_cycles = 0;
 
     SC_HAS_PROCESS(D2DLinkUnit);
     D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_ = -1,
@@ -108,7 +114,9 @@ public:
                (long)rx_fifo_.size() + (long)mem_saf_fifo_.size() + saf_packets +
                (long)saf_expected_.size() + CreditResidual() +
                (long)behavioral_data_events_.size() +
-               (long)behavioral_ctrl_events_.size();
+               (long)behavioral_ctrl_events_.size() +
+               (long)behavioral_endpoint_data_events_.size() +
+               (long)behavioral_endpoint_ctrl_events_.size();
     }
     long CreditResidual() const {
         return (long)data_credit_due_.size() + (long)ctrl_credit_due_.size() +
@@ -138,6 +146,18 @@ public:
     long LinkRateStall() const { return link_rate_stall; }
     long RxBackpressureStall() const { return rx_backpressure_stall; }
     long LinkGroupStall() const { return link_group_stall; }
+    size_t BehavioralEndpointDataOccMax() const {
+        return behavioral_endpoint_data_occ_max;
+    }
+    size_t BehavioralEndpointCtrlOccMax() const {
+        return behavioral_endpoint_ctrl_occ_max;
+    }
+    long BehavioralEndpointDataFullCycles() const {
+        return behavioral_endpoint_data_full_cycles;
+    }
+    long BehavioralEndpointCtrlFullCycles() const {
+        return behavioral_endpoint_ctrl_full_cycles;
+    }
 
 private:
     struct SafFlowBuffer {
@@ -164,10 +184,19 @@ private:
     // V3-b2：信用回还的到达时刻队列（pop 时 push cyc+latency，模拟回程 L 拍；每拍 pulse 一个到期的）。
     std::deque<long> data_credit_due_;
     std::deque<long> ctrl_credit_due_;
-    // Behavioral 不把聚合服务占用解释成有限队列；事件表仅保存代表消息的到达时刻。
+    // Legacy behavioral tables remain unbounded representative-message queues.
+    // Endpoint tables preserve every fragment/control message and are bounded
+    // by endpoint_event_capacity through the registered ready handshake.
     std::multimap<long, sc_bv<256>> behavioral_data_events_;
     std::multimap<long, sc_bv<256>> behavioral_ctrl_events_;
+    std::multimap<long, sc_bv<256>> behavioral_endpoint_data_events_;
+    std::multimap<long, sc_bv<256>> behavioral_endpoint_ctrl_events_;
     long behavioral_mem_data_next_ = 0;
+    long behavioral_endpoint_data_next_ = 0;
+    bool behavioral_endpoint_data_last_advertised_ = false;
+    bool behavioral_endpoint_ctrl_last_advertised_ = false;
+    bool behavioral_endpoint_data_input_granted_ = false;
+    bool behavioral_endpoint_ctrl_input_granted_ = false;
 
     // sc_signal pulse 在写出后的一个调度周期内仍是在途信用；纳入 residual，避免过早宣布 drain。
     bool data_credit_active_ = false;
@@ -181,3 +210,4 @@ private:
 // V1-b2 独立 SystemC link 测试（驱动真实包）：latency=0/1/7/20、FIFO 序、无丢/重、
 // out_avail 停顿、drain 后 in==out、data/ctrl 独立、idle 统计 0。返回失败数（0=全过）。
 int RunD2DLinkSelfTest();
+int RunD2DBehavioralEndpointCapacitySelfTest();

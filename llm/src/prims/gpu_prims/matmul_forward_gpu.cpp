@@ -3,7 +3,7 @@
 #include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Matmul_f_gpu);
+REGISTER_PRIM(Matmul_f_gpu, PrimId::MATMUL_F_GPU);
 
 void Matmul_f_gpu::initialize() {
     if (datatype == INT8)

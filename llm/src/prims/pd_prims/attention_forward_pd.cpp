@@ -2,7 +2,7 @@
 #include "utils/memory_utils.h"
 #include "utils/prim_utils.h"
 
-REGISTER_PRIM(attention_forward_pd);
+REGISTER_PRIM(attention_forward_pd, PrimId::ATTENTION_FORWARD_PD);
 
 void attention_forward_pd::initialize() {
     auto &p = param_value;

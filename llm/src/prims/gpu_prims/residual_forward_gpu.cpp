@@ -3,7 +3,7 @@
 #include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Residual_f_gpu);
+REGISTER_PRIM(Residual_f_gpu, PrimId::RESIDUAL_F_GPU);
 
 void Residual_f_gpu::initialize() {
     if (datatype == INT8)

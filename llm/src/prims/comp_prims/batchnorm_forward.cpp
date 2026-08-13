@@ -5,7 +5,7 @@
 #include "prims/comp_prims.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Batchnorm_f);
+REGISTER_PRIM(Batchnorm_f, PrimId::BATCHNORM_F);
 
 void Batchnorm_f::initialize() {}
 

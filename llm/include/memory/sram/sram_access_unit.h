@@ -83,6 +83,15 @@ class AccessUnit : public sc_module {
                                         uint64_t size_bytes) const;
     bool IsRangeBusy(ByteRange range) const;
 
+    // Test-only direct storage access. These calls reject while SystemC is
+    // running and do not consume ports, timing, statistics, or trace state.
+    void DebugSeed(uint64_t address,
+                   const std::vector<uint8_t> &payload);
+    DebugSnapshot DebugPeek(uint64_t address,
+                            uint64_t size_bytes) const;
+    void DebugRestore(uint64_t address,
+                      const DebugSnapshot &snapshot);
+
     const AccessStats &stats() const { return stats_; }
     const RegionTable &regions() const { return regions_; }
     const std::vector<SramTraceRecord> &trace() const { return trace_; }

@@ -66,6 +66,16 @@ size_t CollectiveTreeEntryCount() {
     return g_tree_entries.size();
 }
 
+size_t CollectiveTreeEntryCountForTree(uint16_t tree_id) {
+    if (tree_id == 0)
+        throw std::invalid_argument("production collective tree_id zero is reserved");
+    std::lock_guard<std::mutex> lock(g_tree_mutex);
+    size_t count = 0;
+    for (const auto &entry : g_tree_entries)
+        if (entry.first.tree_id == tree_id) ++count;
+    return count;
+}
+
 void ValidateCollectiveTree(uint16_t tree_id, uint16_t root,
                             const std::vector<uint16_t> &targets) {
     std::lock_guard<std::mutex> lock(g_tree_mutex);

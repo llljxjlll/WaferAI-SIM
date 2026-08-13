@@ -11,6 +11,7 @@
 #include "memory/hbm_runtime.h"
 #include "memory/mem_endpoint_unit.h"
 
+#include <algorithm>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -129,17 +130,21 @@ int RunHbmR3SelfTest() {
     // ---- 1. DRAMSysHBMBackend 直接读写往返，验证真实 DRAMSys 时序（非零时延）----
     DRAMSysHBMBackend direct_backend("direct_backend", kHbm2Cfg);
     bool direct_rw_ok = false;
+    bool partial_burst_ok = false;
     sc_time direct_write_delay = SC_ZERO_TIME, direct_read_delay = SC_ZERO_TIME;
     sc_time row_hit_delay = SC_ZERO_TIME, row_miss_delay = SC_ZERO_TIME;
     DRAMSys::DecodedAddress row_hit_decoded, row_miss_decoded;
     ScriptDriver driverDirect("driverDirect", [&]() {
         auto issue = [&](MemCommand cmd, uint64_t address,
-                         std::vector<uint8_t> &payload) {
+                         std::vector<uint8_t> &payload,
+                         const std::vector<uint8_t> &byte_enable = {}) {
             auto tx = std::make_shared<HBMBackendTransaction>();
             tx->command = cmd;
             tx->address = address;
             tx->payload = payload;
-            tx->byte_enable.assign(payload.size(), 0xff);
+            tx->byte_enable = byte_enable.empty()
+                                  ? std::vector<uint8_t>(payload.size(), 0xff)
+                                  : byte_enable;
             sc_event done;
             int status = -1;
             sc_time begin = sc_time_stamp();
@@ -161,6 +166,25 @@ int RunHbmR3SelfTest() {
         std::vector<uint8_t> rbuf(4);
         direct_read_delay = issue(MemCommand::kRead, 0, rbuf);
         direct_rw_ok = (rbuf == wdata);
+
+        // Logical byte accesses are expanded to legal 32-byte HBM2 bursts.
+        // Exercise an unaligned write that crosses a burst boundary and prove
+        // that masked bytes on both sides remain unchanged.
+        std::vector<uint8_t> sentinel(64, 0x5a);
+        std::vector<uint8_t> sentinel_write = sentinel;
+        issue(MemCommand::kWrite, 512, sentinel_write);
+        std::vector<uint8_t> patch = {0x10, 0x20, 0x30, 0x40,
+                                      0x50, 0x60, 0x70};
+        std::vector<uint8_t> patch_write = patch;
+        std::vector<uint8_t> patch_enable(patch.size(), 0xff);
+        patch_enable[1] = 0;
+        patch_enable[5] = 0;
+        issue(MemCommand::kWrite, 512 + 29, patch_write, patch_enable);
+        std::vector<uint8_t> sentinel_read(64);
+        issue(MemCommand::kRead, 512, sentinel_read);
+        for (size_t i = 0; i < patch.size(); ++i)
+            if (patch_enable[i]) sentinel[29 + i] = patch[i];
+        partial_burst_ok = sentinel_read == sentinel;
 
         // 地址由 DRAMSys 自己的 decoder 生成，避免按物理位位置猜 row/bank。
         row_hit_decoded = direct_backend.DecodeBackendAddress(0);
@@ -228,6 +252,9 @@ int RunHbmR3SelfTest() {
     Check(direct_rw_ok,
           "DRAMSysHBMBackend read-after-write returns exactly what was "
           "written, through real DRAMSys storage (not a toy in-memory map)");
+    Check(partial_burst_ok,
+          "unaligned logical write crosses a physical HBM2 burst boundary "
+          "without changing adjacent masked bytes");
     Check(direct_write_delay > SC_ZERO_TIME && direct_read_delay > SC_ZERO_TIME,
           "DRAMSysHBMBackend::Access reports a real nonzero DRAMSys access "
           "delay (not a zero-time bypass)");
@@ -235,9 +262,11 @@ int RunHbmR3SelfTest() {
               direct_read_delay != sc_time(60, SC_NS),
           "non-blocking DRAMSys timing is not the legacy fixed 60ns "
           "blocking delay");
-    Check(direct_backend.Stats().completed >= 4 &&
+    Check(direct_backend.Stats().completed == 7 &&
+              direct_backend.Stats().bytes == 151 &&
               direct_backend.Stats().failed == 0,
-          "DRAMSys backend exports completed/failed/service-time statistics");
+          "DRAMSys backend exports logical request/byte statistics independent "
+          "of physical burst expansion");
     Check(row_hit_decoded.bank == row_miss_decoded.bank &&
               row_hit_decoded.bankgroup == row_miss_decoded.bankgroup &&
               row_hit_decoded.row != row_miss_decoded.row,
@@ -246,7 +275,11 @@ int RunHbmR3SelfTest() {
               row_hit_delay != row_miss_delay,
           "same-row and different-row accesses expose distinct DRAMSys timing");
     const auto &direct_trace = direct_backend.AccessTrace();
-    Check(direct_trace.size() >= 4 && direct_trace.back().status == 0 &&
+    Check(direct_trace.size() == 7 &&
+              direct_trace[3].command == MemCommand::kWrite &&
+              direct_trace[3].address == 541 &&
+              direct_trace[3].service > SC_ZERO_TIME &&
+              direct_trace.back().status == 0 &&
               direct_trace.back().service > SC_ZERO_TIME &&
               direct_trace.back().row == row_miss_decoded.row,
           "backend exports per-access command/address/bank/row/service trace");

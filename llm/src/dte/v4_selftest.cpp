@@ -242,8 +242,76 @@ int RunDTEV4SelfTest() {
     decoded_copy.deserialize(local_copy.serialize());
     check(decoded_copy.direction == DteDir::SPM_TO_SPM &&
               decoded_copy.spm_addr == 0x1000 &&
-              decoded_copy.remote_addr == 0x2000,
-          "SPM_TO_SPM source and destination survive the wire");
+              decoded_copy.remote_addr == 0x2000 &&
+              decoded_copy.sram_region.empty() &&
+              decoded_copy.destination_sram_region.empty(),
+          "legacy absolute SPM_TO_SPM strict wire remains unchanged");
+
+    Dte_async_prim named_copy;
+    named_copy.op = DteAsyncOp::ISSUE;
+    named_copy.token = 0xfedcba98U;
+    named_copy.payload_bits = 0x123456789abcdef0ULL;
+    named_copy.direction = DteDir::SPM_TO_SPM;
+    named_copy.spm_size = 0x1234;
+    named_copy.sram_region = "double_a";
+    named_copy.sram_offset = 0x123456789ULL;
+    named_copy.destination_sram_region = "double_b";
+    named_copy.destination_sram_offset = 0x987654321ULL;
+    Dte_async_prim decoded_named;
+    decoded_named.deserialize(named_copy.serialize());
+    check(decoded_named.op == DteAsyncOp::ISSUE &&
+              decoded_named.token == 0xfedcba98U &&
+              decoded_named.payload_bits == 0x123456789abcdef0ULL &&
+              decoded_named.direction == DteDir::SPM_TO_SPM &&
+              decoded_named.spm_addr == 0 &&
+              decoded_named.sram_region == "double_a" &&
+              decoded_named.sram_offset == 0x123456789ULL &&
+              decoded_named.remote_addr == 0 &&
+              decoded_named.destination_sram_region == "double_b" &&
+              decoded_named.destination_sram_offset == 0x987654321ULL,
+          "strict wire preserves independent SPM_TO_SPM source and destination regions");
+
+    Dte_async_prim legacy_json;
+    legacy_json.parseJson(json{{"op", "issue"},
+                               {"token", 7},
+                               {"payload_bits", 256},
+                               {"direction", "SPM_TO_SPM"},
+                               {"spm_addr", 0x1000},
+                               {"spm_size", 32},
+                               {"remote_addr", 0x2000}});
+    check(legacy_json.spm_addr == 0x1000 &&
+              legacy_json.remote_addr == 0x2000 &&
+              legacy_json.sram_region.empty() &&
+              legacy_json.destination_sram_region.empty(),
+          "frozen legacy absolute SPM_TO_SPM JSON remains accepted");
+
+    Dte_async_prim named_json;
+    named_json.parseJson(json{{"op", "issue"},
+                              {"token", 8},
+                              {"payload_bits", 256},
+                              {"direction", "SPM_TO_SPM"},
+                              {"sram_region", "double_a"},
+                              {"sram_offset", 3},
+                              {"spm_size", 32},
+                              {"destination_sram_region", "double_b"},
+                              {"destination_sram_offset", 5}});
+    check(named_json.sram_region == "double_a" &&
+              named_json.sram_offset == 3 &&
+              named_json.destination_sram_region == "double_b" &&
+              named_json.destination_sram_offset == 5,
+          "current JSON accepts independent SPM_TO_SPM regions");
+    check(ThrowsExpected<std::invalid_argument>([] {
+              Dte_async_prim invalid;
+              invalid.parseJson(json{{"op", "issue"},
+                                     {"token", 9},
+                                     {"payload_bits", 256},
+                                     {"direction", "SPM_TO_SPM"},
+                                     {"spm_addr", 0x1000},
+                                     {"spm_size", 32},
+                                     {"remote_addr", 0x2000},
+                                     {"destination_sram_region", "double_b"}});
+          }),
+          "JSON rejects simultaneous absolute and named destinations");
 
     Dte_async_prim dram_remote;
     dram_remote.op = DteAsyncOp::ISSUE;

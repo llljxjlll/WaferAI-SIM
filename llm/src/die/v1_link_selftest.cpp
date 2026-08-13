@@ -6,6 +6,8 @@
 #include "die/d2d_link.h"
 #include "die/port.h"
 #include "defs/spec.h"
+#include "dte/p2p_payload.h"
+#include "dte/p2p_session_runtime.h"
 #include "systemc.h"
 #include "utils/msg_utils.h"
 #include <iostream>
@@ -15,6 +17,26 @@
 #include <algorithm>
 
 namespace {
+
+sc_bv<256> LinkProbeWire(MSG_TYPE type, int id) {
+    Msg message;
+    message.is_end_ = true;
+    message.msg_type_ = type;
+    message.seq_id_ = id;
+    message.des_ = 1;
+    message.source_ = 0;
+    message.tag_id_ = 1;
+    message.length_ = 128;
+    message.roofline_packets_ = type == DATA ? 1 : 0;
+    message.flow_packets_ = type == REQUEST ? 1 : 0;
+    message.dte_payload_bits_ = type == REQUEST ? 128 : 0;
+    message.data_ = sc_bv<128>(static_cast<unsigned long long>(id));
+    return SerializeMsg(message);
+}
+
+int LinkProbeId(const sc_bv<256> &wire) {
+    return DeserializeMsg(wire).seq_id_;
+}
 
 // 单条 link 的探针：驱动 in（data/ctrl 各自脚本）+ out_avail（可设停顿窗），记录 out。
 struct LinkProbe : sc_module {
@@ -72,9 +94,9 @@ struct LinkProbe : sc_module {
         for (int c = 0; c <= run_cycles; c++) {
             // 记录上一拍已 settle 的输出（仅记录，不据此归还信用）
             if (out_s.read())
-                data_out.push_back({c, (int)out_ch.read().to_uint()});
+                data_out.push_back({c, LinkProbeId(out_ch.read())});
             if (out_cs.read())
-                ctrl_out.push_back({c, (int)out_cch.read().to_uint()});
+                ctrl_out.push_back({c, LinkProbeId(out_cch.read())});
             // **信用回还来自 link 的真实接口信号**（非窥探 out_sent）：观测到 pulse → credit++
             if (data_cret.read())
                 credit++;
@@ -111,7 +133,7 @@ struct LinkProbe : sc_module {
             }
             in_s.write(ds);
             if (ds)
-                in_ch.write((sc_bv<256>)did);
+                in_ch.write(LinkProbeWire(DATA, did));
             // 驱动 CTRL 输入（burst 仅依赖独立 ctrl credit；in_ctrl_avail 同样只是诊断镜像）
             bool cs = false;
             int cid = 0;
@@ -131,7 +153,199 @@ struct LinkProbe : sc_module {
             }
             in_cs.write(cs);
             if (cs)
-                in_cch.write((sc_bv<256>)cid);
+                in_cch.write(LinkProbeWire(REQUEST, cid));
+            wait(CYCLE, SC_NS);
+        }
+    }
+};
+
+// P5 endpoint marker 必须让每个 DATA fragment 穿过真实 behavioral link，
+// 不读取或折叠 legacy whole-flow metadata。
+struct EndpointBehavioralProbe : sc_module {
+    D2DLinkUnit *link;
+    sc_signal<sc_bv<256>> in_ch, out_ch, in_cch, out_cch;
+    sc_signal<bool> in_s, in_av, out_s, out_av, in_cs, in_cav, out_cs, out_cav;
+    sc_signal<bool> data_cret, ctrl_cret;
+    std::vector<sc_bv<256>> input_wires;
+    std::vector<sc_bv<256>> input_ctrl_wires;
+    std::vector<std::pair<int, sc_bv<256>>> output_wires;
+    std::vector<sc_bv<256>> output_ctrl_wires;
+    bool saw_data_backpressure = false;
+    bool saw_ctrl_backpressure = false;
+    int release_cycle = 20;
+    int run_cycle_count = 80;
+
+    SC_HAS_PROCESS(EndpointBehavioralProbe);
+    EndpointBehavioralProbe(sc_module_name n, size_t payload_bytes = 35,
+                            size_t event_capacity = 1,
+                            int release_at = 20,
+                            int cycles = 80,
+                            int service_denominator = 3)
+        : sc_module(n), release_cycle(release_at), run_cycle_count(cycles) {
+        D2DLinkBehavioral behavior;
+        behavior.enabled = true;
+        behavior.endpoint_event_capacity = event_capacity;
+        behavior.port_rate = {1, service_denominator};
+        behavior.link_rate = {1, service_denominator};
+        link = new D2DLinkUnit("link", 2, -1, D2DLinkBound{}, behavior);
+        link->in_channel(in_ch);
+        link->in_sent(in_s);
+        link->in_avail(in_av);
+        link->in_ctrl_channel(in_cch);
+        link->in_ctrl_sent(in_cs);
+        link->in_ctrl_avail(in_cav);
+        link->out_channel(out_ch);
+        link->out_sent(out_s);
+        link->out_avail(out_av);
+        link->out_ctrl_channel(out_cch);
+        link->out_ctrl_sent(out_cs);
+        link->out_ctrl_avail(out_cav);
+        link->data_credit_return(data_cret);
+        link->ctrl_credit_return(ctrl_cret);
+
+        std::vector<uint8_t> bytes(payload_bytes);
+        for (size_t i = 0; i < bytes.size(); ++i)
+            bytes[i] = static_cast<uint8_t>(0x80U + i);
+        P2pBuiltPayload payload = BuildP2pPayload(
+            P2pFlowKey{0, 1, UINT16_MAX, 0}, 0x44556677U, bytes);
+        for (const Msg &fragment : payload.fragments)
+            input_wires.push_back(SerializeMsg(fragment));
+        input_ctrl_wires.push_back(SerializeMsg(payload.request));
+        input_ctrl_wires.push_back(SerializeMsg(
+            MakeP2pAdmissionAck(P2pFlowKey{0, 1, UINT16_MAX, 0},
+                                0x44556677U)));
+        input_ctrl_wires.push_back(SerializeMsg(
+            MakeP2pCompletionAck(P2pFlowKey{0, 1, UINT16_MAX, 0},
+                                 0x44556677U)));
+        SC_THREAD(drive);
+    }
+
+    void drive() {
+        size_t next = 0;
+        size_t next_ctrl = 0;
+        for (int cycle = 0; cycle <= run_cycle_count; ++cycle) {
+            if (out_s.read())
+                output_wires.push_back({cycle, out_ch.read()});
+            if (out_cs.read())
+                output_ctrl_wires.push_back(out_cch.read());
+            const bool release = cycle >= release_cycle;
+            out_av.write(release);
+            out_cav.write(release);
+
+            const bool data_pending = cycle >= 2 && next < input_wires.size();
+            const bool send_data = data_pending && in_av.read();
+            saw_data_backpressure =
+                saw_data_backpressure || (data_pending && !in_av.read());
+            in_s.write(send_data);
+            if (send_data)
+                in_ch.write(input_wires[next++]);
+
+            const bool ctrl_pending =
+                cycle >= 2 && next_ctrl < input_ctrl_wires.size();
+            const bool send_ctrl = ctrl_pending && in_cav.read();
+            saw_ctrl_backpressure =
+                saw_ctrl_backpressure || (ctrl_pending && !in_cav.read());
+            in_cs.write(send_ctrl);
+            if (send_ctrl)
+                in_cch.write(input_ctrl_wires[next_ctrl++]);
+            wait(CYCLE, SC_NS);
+        }
+    }
+};
+
+struct EndpointBoundedSafProbe : sc_module {
+    D2DLinkUnit *link;
+    sc_signal<sc_bv<256>> in_ch, out_ch, in_cch, out_cch;
+    sc_signal<bool> in_s, in_av, out_s, out_av, in_cs, in_cav, out_cs, out_cav;
+    sc_signal<bool> data_cret, ctrl_cret;
+    std::vector<sc_bv<256>> input_wires;
+    std::vector<sc_bv<256>> output_wires;
+    sc_bv<256> request_wire;
+    int data_credit = 2;
+    int ctrl_credit = 2;
+    bool data_credit_seen = false;
+    bool ctrl_credit_seen = false;
+    int data_returns = 0;
+    int ctrl_returns = 0;
+    int sent = 0;
+    int ctrl_outputs = 0;
+
+    SC_HAS_PROCESS(EndpointBoundedSafProbe);
+    EndpointBoundedSafProbe(sc_module_name n) : sc_module(n) {
+        D2DLinkBound bound;
+        bound.enabled = true;
+        bound.whole_flow_saf = true;
+        bound.saf_depth = 2;
+        bound.data_depth = 1;
+        bound.rx_depth = 1;
+        bound.ctrl_depth = 2;
+        bound.port_rate = {1, 1};
+        bound.rate = {1, 2};
+        link = new D2DLinkUnit("link", 1, -1, bound);
+        link->in_channel(in_ch);
+        link->in_sent(in_s);
+        link->in_avail(in_av);
+        link->in_ctrl_channel(in_cch);
+        link->in_ctrl_sent(in_cs);
+        link->in_ctrl_avail(in_cav);
+        link->out_channel(out_ch);
+        link->out_sent(out_s);
+        link->out_avail(out_av);
+        link->out_ctrl_channel(out_cch);
+        link->out_ctrl_sent(out_cs);
+        link->out_ctrl_avail(out_cav);
+        link->data_credit_return(data_cret);
+        link->ctrl_credit_return(ctrl_cret);
+
+        std::vector<uint8_t> bytes(9 * P2P_PAYLOAD_FRAGMENT_BYTES);
+        for (size_t i = 0; i < bytes.size(); ++i)
+            bytes[i] = static_cast<uint8_t>(i ^ 0x5aU);
+        P2pBuiltPayload payload = BuildP2pPayload(
+            P2pFlowKey{0, 1, 91, 0}, 0x10203040U, bytes);
+        request_wire = SerializeMsg(payload.request);
+        for (const Msg &fragment : payload.fragments)
+            input_wires.push_back(SerializeMsg(fragment));
+        SC_THREAD(drive);
+    }
+
+    void drive() {
+        bool request_sent = false;
+        for (int cycle = 0; cycle <= 240; ++cycle) {
+            if (out_s.read())
+                output_wires.push_back(out_ch.read());
+            if (out_cs.read())
+                ++ctrl_outputs;
+            const bool data_event = data_cret.read();
+            if (data_event != data_credit_seen) {
+                data_credit_seen = data_event;
+                ++data_credit;
+                ++data_returns;
+            }
+            const bool ctrl_event = ctrl_cret.read();
+            if (ctrl_event != ctrl_credit_seen) {
+                ctrl_credit_seen = ctrl_event;
+                ++ctrl_credit;
+                ++ctrl_returns;
+            }
+            out_av.write(cycle >= 50);
+            out_cav.write(true);
+
+            const bool send_request =
+                !request_sent && cycle >= 2 && ctrl_credit > 0;
+            in_cs.write(send_request);
+            if (send_request) {
+                in_cch.write(request_wire);
+                request_sent = true;
+                --ctrl_credit;
+            }
+            const bool send_data = request_sent && cycle >= 4 &&
+                                   sent < static_cast<int>(input_wires.size()) &&
+                                   data_credit > 0;
+            in_s.write(send_data);
+            if (send_data) {
+                in_ch.write(input_wires[static_cast<size_t>(sent++)]);
+                --data_credit;
+            }
             wait(CYCLE, SC_NS);
         }
     }
@@ -278,6 +492,44 @@ int const_delta(const std::vector<std::pair<int, int>> &out,
     return d;
 }
 
+bool EndpointBehavioralExact(const EndpointBehavioralProbe &probe,
+                             bool require_ctrl_backpressure) {
+    bool data_exact = probe.output_wires.size() == probe.input_wires.size();
+    for (size_t index = 0; data_exact && index < probe.input_wires.size();
+         ++index)
+        data_exact = probe.output_wires[index].second ==
+                     probe.input_wires[index];
+    const size_t capacity = probe.link->behavioral.endpoint_event_capacity;
+    const bool exact = data_exact &&
+           probe.output_ctrl_wires == probe.input_ctrl_wires &&
+           probe.saw_data_backpressure &&
+           (!require_ctrl_backpressure || probe.saw_ctrl_backpressure) &&
+           probe.link->BehavioralEndpointDataOccMax() == capacity &&
+           probe.link->BehavioralEndpointDataFullCycles() > 0 &&
+           probe.link->BehavioralEndpointCtrlOccMax() <= capacity &&
+           (!require_ctrl_backpressure ||
+            probe.link->BehavioralEndpointCtrlFullCycles() > 0) &&
+           probe.link->residual() == 0;
+    if (!exact) {
+        std::cerr << "endpoint behavioral mismatch: data="
+                  << probe.output_wires.size() << "/"
+                  << probe.input_wires.size() << " ctrl="
+                  << probe.output_ctrl_wires.size() << "/"
+                  << probe.input_ctrl_wires.size() << " data_bp="
+                  << probe.saw_data_backpressure << " ctrl_bp="
+                  << probe.saw_ctrl_backpressure << " data_peak="
+                  << probe.link->BehavioralEndpointDataOccMax() << "/"
+                  << capacity << " data_full="
+                  << probe.link->BehavioralEndpointDataFullCycles()
+                  << " ctrl_peak="
+                  << probe.link->BehavioralEndpointCtrlOccMax()
+                  << " ctrl_full="
+                  << probe.link->BehavioralEndpointCtrlFullCycles()
+                  << " residual=" << probe.link->residual() << std::endl;
+    }
+    return exact;
+}
+
 } // namespace
 
 int RunD2DLinkSelfTest() {
@@ -310,6 +562,14 @@ int RunD2DLinkSelfTest() {
     stall->avail_hi = 20;
     // idle 探针（无输入）
     auto *idle = new LinkProbe("probe_idle", 3);
+    auto *endpoint_behavioral =
+        new EndpointBehavioralProbe("endpoint_behavioral");
+    auto *endpoint_behavioral_4k = new EndpointBehavioralProbe(
+        "endpoint_behavioral_4k", 4096, MAX_BUFFER_PACKET_SIZE, 32, 500, 1);
+    auto *endpoint_behavioral_32k = new EndpointBehavioralProbe(
+        "endpoint_behavioral_32k", 32768, MAX_BUFFER_PACKET_SIZE, 64, 3800, 1);
+    auto *endpoint_bounded =
+        new EndpointBoundedSafProbe("endpoint_bounded");
 
     // ---- V3-b：有限缓冲 + token bucket（真实 valid/ready 握手驱动）----
     auto mkbound = [](int depth, int cdepth, int num, int den) {
@@ -477,7 +737,50 @@ int RunD2DLinkSelfTest() {
               "V3-b ctor rejects rate den=0");
     }
 
-    sc_start(760 * CYCLE, SC_NS); // 覆盖最慢的有理速率 BDP-1 边界及全部信用回还
+    sc_start(3900 * CYCLE, SC_NS); // also drains the 2048-fragment endpoint case
+
+    bool endpoint_exact =
+        endpoint_behavioral->output_wires.size() ==
+        endpoint_behavioral->input_wires.size();
+    for (size_t i = 0; endpoint_exact &&
+                       i < endpoint_behavioral->input_wires.size(); ++i) {
+        endpoint_exact = endpoint_behavioral->output_wires[i].second ==
+                         endpoint_behavioral->input_wires[i];
+        if (i != 0)
+            endpoint_exact = endpoint_exact &&
+                endpoint_behavioral->output_wires[i].first -
+                    endpoint_behavioral->output_wires[i - 1].first >= 3;
+    }
+    const bool endpoint_ctrl_exact =
+        endpoint_behavioral->output_ctrl_wires ==
+        endpoint_behavioral->input_ctrl_wires;
+    check(endpoint_exact && endpoint_ctrl_exact &&
+              EndpointBehavioralExact(*endpoint_behavioral, true) &&
+              D2DBehavioralFlowResidual() == 0,
+          "P5 endpoint behavioral REQUEST/DATA/ACK use bounded registered backpressure, preserve every fragment, and drain without legacy flow metadata");
+    check(EndpointBehavioralExact(*endpoint_behavioral_4k, false) &&
+              endpoint_behavioral_4k->input_wires.size() == 256,
+          "P5 behavioral endpoint 4KiB reaches production event capacity, backpressures, preserves 256 fragments, and drains");
+    check(EndpointBehavioralExact(*endpoint_behavioral_32k, false) &&
+              endpoint_behavioral_32k->input_wires.size() == 2048,
+          "P5 behavioral endpoint 32KiB repeatedly backpressures, preserves 2048 fragments, and drains");
+
+    bool endpoint_bounded_exact =
+        endpoint_bounded->output_wires == endpoint_bounded->input_wires;
+    check(endpoint_bounded_exact && endpoint_bounded->sent == 9 &&
+              endpoint_bounded->ctrl_outputs == 1 &&
+              endpoint_bounded->data_returns == 9 &&
+              endpoint_bounded->ctrl_returns == 1 &&
+              endpoint_bounded->data_credit == 2 &&
+              endpoint_bounded->ctrl_credit == 2 &&
+              endpoint_bounded->link->SafOccMax() <= 2 &&
+              endpoint_bounded->link->SafFullCycles() > 0 &&
+              endpoint_bounded->link->InflightOccMax() <= 1 &&
+              endpoint_bounded->link->RxOccMax() <= 1 &&
+              endpoint_bounded->link->DownstreamStall() > 0 &&
+              endpoint_bounded->link->UpstreamBlocked() == 0 &&
+              endpoint_bounded->link->residual() == 0,
+          "P5 endpoint bounded SAF streams payload larger than SAF capacity through finite backpressure and drains");
 
     // 期望交付 id 序列（burst：base .. base+burst-1）
     auto expect_ids = [](int base, int burst) {
@@ -785,5 +1088,35 @@ int RunD2DLinkSelfTest() {
     std::cout << "==== D2D V1 link self-test: " << (g_total - g_fail) << "/"
               << g_total << (g_fail ? "  <<< FAILURES" : "") << " ===="
               << std::endl;
+    return g_fail;
+}
+
+
+int RunD2DBehavioralEndpointCapacitySelfTest() {
+    g_fail = 0;
+    g_total = 0;
+    std::cout << "==== D2D behavioral endpoint capacity self-test ===="
+              << std::endl;
+    ResetD2DLinkStats();
+
+    auto *four_kib = new EndpointBehavioralProbe(
+        "behavioral_capacity_4k", 4096, MAX_BUFFER_PACKET_SIZE, 32, 500, 1);
+    auto *thirty_two_kib = new EndpointBehavioralProbe(
+        "behavioral_capacity_32k", 32768, MAX_BUFFER_PACKET_SIZE, 64, 3800, 1);
+    sc_start(3900 * CYCLE, SC_NS);
+
+    check(EndpointBehavioralExact(*four_kib, false) &&
+              four_kib->input_wires.size() == 256,
+          "4KiB/256-fragment registered capacity and exact drain");
+    check(EndpointBehavioralExact(*thirty_two_kib, false) &&
+              thirty_two_kib->input_wires.size() == 2048,
+          "32KiB/2048-fragment repeated backpressure and exact drain");
+    check(g_d2d_link_in_pkts == g_d2d_link_out_pkts &&
+              D2DBehavioralFlowResidual() == 0,
+          "behavioral endpoint global packet/timing ledgers drain");
+
+    std::cout << "==== D2D behavioral endpoint capacity self-test: "
+              << (g_total - g_fail) << "/" << g_total
+              << (g_fail ? "  <<< FAILURES" : "") << " ====" << std::endl;
     return g_fail;
 }

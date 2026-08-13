@@ -3,7 +3,7 @@
 #include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(load_expert);
+REGISTER_PRIM(load_expert, PrimId::LOAD_EXPERT);
 
 void load_expert::initialize() {
     auto &p = param_value;

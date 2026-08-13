@@ -6,7 +6,7 @@
 #include "utils/system_utils.h"
 #include <regex>
 
-REGISTER_PRIM(attention_forward_gpu_pd);
+REGISTER_PRIM(attention_forward_gpu_pd, PrimId::ATTENTION_FORWARD_GPU_PD);
 
 void attention_forward_gpu_pd::initialize() {
     if (datatype == INT8)

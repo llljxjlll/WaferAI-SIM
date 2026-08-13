@@ -56,10 +56,28 @@ int RunCollR1SelfTest() {
 
     const auto baseline = ParseNocCollectiveConfig(ProfileConfig("baseline"));
     Check(baseline.profile == NocCollProfile::BASELINE &&
+              !baseline.max_trees_per_batch.has_value() &&
               baseline.broadcast_backend ==
                   NocCollBroadcastBackend::UNICAST &&
               baseline.reduce_backend == NocCollReduceBackend::ENDPOINT,
           "baseline profile expands to unicast plus endpoint");
+    auto k1_json = ProfileConfig("broadcast_only");
+    k1_json["collective"]["max_trees_per_batch"] = 1;
+    const auto k1 = ParseNocCollectiveConfig(k1_json);
+    Check(k1.max_trees_per_batch == 1,
+          "explicit max_trees_per_batch=1 is preserved");
+    Check(Throws([] {
+              auto j = ProfileConfig("broadcast_only");
+              j["collective"]["max_trees_per_batch"] = 0;
+              (void)ParseNocCollectiveConfig(j);
+          }),
+          "max_trees_per_batch zero is rejected");
+    Check(Throws([] {
+              auto j = ProfileConfig("broadcast_only");
+              j["collective"]["max_trees_per_batch"] = 65;
+              (void)ParseNocCollectiveConfig(j);
+          }),
+          "max_trees_per_batch limit plus one is rejected");
     const auto broadcast =
         ParseNocCollectiveConfig(ProfileConfig("broadcast_only"));
     Check(broadcast.profile == NocCollProfile::BROADCAST_ONLY &&

@@ -174,6 +174,7 @@ void ProgramCollectiveTreeEntry(const CollectiveTreeKey &key, uint8_t outputs);
 size_t EraseCollectiveTree(uint16_t tree_id);
 uint8_t LookupCollectiveTreeEntry(const CollectiveTreeKey &key);
 size_t CollectiveTreeEntryCount();
+size_t CollectiveTreeEntryCountForTree(uint16_t tree_id);
 void ValidateCollectiveTree(uint16_t tree_id, uint16_t root,
                             const std::vector<uint16_t> &targets);
 

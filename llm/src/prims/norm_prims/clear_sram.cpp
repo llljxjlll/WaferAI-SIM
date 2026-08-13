@@ -10,19 +10,47 @@
 #include "utils/memory_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Clear_sram);
+#include <cstdint>
+#include <stdexcept>
+
+REGISTER_PRIM(Clear_sram, PrimId::CLEAR_SRAM);
+
+namespace {
+constexpr uint8_t kClearSramPrimId = PrimIdValue(PrimId::CLEAR_SRAM);
+
+uint8_t ExpectedPrimId() {
+    const int registered =
+        PrimFactory::getInstance().getPrimId("Clear_sram");
+    if (registered != static_cast<int>(kClearSramPrimId))
+        throw std::invalid_argument(
+            "Clear_sram factory ID does not match its fixed PrimId");
+    return kClearSramPrimId;
+}
+
+void ValidateWire(const vector<sc_bv<128>> &segments) {
+    if (segments.size() != 1)
+        throw std::invalid_argument(
+            "Clear_sram Prim wire requires exactly one segment");
+    const auto &wire = segments.front();
+    if (wire.range(7, 0).to_uint64() != ExpectedPrimId())
+        throw std::invalid_argument("Clear_sram Prim wire ID mismatch");
+    if (wire.range(127, 8).or_reduce())
+        throw std::invalid_argument(
+            "Clear_sram Prim wire reserved bits are non-zero");
+}
+} // namespace
 
 void Clear_sram::printSelf() {}
 
 void Clear_sram::deserialize(vector<sc_bv<128>> segments) {
-    auto buffer = segments[0];
+    ValidateWire(segments);
 }
 
 vector<sc_bv<128>> Clear_sram::serialize() {
     vector<sc_bv<128>> segments;
 
-    sc_bv<128> d;
-    d.range(7, 0) = sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
+    sc_bv<128> d = 0;
+    d.range(7, 0) = sc_bv<8>(ExpectedPrimId());
     segments.push_back(d);
 
     return segments;

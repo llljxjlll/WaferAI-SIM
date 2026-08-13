@@ -1,15 +1,60 @@
 #include "utils/msg_utils.h"
+#include "dte/p2p_payload.h"
 #include "defs/global.h"
 #include "defs/spec.h"
 #include <stdexcept>
+#include <limits>
+
+namespace {
+bool IsP2pEndpointData(const Msg &msg) {
+    return msg.p2p_endpoint_ && msg.msg_type_ == MSG_TYPE::DATA &&
+           msg.offset_ == P2P_ENDPOINT_MSG_MARKER;
+}
+
+void ValidateEventCommon(const Msg &msg) {
+    if (msg.msg_type_ != MSG_TYPE::EVENT)
+        throw std::invalid_argument("message is not EVENT control");
+    if (!msg.is_end_ || msg.seq_id_ != 0 || msg.offset_ != 0 ||
+        msg.tag_id_ != 0 || msg.length_ != 0 || msg.refill_ ||
+        msg.config_end_ || msg.roofline_packets_ != 0 ||
+        msg.flow_packets_ != 0 || msg.subflow_ != 0 ||
+        msg.dte_payload_bits_ != 0 ||
+        msg.dte_stream_source_first_ns_ != 0 ||
+        msg.dte_stream_source_done_ns_ != 0 ||
+        msg.dte_stream_network_tail_cycles_ != 0)
+        throw std::invalid_argument("EVENT control envelope is non-canonical");
+    if (msg.source_ < 0 || msg.source_ > UINT16_MAX || msg.des_ < 0 ||
+        msg.des_ > UINT16_MAX)
+        throw std::invalid_argument("EVENT endpoint exceeds 16-bit wire");
+}
+}
 
 static_assert(M_D_IS_END + M_D_MSG_TYPE + M_D_SEQ_ID + M_D_DES + M_D_OFFSET +
                       M_D_TAG_ID + M_D_SOURCE + M_D_LENGTH + M_D_REFILL +
                       M_D_ROOFLINE + M_D_CONF_END + M_D_DATA + M_D_EXIT_PORT <=
                   256,
               "Msg wire layout exceeds sc_bv<256>");
+static_assert(M_D_IS_END + M_D_MSG_TYPE + M_D_SEQ_ID + M_D_DES +
+                      M_D_OFFSET + M_D_TAG_ID + M_D_SOURCE + M_D_LENGTH +
+                      M_D_REFILL + M_D_ROOFLINE + M_D_CONF_END + M_D_DATA +
+                      M_D_EXIT_PORT == 255,
+              "Msg top-reserved-bit validation requires a 255-bit layout");
 
 sc_bv<256> SerializeMsg(Msg msg) {
+    if (msg.p2p_endpoint_ &&
+        (msg.offset_ != P2P_ENDPOINT_MSG_MARKER ||
+         (msg.msg_type_ != MSG_TYPE::REQUEST &&
+          msg.msg_type_ != MSG_TYPE::DATA &&
+          msg.msg_type_ != MSG_TYPE::ACK)))
+        throw std::invalid_argument(
+            "P2P endpoint discriminator has an invalid envelope");
+    if (msg.msg_type_ == MSG_TYPE::EVENT) {
+        ValidateEventCommon(msg);
+        if (msg.data_.or_reduce())
+            throw std::invalid_argument(
+                "EVENT generic data payload must be zero");
+    }
+
     sc_bv<256> serialized_msg;
 
     int pos = 0;
@@ -61,12 +106,21 @@ sc_bv<256> SerializeMsg(Msg msg) {
         flow_msg ? ((msg.subflow_ >> 1) & 1) : msg.config_end_;
     pos += M_D_CONF_END;
     sc_bv<M_D_DATA> wire_data = msg.data_;
+    if (msg.msg_type_ == MSG_TYPE::EVENT) {
+        wire_data = 0;
+        wire_data.range(31, 0) = sc_bv<32>(msg.event_tag_);
+    }
     if (msg.msg_type_ == MSG_TYPE::REQUEST)
         wire_data.range(127, 64) = sc_bv<64>(msg.dte_payload_bits_);
+    const bool has_streaming_metadata =
+        msg.dte_stream_source_first_ns_ != 0 ||
+        msg.dte_stream_source_done_ns_ != 0 ||
+        msg.dte_stream_network_tail_cycles_ != 0;
+    if (IsP2pEndpointData(msg) && has_streaming_metadata)
+        throw std::invalid_argument(
+            "P2P endpoint DATA timing must use its sideband registry");
     if (msg.msg_type_ == MSG_TYPE::DATA &&
-        (msg.dte_stream_source_first_ns_ != 0 ||
-         msg.dte_stream_source_done_ns_ != 0 ||
-         msg.dte_stream_network_tail_cycles_ != 0)) {
+        !IsP2pEndpointData(msg) && has_streaming_metadata) {
         constexpr uint64_t kMaxStreamingNanosecond = (uint64_t(1) << 48) - 1;
         if (msg.dte_stream_source_first_ns_ > kMaxStreamingNanosecond ||
             msg.dte_stream_source_done_ns_ > kMaxStreamingNanosecond)
@@ -85,19 +139,26 @@ sc_bv<256> SerializeMsg(Msg msg) {
     serialized_msg.range(pos + M_D_EXIT_PORT - 1, pos) =
         sc_bv<M_D_EXIT_PORT>(msg.exit_port_ >= 0 ? msg.exit_port_ + 1 : 0);
     pos += M_D_EXIT_PORT;
-    serialized_msg.range(255, pos) = sc_bv<32>(0);
+    serialized_msg[255] = msg.p2p_endpoint_;
 
     return serialized_msg;
 }
 
 Msg DeserializeMsg(sc_bv<256> buffer) {
     Msg msg;
+    // Decode the transport discriminator before inspecting DATA payload bits.
+    // Endpoint DATA owns all 128 payload bits; treating it as legacy streaming
+    // metadata here would make a deserialize/serialize round trip lossy.
+    msg.p2p_endpoint_ = buffer[255].to_bool();
     int pos = 0;
 
     msg.is_end_ = buffer.range(pos + M_D_IS_END - 1, pos).to_uint64(),
     pos += M_D_IS_END;
-    msg.msg_type_ =
-        MSG_TYPE(buffer.range(pos + M_D_MSG_TYPE - 1, pos).to_uint64()),
+    const uint64_t raw_msg_type =
+        buffer.range(pos + M_D_MSG_TYPE - 1, pos).to_uint64();
+    if (raw_msg_type >= MSG_TYPE::MSG_TYPE_NUM)
+        throw std::invalid_argument("Msg wire contains an unknown message type");
+    msg.msg_type_ = static_cast<MSG_TYPE>(raw_msg_type);
     pos += M_D_MSG_TYPE;
     msg.seq_id_ = buffer.range(pos + M_D_SEQ_ID - 1, pos).to_uint64(),
     pos += M_D_SEQ_ID;
@@ -130,7 +191,7 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
     msg.data_ = buffer.range(pos + M_D_DATA - 1, pos);
     if (msg.msg_type_ == MSG_TYPE::REQUEST)
         msg.dte_payload_bits_ = msg.data_.range(127, 64).to_uint64();
-    if (msg.msg_type_ == MSG_TYPE::DATA) {
+    if (msg.msg_type_ == MSG_TYPE::DATA && !IsP2pEndpointData(msg)) {
         msg.dte_stream_source_first_ns_ =
             msg.data_.range(47, 0).to_uint64();
         msg.dte_stream_source_done_ns_ =
@@ -138,14 +199,60 @@ Msg DeserializeMsg(sc_bv<256> buffer) {
         msg.dte_stream_network_tail_cycles_ =
             static_cast<uint32_t>(msg.data_.range(127, 96).to_uint64());
     }
+    if (msg.msg_type_ == MSG_TYPE::EVENT) {
+        if (msg.data_.range(127, 32).or_reduce())
+            throw std::invalid_argument(
+                "EVENT control data reserved bits are non-zero");
+        msg.event_tag_ =
+            static_cast<uint32_t>(msg.data_.range(31, 0).to_uint64());
+        msg.data_ = 0;
+    }
     pos += M_D_DATA;
     // exit_port_ 解码：0=未 pin(-1)，否则 port_id = enc-1。
     {
         unsigned ep = buffer.range(pos + M_D_EXIT_PORT - 1, pos).to_uint64();
         msg.exit_port_ = (ep == 0u) ? -1 : (int)ep - 1;
     }
+    pos += M_D_EXIT_PORT;
+    if (msg.p2p_endpoint_ &&
+        (msg.offset_ != P2P_ENDPOINT_MSG_MARKER ||
+         (msg.msg_type_ != MSG_TYPE::REQUEST &&
+          msg.msg_type_ != MSG_TYPE::DATA &&
+          msg.msg_type_ != MSG_TYPE::ACK)))
+        throw std::invalid_argument(
+            "P2P endpoint discriminator has an invalid envelope");
+    if (msg.msg_type_ == MSG_TYPE::EVENT)
+        ValidateEventCommon(msg);
 
     return msg;
+}
+
+
+Msg MakeEventControlMsg(const EventControlMessage &event) {
+    Msg msg;
+    msg.is_end_ = true;
+    msg.msg_type_ = MSG_TYPE::EVENT;
+    msg.seq_id_ = 0;
+    msg.des_ = event.destination;
+    msg.offset_ = 0;
+    msg.tag_id_ = 0;
+    msg.source_ = event.source;
+    msg.length_ = 0;
+    msg.refill_ = false;
+    msg.config_end_ = false;
+    msg.roofline_packets_ = 0;
+    msg.flow_packets_ = 0;
+    msg.subflow_ = 0;
+    msg.data_ = 0;
+    msg.event_tag_ = event.tag;
+    ValidateEventCommon(msg);
+    return msg;
+}
+
+EventControlMessage ParseEventControlMsg(const Msg &msg) {
+    ValidateEventCommon(msg);
+    return {static_cast<uint16_t>(msg.source_),
+            static_cast<uint16_t>(msg.des_), msg.event_tag_};
 }
 
 void CalculatePacketNum(int output_size, int weight, int data_byte,

@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 
-REGISTER_PRIM(Collective_prim);
+REGISTER_PRIM(Collective_prim, PrimId::COLLECTIVE);
 
 namespace {
 CollOp ParseCollOp(const std::string &v) {
@@ -71,11 +71,15 @@ vector<sc_bv<128>> Collective_prim::serialize() {
     marker.range(47, 40) = static_cast<uint8_t>(marker_kind);
     marker.range(63, 48) = release_tree_id;
     encoded.insert(encoded.begin(), marker);
-    return encoded;
+    return prim_wire::WrapSegments(std::move(encoded), name);
 }
 
 void Collective_prim::deserialize(vector<sc_bv<128>> segments) {
+    segments = prim_wire::UnwrapSegments(segments, name);
     if (segments.size() < 2) throw std::invalid_argument("Collective_prim wire is truncated");
+    if (segments.front().range(127, 64).or_reduce())
+        throw std::invalid_argument(
+            "Collective_prim marker reserved bits are non-zero");
     phase_id = segments.front().range(23, 8).to_uint();
     const uint16_t encoded_group_size = segments.front().range(39, 24).to_uint();
     const uint8_t encoded_kind = segments.front().range(47, 40).to_uint();

@@ -4,12 +4,14 @@
 #include <iostream>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 
 #include "defs/const.h"
 #include "defs/enums.h"
 #include "defs/global.h"
 #include "utils/config_utils.h"
 #include "utils/print_utils.h"
+#include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
 #include "nlohmann/json.hpp"
@@ -60,38 +62,46 @@ int CeilingDivision(int a, int b) {
     return (a + b - 1) / b;
 }
 
-void InitGrid(string workload_config_path, string hardware_config_path,
-              string simulation_config_path, string mapping_config_path) {
-    json j1;
-    ifstream jfile1(workload_config_path);
+namespace {
+json ReadRequiredJson(const std::string &path, const char *role) {
+    std::ifstream input(path);
+    if (!input.is_open())
+        throw std::invalid_argument(std::string("cannot open ") + role +
+                                    " config: " + path);
+    json document;
+    try {
+        input >> document;
+    } catch (const std::exception &error) {
+        throw std::invalid_argument(std::string("cannot parse ") + role +
+                                    " config " + path + ": " +
+                                    error.what());
+    }
+    return document;
+}
+} // namespace
 
-    if (!jfile1.is_open())
-        LOG_ERROR(system_utils.cpp)
-            << "Failed to open file " << workload_config_path;
+void InitPlatform(string hardware_config_path, string simulation_config_path,
+                  string mapping_config_path) {
+    prim_wire::SetLegacyCompatibility(false);
+    const json hardware =
+        ReadRequiredJson(hardware_config_path, "hardware");
+    ParseHardwareConfig(hardware);
 
-    jfile1 >> j1;
-    ParseSimulationType(j1);
-
-    json j2;
-    ifstream jfile2(hardware_config_path);
-
-    if (!jfile2.is_open())
-        LOG_ERROR(system_utils.cpp)
-            << "Failed to open file " << hardware_config_path;
-
-    jfile2 >> j2;
-    ParseHardwareConfig(j2);
-
-    json j3;
-    ifstream jfile3(simulation_config_path);
-
-    if (!jfile3.is_open())
-        LOG_ERROR(system_utils.cpp) << "Failed to parse simulation config file";
-
-    jfile3 >> j3;
-    ParseSimulationConfig(j3);
+    const json simulation =
+        ReadRequiredJson(simulation_config_path, "simulation");
+    ParseSimulationConfig(simulation);
 
     ParseMemorySpec(mapping_config_path);
+}
+
+void InitGrid(string workload_config_path, string hardware_config_path,
+              string simulation_config_path, string mapping_config_path) {
+    const json workload =
+        ReadRequiredJson(workload_config_path, "workload");
+    ParseSimulationType(workload);
+    InitPlatform(hardware_config_path, simulation_config_path,
+                 mapping_config_path);
+    prim_wire::SetLegacyCompatibility(true);
 }
 
 void SystemCleanup() {

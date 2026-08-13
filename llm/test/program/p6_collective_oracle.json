@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "description": "P6 ISA-v1 3x3 collective Program Format fixtures and byte oracle",
+  "grid": {
+    "group_sizes": [1, 2, 4],
+    "length_bytes": 17,
+    "dtype": "u8",
+    "reduce_dtype": "UINT8",
+    "reduce_op": "SUM",
+    "cells": [
+      {"tx": "unicast", "rx": "unicast", "op": "P2P"},
+      {"tx": "scatter", "rx": "unicast", "op": "SCATTER"},
+      {"tx": "broadcast", "rx": "unicast", "op": "BROADCAST"},
+      {"tx": "unicast", "rx": "gather", "op": "GATHER"},
+      {"tx": "scatter", "rx": "gather", "op": "ALLTOALL"},
+      {"tx": "broadcast", "rx": "gather", "op": "ALLGATHER"},
+      {"tx": "unicast", "rx": "reduce", "op": "REDUCE"},
+      {"tx": "scatter", "rx": "reduce", "op": "REDUCESCATTER"},
+      {"tx": "broadcast", "rx": "reduce", "op": "ALLREDUCE"}
+    ]
+  },
+  "length_cases": [
+    {"tx": "broadcast", "rx": "unicast", "n": 4, "length_bytes": 1},
+    {"tx": "unicast", "rx": "unicast", "n": 2, "length_bytes": 17},
+    {"tx": "broadcast", "rx": "gather", "n": 4, "length_bytes": 1024},
+    {"tx": "scatter", "rx": "gather", "n": 4, "length_bytes": 8192},
+    {"tx": "broadcast", "rx": "unicast", "n": 4, "length_bytes": 32768}
+  ],
+  "reduction_cases": [
+    {"tx": "unicast", "rx": "reduce", "n": 4, "length_bytes": 1024, "dtype": "UINT8", "op": "SUM"},
+    {"tx": "broadcast", "rx": "reduce", "n": 4, "length_bytes": 1, "dtype": "UINT8", "op": "MAX"},
+    {"tx": "scatter", "rx": "reduce", "n": 4, "length_bytes": 1024, "dtype": "INT32", "op": "SUM"},
+    {"tx": "broadcast", "rx": "reduce", "n": 4, "length_bytes": 1024, "dtype": "INT32", "op": "MAX"},
+    {"tx": "unicast", "rx": "reduce", "n": 4, "length_bytes": 8192, "dtype": "INT64", "op": "SUM"},
+    {"tx": "scatter", "rx": "reduce", "n": 4, "length_bytes": 32768, "dtype": "INT64", "op": "MAX"}
+  ],
+  "negative_cases": [
+    {"option": "--p6-bad-group", "layer": "codec", "category": "group", "fixture_reject": true},
+    {"option": "--p6-bad-rank", "layer": "whole-artifact", "category": "rank"},
+    {"option": "--p6-bad-root", "layer": "whole-artifact", "category": "root"},
+    {"option": "--p6-bad-crossdie", "layer": "platform", "category": "crossdie"},
+    {"option": "--p6-bad-count", "layer": "whole-artifact", "category": "count"},
+    {"option": "--p6-bad-stride", "layer": "whole-artifact", "category": "stride"},
+    {"option": "--p6-bad-schedule", "layer": "whole-artifact", "category": "schedule"}
+  ],
+  "memory_probe": {
+    "version": 1,
+    "format": "p6-p5-compatible-multi-region-v1",
+    "source_region": "p6_input",
+    "staging_region": "p6_staging",
+    "result_region": "p6_result",
+    "payload_offset_bytes": 16,
+    "sentinel_byte": 165,
+    "verify_all_bytes_outside_payload": true,
+    "pattern": "affine_u8_v1-with-reduction-boundary-patch"
+  },
+  "runtime_contract": {
+    "trace_prefix": "P6_COLLECTIVE_TRACE",
+    "stats_prefix": "P6_COLLECTIVE_STATS",
+    "drain_prefix": "P6_COLLECTIVE_DRAIN",
+    "probe_prefix": "P6_MEMORY_PROBE"
+  }
+}

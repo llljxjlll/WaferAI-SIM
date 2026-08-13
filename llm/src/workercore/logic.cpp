@@ -200,9 +200,6 @@ void WorkerCoreExecutor::send_logic() {
             bool need_long_wait = false;
             int roofline_packets = 1;
 
-            if (atomic_helper_lock(sc_time_stamp(), 0))
-                ev_send_helper.notify(0, SC_NS);
-
             // SEND_DATA, SEND_ACK, SEND_REQ
             if (prim->type == SEND_DATA) {
                 while (job_done != true) {
@@ -275,10 +272,10 @@ void WorkerCoreExecutor::send_logic() {
                                 stream_source_xfer->scheduled_completion_time.value() /
                                 sc_time(1, SC_NS).value());
                     }
-                    send_buffer = temp_msg;
-
-                    atomic_helper_lock(sc_time_stamp(), 3);
-                    ev_send_helper.notify(0, SC_NS);
+                    while (!channel_avail_i.read() ||
+                           !atomic_helper_lock(sc_time_stamp(), 3))
+                        wait(CYCLE, SC_NS);
+                    send_serialized_wire(SerializeMsg(temp_msg), false);
 
                     if (logical_last) {
                         LOG_DEBUG(NETWORK)
@@ -298,18 +295,18 @@ void WorkerCoreExecutor::send_logic() {
             else if (prim->type == SEND_REQ) {
                 // [发送方] 发送一个req包，发送完之后结束此原语，进入 RECV_ACK
                 // REQUEST 是控制消息，使用控制信道
-                if (!ctrl_channel_avail_i.read())
-                    wait(ev_ctrl_channel_avail_i);
+                while (!ctrl_channel_avail_i.read())
+                    wait(CYCLE, SC_NS);
+                while (!atomic_helper_lock(sc_time_stamp(), 3))
+                    wait(CYCLE, SC_NS);
 
                 ReserveStripedSafOnce(prim, cid);
-                send_buffer =
-                    Msg(MSG_TYPE::REQUEST, prim->des_id, prim->tag_id, cid);
+                Msg request(MSG_TYPE::REQUEST, prim->des_id, prim->tag_id,
+                            cid);
                 int subflow = prim->next_subflow++;
-                AttachRequestFlowPackets(send_buffer, prim, subflow);
-                PinControlMsgExit(send_buffer);
-
-                send_helper_write = 3;
-                ev_send_helper.notify(0, SC_NS);
+                AttachRequestFlowPackets(request, prim, subflow);
+                PinControlMsgExit(request);
+                send_serialized_wire(SerializeMsg(request), true);
 
                 LOG_DEBUG(NETWORK) << "Core " << cid << " -> REQ["
                                    << subflow << "] -> " << prim->des_id;
@@ -321,21 +318,22 @@ void WorkerCoreExecutor::send_logic() {
                 // [执行核]
                 // 在计算图的汇节点执行完毕之后，给host发送一份DONE数据包，标志任务完成
                 // DONE 是控制消息，使用控制信道
-                if (!ctrl_channel_avail_i.read())
-                    wait(ev_ctrl_channel_avail_i);
+                while (!ctrl_channel_avail_i.read())
+                    wait(CYCLE, SC_NS);
+                while (!atomic_helper_lock(sc_time_stamp(), 3))
+                    wait(CYCLE, SC_NS);
 
-                send_buffer = Msg(MSG_TYPE::DONE, HostEndpointOfDie(DieOfGlobal(cid)), cid);
+                Msg done(MSG_TYPE::DONE,
+                         HostEndpointOfDie(DieOfGlobal(cid)), cid);
 
                 if (SYSTEM_MODE == SIM_PD || SYSTEM_MODE == SIM_PDS) {
                     for (int i = 0; i < core_context->decode_done_.size();
                          i++) {
-                        send_buffer.data_.range(i, i) =
+                        done.data_.range(i, i) =
                             sc_bv<1>(core_context->decode_done_[i]);
                     }
                 }
-
-                send_helper_write = 3;
-                ev_send_helper.notify(0, SC_NS);
+                send_serialized_wire(SerializeMsg(done), true);
 
                 LOG_DEBUG(NETWORK) << "Core " << cid << " -> DONE -> Host";
 
@@ -480,17 +478,6 @@ void WorkerCoreExecutor::send_para_logic() {
             bool job_done = false; // 结束内圈循环的标志
 
             while (true) {
-                if (!SPEC_ROUTER_PIPE) {
-                    if (atomic_helper_lock(sc_time_stamp(), 0))
-                        ev_send_helper.notify(0, SC_NS);
-                } else {
-                    while (atomic_helper_lock(sc_time_stamp(), 0) == false) {
-                        wait(CYCLE, SC_NS);
-                    }
-
-                    ev_send_helper.notify(0, SC_NS);
-                }
-
                 if (job_done)
                     break;
 
@@ -505,105 +492,35 @@ void WorkerCoreExecutor::send_para_logic() {
                         s_prim->d2d_exit_selected = true;
                     }
 
-                    // atomic_helper_lock 其实是为了表示上锁
-                    if (SPEC_ROUTER_PIPE) {
-                        while (job_done == false) {
-                            if (channel_avail_i.read() &&
-                                atomic_helper_lock(sc_time_stamp(), 1)) {
-                                ev_send_helper.notify(0, SC_NS);
+                    const bool is_end_packet =
+                        s_prim->data_packet_id + 1 == s_prim->max_packet;
+                    if (is_end_packet)
+                        while (!send_last_packet)
+                            wait(ev_send_last_packet);
+                    while (!channel_avail_i.read() ||
+                           !atomic_helper_lock(sc_time_stamp(), 3))
+                        wait(CYCLE, SC_NS);
 
-                                s_prim->data_packet_id++;
+                    ++s_prim->data_packet_id;
+                    const int length = is_end_packet
+                        ? s_prim->end_length : M_D_DATA;
+                    if (is_end_packet) consume_data_tail();
+                    Msg data(is_end_packet, MSG_TYPE::DATA,
+                             s_prim->data_packet_id, s_prim->des_id, 0,
+                             s_prim->tag_id, length, sc_bv<128>(0x1));
+                    data.source_ = cid;
+                    data.exit_port_ = s_prim->d2d_exit_port;
+                    TaskCoreContext context = generate_context(this);
+                    (void)prim->taskCoreDefault(context);
+                    send_serialized_wire(SerializeMsg(data), false);
 
-                                bool is_end_packet = s_prim->data_packet_id ==
-                                                     s_prim->max_packet;
-                                int length = M_D_DATA;
-                                if (is_end_packet) {
-                                    length = s_prim->end_length;
-                                    while (!send_last_packet) {
-                                        atomic_helper_lock(sc_time_stamp(), 0,
-                                                           true);
-                                        wait(ev_send_last_packet);
-                                        while (
-                                            atomic_helper_lock(sc_time_stamp(),
-                                                               0) == false) {
-                                            wait(CYCLE, SC_NS);
-                                        }
-                                    }
-                                    consume_data_tail();
-                                }
-                                send_buffer =
-                                    Msg(s_prim->data_packet_id ==
-                                            s_prim->max_packet,
-                                        MSG_TYPE::DATA, s_prim->data_packet_id,
-                                        s_prim->des_id, 0, s_prim->tag_id,
-                                        length, sc_bv<128>(0x1));
-                                send_buffer.source_ = cid; // 真实全局 source
-                                send_buffer.exit_port_ = s_prim->d2d_exit_port;
-                                int delay = 0;
-                                TaskCoreContext context =
-                                    generate_context(this);
-                                delay = prim->taskCoreDefault(context);
-                                atomic_helper_lock(sc_time_stamp(), 0, true);
-                                ev_send_helper.notify(0, SC_NS);
-
-                                if (s_prim->data_packet_id ==
-                                    s_prim->max_packet) {
-                                    job_done = true;
-
-                                    LOG_DEBUG(NETWORK)
-                                        << "Core " << cid << " -> DATA -> "
-                                        << s_prim->des_id;
-                                    LOG_DEBUG(NETWORK)
-                                        << "max_packet " << s_prim->max_packet;
-                                }
-                            } else {
-                                if (send_helper_write == 1) {
-                                    send_helper_write = 0;
-                                }
-
-                                wait(CYCLE, SC_NS);
-                                atomic_helper_lock(sc_time_stamp(), 0);
-                            }
-                        }
-                    } else {
-                        if (channel_avail_i.read() &&
-                            atomic_helper_lock(sc_time_stamp(), 1)) {
-                            ev_send_helper.notify(0, SC_NS);
-
-                            s_prim->data_packet_id++;
-
-                            bool is_end_packet =
-                                s_prim->data_packet_id == s_prim->max_packet;
-                            int length = M_D_DATA;
-                            if (is_end_packet) {
-                                length = s_prim->end_length;
-                                while (!send_last_packet)
-                                    wait(ev_send_last_packet);
-                                consume_data_tail();
-                            }
-                            send_buffer = Msg(
-                                s_prim->data_packet_id == s_prim->max_packet,
-                                MSG_TYPE::DATA, s_prim->data_packet_id,
-                                s_prim->des_id, 0, s_prim->tag_id, length,
-                                sc_bv<128>(0x1));
-                            send_buffer.source_ = cid; // 真实全局 source
-                            send_buffer.exit_port_ = s_prim->d2d_exit_port;
-                            int delay = 0;
-                            TaskCoreContext context = generate_context(this);
-                            delay = prim->taskCoreDefault(context);
-                            atomic_helper_lock(sc_time_stamp(), 2);
-                            ev_send_helper.notify(0, SC_NS);
-
-                            if (s_prim->data_packet_id == s_prim->max_packet) {
-                                job_done = true;
-
-                                LOG_DEBUG(NETWORK)
-                                    << "Core " << cid << " -> DATA -> "
-                                    << s_prim->des_id;
-                                LOG_DEBUG(NETWORK)
-                                    << "max_packet " << s_prim->max_packet;
-                            }
-                        }
+                    if (is_end_packet) {
+                        job_done = true;
+                        LOG_DEBUG(NETWORK)
+                            << "Core " << cid << " -> DATA -> "
+                            << s_prim->des_id;
+                        LOG_DEBUG(NETWORK)
+                            << "max_packet " << s_prim->max_packet;
                     }
                 }
 
@@ -615,16 +532,15 @@ void WorkerCoreExecutor::send_para_logic() {
                     if (ctrl_channel_avail_i.read() &&
                         atomic_helper_lock(sc_time_stamp(), 3)) {
                         // 可以发送数据
-                        send_buffer = Msg(MSG_TYPE::REQUEST, s_prim->des_id,
-                                          s_prim->tag_id, cid);
+                        Msg request(MSG_TYPE::REQUEST, s_prim->des_id,
+                                    s_prim->tag_id, cid);
                         if (s_prim->stripe_count != 1)
                             throw std::runtime_error(
                                 "V5 striping is supported by the sequential "
                                 "dataflow path, not parallel-send pipeline mode");
-                        AttachRequestFlowPackets(send_buffer, s_prim, 0);
-                        PinControlMsgExit(send_buffer);
-
-                        ev_send_helper.notify(0, SC_NS);
+                        AttachRequestFlowPackets(request, s_prim, 0);
+                        PinControlMsgExit(request);
+                        send_serialized_wire(SerializeMsg(request), true);
 
                         LOG_DEBUG(NETWORK) << "Core " << cid << " -> REQ -> "
                                            << s_prim->des_id;
@@ -635,15 +551,14 @@ void WorkerCoreExecutor::send_para_logic() {
 
                 else if (typeid(*prim) == typeid(Send_prim) &&
                          ((Send_prim *)prim)->type == SEND_DONE) {
-                    Send_prim *s_prim = (Send_prim *)prim;
                     // [执行核]
                     // 在计算图的汇节点执行完毕之后，给host发送一份DONE数据包，标志任务完成
                     if (ctrl_channel_avail_i.read() &&
                         atomic_helper_lock(sc_time_stamp(), 3)) {
                         // 可以发送数据
-                        send_buffer = Msg(MSG_TYPE::DONE, HostEndpointOfDie(DieOfGlobal(cid)), cid);
-
-                        ev_send_helper.notify(0, SC_NS);
+                        Msg done(MSG_TYPE::DONE,
+                                 HostEndpointOfDie(DieOfGlobal(cid)), cid);
+                        send_serialized_wire(SerializeMsg(done), true);
 
                         LOG_DEBUG(NETWORK)
                             << "Core " << cid << " -> DONE -> Host";
@@ -740,9 +655,6 @@ void WorkerCoreExecutor::recv_logic() {
             bool complete_start_packet = false;
             Msg start_packet;
 
-            if (atomic_helper_lock(sc_time_stamp(), 0))
-                ev_send_helper.notify(0, SC_NS);
-
             if (prim->type == RECV_ACK) {
                 // [发送方] 接收来自接收方的ack包，收到之后结束此原语，进入
                 // SEND_DATA 或 SEND_SRAM
@@ -789,15 +701,17 @@ void WorkerCoreExecutor::recv_logic() {
                 // 如果是end包，则将recv_index归零，表示开始接收下一个core传来的数据（如果有的话）
                 if (temp.is_end_) {
                     // ACK 是控制消息，使用控制信道
-                    while (!atomic_helper_lock(sc_time_stamp(), 3) ||
-                           !ctrl_channel_avail_i.read()) {
-                            wait(CYCLE, SC_NS);
-                    }
+                    while (!ctrl_channel_avail_i.read())
+                        wait(CYCLE, SC_NS);
+                    while (!atomic_helper_lock(sc_time_stamp(), 3))
+                        wait(CYCLE, SC_NS);
 
                     // 向host发送一个ack包
-                    send_buffer =
-                        Msg(MSG_TYPE::ACK, HostEndpointOfDie(DieOfGlobal(cid)), prim->tag_id, cid);
-                    ev_send_helper.notify(0, SC_NS);
+                    const Msg ack(
+                        MSG_TYPE::ACK,
+                        HostEndpointOfDie(DieOfGlobal(cid)), prim->tag_id,
+                        cid);
+                    send_serialized_wire(SerializeMsg(ack), true);
 
                     LOG_DEBUG(NETWORK) << "Core " << cid << " <- PREPARE data";
                     LOG_DEBUG(NETWORK) << "end_cnt " << end_cnt << ", recv_cnt "
@@ -1034,16 +948,18 @@ void WorkerCoreExecutor::recv_logic() {
                 // 在模拟开始时接收配置，接收完毕之后发送一个ACK包给host，此原语需要对prim_queue进行压入，此原语执行完毕之后，进入RECV_DATA
                 if (wait_send) {
                     // ACK 是控制消息，使用控制信道
-                    while (!atomic_helper_lock(sc_time_stamp(), 3) ||
-                           !ctrl_channel_avail_i.read()) {
-                            wait(CYCLE, SC_NS);
-                    }
+                    while (!ctrl_channel_avail_i.read())
+                        wait(CYCLE, SC_NS);
+                    while (!atomic_helper_lock(sc_time_stamp(), 3))
+                        wait(CYCLE, SC_NS);
 
                     // 正在等待向host发送ack包（CONFIG ACK；tag 契约 = RECV_CONF 的 prim->tag_id == 0，
                     // 现由 Recv_prim 类内默认值 + 显式构造保证确定，不再是未初始化 UB）。
-                    send_buffer =
-                        Msg(MSG_TYPE::ACK, HostEndpointOfDie(DieOfGlobal(cid)), prim->tag_id, cid);
-                    ev_send_helper.notify(0, SC_NS);
+                    const Msg ack(
+                        MSG_TYPE::ACK,
+                        HostEndpointOfDie(DieOfGlobal(cid)), prim->tag_id,
+                        cid);
+                    send_serialized_wire(SerializeMsg(ack), true);
 
                     LOG_DEBUG(NETWORK) << "Core " << cid << " <- CONFIG";
 
@@ -1217,6 +1133,24 @@ void WorkerCoreExecutor::task_logic() {
                        << p->name;
 
         delay = p->taskCoreDefault(context);
+        if (event_engine != nullptr) {
+            if (auto *npu = dynamic_cast<NpuBase *>(p)) {
+                const NpuCostSnapshot &cost = npu->lastCostSnapshot();
+                event_engine->add_event(
+                    "Core " + ToHexString(cid), "Compute_cost", "i",
+                    Trace_event_util(
+                        p->name,
+                        {{"compute_cycle_ns", cost.compute_cycle_ns},
+                         {"dram_time_ns", cost.dram_time_ns},
+                         {"exu_cycle_ns", cost.exu_cycle_ns},
+                         {"exu_ops", cost.ops.exu},
+                         {"overlap_delay_ns", cost.overlap_delay_ns},
+                         {"sfu_cycle_ns", cost.sfu_cycle_ns},
+                         {"sfu_ops", cost.ops.sfu},
+                         {"vec_cycle_ns", cost.vec_cycle_ns},
+                         {"vec_ops", cost.ops.vec}}));
+            }
+        }
         const long delay_cycles =
             (static_cast<long>(delay) + CYCLE - 1) / CYCLE;
         if (delay_cycles > g_protocol_watchdog_cycles) {
@@ -1296,19 +1230,19 @@ void WorkerCoreExecutor::req_logic() {
                 // 发送ack包
                 // ACK 是控制消息，使用控制信道
                 while (ack_queue.size()) {
-                    while (!atomic_helper_lock(sc_time_stamp(), 3) ||
-                           !ctrl_channel_avail_i.read()) {
-                            wait(CYCLE, SC_NS);
-                    }
+                    while (!ctrl_channel_avail_i.read())
+                        wait(CYCLE, SC_NS);
+                    while (!atomic_helper_lock(sc_time_stamp(), 3))
+                        wait(CYCLE, SC_NS);
 
                     Msg req = ack_queue.front();
                     ack_queue.pop();
 
                     int des = req.source_;
-                    send_buffer = Msg(MSG_TYPE::ACK, des, des, cid);
-                    send_buffer.subflow_ = req.subflow_;
-                    PinControlMsgExit(send_buffer);
-                    ev_send_helper.notify(0, SC_NS);
+                    Msg ack(MSG_TYPE::ACK, des, des, cid);
+                    ack.subflow_ = req.subflow_;
+                    PinControlMsgExit(ack);
+                    send_serialized_wire(SerializeMsg(ack), true);
 
                     LOG_DEBUG(NETWORK) << "Core " << cid << " -> ACK["
                                        << req.subflow_ << "] -> " << des;

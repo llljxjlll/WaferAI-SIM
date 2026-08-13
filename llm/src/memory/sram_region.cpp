@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -58,6 +59,44 @@ std::string RegionLabel(const RegionConfig &region) {
     std::ostringstream os;
     os << "SRAM region '" << region.name << "'";
     return os.str();
+}
+
+bool IsPowerOfTwo(uint64_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+uint64_t EffectiveAlignment(uint64_t configured, uint64_t requested) {
+    if (requested == 0) return configured;
+    if (!IsPowerOfTwo(requested))
+        throw std::invalid_argument(
+            "SRAM requested alignment must be a power of two");
+    const uint64_t divisor = std::gcd(configured, requested);
+    const uint64_t multiplier = requested / divisor;
+    if (configured > std::numeric_limits<uint64_t>::max() / multiplier)
+        throw std::overflow_error(
+            "SRAM effective alignment overflows uint64_t");
+    return configured * multiplier;
+}
+
+template <typename Span>
+void MergeSpans(std::vector<Span> *spans) {
+    std::sort(spans->begin(), spans->end(),
+              [](const auto &a, const auto &b) {
+                  return a.offset < b.offset;
+              });
+    std::vector<Span> merged;
+    for (const auto &span : *spans) {
+        if (merged.empty() ||
+            merged.back().offset + merged.back().size_bytes < span.offset) {
+            merged.push_back(span);
+        } else {
+            const uint64_t end = std::max(
+                merged.back().offset + merged.back().size_bytes,
+                span.offset + span.size_bytes);
+            merged.back().size_bytes = end - merged.back().offset;
+        }
+    }
+    *spans = std::move(merged);
 }
 
 } // namespace
@@ -377,20 +416,32 @@ ResolvedRange RegionTable::ResolveAbsolute(uint64_t address,
 
 Allocation RegionTable::Allocate(std::string_view region_name,
                                  uint64_t size_bytes, std::string label,
-                                 AllocationLifetime lifetime) {
+                                 AllocationLifetime lifetime,
+                                 uint64_t alignment_bytes) {
     if (size_bytes == 0)
         throw std::invalid_argument("SRAM allocation size must be non-zero");
     const int region_id = RegionId(region_name);
     const auto &region = Region(region_id);
     if (region.allocator != AllocatorKind::kBlock)
         throw std::invalid_argument("fixed SRAM region cannot allocate blocks");
+    if (!label.empty()) {
+        for (const auto &[id, allocation] : allocations_) {
+            (void)id;
+            if (allocation.label == label)
+                throw std::invalid_argument(
+                    "duplicate SRAM allocation label: " + label);
+        }
+    }
+    const uint64_t effective_alignment = EffectiveAlignment(
+        config_.allocation_alignment_bytes, alignment_bytes);
     const uint64_t aligned =
         AlignUp(size_bytes, config_.allocation_alignment_bytes);
     auto &spans = free_spans_.at(region_id);
     for (size_t span_index = 0; span_index < spans.size(); ++span_index) {
         const FreeSpan original = spans[span_index];
-        const uint64_t start =
-            AlignUp(original.offset, config_.allocation_alignment_bytes);
+        const uint64_t absolute_start = AlignUp(
+            region.base_bytes + original.offset, effective_alignment);
+        const uint64_t start = absolute_start - region.base_bytes;
         const uint64_t padding = start - original.offset;
         if (padding > original.size_bytes ||
             aligned > original.size_bytes - padding)
@@ -399,21 +450,28 @@ Allocation RegionTable::Allocate(std::string_view region_name,
         const uint64_t alloc_end = start + aligned;
         const FreeSpan before{original.offset, padding};
         const FreeSpan after{alloc_end, old_end - alloc_end};
-        spans.erase(spans.begin() + span_index);
+        auto updated_spans = spans;
+        updated_spans.erase(updated_spans.begin() + span_index);
         size_t insert_index = span_index;
         if (before.size_bytes != 0) {
-            spans.insert(spans.begin() + insert_index, before);
+            updated_spans.insert(updated_spans.begin() + insert_index, before);
             ++insert_index;
         }
         if (after.size_bytes != 0)
-            spans.insert(spans.begin() + insert_index, after);
+            updated_spans.insert(updated_spans.begin() + insert_index, after);
 
+        if (next_allocation_id_ == 0)
+            throw std::overflow_error("SRAM allocation ID space is exhausted");
         Allocation allocation;
-        allocation.id = next_allocation_id_++;
-        allocation.range = {region.base_bytes + start, aligned, region_id};
+        allocation.id = next_allocation_id_;
+        allocation.range = {absolute_start, aligned, region_id};
         allocation.label = std::move(label);
         allocation.lifetime = lifetime;
-        allocations_.emplace(allocation.id, allocation);
+        const auto inserted = allocations_.emplace(allocation.id, allocation);
+        if (!inserted.second)
+            throw std::logic_error("duplicate SRAM allocation ID");
+        spans.swap(updated_spans);
+        ++next_allocation_id_;
         TraceLifecycle("SRAM_region_alloc", "B", allocation.id,
                        allocation.range.address, allocation.range.size_bytes,
                        allocation.label);
@@ -427,15 +485,31 @@ Allocation RegionTable::Allocate(std::string_view region_name,
 
 Allocation RegionTable::AllocateAt(
     std::string_view region_name, uint64_t offset_bytes,
-    uint64_t size_bytes, std::string label, AllocationLifetime lifetime) {
+    uint64_t size_bytes, std::string label, AllocationLifetime lifetime,
+    uint64_t alignment_bytes) {
     if (size_bytes == 0)
         throw std::invalid_argument("SRAM allocation size must be non-zero");
     const int region_id = RegionId(region_name);
     const auto &region = Region(region_id);
     if (region.allocator != AllocatorKind::kBlock)
         throw std::invalid_argument("fixed SRAM region cannot allocate blocks");
-    if (offset_bytes % config_.allocation_alignment_bytes != 0)
-        throw std::invalid_argument("SRAM fixed allocation offset is not aligned");
+    if (!label.empty()) {
+        for (const auto &[id, allocation] : allocations_) {
+            (void)id;
+            if (allocation.label == label)
+                throw std::invalid_argument(
+                    "duplicate SRAM allocation label: " + label);
+        }
+    }
+    const uint64_t effective_alignment = EffectiveAlignment(
+        config_.allocation_alignment_bytes, alignment_bytes);
+    if (region.base_bytes >
+        std::numeric_limits<uint64_t>::max() - offset_bytes)
+        throw std::overflow_error("SRAM fixed allocation address overflows");
+    const uint64_t absolute_address = region.base_bytes + offset_bytes;
+    if (absolute_address % effective_alignment != 0)
+        throw std::invalid_argument(
+            "SRAM fixed allocation address is not aligned");
     const uint64_t aligned =
         AlignUp(size_bytes, config_.allocation_alignment_bytes);
     const ByteRange wanted{offset_bytes, aligned};
@@ -450,21 +524,27 @@ Allocation RegionTable::AllocateAt(
         const FreeSpan before{original.offset,
                               offset_bytes - original.offset};
         const FreeSpan after{wanted.End(), original_end - wanted.End()};
-        spans.erase(spans.begin() + index);
+        auto updated_spans = spans;
+        updated_spans.erase(updated_spans.begin() + index);
         size_t insert = index;
         if (before.size_bytes != 0) {
-            spans.insert(spans.begin() + insert, before);
+            updated_spans.insert(updated_spans.begin() + insert, before);
             ++insert;
         }
         if (after.size_bytes != 0)
-            spans.insert(spans.begin() + insert, after);
+            updated_spans.insert(updated_spans.begin() + insert, after);
+        if (next_allocation_id_ == 0)
+            throw std::overflow_error("SRAM allocation ID space is exhausted");
         Allocation allocation;
-        allocation.id = next_allocation_id_++;
-        allocation.range = {region.base_bytes + offset_bytes, aligned,
-                            region_id};
+        allocation.id = next_allocation_id_;
+        allocation.range = {absolute_address, aligned, region_id};
         allocation.label = std::move(label);
         allocation.lifetime = lifetime;
-        allocations_.emplace(allocation.id, allocation);
+        const auto inserted = allocations_.emplace(allocation.id, allocation);
+        if (!inserted.second)
+            throw std::logic_error("duplicate SRAM allocation ID");
+        spans.swap(updated_spans);
+        ++next_allocation_id_;
         TraceLifecycle("SRAM_region_alloc", "B", allocation.id,
                        allocation.range.address, allocation.range.size_bytes,
                        allocation.label);
@@ -484,19 +564,35 @@ const Allocation &RegionTable::ResizeAllocation(uint64_t allocation_id,
     if (size_bytes == 0)
         throw std::invalid_argument("SRAM allocation size must be non-zero");
     Allocation &allocation = it->second;
+    if (range_busy_probe_ && range_busy_probe_(
+            {allocation.range.address, allocation.range.size_bytes}))
+        throw std::runtime_error(
+            "cannot resize SRAM allocation with outstanding accesses");
     const uint64_t aligned =
         AlignUp(size_bytes, config_.allocation_alignment_bytes);
     const uint64_t old_size = allocation.range.size_bytes;
-    if (aligned == old_size) return allocation;
+    if (aligned == old_size) {
+        TraceLifecycle("SRAM_region_resize", "B", allocation.id,
+                       allocation.range.address, aligned, allocation.label);
+        TraceLifecycle("SRAM_region_resize", "E", allocation.id,
+                       allocation.range.address, aligned, allocation.label);
+        return allocation;
+    }
     const auto &region = Region(allocation.range.region_id);
     const uint64_t offset = allocation.range.address - region.base_bytes;
-    if (offset + aligned > region.size_bytes)
+    if (offset > region.size_bytes || aligned > region.size_bytes - offset)
         throw std::out_of_range("resized SRAM allocation exceeds region");
     auto &spans = free_spans_.at(allocation.range.region_id);
     if (aligned < old_size) {
-        spans.push_back({offset + aligned, old_size - aligned});
+        auto updated_spans = spans;
+        updated_spans.push_back({offset + aligned, old_size - aligned});
+        MergeSpans(&updated_spans);
+        TraceLifecycle("SRAM_region_resize", "B", allocation.id,
+                       allocation.range.address, aligned, allocation.label);
         allocation.range.size_bytes = aligned;
-        MergeFreeSpans(allocation.range.region_id);
+        spans.swap(updated_spans);
+        TraceLifecycle("SRAM_region_resize", "E", allocation.id,
+                       allocation.range.address, aligned, allocation.label);
         return allocation;
     }
     const uint64_t grow_begin = offset + old_size;
@@ -507,14 +603,21 @@ const Allocation &RegionTable::ResizeAllocation(uint64_t allocation_id,
         if (grow_begin < original.offset || grow_end > original_end) continue;
         const FreeSpan before{original.offset, grow_begin - original.offset};
         const FreeSpan after{grow_end, original_end - grow_end};
-        spans.erase(spans.begin() + index);
+        auto updated_spans = spans;
+        updated_spans.erase(updated_spans.begin() + index);
         size_t insert = index;
         if (before.size_bytes != 0) {
-            spans.insert(spans.begin() + insert, before);
+            updated_spans.insert(updated_spans.begin() + insert, before);
             ++insert;
         }
-        if (after.size_bytes != 0) spans.insert(spans.begin() + insert, after);
+        if (after.size_bytes != 0)
+            updated_spans.insert(updated_spans.begin() + insert, after);
+        TraceLifecycle("SRAM_region_resize", "B", allocation.id,
+                       allocation.range.address, aligned, allocation.label);
         allocation.range.size_bytes = aligned;
+        spans.swap(updated_spans);
+        TraceLifecycle("SRAM_region_resize", "E", allocation.id,
+                       allocation.range.address, aligned, allocation.label);
         return allocation;
     }
     throw std::bad_alloc();
@@ -522,23 +625,7 @@ const Allocation &RegionTable::ResizeAllocation(uint64_t allocation_id,
 
 void RegionTable::MergeFreeSpans(int region_id) {
     auto &spans = free_spans_.at(region_id);
-    std::sort(spans.begin(), spans.end(),
-              [](const FreeSpan &a, const FreeSpan &b) {
-                  return a.offset < b.offset;
-              });
-    std::vector<FreeSpan> merged;
-    for (const auto &span : spans) {
-        if (merged.empty() ||
-            merged.back().offset + merged.back().size_bytes < span.offset) {
-            merged.push_back(span);
-        } else {
-            const uint64_t end = std::max(
-                merged.back().offset + merged.back().size_bytes,
-                span.offset + span.size_bytes);
-            merged.back().size_bytes = end - merged.back().offset;
-        }
-    }
-    spans = std::move(merged);
+    MergeSpans(&spans);
 }
 
 void RegionTable::Free(uint64_t allocation_id,
@@ -549,22 +636,22 @@ void RegionTable::Free(uint64_t allocation_id,
     const Allocation allocation = it->second;
     if (static_cast<uint8_t>(allocation.lifetime) >
         static_cast<uint8_t>(completed_lifetime))
-        throw std::runtime_error(
-            "SRAM allocation lifetime has not ended");
+        throw std::runtime_error("SRAM allocation lifetime has not ended");
     if (range_busy_probe_ &&
         range_busy_probe_(
             {allocation.range.address, allocation.range.size_bytes}))
         throw std::runtime_error(
             "cannot free SRAM allocation with outstanding accesses");
     const auto &region = Region(allocation.range.region_id);
-    free_spans_.at(allocation.range.region_id)
-        .push_back({allocation.range.address - region.base_bytes,
-                    allocation.range.size_bytes});
+    auto updated_spans = free_spans_.at(allocation.range.region_id);
+    updated_spans.push_back({allocation.range.address - region.base_bytes,
+                             allocation.range.size_bytes});
+    MergeSpans(&updated_spans);
     TraceLifecycle("SRAM_region_free", "B", allocation.id,
                    allocation.range.address, allocation.range.size_bytes,
                    allocation.label);
+    free_spans_.at(allocation.range.region_id).swap(updated_spans);
     allocations_.erase(it);
-    MergeFreeSpans(allocation.range.region_id);
     TraceLifecycle("SRAM_region_free", "E", allocation.id,
                    allocation.range.address, allocation.range.size_bytes,
                    allocation.label);
@@ -594,7 +681,20 @@ void RegionTable::RenameAllocation(uint64_t allocation_id, std::string label) {
     const auto it = allocations_.find(allocation_id);
     if (it == allocations_.end())
         throw std::out_of_range("unknown SRAM allocation");
-    it->second.label = std::move(label);
+    if (label.empty())
+        throw std::invalid_argument("SRAM allocation label must not be empty");
+    for (const auto &[id, allocation] : allocations_) {
+        if (id != allocation_id && allocation.label == label)
+            throw std::invalid_argument(
+                "duplicate SRAM allocation label: " + label);
+    }
+    TraceLifecycle("SRAM_region_rename", "B", it->second.id,
+                   it->second.range.address, it->second.range.size_bytes,
+                   it->second.label);
+    it->second.label.swap(label);
+    TraceLifecycle("SRAM_region_rename", "E", it->second.id,
+                   it->second.range.address, it->second.range.size_bytes,
+                   it->second.label);
 }
 
 } // namespace sram

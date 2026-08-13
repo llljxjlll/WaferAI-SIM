@@ -55,6 +55,16 @@ size_t CollectiveReduceNodeCount() {
     return g_reduce_nodes.size();
 }
 
+size_t CollectiveReduceNodeCountForTree(uint16_t tree_id) {
+    if (tree_id == 0)
+        throw std::invalid_argument("production reduce tree_id zero is reserved");
+    std::lock_guard<std::mutex> lock(g_reduce_tree_mutex);
+    size_t count = 0;
+    for (const auto &entry : g_reduce_nodes)
+        if (entry.first.first == tree_id) ++count;
+    return count;
+}
+
 CollReduceTreeNode LookupCollectiveReduceNode(uint16_t tree_id,
                                               uint16_t router_id) {
     std::lock_guard<std::mutex> lock(g_reduce_tree_mutex);

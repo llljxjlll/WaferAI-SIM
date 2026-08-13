@@ -395,7 +395,7 @@ void config_helper_pd::generate_prims(int i) {
         // 每个核生成一个set_batch
         PrimBase *set_batch = new Set_batch(status.batchInfo);
         g_prim_stash.push_back(set_batch);
-        auto segments = set_batch->serialize();
+        auto segments = prim_wire::LegacyTransportSegments(set_batch);
         for (int seg = 0; seg < segments.size(); seg++)
             temp_config.push_back(
                 Msg(!status.batchInfo.size() && core_id % tp_size &&
@@ -417,7 +417,7 @@ void config_helper_pd::generate_prims(int i) {
                         PrimFactory::getInstance().createPrim("Set_addr");
                     auto label = set_addr->prim_context->datapass_label_;
 
-                    if (prim->prim_type & COMP_PRIM) {
+                    if (dynamic_cast<CompBase *>(prim) != nullptr) {
                         for (int i = 0; i < MAX_SPLIT_NUM; i++)
                             label->indata[i] =
                                 prim->prim_context->datapass_label_->indata[i];
@@ -425,13 +425,13 @@ void config_helper_pd::generate_prims(int i) {
                             prim->prim_context->datapass_label_->outdata;
                     }
 
-                    auto segments = set_addr->serialize();
+                    auto segments = prim_wire::LegacyTransportSegments(set_addr);
                     for (int seg = 0; seg < segments.size(); seg++)
                         temp_config.push_back(
                             Msg(false, MSG_TYPE::CONFIG, ++prim_seq, core_id,
                                 seg == segments.size() - 1, segments[seg]));
 
-                    segments = prim->serialize();
+                    segments = prim_wire::LegacyTransportSegments(prim);
                     for (int seg = 0; seg < segments.size(); seg++)
                         temp_config.push_back(
                             Msg(false, MSG_TYPE::CONFIG, ++prim_seq, core_id,

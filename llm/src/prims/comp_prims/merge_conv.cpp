@@ -4,7 +4,7 @@
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 
-REGISTER_PRIM(Merge_conv);
+REGISTER_PRIM(Merge_conv, PrimId::MERGE_CONV);
 
 void Merge_conv::initialize() {
     LOG_ERROR(PRIM) << "Merge_conv::initialize() not implemented";

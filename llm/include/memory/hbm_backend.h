@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <systemc>
 #include <vector>
@@ -17,6 +18,12 @@ struct HBMBackendStats {
     uint64_t completed = 0;
     uint64_t failed = 0;
     sc_core::sc_time service_time = sc_core::SC_ZERO_TIME;
+};
+
+struct HBMDebugSnapshot {
+    uint64_t address = 0;
+    std::vector<uint8_t> payload;
+    std::vector<uint8_t> present;
 };
 
 struct HBMBackendTransaction {
@@ -37,4 +44,19 @@ public:
     virtual ~HBMBackend() = default;
     virtual void Submit(const std::shared_ptr<HBMBackendTransaction> &tx) = 0;
     virtual const HBMBackendStats &Stats() const = 0;
+
+    // Test-only backing access. Non-behavioral backends reject by default.
+    virtual void DebugSeed(uint64_t,
+                           const std::vector<uint8_t> &) {
+        throw std::logic_error(
+            "HBM backend does not support debug seeding");
+    }
+    virtual HBMDebugSnapshot DebugPeek(uint64_t, uint64_t) const {
+        throw std::logic_error(
+            "HBM backend does not support debug peeking");
+    }
+    virtual void DebugRestore(const HBMDebugSnapshot &) {
+        throw std::logic_error(
+            "HBM backend does not support debug restore");
+    }
 };

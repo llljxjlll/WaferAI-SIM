@@ -5,6 +5,11 @@
 
 namespace sram {
 
+struct DebugSnapshot {
+    std::vector<uint8_t> payload;
+    std::vector<uint8_t> valid;
+};
+
 class Storage {
   public:
     explicit Storage(uint64_t capacity_bytes, bool payload_mode = true);
@@ -18,6 +23,11 @@ class Storage {
     void Clear(uint64_t address, uint64_t size_bytes);
     bool IsValid(uint64_t address, uint64_t size_bytes) const;
     uint64_t Signature(uint64_t address, uint64_t size_bytes) const;
+
+    // Test-only raw state access used by AccessUnit before sc_start or after
+    // simulation stops. Snapshot preserves validity and payload/fingerprint.
+    DebugSnapshot DebugPeek(uint64_t address, uint64_t size_bytes) const;
+    void DebugRestore(uint64_t address, const DebugSnapshot &snapshot);
 
   private:
     void CheckRange(uint64_t address, uint64_t size_bytes) const;

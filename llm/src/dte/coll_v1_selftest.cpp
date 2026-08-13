@@ -1,6 +1,8 @@
 #include "dte/coll_plan.h"
 #include "dte/coll_runtime.h"
 #include "prims/norm_prims.h"
+#include "workercore/prim_refill_policy.h"
+#include "workercore/serialized_wire_queue.h"
 #include "systemc.h"
 
 #include <iostream>
@@ -60,6 +62,50 @@ int RunCollV1SelfTest() {
     Check(Count(ag, CollActionKind::SEND) == 2 && Count(ag, CollActionKind::RECV) == 2 &&
               Count(ag, CollActionKind::BARRIER) == 3,
           "allgather serializes source phases without losing flows");
+    Check(!SendPrimMayRefill(SEND_REQ, COLL_TAG_BASE) &&
+              !RecvPrimMayRefill(RECV_ACK, COLL_TAG_BASE) &&
+              !SendPrimMayRefill(SEND_DATA, COLL_TAG_MAX) &&
+              !RecvPrimMayRefill(RECV_DATA, COLL_TAG_MAX),
+          "all four reserved-tag collective endpoint primitives never refill");
+    Check(SendPrimMayRefill(SEND_REQ, 7) &&
+              RecvPrimMayRefill(RECV_ACK, 7) &&
+              SendPrimMayRefill(SEND_DATA, 7) &&
+              RecvPrimMayRefill(RECV_DATA, 7) &&
+              !SendPrimMayRefill(SEND_DONE, 0) &&
+              !RecvPrimMayRefill(RECV_CONF, 0),
+          "regular loop endpoints retain refill while terminal/config do not");
+
+    size_t n3_endpoint_prims = 0;
+    size_t n3_refillable_prims = 0;
+    SerializedWireQueue n3_wires(24);
+    for (uint16_t rank = 0; rank < 3; ++rank) {
+        const auto actions = PlanTier0Collective(
+            Make(CollOp::ALLGATHER, rank, 3), rank);
+        for (const auto &action : actions) {
+            const int tag = COLL_TAG_BASE +
+                static_cast<int>(rank * 3 + action.phase_id);
+            if (action.kind == CollActionKind::SEND) {
+                const bool may_refill =
+                    SendPrimMayRefill(SEND_REQ, tag) ||
+                    RecvPrimMayRefill(RECV_ACK, tag) ||
+                    SendPrimMayRefill(SEND_DATA, tag);
+                n3_refillable_prims += may_refill ? 3 : 0;
+                n3_endpoint_prims += 3;
+                for (int wire = 0; wire < 3; ++wire)
+                    (void)n3_wires.Enqueue(sc_bv<256>(tag + wire),
+                                           wire != 2);
+            } else if (action.kind == CollActionKind::RECV) {
+                n3_refillable_prims +=
+                    RecvPrimMayRefill(RECV_DATA, tag) ? 1 : 0;
+                ++n3_endpoint_prims;
+                (void)n3_wires.Enqueue(sc_bv<256>(tag), false);
+            }
+        }
+    }
+    while (!n3_wires.Empty()) (void)n3_wires.CompleteFront();
+    Check(n3_endpoint_prims == 24 && n3_refillable_prims == 0 &&
+              n3_wires.Empty() && n3_wires.Size() == 0,
+          "loop=1 N=3 AllGather endpoint queue cannot restart after final barrier and drains wires");
     auto a2a = PlanTier0Collective(Make(CollOp::ALLTOALL, 2, 3), 2);
     Check(Count(a2a, CollActionKind::SEND) == 2 && Count(a2a, CollActionKind::RECV) == 2 &&
               Count(a2a, CollActionKind::BARRIER) == 3,
@@ -100,3 +146,7 @@ int RunCollV1SelfTest() {
               << " (" << total << " checks)" << std::endl;
     return fails;
 }
+
+#ifdef COLL_V1_SELFTEST_MAIN
+int sc_main(int, char **) { return RunCollV1SelfTest(); }
+#endif

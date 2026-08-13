@@ -1,0 +1,116 @@
+{
+  "vars": {
+    "B": 1,
+    "T": 4,
+    "C": 64,
+    "OC": 64,
+    "NH": 4,
+    "R": 3,
+    "N": 256,
+    "loop": 1,
+    "matmul_input": 0,
+    "matmul_data": 4096,
+    "matmul_output": 8192,
+    "attention_input": 8192,
+    "attention_data": 9216,
+    "attention_output": 10240,
+    "layernorm_input": 10240,
+    "layernorm_data": 12288,
+    "layernorm_output": 13312,
+    "gelu_input": 13312,
+    "gelu_data": 14336,
+    "gelu_output": 15360
+  },
+  "pipeline": 1,
+  "source": [
+    {
+      "dest": 0,
+      "size": "N"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": 0,
+      "cores": [
+        {
+          "id": 0,
+          "loop": "loop",
+          "worklist": [
+            {
+              "recv_cnt": 1,
+              "prims": [
+                {
+                  "type": "Matmul_f",
+                  "B": "B",
+                  "T": "T",
+                  "C": "C",
+                  "OC": "OC",
+                  "sram_address": {
+                    "indata": "dram_label p3diff_input",
+                    "outdata": "p3diff_matmul_out"
+                  },
+                  "dram_address": {
+                    "input": "matmul_input",
+                    "data": "matmul_data",
+                    "output": "matmul_output"
+                  }
+                },
+                {
+                  "type": "Attention_f",
+                  "B": "B",
+                  "T": "T",
+                  "C": "C",
+                  "NH": "NH",
+                  "R": "R",
+                  "sram_address": {
+                    "indata": "p3diff_matmul_out",
+                    "outdata": "p3diff_attention_out"
+                  },
+                  "dram_address": {
+                    "input": "attention_input",
+                    "data": "attention_data",
+                    "output": "attention_output"
+                  }
+                },
+                {
+                  "type": "Layernorm_f",
+                  "B": "B",
+                  "T": "T",
+                  "C": "C",
+                  "sram_address": {
+                    "indata": "p3diff_attention_out",
+                    "outdata": "p3diff_layernorm_out"
+                  },
+                  "dram_address": {
+                    "input": "layernorm_input",
+                    "data": "layernorm_data",
+                    "output": "layernorm_output"
+                  }
+                },
+                {
+                  "type": "Gelu_f",
+                  "N": "N",
+                  "sram_address": {
+                    "indata": "p3diff_layernorm_out",
+                    "outdata": "p3diff_result"
+                  },
+                  "dram_address": {
+                    "input": "gelu_input",
+                    "data": "gelu_data",
+                    "output": "gelu_output"
+                  }
+                }
+              ],
+              "cast": [
+                {
+                  "dest": -1,
+                  "loopout": "true"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

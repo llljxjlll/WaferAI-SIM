@@ -56,6 +56,12 @@ inline CollDescriptor DeserializeCollDescriptor(const std::vector<sc_bv<128>> &w
         throw std::invalid_argument("invalid collective descriptor magic");
     if (wire[0].range(23, 16).to_uint() != COLL_WIRE_VERSION)
         throw std::invalid_argument("unsupported collective descriptor version");
+    if (wire[0].range(127, 120).or_reduce())
+        throw std::invalid_argument(
+            "collective descriptor header reserved bits are non-zero");
+    if (wire[4].range(127, 64).or_reduce())
+        throw std::invalid_argument(
+            "collective descriptor stride reserved bits are non-zero");
     const size_t encoded_segments = wire[0].range(119, 104).to_uint();
     const size_t group_size = wire[0].range(103, 88).to_uint();
     const size_t expected = COLL_WIRE_FIXED_SEGMENTS +
@@ -88,6 +94,14 @@ inline CollDescriptor DeserializeCollDescriptor(const std::vector<sc_bv<128>> &w
     d.src_addr = wire[3].range(63, 0).to_uint64();
     d.dst_addr = wire[3].range(127, 64).to_uint64();
     d.stride_bits = wire[4].range(63, 0).to_uint64();
+    if (group_size != 0 &&
+        (group_size % COLL_WIRE_GROUP_IDS_PER_SEGMENT) != 0) {
+        const size_t used = group_size % COLL_WIRE_GROUP_IDS_PER_SEGMENT;
+        const int first_reserved = static_cast<int>(used * 16);
+        if (wire.back().range(127, first_reserved).or_reduce())
+            throw std::invalid_argument(
+                "collective descriptor group padding is non-zero");
+    }
     d.group.reserve(group_size);
     for (size_t i = 0; i < group_size; ++i) {
         const size_t segment = COLL_WIRE_FIXED_SEGMENTS + i / COLL_WIRE_GROUP_IDS_PER_SEGMENT;

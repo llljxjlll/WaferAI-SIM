@@ -91,7 +91,7 @@ void config_helper_gpu::fill_queue_config(queue<Msg> *q) {
             batchInfo.push_back(Stage(i + 1, PREFILL, GetDefinedParam("T")));
 
         PrimBase *set_batch = new Set_batch(batchInfo, 1);
-        auto segments = set_batch->serialize();
+        auto segments = prim_wire::LegacyTransportSegments(set_batch);
         for (int seg = 0; seg < segments.size(); seg++)
             single_rep.push_back(
                 Msg(false, MSG_TYPE::CONFIG, single_rep.size() + 1, config.id,
@@ -99,7 +99,7 @@ void config_helper_gpu::fill_queue_config(queue<Msg> *q) {
 
         for (auto work : config.worklist) {
             for (auto prim : work.prims_last_loop) {
-                auto segments = prim->serialize();
+                auto segments = prim_wire::LegacyTransportSegments(prim);
                 for (int seg = 0; seg < segments.size(); seg++)
                     single_rep.push_back(Msg(
                         false, MSG_TYPE::CONFIG, single_rep.size() + 1,

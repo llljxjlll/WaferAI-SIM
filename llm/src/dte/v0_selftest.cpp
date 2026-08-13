@@ -2,6 +2,7 @@
 
 #include "common/config.h"
 #include "dte/dte_streaming.h"
+#include "dte/p2p_payload.h"
 #include "defs/spec.h"
 #include "macros/macros.h"
 #include "trace/Event_engine.h"
@@ -319,6 +320,26 @@ int RunDTEV0SelfTest() {
                   legacy_wire.dte_stream_source_done_ns_ == 0 &&
                   legacy_wire.dte_stream_network_tail_cycles_ == 0,
               "DTE V2b legacy DATA retains raw decode that consumers must gate");
+
+        std::vector<uint8_t> endpoint_bytes(35);
+        for (size_t i = 0; i < endpoint_bytes.size(); ++i)
+            endpoint_bytes[i] = static_cast<uint8_t>(0xe0U + i);
+        P2pBuiltPayload endpoint = BuildP2pPayload(
+            P2pFlowKey{0, 1, 9, 0}, 0x1234U, endpoint_bytes);
+        const Msg endpoint_fragment = endpoint.fragments.front();
+        const sc_bv<256> endpoint_wire = SerializeMsg(endpoint_fragment);
+        const Msg endpoint_decoded = DeserializeMsg(endpoint_wire);
+        check(SerializeMsg(endpoint_decoded) == endpoint_wire &&
+                  endpoint_decoded.data_ == endpoint_fragment.data_ &&
+                  endpoint_decoded.dte_stream_source_first_ns_ == 0 &&
+                  endpoint_decoded.dte_stream_source_done_ns_ == 0 &&
+                  endpoint_decoded.dte_stream_network_tail_cycles_ == 0,
+              "P2P endpoint DATA preserves all 128 payload bits across repeated wire encode");
+        Msg endpoint_with_legacy_timing = endpoint_fragment;
+        endpoint_with_legacy_timing.dte_stream_source_first_ns_ = 1;
+        check(throwsExpected<std::invalid_argument>(
+                  [&]() { (void)SerializeMsg(endpoint_with_legacy_timing); }),
+              "P2P endpoint DATA rejects legacy in-payload timing metadata");
     }
 
     // 配置负例不需要构造 SystemC module。

@@ -119,6 +119,12 @@ void MemEndpointUnit::CompletionLoop() {
             } else {
                 resp.length_bytes = 0;
             }
+            // PendingEntry owns the backend transaction while the transaction
+            // completion callback captures PendingEntry.  The transaction is
+            // complete here, so break that ownership cycle before waking the
+            // requester; otherwise every completed request survives teardown.
+            entry->backend_tx->complete = {};
+            entry->backend_tx.reset();
             in_flight_--;
             stats_.completed++;
             stats_.response_time += now - entry->arrival;

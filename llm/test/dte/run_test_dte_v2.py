@@ -17,7 +17,7 @@ WORKLOADS = {
     4: "../llm/test/dte/workload/v2_parallel_four.json",
 }
 
-EXPECTED_FINISH_NS = {1: 579, 2: 781, 4: 1125}
+EXPECTED_FINISH_NS = {1: 641, 2: 903, 4: 1371}
 EXPECTED_SOURCE_COMPLETION_NS = {
     (1, 1): [36],
     (1, 2): [36],
@@ -256,7 +256,7 @@ def main() -> int:
     tests.append((
         "parallel DTE-off compatibility",
         off.returncode == 0
-        and off.finish_ns == 1073
+        and off.finish_ns == 1323
         and not dte_spans(off.trace_events),
         f"exit={off.returncode}, finish={off.finish_ns} ns, no DTE spans",
     ))
@@ -288,7 +288,7 @@ def main() -> int:
         tests.append((
             f"mixed lengths, same destination, channel={channel_count}",
             result.returncode == 0
-            and result.finish_ns == 873
+            and result.finish_ns == 985
             and trace_ok,
             f"finish={result.finish_ns} ns; {detail}",
         ))
@@ -301,8 +301,8 @@ def main() -> int:
         "parallel pipeline/refill lifecycle",
         refill_off.returncode == 0
         and refill_on.returncode == 0
-        and refill_off.finish_ns == 867
-        and refill_on.finish_ns == 951
+        and refill_off.finish_ns == 965
+        and refill_on.finish_ns == 1051
         and not dte_spans(refill_off.trace_events)
         and refill_ok,
         f"off/on={refill_off.finish_ns}/{refill_on.finish_ns} ns; "

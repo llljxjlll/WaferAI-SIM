@@ -182,5 +182,6 @@ void ProgramCollectiveReduceNode(uint16_t tree_id, uint16_t router_id,
                                  const CollReduceTreeNode &node);
 size_t EraseCollectiveReduceTree(uint16_t tree_id);
 size_t CollectiveReduceNodeCount();
+size_t CollectiveReduceNodeCountForTree(uint16_t tree_id);
 CollReduceTreeNode LookupCollectiveReduceNode(uint16_t tree_id,
                                               uint16_t router_id);

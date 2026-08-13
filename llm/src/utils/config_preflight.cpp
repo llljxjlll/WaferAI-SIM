@@ -84,6 +84,12 @@ void ValidateConfigInputs(const std::string &workload,
         ValidateWorkloadRendezvous(workload_json, 0);
     }
 
+    ValidatePlatformConfigInputs(hardware, simulation, mapping);
+}
+
+void ValidatePlatformConfigInputs(const std::string &hardware,
+                                  const std::string &simulation,
+                                  const std::string &mapping) {
     const json hardware_json = ReadJson(hardware, "hardware");
     Require(hardware_json, "x", "hardware", hardware);
     Require(hardware_json, "cores", "hardware", hardware);

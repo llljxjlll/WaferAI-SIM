@@ -162,12 +162,20 @@ struct R4Bench : sc_module {
         Check(hbm.Peek(0x2000, transformed.size()) == transformed,
               "DTE SPM_TO_DRAM writes SRAM payload to HBM");
 
+        const uint64_t named_source = regions.Resolve(
+            "double_b", 0, transformed.size(), sram::Initiator::kDte,
+            sram::Command::kRead).address;
+        const uint64_t named_destination = regions.Resolve(
+            "double_a", 1024, transformed.size(), sram::Initiator::kDte,
+            sram::Command::kWrite).address;
         tracker.IssueToken(13, transformed.size() * 8,
-                           DteDir::SPM_TO_SPM, 2048, transformed.size(),
-                           DTE_ASYNC_INVALID_REMOTE_PEER, 1024, 0);
+                           DteDir::SPM_TO_SPM, named_source,
+                           transformed.size(), DTE_ASYNC_INVALID_REMOTE_PEER,
+                           named_destination, 0);
         tracker.WaitToken(13);
         Check(storage.Read(1024, transformed.size()) == transformed,
-              "DTE SPM_TO_SPM copies real bytes between SRAM regions");
+              "DTE SPM_TO_SPM copies real bytes between independently "
+              "resolved SRAM regions");
 
         bool size_mismatch_rejected = false;
         try {
@@ -189,11 +197,10 @@ struct R4Bench : sc_module {
         tracker.IssueToken(32, transformed.size() * 8,
                            DteDir::DRAM_TO_SPM, 512, transformed.size(),
                            DTE_ASYNC_INVALID_REMOTE_PEER, 0x5000, 0);
-        tracker.WaitToken(31);
-        tracker.WaitToken(32);
+        tracker.Fence();
         Check(storage.Read(256, pattern.size()) == pattern &&
                   storage.Read(512, transformed.size()) == transformed,
-              "two DTE memory workers commit independent transfers");
+              "FENCE drains two independent DTE memory workers");
 
         hbm.Seed(0x6000, pattern);
         rollback_tracker.IssueToken(

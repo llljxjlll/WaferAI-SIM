@@ -16,7 +16,7 @@ public:
     void deserialize(vector<sc_bv<128>> buffer);
     void printSelf();
 
-    Clear_sram() { name = "Clear_sram"; }
+    Clear_sram() { name = "Clear_sram"; setPrimMainCategory(MEM_PRIM); }
 };
 
 
@@ -32,7 +32,7 @@ public:
     void deserialize(vector<sc_bv<128>> buffer);
     void printSelf();
 
-    Load_prim() { name = "Load_prim"; }
+    Load_prim() { name = "Load_prim"; setPrimMainCategory(MEM_PRIM); }
 };
 
 
@@ -58,8 +58,9 @@ public:
     void deserialize(vector<sc_bv<128>> segments);
     void parseJson(json j);
     void printSelf();
+    void refreshPrimType();
 
-    Lsu_mem_prim() { name = "Lsu_mem"; }
+    Lsu_mem_prim() { name = "Lsu_mem"; refreshPrimType(); }
 };
 
 enum class SramPipelineEngine : uint8_t { kLsu = 0, kDte = 1 };
@@ -84,7 +85,7 @@ public:
     void parseJson(json j);
     void printSelf();
 
-    Sram_pipeline_prim() { name = "Sram_pipeline"; }
+    Sram_pipeline_prim() { name = "Sram_pipeline"; setPrimMainCategory(MEM_PRIM); }
 };
 
 class Dte_async_prim : public PrimBase {
@@ -97,6 +98,11 @@ public:
     uint64_t spm_size = 0; // byte
     std::string sram_region;
     uint64_t sram_offset = 0;
+    // SPM_TO_SPM may independently name its destination region. Existing
+    // sram_region/sram_offset remain the source/local side for wire
+    // compatibility with DRAM directions and legacy JSON.
+    std::string destination_sram_region;
+    uint64_t destination_sram_offset = 0;
     // V3b aggregation compatibility metadata. Legacy V3a workloads may omit it
     // while aggregation is disabled.
     uint32_t remote_peer = DTE_ASYNC_INVALID_REMOTE_PEER;
@@ -110,8 +116,9 @@ public:
     void deserialize(vector<sc_bv<128>> segments);
     void parseJson(json j);
     void printSelf();
+    void refreshPrimType();
 
-    Dte_async_prim() { name = "Dte_async"; }
+    Dte_async_prim() { name = "Dte_async"; refreshPrimType(); }
 };
 
 class Collective_prim : public PrimBase {
@@ -130,7 +137,7 @@ public:
     void parseJson(json j);
     void printSelf();
 
-    Collective_prim() { name = "Collective_prim"; }
+    Collective_prim() { name = "Collective_prim"; setPrimMainCategory(SYNC_PRIM); }
 };
 
 class Reduce_compute_prim : public PrimBase {
@@ -142,7 +149,7 @@ public:
     void deserialize(vector<sc_bv<128>> segments);
     void printSelf();
 
-    Reduce_compute_prim() { name = "Reduce_compute_prim"; }
+    Reduce_compute_prim() { name = "Reduce_compute_prim"; setPrimMainCategory(COMM_PRIM); }
 };
 
 class Collective_data_prim : public PrimBase {
@@ -159,6 +166,10 @@ public:
     CollDescriptor descriptor;
     uint16_t tree_id = 0;
     uint32_t core_vector_beats = 0;
+    // Internal P7 STREAM_V2 generation. Legacy serialized Collective_data
+    // records retain their canonical zero/default representation.
+    uint16_t dca_phase_id = 0;
+    uint32_t dca_stream_id = 1;
     Mode mode = Mode::BROADCAST_RX;
 
     int taskCoreDefault(TaskCoreContext &context);
@@ -166,7 +177,7 @@ public:
     void deserialize(vector<sc_bv<128>> segments);
     void printSelf();
 
-    Collective_data_prim() { name = "Collective_data_prim"; }
+    Collective_data_prim() { name = "Collective_data_prim"; setPrimMainCategory(COMM_PRIM); }
 };
 
 
@@ -185,11 +196,12 @@ public:
     void deserialize(vector<sc_bv<128>> buffer);
     void printSelf();
 
-    Recv_prim() { name = "Recv_prim"; }
-    Recv_prim(RECV_TYPE type) : type(type) { name = "Recv_prim"; }
+    Recv_prim() { name = "Recv_prim"; setPrimMainCategory(COMM_PRIM); }
+    Recv_prim(RECV_TYPE type) : type(type) { name = "Recv_prim"; setPrimMainCategory(COMM_PRIM); }
     Recv_prim(RECV_TYPE type, int tag, int cnt)
         : type(type), tag_id(tag), recv_cnt(cnt) {
         name = "Recv_prim";
+        setPrimMainCategory(COMM_PRIM);
     }
 };
 
@@ -230,15 +242,17 @@ public:
 
     void printSelf();
 
-    Send_prim() { name = "Send_prim"; }
-    Send_prim(SEND_TYPE type) : type(type) { name = "Send_prim"; }
+    Send_prim() { name = "Send_prim"; setPrimMainCategory(COMM_PRIM); }
+    Send_prim(SEND_TYPE type) : type(type) { name = "Send_prim"; setPrimMainCategory(COMM_PRIM); }
     Send_prim(SEND_TYPE type, int des, int tag)
         : type(type), des_id(des), tag_id(tag) {
         name = "Send_prim";
+        setPrimMainCategory(COMM_PRIM);
     } // 用于SEND_ACK
     Send_prim(SEND_TYPE type, int des, int max_packet, int tag)
         : des_id(des), type(type), max_packet(max_packet), tag_id(tag) {
         name = "Send_prim";
+        setPrimMainCategory(COMM_PRIM);
     }
 };
 
@@ -253,7 +267,26 @@ public:
     void deserialize(vector<sc_bv<128>> buffer);
 
     void printSelf();
-    Set_addr() { name = "Set_addr"; }
+    Set_addr() { name = "Set_addr"; setPrimMainCategory(MEM_PRIM); }
+};
+
+// Strict internal form of the public SRAM_BIND program instruction. Unlike
+// Set_addr, this binding is consumed by exactly one subsequent NPU compute.
+class Sram_bind_oneshot : public PrimBase {
+public:
+    uint32_t input_count = 0;
+    AddrDatapassLabel datapass_label;
+
+    int taskCoreDefault(TaskCoreContext &context);
+
+    vector<sc_bv<128>> serialize();
+    void deserialize(vector<sc_bv<128>> buffer);
+
+    void printSelf();
+    Sram_bind_oneshot() {
+        name = "Sram_bind_oneshot";
+        setPrimMainCategory(MEM_PRIM);
+    }
 };
 
 class Set_batch : public PrimBase {
@@ -271,18 +304,21 @@ public:
     Set_batch() {
         name = "Set_batch";
         auto_pd = 0;
+        setPrimMainCategory(MEM_PRIM);
     }
 
     Set_batch(vector<Stage> batchInfo) {
         name = "Set_batch";
         this->batch_info = batchInfo;
         auto_pd = 0;
+        setPrimMainCategory(MEM_PRIM);
     }
 
     Set_batch(vector<Stage> batchInfo, int auto_pd) {
         name = "Set_batch";
         this->batch_info = batchInfo;
         this->auto_pd = auto_pd;
+        setPrimMainCategory(MEM_PRIM);
     }
 };
 
@@ -299,5 +335,5 @@ public:
 
     void printSelf();
 
-    Store_prim() { name = "Store_prim"; }
+    Store_prim() { name = "Store_prim"; setPrimMainCategory(MEM_PRIM); }
 };

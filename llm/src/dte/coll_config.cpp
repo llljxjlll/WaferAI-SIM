@@ -264,13 +264,22 @@ NocCollectiveConfig ParseNocCollectiveConfig(const json &noc_config) {
     RejectUnknownKeys(
         coll,
         {"enabled", "tier", "profile", "broadcast_backend",
-         "reduce_backend", "reduce_wire", "allow_legacy_backend", "dca"},
+         "reduce_backend", "reduce_wire", "allow_legacy_backend",
+         "max_trees_per_batch", "dca"},
         "noc.collective");
     if (coll.contains("enabled"))
         result.enabled = coll.at("enabled").get<bool>();
     if (coll.contains("allow_legacy_backend"))
         result.allow_legacy_backend =
             coll.at("allow_legacy_backend").get<bool>();
+    if (coll.contains("max_trees_per_batch")) {
+        const uint64_t value =
+            coll.at("max_trees_per_batch").get<uint64_t>();
+        if (value == 0 || value > kNocCollMaxTreesPerBatch)
+            throw std::invalid_argument(
+                "noc.collective.max_trees_per_batch must be in [1,64]");
+        result.max_trees_per_batch = static_cast<uint16_t>(value);
+    }
 
     std::optional<NocCollProfile> selected_profile;
     if (coll.contains("profile"))

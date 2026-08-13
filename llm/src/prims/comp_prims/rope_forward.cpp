@@ -1,7 +1,8 @@
+#include "isa/published_npu_ops.h"
 #include "prims/comp_prims.h"
 #include "utils/memory_utils.h"
 
-REGISTER_PRIM(rope_forward);
+REGISTER_PRIM(rope_forward, PrimId::ROPE_FORWARD);
 
 void rope_forward::initialize() {
     auto &p = param_value;
@@ -23,8 +24,8 @@ void rope_forward::taskCore(TaskCoreContext &context, string prim_name,
     checkStaticData(context, dram_time, data_chunk_addr["sincos"],
                     GetFromPairedVector(data_chunk, "sincos"), label_sincos);
 
-    auto &p = param_value;
-    exu_ops = 0;
-    sfu_ops = 0;
-    vec_ops = 3 * p["T"] * p["C"];
+    const NpuOps ops = EvaluatePublishedNpuOps(Opcode::ROPE, param_value);
+    exu_ops = ops.exu;
+    sfu_ops = ops.sfu;
+    vec_ops = ops.vec;
 }

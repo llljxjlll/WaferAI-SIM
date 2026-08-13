@@ -302,6 +302,50 @@ void AccessUnit::TraceStage(const char *stage, const char *phase,
         static_cast<unsigned>(trace_request_id));
 }
 
+
+void AccessUnit::DebugSeed(
+    uint64_t address, const std::vector<uint8_t> &payload) {
+    if (sc_core::sc_is_running())
+        throw std::logic_error(
+            "SRAM DebugSeed is forbidden while simulation is running");
+    if (!storage_.payload_mode())
+        throw std::logic_error(
+            "SRAM DebugSeed requires the real payload data path");
+    if (payload.empty())
+        throw std::invalid_argument(
+            "SRAM DebugSeed payload must not be empty");
+    regions_.LocateAbsolute(address, payload.size());
+    storage_.Write(address, payload);
+}
+
+DebugSnapshot AccessUnit::DebugPeek(
+    uint64_t address, uint64_t size_bytes) const {
+    if (sc_core::sc_is_running())
+        throw std::logic_error(
+            "SRAM DebugPeek is forbidden while simulation is running");
+    if (!storage_.payload_mode())
+        throw std::logic_error(
+            "SRAM DebugPeek requires the real payload data path");
+    regions_.LocateAbsolute(address, size_bytes);
+    return storage_.DebugPeek(address, size_bytes);
+}
+
+void AccessUnit::DebugRestore(
+    uint64_t address, const DebugSnapshot &snapshot) {
+    if (sc_core::sc_is_running())
+        throw std::logic_error(
+            "SRAM DebugRestore is forbidden while simulation is running");
+    if (!storage_.payload_mode())
+        throw std::logic_error(
+            "SRAM DebugRestore requires the real payload data path");
+    if (snapshot.payload.empty() ||
+        snapshot.payload.size() != snapshot.valid.size())
+        throw std::invalid_argument(
+            "SRAM DebugRestore snapshot is malformed");
+    regions_.LocateAbsolute(address, snapshot.payload.size());
+    storage_.DebugRestore(address, snapshot);
+}
+
 Response AccessUnit::Access(const Request &request) {
     Response response;
     response.issue_time = sc_time_stamp();

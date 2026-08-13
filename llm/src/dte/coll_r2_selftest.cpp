@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <limits>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -271,6 +272,117 @@ int RunCollR2SelfTest() {
     Check(ArbitrationOrder(NocCollDcaArbitration::ROUND_ROBIN) ==
               std::vector<uint64_t>({1, 3, 2, 4}),
           "round-robin alternates synthetic core and DCA requests");
+
+    {
+        constexpr uint64_t kRequestsPerSource = 32;
+        constexpr uint64_t kLatency = 5;
+        constexpr uint64_t kInitiationInterval = 2;
+        constexpr uint64_t kMaximumSameSourceServiceGap =
+            2 * kInitiationInterval;
+        auto config = PoolConfig(
+            NocCollValueMode::TIMING_ONLY,
+            2 * kRequestsPerSource, 2 * kRequestsPerSource, 1,
+            NocCollDcaArbitration::ROUND_ROBIN);
+        config.timing[0][0] = {kLatency, kInitiationInterval};
+        DcaComputePool pool(config);
+        bool accepted = true;
+        for (uint64_t index = 0; index < kRequestsPerSource; ++index) {
+            accepted = pool.TrySubmit(
+                           DcaRequestSource::CORE, Request(index + 1)) &&
+                       accepted;
+            accepted = pool.TrySubmit(
+                           DcaRequestSource::DCA,
+                           Request(101 + index)) &&
+                       accepted;
+        }
+        Check(accepted && pool.Pending() == 2 * kRequestsPerSource,
+              "sustained RR fixture admits 32 CORE and 32 DCA requests");
+
+        std::vector<DcaPoolResult> results;
+        // Hold the depth-one result queue through the first eight due
+        // completions, then consume only every third cycle.  Issue remains
+        // active while due completions are backpressured.
+        for (uint64_t cycle = 0; cycle < 512 && !pool.Drained(); ++cycle) {
+            pool.Tick(cycle);
+            if (cycle >= 20 && cycle % 3 == 2) {
+                if (auto result = pool.PopResult())
+                    results.push_back(std::move(*result));
+            }
+        }
+        // The last Tick may have filled the result slot on a non-consumption
+        // cycle; finish with consecutive cycles and eager consumption.
+        for (uint64_t cycle = 512; cycle < 640 && !pool.Drained(); ++cycle) {
+            pool.Tick(cycle);
+            Collect(pool, results);
+        }
+
+        Check(pool.Stats().result_backpressure_cycles > 0 &&
+                  pool.Stats().result_peak == 1,
+              "depth-one result backpressure is exercised and bounded");
+        Check(pool.Stats().core_issued == kRequestsPerSource &&
+                  pool.Stats().dca_issued == kRequestsPerSource,
+              "both continuously pending RR sources make complete progress");
+
+        bool deterministic_service =
+            results.size() == 2 * kRequestsPerSource;
+        bool completion_timing = deterministic_service;
+        bool strict_alternation = deterministic_service;
+        bool bounded_service_gap = deterministic_service;
+        bool exactly_once = deterministic_service;
+        std::set<uint64_t> tags;
+        uint64_t last_core_issue = 0;
+        uint64_t last_dca_issue = 0;
+        bool have_core_issue = false;
+        bool have_dca_issue = false;
+        for (uint64_t position = 0;
+             position < results.size(); ++position) {
+            const DcaPoolResult &result = results[position];
+            const bool expect_core = position % 2 == 0;
+            const uint64_t source_index = position / 2;
+            const uint64_t expected_tag =
+                expect_core ? source_index + 1 : 101 + source_index;
+            const uint64_t expected_issue =
+                position * kInitiationInterval;
+            deterministic_service = deterministic_service &&
+                result.result.tag == expected_tag &&
+                result.issue_cycle == expected_issue;
+            strict_alternation = strict_alternation &&
+                result.source == (expect_core
+                    ? DcaRequestSource::CORE : DcaRequestSource::DCA);
+            completion_timing = completion_timing &&
+                result.scheduled_completion_cycle ==
+                    result.issue_cycle + kLatency &&
+                result.enqueue_cycle >= result.scheduled_completion_cycle;
+            exactly_once = exactly_once &&
+                tags.insert(result.result.tag).second;
+            uint64_t &last_issue = expect_core
+                ? last_core_issue : last_dca_issue;
+            bool &have_issue = expect_core
+                ? have_core_issue : have_dca_issue;
+            if (have_issue)
+                bounded_service_gap = bounded_service_gap &&
+                    result.issue_cycle - last_issue <=
+                        kMaximumSameSourceServiceGap;
+            last_issue = result.issue_cycle;
+            have_issue = true;
+        }
+        Check(deterministic_service,
+              "sustained RR freezes CORE1,DCA101,... service at II=2");
+        Check(strict_alternation,
+              "sustained dual-source contention alternates CORE and DCA");
+        Check(bounded_service_gap && have_core_issue && have_dca_issue,
+              "each source service gap is bounded by 2*II");
+        Check(completion_timing,
+              "every completion preserves L=5 despite result backpressure");
+        Check(exactly_once && tags.size() == 2 * kRequestsPerSource &&
+                  pool.Stats().completions == 2 * kRequestsPerSource &&
+                  pool.Stats().results_consumed ==
+                      2 * kRequestsPerSource,
+              "all 64 tags complete and are consumed exactly once");
+        Check(pool.Drained() && pool.Residual() == 0,
+              "sustained CORE/DCA contention fully drains");
+    }
+
     DcaComputePoolStats core_stats;
     Check(ArbitrationOrder(NocCollDcaArbitration::CORE_PRIORITY,
                            &core_stats) ==
@@ -382,3 +494,7 @@ int RunCollR2SelfTest() {
               << " checks)" << std::endl;
     return failures;
 }
+
+#ifdef COLL_R2_SELFTEST_MAIN
+int main() { return RunCollR2SelfTest(); }
+#endif

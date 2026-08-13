@@ -1,0 +1,48 @@
+{
+  "scenario": "blocking_lsu_dte_double_buffer",
+  "fixture_option": "--p8-double-buffer",
+  "core": 0,
+  "payload_bytes": 1024,
+  "payload_offset": 64,
+  "region_bytes": 2048,
+  "batch0_hbm": 65536,
+  "batch1_hbm": 131072,
+  "batch2_hbm": 196608,
+  "output_hbm": 262144,
+  "token1": 81,
+  "token2": 82,
+  "initializations": [
+    {"name": "batch0", "space": "HBM", "region": "", "base": 65536, "sentinel": 161, "seed": 17, "multiplier": 29, "quarter_step": 1, "checksum": 3430531875},
+    {"name": "batch1", "space": "HBM", "region": "", "base": 131072, "sentinel": 178, "seed": 41, "multiplier": 37, "quarter_step": 1, "checksum": 913057142},
+    {"name": "batch2", "space": "HBM", "region": "", "base": 196608, "sentinel": 195, "seed": 73, "multiplier": 43, "quarter_step": 1, "checksum": 3683438019},
+    {"name": "output_before", "space": "HBM", "region": "", "base": 262144, "sentinel": 165, "seed": 211, "multiplier": 7, "quarter_step": 3, "checksum": 4187765299},
+    {"name": "double_a_before", "space": "SRAM", "region": "double_a", "base": 0, "sentinel": 195, "seed": 151, "multiplier": 11, "quarter_step": 3, "checksum": 371033653},
+    {"name": "double_b_before", "space": "SRAM", "region": "double_b", "base": 0, "sentinel": 212, "seed": 181, "multiplier": 13, "quarter_step": 5, "checksum": 270775633}
+  ],
+  "verifications": [
+    {"name": "batch0", "space": "HBM", "region": "", "base": 65536, "sentinel": 161, "seed": 17, "multiplier": 29, "quarter_step": 1, "checksum": 3430531875},
+    {"name": "batch1", "space": "HBM", "region": "", "base": 131072, "sentinel": 178, "seed": 41, "multiplier": 37, "quarter_step": 1, "checksum": 913057142},
+    {"name": "batch2", "space": "HBM", "region": "", "base": 196608, "sentinel": 195, "seed": 73, "multiplier": 43, "quarter_step": 1, "checksum": 3683438019},
+    {"name": "double_a_after", "space": "SRAM", "region": "double_a", "base": 0, "sentinel": 195, "seed": 73, "multiplier": 43, "quarter_step": 1, "checksum": 3683438019},
+    {"name": "double_b_after", "space": "SRAM", "region": "double_b", "base": 0, "sentinel": 212, "seed": 41, "multiplier": 37, "quarter_step": 1, "checksum": 913057142},
+    {"name": "output_after", "space": "HBM", "region": "", "base": 262144, "sentinel": 165, "seed": 73, "multiplier": 43, "quarter_step": 1, "checksum": 3683438019}
+  ],
+  "expected_stats": {
+    "core": 0,
+    "lsu_issued": 6,
+    "lsu_completed": 6,
+    "lsu_hbm_read_bytes": 1028,
+    "lsu_hbm_write_bytes": 1024,
+    "lsu_sram_read_bytes": 1024,
+    "lsu_sram_write_bytes": 1028,
+    "lsu_residual": 0,
+    "dte_issued": 2,
+    "dte_completed": 2,
+    "dte_hbm_read_bytes": 2048,
+    "dte_hbm_write_bytes": 0,
+    "dte_sram_read_bytes": 0,
+    "dte_sram_write_bytes": 2048,
+    "dte_residual": 0,
+    "dte_tracker_residual": 0
+  }
+}

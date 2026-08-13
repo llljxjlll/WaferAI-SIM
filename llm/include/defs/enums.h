@@ -67,6 +67,7 @@ enum MSG_TYPE {
     DONE,
     S_DATA, // start data
     P_DATA,  // prepare data
+    EVENT,   // dedicated one-credit event control
     MSG_TYPE_NUM
 };
 
@@ -120,12 +121,36 @@ enum PD_JOB {
 // 原语类型
 enum PRIM_TYPE {
     NORM_PRIM = 0,
-    COMP_PRIM = 1,
+    COMP_PRIM = 1 << 0,
     GPU_PRIM = 1 << 1,
     NPU_PRIM = 1 << 2,
     PD_PRIM = 1 << 3,
     MOE_PRIM = 1 << 4,
+    COMM_PRIM = 1 << 5,
+    MEM_PRIM = 1 << 6,
+    SYNC_PRIM = 1 << 7,
 };
+// A primitive has exactly one main category. GPU/NPU/PD/MOE describe the
+// implementation family and are intentionally orthogonal to that category.
+constexpr int PRIM_MAIN_CATEGORY_MASK =
+    COMP_PRIM | COMM_PRIM | MEM_PRIM | SYNC_PRIM;
+constexpr int PRIM_FAMILY_MASK = GPU_PRIM | NPU_PRIM | PD_PRIM | MOE_PRIM;
+constexpr int PrimMainCategoryBits(int prim_type) {
+    return prim_type & PRIM_MAIN_CATEGORY_MASK;
+}
+constexpr int PrimFamilyBits(int prim_type) {
+    return prim_type & PRIM_FAMILY_MASK;
+}
+constexpr bool HasExactlyOnePrimMainCategory(int prim_type) {
+    const int category = PrimMainCategoryBits(prim_type);
+    return category != 0 && (category & (category - 1)) == 0;
+}
+constexpr int WithPrimMainCategory(int prim_type, int category) {
+    return (prim_type & ~PRIM_MAIN_CATEGORY_MASK) |
+           (category & PRIM_MAIN_CATEGORY_MASK);
+}
+static_assert((PRIM_MAIN_CATEGORY_MASK & PRIM_FAMILY_MASK) == 0,
+              "primitive main-category and family bits must be orthogonal");
 
 // 用于计算核硬件配置
 enum Etype { MAC_Array };

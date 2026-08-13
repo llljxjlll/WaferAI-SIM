@@ -1,7 +1,7 @@
 #include "prims/comp_prims.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(parse_output);
+REGISTER_PRIM(parse_output, PrimId::PARSE_OUTPUT);
 
 void parse_output::initialize() {
     auto &p = param_value;

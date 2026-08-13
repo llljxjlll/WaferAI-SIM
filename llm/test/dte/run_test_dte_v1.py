@@ -285,7 +285,7 @@ def main() -> int:
     tests.append((
         "DTE off + physical NoC",
         cycle_off.returncode == 0
-        and cycle_off.finish_ns == 29109
+        and cycle_off.finish_ns == 37295
         and not dte_spans(cycle_off.trace_events),
         f"exit={cycle_off.returncode}, finish={cycle_off.finish_ns} ns",
     ))
@@ -294,7 +294,7 @@ def main() -> int:
     tests.append((
         "DTE off + behavioral NoC",
         beha_off.returncode == 0
-        and beha_off.finish_ns == 14781
+        and beha_off.finish_ns == 14777
         and not dte_spans(beha_off.trace_events),
         f"exit={beha_off.returncode}, finish={beha_off.finish_ns} ns",
     ))
@@ -306,7 +306,7 @@ def main() -> int:
     tests.append((
         "DTE on + physical NoC",
         cycle_on.returncode == 0
-        and cycle_on.finish_ns == 33217
+        and cycle_on.finish_ns == 41403
         and cycle_trace_ok,
         f"finish={cycle_on.finish_ns} ns; {cycle_detail}",
     ))
@@ -318,7 +318,7 @@ def main() -> int:
     tests.append((
         "DTE on + behavioral NoC",
         beha_on.returncode == 0
-        and beha_on.finish_ns == 18889
+        and beha_on.finish_ns == 18885
         and beha_trace_ok
         and beha_payloads == cycle_payloads,
         f"finish={beha_on.finish_ns} ns; {beha_detail}",
@@ -328,8 +328,8 @@ def main() -> int:
         "exact store-and-forward delta",
         cycle_on.finish_ns is not None
         and beha_on.finish_ns is not None
-        and cycle_on.finish_ns - 29109 == 4108
-        and beha_on.finish_ns - 14781 == 4108,
+        and cycle_on.finish_ns - 37295 == 4108
+        and beha_on.finish_ns - 14777 == 4108,
         "source 2054 ns + destination 2054 ns = 4108 ns",
     ))
 
@@ -343,7 +343,7 @@ def main() -> int:
     tests.append((
         "cross-die stripe=4 DTE off",
         cross_off.returncode == 0
-        and cross_off.finish_ns == 652
+        and cross_off.finish_ns == 710
         and not dte_spans(cross_off.trace_events),
         f"exit={cross_off.returncode}, finish={cross_off.finish_ns} ns",
     ))
@@ -363,7 +363,7 @@ def main() -> int:
     tests.append((
         "cross-die stripe=4 DTE on",
         cross_on.returncode == 0
-        and cross_on.finish_ns == 696
+        and cross_on.finish_ns == 754
         and cross_trace_ok
         and d2d_used,
         f"finish={cross_on.finish_ns} ns; {cross_detail}; D2D used={d2d_used}",
@@ -396,8 +396,8 @@ def main() -> int:
         "cross-die stripe=2 exact payload",
         stripe2_off.returncode == 0
         and stripe2_on.returncode == 0
-        and stripe2_off.finish_ns == 656
-        and stripe2_on.finish_ns == 700
+        and stripe2_off.finish_ns == 714
+        and stripe2_on.finish_ns == 758
         and stripe2_on.finish_ns - stripe2_off.finish_ns == 44
         and stripe2_trace_ok
         and stripe2_d2d,
@@ -421,8 +421,8 @@ def main() -> int:
         "multi-source destination aggregation",
         multi_off.returncode == 0
         and multi_on.returncode == 0
-        and multi_off.finish_ns == 623
-        and multi_on.finish_ns == 683
+        and multi_off.finish_ns == 681
+        and multi_on.finish_ns == 741
         and multi_on.finish_ns - multi_off.finish_ns == 60
         and multi_trace_ok,
         f"off/on={multi_off.finish_ns}/{multi_on.finish_ns} ns; {multi_detail}",
@@ -444,8 +444,8 @@ def main() -> int:
         "repeated source/tag lifecycle across pipeline iterations",
         repeated_off.returncode == 0
         and repeated_on.returncode == 0
-        and repeated_off.finish_ns == 1033
-        and repeated_on.finish_ns == 1115
+        and repeated_off.finish_ns == 1151
+        and repeated_on.finish_ns == 1233
         and not dte_spans(repeated_off.trace_events)
         and repeated_ok,
         f"off/on={repeated_off.finish_ns}/{repeated_on.finish_ns} ns; "
@@ -475,7 +475,7 @@ def main() -> int:
     tests.append((
         "DTE parallel dataflow compatibility after V2a",
         parallel.returncode == 0
-        and parallel.finish_ns == 33189
+        and parallel.finish_ns == 41379
         and parallel_trace_ok,
         f"exit={parallel.returncode}, finish={parallel.finish_ns} ns; "
         f"{parallel_detail}",

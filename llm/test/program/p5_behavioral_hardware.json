@@ -1,0 +1,80 @@
+{
+  "x": 4,
+  "die": {"x": 2, "y": 1},
+  "noc": {"noc_payload_per_cycle": 4},
+  "dte": {
+    "gamma_ns": 2, "tau_launch_avg_ns": 1,
+    "command_slots_per_channel": 2, "pending_queue_depth": 8,
+    "spm_read_width_bits": 256, "spm_write_width_bits": 256,
+    "axi_read_width_bits": 256, "axi_write_width_bits": 256
+  },
+  "operand": {"comp_util": 0.7, "core_credit": 8, "pd_ratio": 5},
+  "memory": {
+    "beha_dram_util": 1.0, "dram_default_bitwidth": 256,
+    "sram_size": 16384,
+    "sram": {
+      "capacity_bytes": 16384, "allocation_alignment_bytes": 64,
+      "bank_count": 4, "bank_interleave_bytes": 64,
+      "read_base_latency_cycles": 2, "write_base_latency_cycles": 2,
+      "queue_depth": 16, "real_data_path": true,
+      "manual_regions": true, "manual_memory_schedule": true,
+      "lsu": {"queue_depth": 8, "max_outstanding": 2, "issue_latency_ns": 1},
+      "dte_memory": {"workers": 2, "queue_depth": 8},
+      "ports": {
+        "compute": {"read": {"count": 1, "width_bits": 256}, "write": {"count": 1, "width_bits": 256}},
+        "dte": {"read": {"count": 1, "width_bits": 256}, "write": {"count": 1, "width_bits": 256}},
+        "lsu": {"read": {"count": 1, "width_bits": 256}, "write": {"count": 1, "width_bits": 256}}
+      },
+      "regions": [
+        {"name": "double_a", "base_bytes": 0, "size_bytes": 2048, "allocator": "fixed", "spillable": false, "access": ["compute", "dte", "lsu"]},
+        {"name": "double_b", "base_bytes": 2048, "size_bytes": 2048, "allocator": "fixed", "spillable": false, "access": ["compute", "dte", "lsu"]},
+        {"name": "input", "base_bytes": 4096, "size_bytes": 4096, "allocator": "block", "spillable": true, "access": ["compute", "dte", "lsu", "legacy"]},
+        {"name": "intermediate", "base_bytes": 8192, "size_bytes": 4096, "allocator": "block", "spillable": true, "access": ["compute", "dte", "lsu", "legacy"]},
+        {"name": "comm", "base_bytes": 12288, "size_bytes": 4096, "allocator": "block", "spillable": false, "access": ["compute", "dte", "lsu", "noc_rx"]}
+      ]
+    }
+  },
+  "die_ports": {
+    "edges": {"S": {"role": "host"}},
+    "overrides": [
+      {"side": "E", "idx": 2, "role": "c2c", "dir": "E"},
+      {"side": "E", "idx": 3, "role": "c2c", "dir": "E"},
+      {"side": "W", "idx": 2, "role": "c2c", "dir": "W"},
+      {"side": "W", "idx": 3, "role": "c2c", "dir": "W"}
+    ],
+    "c2c": {
+      "backend": "behavioral",
+      "multi_port": true,
+      "select_policy": "hybrid",
+      "select_seed": 17,
+      "port_rate": {"num": 1, "den": 4},
+      "link_rate": {"num": 1, "den": 4},
+      "link_latency": 3
+    }
+  },
+  "memory_system": {
+    "topology": "distributed_hbm", "cache_policy": "none",
+    "profiles": {
+      "test_hbm": {
+        "generation": "HBM2", "channels_per_stack": 1,
+        "pseudo_channels_per_channel": 2,
+        "data_rate_gbps_per_pin": 2.0, "stack_bus_width_bits": 64
+      }
+    },
+    "hbm_stacks": [
+      {"stack_id": 0, "compute_die_id": 0, "profile": "test_hbm", "side": "N", "start_idx": 1, "phy_span_tiles": 1, "capacity_bytes": 1048576, "backend": "behavioral", "backend_granularity": "channel", "channel_dram_config": "../DRAMSys/configs/hbm2-example.json", "bandwidth_cap_GBps": 8.0, "behavioral_base_latency_ns": 20.0},
+      {"stack_id": 1, "compute_die_id": 1, "profile": "test_hbm", "side": "N", "start_idx": 1, "phy_span_tiles": 1, "capacity_bytes": 1048576, "backend": "behavioral", "backend_granularity": "channel", "channel_dram_config": "../DRAMSys/configs/hbm2-example.json", "bandwidth_cap_GBps": 8.0, "behavioral_base_latency_ns": 20.0}
+    ],
+    "address_policy": {
+      "mode": "numa_local_interleave",
+      "home_ranges": [
+        {"die_id": 0, "base": 0, "size_bytes": 1048576},
+        {"die_id": 1, "base": 1048576, "size_bytes": 1048576}
+      ],
+      "stack_interleave_bytes": 1048576,
+      "channel_interleave_bytes": 64
+    }
+  },
+  "gpu": {"dram_bandwidth": 512, "dram_burst_size": 2048, "dram_aligned": 64},
+  "cores": [{"id": 0, "exu_x": 32, "sfu_x": 1024, "vec_x": 128, "sa_cnt": 1, "vec_cnt": 1, "sram_bitwidth": 256, "dram_bw": 256, "dte_channel_count": 2, "dte_bit_width": 256}]
+}

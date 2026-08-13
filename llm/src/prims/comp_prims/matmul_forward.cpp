@@ -1,3 +1,5 @@
+#include "isa/published_npu_ops.h"
+
 #include "systemc.h"
 #include <tlm>
 #include <tlm_utils/simple_initiator_socket.h>
@@ -12,7 +14,7 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Matmul_f);
+REGISTER_PRIM(Matmul_f, PrimId::MATMUL_F);
 
 void Matmul_f::initialize() {
     auto &p = param_value;
@@ -68,18 +70,14 @@ void Matmul_f::taskCore(TaskCoreContext &context, string prim_name,
     uint64_t performance_cycle = (exu->x_dims + exu->x_dims + padding_input_x) *
                                  weight_tile_x * weight_tile_y;
 
-    uint64_t performance_comp =
-        performance_cycle * exu->x_dims * exu->x_dims * HW_COMP_UTIL;
-
     LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
-                    << " performance_cycle " << performance_cycle
-                    << " performance_comp " << performance_comp;
+                    << " performance_cycle " << performance_cycle;
 
     int loop_input_count =
         weight_tile_y - 1; // read loop_input_count Repetitive input
 
     for (int loop = 0; loop < loop_input_count; loop++) {
-        for (int p = 0; p < data_size_input.size(); p++) {
+        for (std::size_t p = 0; p < data_size_input.size(); ++p) {
             if (prim_context->datapass_label_->indata[p].find(DRAM_LABEL) ==
                 0) {
                 prefReadData(context, dram_time, data_size_input[p],
@@ -88,23 +86,10 @@ void Matmul_f::taskCore(TaskCoreContext &context, string prim_name,
         }
     }
 
-    exu_ops = performance_comp * 2;
-    sfu_ops = 0;
-    vec_ops = (uint64_t)p["B"] * p["OC"] * p["T"] * p["C"] * 2;
-
-    // 比较使用vector core是否更快
-    VectorConfig *vec = GetCoreHWConfig(context.cid)->vec;
-
-    int exu_cycle = 0;
-    exu_cycle += exu_ops /
-                 (exu->x_dims * exu->x_dims * 2 * exu->count * HW_COMP_UTIL) *
-                 CYCLE;
-    int vec_cycle = vec_ops / vec->x_dims / vec->count * CYCLE;
-    if (vec_cycle < exu_cycle) {
-        exu_ops = 0;
-        sfu_ops = 0;
-    } else {
-        vec_ops = 0;
-        sfu_ops = 0;
-    }
+    const NpuOps ops = EvaluatePublishedNpuOps(
+        Opcode::MATMUL, param_value,
+        PublishedNpuHardwareForCore(context.cid));
+    exu_ops = ops.exu;
+    sfu_ops = ops.sfu;
+    vec_ops = ops.vec;
 }

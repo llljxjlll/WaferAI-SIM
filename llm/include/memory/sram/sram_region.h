@@ -1,6 +1,7 @@
 #pragma once
 
 #include "memory/sram/sram_types.h"
+#include <cstddef>
 #include <functional>
 #include <nlohmann/json.hpp>
 #include <string_view>
@@ -36,6 +37,9 @@ class RegionTable {
     const RegionConfig &Region(std::string_view name) const;
     const RegionConfig &Region(int region_id) const;
     int RegionId(std::string_view name) const;
+    std::size_t AllocationCount() const noexcept {
+        return allocations_.size();
+    }
 
     ResolvedRange Resolve(std::string_view name, uint64_t offset,
                           uint64_t size_bytes, Initiator initiator,
@@ -49,11 +53,13 @@ class RegionTable {
     Allocation Allocate(
         std::string_view region_name, uint64_t size_bytes,
         std::string label = {},
-        AllocationLifetime lifetime = AllocationLifetime::kTask);
+        AllocationLifetime lifetime = AllocationLifetime::kTask,
+        uint64_t alignment_bytes = 0);
     Allocation AllocateAt(
         std::string_view region_name, uint64_t offset_bytes,
         uint64_t size_bytes, std::string label = {},
-        AllocationLifetime lifetime = AllocationLifetime::kTask);
+        AllocationLifetime lifetime = AllocationLifetime::kTask,
+        uint64_t alignment_bytes = 0);
     const Allocation &ResizeAllocation(uint64_t allocation_id,
                                        uint64_t size_bytes);
     void Free(uint64_t allocation_id,

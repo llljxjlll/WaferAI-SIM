@@ -6,6 +6,94 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
+namespace {
+int DecodeSignedWire32(uint64_t raw, const std::string &field) {
+    if (raw > std::numeric_limits<uint32_t>::max())
+        throw std::invalid_argument(field + " is not a 32-bit wire value");
+    if (raw <= static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))
+        return static_cast<int>(raw);
+    const int64_t signed_value =
+        static_cast<int64_t>(raw) - (int64_t{1} << 32);
+    if (signed_value < std::numeric_limits<int32_t>::min())
+        throw std::invalid_argument(field + " signed decode overflowed");
+    return static_cast<int>(signed_value);
+}
+
+void ValidateOneShotLabels(const AddrDatapassLabel &labels,
+                           uint32_t input_count) {
+    if (input_count == 0 || input_count > MAX_SPLIT_NUM)
+        throw std::logic_error(
+            "pending SRAM_BIND input count is outside [1, 16]");
+    for (uint32_t index = 0; index < input_count; ++index) {
+        if (labels.indata[index].empty() ||
+            labels.indata[index] == UNSET_LABEL)
+            throw std::logic_error(
+                "pending SRAM_BIND contains an unset input label");
+    }
+    for (uint32_t index = input_count; index < MAX_SPLIT_NUM; ++index) {
+        if (labels.indata[index] != UNSET_LABEL)
+            throw std::logic_error(
+                "pending SRAM_BIND contains a set unused input label");
+    }
+    if (labels.outdata.empty() || labels.outdata == UNSET_LABEL)
+        throw std::logic_error(
+            "pending SRAM_BIND contains an unset output label");
+}
+
+class ScopedOneShotSramBinding {
+public:
+    ScopedOneShotSramBinding(PrimCoreContext &context,
+                             size_t compute_input_count,
+                             const std::string &prim_name)
+        : context_(context) {
+        if (!context_.program_mode_) return;
+        if (context_.datapass_label_ == nullptr)
+            throw std::logic_error(
+                prim_name + " has no active SRAM label context");
+        if (!context_.sram_bind_pending_)
+            throw std::logic_error(
+                prim_name + " requires a preceding one-shot SRAM_BIND");
+        if (context_.sram_bind_input_count_ != compute_input_count)
+            throw std::logic_error(
+                prim_name + " input count does not match pending SRAM_BIND");
+        ValidateOneShotLabels(context_.sram_bind_pending_labels_,
+                              context_.sram_bind_input_count_);
+
+        AddrDatapassLabel active_labels =
+            context_.sram_bind_pending_labels_;
+        AddrDatapassLabel cleared_pending;
+        previous_labels_ = *context_.datapass_label_;
+        *context_.datapass_label_ = std::move(active_labels);
+        active_ = true;
+
+        // Consumption happens when the compute has successfully entered the
+        // NPU path. It remains consumed if later compute work throws.
+        context_.sram_bind_pending_ = false;
+        context_.sram_bind_input_count_ = 0;
+        context_.sram_bind_pending_labels_ = std::move(cleared_pending);
+    }
+
+    ~ScopedOneShotSramBinding() {
+        if (active_)
+            *context_.datapass_label_ = std::move(previous_labels_);
+    }
+
+    ScopedOneShotSramBinding(const ScopedOneShotSramBinding &) = delete;
+    ScopedOneShotSramBinding &operator=(
+        const ScopedOneShotSramBinding &) = delete;
+
+private:
+    PrimCoreContext &context_;
+    AddrDatapassLabel previous_labels_;
+    bool active_ = false;
+};
+
+} // namespace
+
 void NpuBase::parseAddress(json j) {
     SetParamFromJson(j, "input", &inp_offset, 0);
     SetParamFromJson(j, "data", &data_offset,
@@ -49,13 +137,21 @@ void NpuBase::parseSramLabel(json j) {
 
 vector<sc_bv<128>> NpuBase::serialize() {
     vector<sc_bv<128>> segments;
+    if (datatype != INT8 && datatype != FP16)
+        throw std::invalid_argument(name + " has an invalid datatype");
+    for (const auto &entry : param_value)
+        if (entry.second < 0 || entry.second > 0x3fffffff)
+            throw std::overflow_error(name + " parameter " + entry.first +
+                                      " exceeds the 30-bit Prim wire");
 
-    sc_bv<128> metadata;
+
+    sc_bv<128> metadata = 0;
     metadata.range(7, 0) = sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
-    metadata.range(8, 8) = sc_bv<1>(datatype);
-    metadata.range(24, 9) = sc_bv<16>(inp_offset);
-    metadata.range(40, 25) = sc_bv<16>(data_offset);
-    metadata.range(56, 41) = sc_bv<16>(out_offset);
+    metadata.range(9, 8) = sc_bv<2>(datatype);
+    metadata.range(41, 10) = sc_bv<32>(static_cast<uint32_t>(inp_offset));
+    metadata.range(73, 42) = sc_bv<32>(static_cast<uint32_t>(data_offset));
+    metadata.range(105, 74) =
+        sc_bv<32>(static_cast<uint32_t>(out_offset));
     segments.push_back(metadata);
 
     std::vector<std::pair<std::string, int>> vec(param_value.begin(),
@@ -65,7 +161,7 @@ vector<sc_bv<128>> NpuBase::serialize() {
 
     // 规定一个参数使用32位存储，即一个segment存储4个参数
     for (auto it = vec.begin(); it != vec.end();) {
-        sc_bv<128> d;
+        sc_bv<128> d = 0;
         d.range(7, 0) = sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
         int pos = 8;
         for (int i = 0; i < 4 && it != vec.end(); i++, it++, pos += 30) {
@@ -79,36 +175,69 @@ vector<sc_bv<128>> NpuBase::serialize() {
 }
 
 void NpuBase::deserialize(vector<sc_bv<128>> segments) {
-    // 解析metadata
-    auto buffer = segments[0];
-    datatype = DATATYPE(buffer.range(8, 8).to_uint64());
-    inp_offset = buffer.range(24, 9).to_uint64();
-    data_offset = buffer.range(40, 25).to_uint64();
-    out_offset = buffer.range(56, 41).to_uint64();
+    if (segments.empty())
+        throw std::invalid_argument(name + " Prim wire has no segments");
 
     vector<string> vec(param_name.begin(), param_name.end());
     sort(vec.begin(), vec.end());
+    const size_t expected_segments = 1 + (vec.size() + 3) / 4;
+    if (segments.size() != expected_segments)
+        throw std::invalid_argument(
+            name + " Prim wire segment count does not match its parameters");
 
-    // 依次解析参数，每一个segment存储4个参数
-    if (segments.size() - 1 != (vec.size() + 3) / 4)
-        LOG_ERROR(npu_base.cpp)
-            << "In deserialize " << name << ": the number of segments "
-            << segments.size()
-            << " does not match the number of "
-               "parameters "
-            << vec.size();
+    const uint64_t expected_id = static_cast<uint64_t>(
+        PrimFactory::getInstance().getPrimId(name));
+    for (const auto &segment : segments)
+        if (segment.range(7, 0).to_uint64() != expected_id)
+            throw std::invalid_argument(
+                name + " Prim wire contains inconsistent segment IDs");
 
-    for (int i = 1; i < segments.size(); i++) {
-        auto buffer = segments[i];
-        for (int j = 0; j < 4; j++) {
-            int index = (i - 1) * 4 + j;
-            if (index >= vec.size())
-                break;
-            param_value[vec[index]] =
-                buffer.range(29 + j * 30 + 8, j * 30 + 8).to_uint64();
+    const auto &metadata = segments[0];
+    if (prim_wire::LegacyCompatibilityEnabled()) {
+        if (metadata.range(127, 57).or_reduce())
+            throw std::invalid_argument(
+                name + " legacy Prim wire reserved bits are set");
+        datatype = static_cast<DATATYPE>(
+            metadata.range(8, 8).to_uint64());
+        inp_offset = metadata.range(24, 9).to_uint64();
+        data_offset = metadata.range(40, 25).to_uint64();
+        out_offset = metadata.range(56, 41).to_uint64();
+    } else {
+        if (metadata.range(127, 106).or_reduce())
+            throw std::invalid_argument(
+                name + " Prim wire reserved bits are set");
+        const uint64_t raw_datatype = metadata.range(9, 8).to_uint64();
+        if (raw_datatype > static_cast<uint64_t>(FP16))
+            throw std::invalid_argument(
+                name + " Prim wire datatype is invalid");
+        datatype = static_cast<DATATYPE>(raw_datatype);
+        inp_offset = DecodeSignedWire32(
+            metadata.range(41, 10).to_uint64(), name + " input offset");
+        data_offset = DecodeSignedWire32(
+            metadata.range(73, 42).to_uint64(), name + " data offset");
+        out_offset = DecodeSignedWire32(
+            metadata.range(105, 74).to_uint64(), name + " output offset");
+    }
+
+    decltype(param_value) decoded_param_value;
+    for (size_t i = 1; i < segments.size(); ++i) {
+        const auto &segment = segments[i];
+        for (size_t j = 0; j < 4; ++j) {
+            const size_t index = (i - 1) * 4 + j;
+            const int low = static_cast<int>(8 + j * 30);
+            const int high = low + 29;
+            const uint64_t value = segment.range(high, low).to_uint64();
+            if (index >= vec.size()) {
+                if (value != 0)
+                    throw std::invalid_argument(
+                        name + " Prim wire unused parameter bits are set");
+                continue;
+            }
+            decoded_param_value[vec[index]] = static_cast<int>(value);
         }
     }
 
+    param_value = std::move(decoded_param_value);
     initialize();
     initializeDefault();
 }
@@ -174,6 +303,12 @@ void NpuBase::initializeDefault() {
 }
 
 int NpuBase::taskCoreDefault(TaskCoreContext &context) {
+    if (prim_context == nullptr)
+        throw std::logic_error(name + " requires a PrimCoreContext");
+    last_cost_snapshot_ = {};
+    ScopedOneShotSramBinding one_shot_binding(
+        *prim_context, data_size_input.size(), name);
+
     // 检查是否满足auto_pd的条件，若是，则将T参数设置为1，并重新初始化
     if (prim_context->auto_pd_ &&
         prim_context->loop_cnt > prim_context->auto_pd_) {
@@ -630,7 +765,6 @@ void NpuBase::writeOutputData(TaskCoreContext &context, uint64_t exu_flops,
                               uint64_t sfu_flops, u_int64_t vec_flops,
                               uint64_t dram_time, uint64_t &overlap_time,
                               int data_size_out, uint64_t out_global_addr) {
-    int cycle = 0;
     int cid = context.cid;
     CoreHWConfig *hardware_config = GetCoreHWConfig(cid);
     ExuConfig *exu = hardware_config->exu;
@@ -641,34 +775,38 @@ void NpuBase::writeOutputData(TaskCoreContext &context, uint64_t exu_flops,
                     << exu_flops << " sfu_flops " << sfu_flops << " vec_flops "
                     << vec_flops;
 
-    int exu_cycle = 0;
-    if (exu->type == MAC_Array)
-        exu_cycle +=
-            exu_flops /
-            (exu->x_dims * exu->x_dims * 2 * exu->count * HW_COMP_UTIL) * CYCLE;
-    else
+    if (exu->type != MAC_Array)
+        assert(false && "Unsupported tile type");
+    if (sfu->type != Linear)
         assert(false && "Unsupported tile type");
 
-    int sfu_cycle = 0;
-    if (sfu->type == Linear)
-        sfu_cycle += sfu_flops / sfu->x_dims * CYCLE;
-    else
-        assert(false && "Unsupported tile type");
-
-    int vec_cycle = vec_flops / (vec->x_dims * vec->count) * CYCLE;
-    cycle += max(exu_cycle, max(sfu_cycle, vec_cycle));
+    NpuCostHardware cost_hardware;
+    cost_hardware.exu_x_dims = static_cast<uint64_t>(exu->x_dims);
+    cost_hardware.exu_count = static_cast<uint64_t>(exu->count);
+    cost_hardware.sfu_x_dims = static_cast<uint64_t>(sfu->x_dims);
+    cost_hardware.vec_x_dims = static_cast<uint64_t>(vec->x_dims);
+    cost_hardware.vec_count = static_cast<uint64_t>(vec->count);
+    cost_hardware.compute_utilization = HW_COMP_UTIL;
+    cost_hardware.cycle_ns = CYCLE;
+    last_cost_snapshot_ = CalculateNpuCost(
+        NpuOps{exu_flops, sfu_flops, vec_flops}, cost_hardware, dram_time);
+    if (last_cost_snapshot_.overlap_delay_ns >
+        static_cast<uint64_t>(std::numeric_limits<int>::max()))
+        throw std::overflow_error("NPU overlap delay exceeds runtime int");
+    overlap_time = last_cost_snapshot_.overlap_delay_ns;
 
 #if USE_SRAM == 1
-    if (dram_time > cycle) {
+    if (dram_time > last_cost_snapshot_.compute_cycle_ns) {
         // 因为dram 已经wait 过了，所以额外的 overlap_time = 0
         overlap_time = 0;
         LOG_INFO(PRIM) << name << " of Core " << context.cid << ": dram_time "
-                       << dram_time << ", compute cycle " << cycle;
+                       << dram_time << ", compute cycle "
+                       << last_cost_snapshot_.compute_cycle_ns;
 
     } else {
-        overlap_time = cycle - dram_time;
         LOG_INFO(PRIM) << name << " of Core " << context.cid << ": dram_time "
-                       << dram_time << ", compute cycle " << cycle;
+                       << dram_time << ", compute cycle "
+                       << last_cost_snapshot_.compute_cycle_ns;
     }
 
     // 写入out

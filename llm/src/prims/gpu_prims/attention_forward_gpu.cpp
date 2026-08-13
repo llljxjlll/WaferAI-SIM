@@ -4,7 +4,7 @@
 #include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Attention_f_gpu);
+REGISTER_PRIM(Attention_f_gpu, PrimId::ATTENTION_F_GPU);
 
 void Attention_f_gpu::initialize() {
     if (datatype == INT8)

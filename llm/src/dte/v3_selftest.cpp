@@ -258,8 +258,8 @@ int RunDTEV3SelfTest() {
               issue_wire.spm_addr == issue.spm_addr &&
               issue_wire.spm_size == issue.spm_size &&
               issue_wire.remote_peer == DTE_ASYNC_INVALID_REMOTE_PEER &&
-              issue_segments.size() == 2,
-          "legacy Dte_async issue preserves its two-segment wire");
+              issue_segments.size() == 4,
+          "Dte_async issue uses stable PrimId framing and round-trips");
 
     Dte_async_prim fence;
     fence.op = DteAsyncOp::FENCE;
@@ -279,6 +279,7 @@ int RunDTEV3SelfTest() {
     const bool old_use_dte = SPEC_USE_BEHA_DTE;
     const bool old_streaming = SPEC_DTE_STREAMING;
     const bool old_async = SPEC_DTE_ASYNC;
+    const bool old_fine_grained = SPEC_DTE_V4_RESOURCES;
     const bool old_parallel = SPEC_SEND_RECV_PARALLEL;
     const SIM_MODE old_mode = SYSTEM_MODE;
 
@@ -345,9 +346,45 @@ int RunDTEV3SelfTest() {
           }),
           "DTE V3a rejects the parallel dispatcher");
 
+    SPEC_USE_BEHA_DTE = false;
+    SPEC_DTE_STREAMING = false;
+    SPEC_DTE_ASYNC = false;
+    SPEC_DTE_V4_RESOURCES = false;
+    SPEC_SEND_RECV_PARALLEL = false;
+    SYSTEM_MODE = SIM_DATAFLOW;
+    accepted = true;
+    try {
+        ParseSimulationConfig(nlohmann::json{
+            {"noc", {{"send_recv_parallel", false}}},
+            {"dte", {{"use_beha_dte", true}, {"streaming", true},
+                     {"async", false}, {"aggregation", false},
+                     {"fine_grained_resources", false}}}});
+    } catch (...) {
+        accepted = false;
+    }
+    check(accepted && SPEC_USE_BEHA_DTE && SPEC_DTE_STREAMING &&
+              !SPEC_DTE_ASYNC && !SPEC_DTE_V4_RESOURCES,
+          "DTE V2b accepts streaming with async and V4 resources disabled");
+
+    SPEC_USE_BEHA_DTE = false;
+    SPEC_DTE_STREAMING = false;
+    SPEC_DTE_ASYNC = false;
+    SPEC_DTE_V4_RESOURCES = false;
+    SPEC_SEND_RECV_PARALLEL = false;
+    SYSTEM_MODE = SIM_DATAFLOW;
+    check(ThrowsExpected<std::invalid_argument>([]() {
+              ParseSimulationConfig(nlohmann::json{
+                  {"noc", {{"send_recv_parallel", false}}},
+                  {"dte", {{"use_beha_dte", true}, {"streaming", true},
+                           {"async", false},
+                           {"fine_grained_resources", true}}}});
+          }),
+          "DTE V2b rejects V4 fine-grained resources without async");
+
     SYSTEM_MODE = old_mode;
     SPEC_SEND_RECV_PARALLEL = old_parallel;
     SPEC_DTE_ASYNC = old_async;
+    SPEC_DTE_V4_RESOURCES = old_fine_grained;
     SPEC_DTE_STREAMING = old_streaming;
     SPEC_USE_BEHA_DTE = old_use_dte;
 

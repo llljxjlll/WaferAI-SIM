@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "scenario": "multicore_p2p_collectives_sync",
+  "fixture_option": "--p8-program-b",
+  "cores": [1, 3, 7, 11],
+  "group_id": 83,
+  "region_bytes": 4096,
+  "payload_offset": 64,
+  "sentinel": 165,
+  "p2p": {"bytes": 97, "source_core": 1, "destination_core": 3, "seed": 145, "multiplier": 7},
+  "allgather": {"bytes": 68, "collective_id": 6816001, "epoch": 1},
+  "allreduce": {"bytes": 64, "collective_id": 6816002, "epoch": 1, "dtype": "INT32", "reduce_op": "SUM"},
+  "regions": {
+    "compute": {"name": "p8b_compute", "base": 4096},
+    "p2p_source": {"name": "p8b_p2p_source", "base": 12288},
+    "p2p_destination": {"name": "p8b_p2p_destination", "base": 20480},
+    "allgather_input": {"name": "p8b_allgather_input", "base": 28672},
+    "allgather_staging": {"name": "p8b_allgather_staging", "base": 36864},
+    "allreduce_input": {"name": "p8b_allreduce_input", "base": 45056},
+    "allreduce_staging": {"name": "p8b_allreduce_staging", "base": 53248},
+    "allreduce_result": {"name": "p8b_allreduce_result", "base": 61440}
+  },
+  "expected_counts": {
+    "collective_children": 24,
+    "collective_actions": 196,
+    "collective_waves": 8,
+    "compute": 8,
+    "bind": 8,
+    "alloc": 4,
+    "rename": 4,
+    "free": 4,
+    "p2p_send": 1,
+    "p2p_recv": 1,
+    "collective_send": 8,
+    "collective_recv": 8,
+    "reduce_compute": 4,
+    "wait": 18,
+    "fence": 4,
+    "group_sync": 16,
+    "group_sync_sequences": 4
+  },
+  "profiles": {
+    "baseline": {"allgather_broadcast": "unicast", "allreduce_broadcast": "unicast", "allreduce_reduce": "endpoint", "multicast_trees": 0, "dca_trees": 0},
+    "broadcast_only": {"allgather_broadcast": "multicast", "allreduce_broadcast": "multicast", "allreduce_reduce": "endpoint", "multicast_trees": 4, "dca_trees": 0},
+    "reduce_only": {"allgather_broadcast": "unicast", "allreduce_broadcast": "unicast", "allreduce_reduce": "dca_offload", "multicast_trees": 0, "dca_trees": 4},
+    "reduce_broadcast": {"allgather_broadcast": "multicast", "allreduce_broadcast": "multicast", "allreduce_reduce": "dca_offload", "multicast_trees": 4, "dca_trees": 4}
+  },
+  "current_rejections": {},
+  "repeat_default": 3
+}

@@ -1,6 +1,7 @@
 #include "memory/dramsys_hbm_backend.h"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 using namespace sc_core;
@@ -51,9 +52,29 @@ void DRAMSysHBMBackend::Submit(
         tx->byte_enable.size() != tx->payload.size())
         throw std::runtime_error(
             "DRAMSysHBMBackend::Submit: byte-enable size mismatch");
-    if (trace_index_.count(tx.get()))
+    if (active_logical_.count(tx.get()))
         throw std::runtime_error(
             "DRAMSysHBMBackend::Submit: transaction object already pending");
+
+    const auto &mem_spec = dram_sys_wrapper_->dramsys->getMemSpec();
+    const uint64_t burst_bytes = mem_spec.defaultBytesPerBurst;
+    if (burst_bytes == 0 ||
+        burst_bytes >
+            static_cast<uint64_t>(std::numeric_limits<unsigned>::max()))
+        throw std::runtime_error(
+            "DRAMSysHBMBackend::Submit: invalid physical burst size");
+
+    const uint64_t logical_end = tx->address + tx->payload.size();
+    const uint64_t first_burst = tx->address - (tx->address % burst_bytes);
+    const uint64_t last_burst =
+        (logical_end - 1) - ((logical_end - 1) % burst_bytes);
+    const uint64_t capacity_bytes = CapacityBytes();
+    if (capacity_bytes < burst_bytes ||
+        first_burst > capacity_bytes - burst_bytes ||
+        last_burst > capacity_bytes - burst_bytes)
+        throw std::runtime_error(
+            "DRAMSysHBMBackend::Submit: aligned burst exceeds backend capacity");
+
     DRAMSys::DecodedAddress decoded = DecodeBackendAddress(tx->address);
     DRAMSysHBMAccessRecord record;
     record.command = tx->command;
@@ -65,10 +86,75 @@ void DRAMSysHBMBackend::Submit(
     record.row = decoded.row;
     record.column = decoded.column;
     record.submitted = sc_time_stamp();
-    trace_index_[tx.get()] = access_trace_.size();
+    auto logical = std::make_shared<LogicalRequest>(tx);
+    std::list<std::shared_ptr<PhysicalRequest>> physical_requests;
+    uint64_t burst_address = first_burst;
+    while (burst_address < logical_end) {
+        const uint64_t covered_begin = std::max(burst_address, tx->address);
+        const uint64_t burst_end = burst_address + burst_bytes;
+        const uint64_t covered_end = std::min(burst_end, logical_end);
+
+        auto physical = std::make_shared<PhysicalRequest>();
+        physical->logical = logical;
+        physical->address = burst_address;
+        physical->payload.assign(static_cast<size_t>(burst_bytes), 0);
+        physical->logical_offset =
+            static_cast<size_t>(covered_begin - tx->address);
+        physical->burst_offset =
+            static_cast<size_t>(covered_begin - burst_address);
+        physical->copy_length =
+            static_cast<size_t>(covered_end - covered_begin);
+        if (tx->command == MemCommand::kWrite) {
+            physical->byte_enable.assign(static_cast<size_t>(burst_bytes), 0);
+            for (size_t i = 0; i < physical->copy_length; ++i) {
+                const size_t logical_index = physical->logical_offset + i;
+                const size_t burst_index = physical->burst_offset + i;
+                physical->payload[burst_index] = tx->payload[logical_index];
+                if (tx->byte_enable.empty() || tx->byte_enable[logical_index])
+                    physical->byte_enable[burst_index] = 0xff;
+            }
+        }
+        physical_requests.push_back(std::move(physical));
+        ++logical->remaining;
+        burst_address = burst_end;
+    }
+
+    logical->trace_index = access_trace_.size();
     access_trace_.push_back(record);
-    pending_.push_back(tx);
-    TryIssue();
+    try {
+        const auto inserted = active_logical_.emplace(tx.get(), logical);
+        if (!inserted.second)
+            throw std::logic_error(
+                "DRAMSysHBMBackend: duplicate active logical request");
+    } catch (...) {
+        access_trace_.pop_back();
+        throw;
+    }
+    pending_.splice(pending_.end(), physical_requests);
+    stats_.requests++;
+    stats_.bytes += tx->payload.size();
+    if (tx->command == MemCommand::kRead)
+        stats_.reads++;
+    else
+        stats_.writes++;
+    try {
+        TryIssue();
+    } catch (...) {
+        if (!logical->issued) {
+            pending_.remove_if([&](const auto &request) {
+                return request->logical == logical;
+            });
+            active_logical_.erase(tx.get());
+            access_trace_.pop_back();
+            --stats_.requests;
+            stats_.bytes -= tx->payload.size();
+            if (tx->command == MemCommand::kRead)
+                --stats_.reads;
+            else
+                --stats_.writes;
+        }
+        throw;
+    }
 }
 
 void DRAMSysHBMBackend::TryIssue() {
@@ -79,41 +165,36 @@ void DRAMSysHBMBackend::TryIssue() {
     pending_.pop_front();
     Inflight *h = holder.get();
     h->issued = sc_time_stamp();
-    auto trace_it = trace_index_.find(h->tx.get());
-    if (trace_it == trace_index_.end())
-        throw std::runtime_error(
-            "DRAMSysHBMBackend: transaction has no trace record");
-    h->trace_index = trace_it->second;
-    access_trace_[h->trace_index].issued = h->issued;
-    h->payload.set_command(h->tx->command == MemCommand::kWrite
+    auto &logical = *h->request->logical;
+    if (!logical.issued) {
+        logical.issued = true;
+        logical.issued_at = h->issued;
+        access_trace_[logical.trace_index].issued = h->issued;
+    }
+    h->payload.set_command(logical.tx->command == MemCommand::kWrite
                                ? tlm::TLM_WRITE_COMMAND
                                : tlm::TLM_READ_COMMAND);
-    h->payload.set_address(h->tx->address);
-    h->payload.set_data_ptr(h->tx->payload.data());
-    h->payload.set_data_length((unsigned)h->tx->payload.size());
-    h->payload.set_streaming_width((unsigned)h->tx->payload.size());
-    if (h->tx->byte_enable.empty()) {
+    h->payload.set_address(h->request->address);
+    h->payload.set_data_ptr(h->request->payload.data());
+    h->payload.set_data_length((unsigned)h->request->payload.size());
+    h->payload.set_streaming_width((unsigned)h->request->payload.size());
+    if (h->request->byte_enable.empty()) {
         h->payload.set_byte_enable_ptr(nullptr);
         h->payload.set_byte_enable_length(0);
     } else {
-        h->payload.set_byte_enable_ptr(h->tx->byte_enable.data());
-        h->payload.set_byte_enable_length((unsigned)h->tx->byte_enable.size());
+        h->payload.set_byte_enable_ptr(h->request->byte_enable.data());
+        h->payload.set_byte_enable_length(
+            (unsigned)h->request->byte_enable.size());
     }
     h->payload.set_dmi_allowed(false);
     h->payload.set_response_status(tlm::TLM_INCOMPLETE_RESPONSE);
-    h->payload.acquire(); // initiator 持有至 END_RESP；DRAMSys 可在内部继续 acquire
+    h->payload.acquire(); // initiator holds through END_RESP
 
     tlm::tlm_generic_payload *payload = &h->payload;
     inflight_[payload] = std::move(holder);
     peak_inflight_ = std::max(peak_inflight_, inflight_.size());
     begin_req_in_progress_ = true;
     begin_req_payload_ = payload;
-    stats_.requests++;
-    stats_.bytes += payload->get_data_length();
-    if (payload->is_read())
-        stats_.reads++;
-    else
-        stats_.writes++;
 
     tlm::tlm_phase phase = tlm::BEGIN_REQ;
     sc_time delay = SC_ZERO_TIME;
@@ -167,19 +248,37 @@ void DRAMSysHBMBackend::peqCallback(tlm::tlm_generic_payload &payload,
     initiator_socket_->nb_transport_fw(payload, end_phase, end_delay);
 
     Inflight *holder = it->second.get();
-    sc_time service = sc_time_stamp() - holder->issued;
-    int status = payload.get_response_status() == tlm::TLM_OK_RESPONSE ? 0 : 1;
-    stats_.service_time += service;
-    stats_.completed++;
-    if (status)
-        stats_.failed++;
-    DRAMSysHBMAccessRecord &record = access_trace_[holder->trace_index];
-    record.completed = sc_time_stamp();
-    record.service = service;
-    record.status = status;
-    holder->tx->complete(
-        SC_ZERO_TIME, service, status,
-        status ? "DRAMSys transaction returned non-OK status" : "");
+    auto physical = holder->request;
+    auto logical = physical->logical;
+    const int status =
+        payload.get_response_status() == tlm::TLM_OK_RESPONSE ? 0 : 1;
+    if (status && logical->status == 0) {
+        logical->status = status;
+        logical->error = "DRAMSys transaction returned non-OK status";
+    }
+    if (status == 0 && logical->tx->command == MemCommand::kRead) {
+        std::copy_n(physical->payload.begin() + physical->burst_offset,
+                    physical->copy_length,
+                    logical->tx->payload.begin() + physical->logical_offset);
+    }
+    if (logical->remaining == 0)
+        throw std::logic_error(
+            "DRAMSysHBMBackend: physical completion underflow");
+    --logical->remaining;
+    if (logical->remaining == 0) {
+        const sc_time service = sc_time_stamp() - logical->issued_at;
+        stats_.service_time += service;
+        stats_.completed++;
+        if (logical->status)
+            stats_.failed++;
+        DRAMSysHBMAccessRecord &record = access_trace_[logical->trace_index];
+        record.completed = sc_time_stamp();
+        record.service = service;
+        record.status = logical->status;
+        active_logical_.erase(logical->tx.get());
+        logical->tx->complete(SC_ZERO_TIME, service, logical->status,
+                              logical->error);
+    }
     // 这里只释放 initiator 自己的引用。Arbiter 在稍后消费 END_RESP 后才释放其引用；
     // 最终 refcount==0 会回调 free()，下一 delta 才真正销毁 payload。
     payload.release();
@@ -198,9 +297,6 @@ void DRAMSysHBMBackend::CleanupLoop() {
         while (!retired_.empty()) {
             auto *payload = retired_.front();
             retired_.pop_front();
-            auto it = inflight_.find(payload);
-            if (it != inflight_.end())
-                trace_index_.erase(it->second->tx.get());
             inflight_.erase(payload);
         }
     }

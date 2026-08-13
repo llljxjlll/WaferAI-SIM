@@ -33,7 +33,7 @@ def main() -> int:
     tests.append(("independent Python oracle", oracle.returncode == 0 and "oracle self-test: PASS" in oracle.stdout, oracle.stdout.strip()))
     unit = run([str(NPUSIM), "--coll-v1-selftest"])
     tests.append(("planner/barrier self-test", unit.returncode == 0 and
-                  "PASS (12 checks)" in unit.stdout, "12 checks"))
+                  "PASS (15 checks)" in unit.stdout, "15 checks"))
     with tempfile.TemporaryDirectory(prefix="coll_v1_") as td:
         for op, (n, expected_flows) in OPS.items():
             path = Path(td) / f"{op}.json"

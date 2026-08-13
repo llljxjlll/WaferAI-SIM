@@ -22,5 +22,6 @@ public:
         name = "load_expert";
         param_name.insert(param_name.end(),
                           {"E_N", "K", "OC", "C", "strategy"});
+        setPrimMainCategory(MEM_PRIM);
     }
 };

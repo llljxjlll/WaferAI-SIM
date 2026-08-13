@@ -2,6 +2,8 @@
 
 #include "memory/hbm_backend.h"
 
+#include <algorithm>
+#include <limits>
 #include <map>
 #include <stdexcept>
 
@@ -72,6 +74,74 @@ public:
         }
         stats_.completed++;
         tx->complete(next_available_ - now, service, 0, "");
+    }
+
+
+    void DebugSeed(
+        uint64_t address,
+        const std::vector<uint8_t> &payload) override {
+        if (sc_core::sc_is_running())
+            throw std::logic_error(
+                "HBM DebugSeed is forbidden while simulation is running");
+        if (payload.empty())
+            throw std::invalid_argument(
+                "HBM DebugSeed payload must not be empty");
+        if (address > std::numeric_limits<uint64_t>::max() -
+                          payload.size())
+            throw std::out_of_range("HBM debug seed address overflows");
+        for (size_t i = 0; i < payload.size(); ++i)
+            backing_[address + i] = payload[i];
+    }
+
+    HBMDebugSnapshot DebugPeek(
+        uint64_t address, uint64_t size_bytes) const override {
+        if (sc_core::sc_is_running())
+            throw std::logic_error(
+                "HBM DebugPeek is forbidden while simulation is running");
+        if (size_bytes == 0 ||
+            size_bytes > std::numeric_limits<size_t>::max())
+            throw std::invalid_argument(
+                "HBM DebugPeek size is invalid");
+        if (address > std::numeric_limits<uint64_t>::max() - size_bytes)
+            throw std::out_of_range("HBM debug peek address overflows");
+        HBMDebugSnapshot snapshot;
+        snapshot.address = address;
+        snapshot.payload.resize(static_cast<size_t>(size_bytes), 0);
+        snapshot.present.resize(static_cast<size_t>(size_bytes), 0);
+        for (size_t i = 0; i < snapshot.payload.size(); ++i) {
+            const auto it = backing_.find(address + i);
+            if (it == backing_.end()) continue;
+            snapshot.payload[i] = it->second;
+            snapshot.present[i] = 1;
+        }
+        return snapshot;
+    }
+
+    void DebugRestore(
+        const HBMDebugSnapshot &snapshot) override {
+        if (sc_core::sc_is_running())
+            throw std::logic_error(
+                "HBM DebugRestore is forbidden while simulation is running");
+        if (snapshot.payload.empty() ||
+            snapshot.payload.size() != snapshot.present.size())
+            throw std::invalid_argument(
+                "HBM debug snapshot payload/present size mismatch");
+        if (!std::all_of(
+                snapshot.present.begin(), snapshot.present.end(),
+                [](uint8_t value) { return value <= 1; }))
+            throw std::invalid_argument(
+                "HBM debug snapshot presence must be zero or one");
+        if (snapshot.address >
+            std::numeric_limits<uint64_t>::max() -
+                snapshot.payload.size())
+            throw std::out_of_range("HBM debug restore address overflows");
+        for (size_t i = 0; i < snapshot.payload.size(); ++i) {
+            const uint64_t address = snapshot.address + i;
+            if (snapshot.present[i])
+                backing_[address] = snapshot.payload[i];
+            else
+                backing_.erase(address);
+        }
     }
 
     const HBMBackendStats &Stats() const override { return stats_; }

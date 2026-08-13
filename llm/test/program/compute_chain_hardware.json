@@ -1,0 +1,106 @@
+{
+  "x": 2,
+  "noc": {
+    "noc_payload_per_cycle": 4
+  },
+  "dte": {
+    "gamma_ns": 40000,
+    "tau_launch_avg_ns": 2000,
+    "command_slots_per_channel": 1,
+    "pending_queue_depth": 0,
+    "spm_read_width_bits": 2048,
+    "spm_write_width_bits": 2048,
+    "axi_read_width_bits": 2048,
+    "axi_write_width_bits": 2048
+  },
+  "operand": {
+    "comp_util": 0.7,
+    "core_credit": 8,
+    "pd_ratio": 5
+  },
+  "memory": {
+    "beha_dram_util": 0.7,
+    "dram_default_bitwidth": 32,
+    "sram_size": 16384,
+    "sram": {
+      "capacity_bytes": 16384,
+      "allocation_alignment_bytes": 64,
+      "bank_count": 4,
+      "bank_interleave_bytes": 64,
+      "read_base_latency_cycles": 2,
+      "write_base_latency_cycles": 2,
+      "queue_depth": 16,
+      "real_data_path": true,
+      "manual_regions": true,
+      "manual_memory_schedule": false,
+      "lsu": {
+        "queue_depth": 8,
+        "max_outstanding": 2,
+        "issue_latency_ns": 1
+      },
+      "dte_memory": {
+        "workers": 2,
+        "queue_depth": 8
+      },
+      "ports": {
+        "compute": {
+          "read": {"count": 1, "width_bits": 256},
+          "write": {"count": 1, "width_bits": 256}
+        },
+        "dte": {
+          "read": {"count": 1, "width_bits": 256},
+          "write": {"count": 1, "width_bits": 256}
+        },
+        "lsu": {
+          "read": {"count": 1, "width_bits": 256},
+          "write": {"count": 1, "width_bits": 256}
+        }
+      },
+      "regions": [
+        {
+          "name": "input",
+          "base_bytes": 0,
+          "size_bytes": 6144,
+          "allocator": "block",
+          "spillable": true,
+          "access": ["compute", "dte", "lsu", "legacy"]
+        },
+        {
+          "name": "intermediate",
+          "base_bytes": 6144,
+          "size_bytes": 6144,
+          "allocator": "block",
+          "spillable": true,
+          "access": ["compute", "dte", "lsu", "legacy"]
+        },
+        {
+          "name": "comm",
+          "base_bytes": 12288,
+          "size_bytes": 4096,
+          "allocator": "block",
+          "spillable": false,
+          "access": ["compute", "dte", "lsu", "noc_rx"]
+        }
+      ]
+    }
+  },
+  "gpu": {
+    "dram_bandwidth": 512,
+    "dram_burst_size": 2048,
+    "dram_aligned": 64
+  },
+  "cores": [
+    {
+      "id": 0,
+      "exu_x": 32,
+      "sfu_x": 1024,
+      "vec_x": 128,
+      "sa_cnt": 1,
+      "vec_cnt": 1,
+      "sram_bitwidth": 256,
+      "dram_bw": 256,
+      "dte_channel_count": 2,
+      "dte_bit_width": 256
+    }
+  ]
+}

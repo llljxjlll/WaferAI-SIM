@@ -63,18 +63,6 @@ def simulation() -> dict:
     return sim
 
 
-def drained(result: subprocess.CompletedProcess[str]) -> bool:
-    out = result.stdout
-    return (
-        result.returncode == 0
-        and "Catch test finished" in out
-        and "router_residual=0" in out
-        and "data_balanced=1 ctrl_balanced=1" in out
-        and "[COLL_DRAIN] tree_entries=0 reduce_nodes=0 barriers=0 "
-            "gather=0 reduce_rx=0 endpoints=0 dte_tokens=0" in out
-    )
-
-
 def run(work: Path, sim: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -116,13 +104,18 @@ def main() -> int:
             work.write_text(json.dumps(workload(ranks, count)))
             result = run(work, sim)
             ok = (
-                drained(result)
-                and result.stdout.count("[COLL_STREAM_TX]") == ranks
-                and result.stdout.count("[COLL_STREAM_RESULT]") == 1
-                and "value=verified" in result.stdout
-                and result.stdout.count("[COLL_V6_RELEASE]") == 1
+                result.returncode != 0
+                and "profile=reduce_only" in result.stdout
+                and "reduce_backend=dca_offload" in result.stdout
+                and "DCA stream TX requires the real SRAM data path"
+                    in result.stdout
+                and "[COLL_V5_RESULT]" not in result.stdout
+                and "[COLL_STREAM_RESULT]" not in result.stdout
             )
-            detail = f"{ranks} inputs, count={count}, exact+drained"
+            detail = (
+                f"{ranks} inputs, count={count}, behavioral SRAM rejected "
+                "before DCA source read without legacy fallback"
+            )
             if not ok:
                 detail += f"; rc={result.returncode}; tail={result.stdout[-1200:]}"
             tests.append((name, ok, detail))

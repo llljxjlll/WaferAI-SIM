@@ -1,7 +1,7 @@
 #include "prims/comp_prims.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(parse_input);
+REGISTER_PRIM(parse_input, PrimId::PARSE_INPUT);
 
 void parse_input::initialize() {
     auto &p = param_value;
@@ -15,7 +15,7 @@ void parse_input::taskCore(TaskCoreContext &context, string prim_name,
     // 将input_label这个标签存储在指定label中
     string inp_label = INPUT_LABEL;
     prim_context->sram_pos_locator_->changePairName(
-        inp_label, prim_context->datapass_label_->indata[0]);
+        inp_label, prim_context->datapass_label_->indata[0], true);
 
     LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
                     << " change input label to "

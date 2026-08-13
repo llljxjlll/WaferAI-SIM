@@ -1,10 +1,11 @@
+#include "isa/published_npu_ops.h"
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 #include "utils/memory_utils.h"
 #include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(rmsnorm_forward);
+REGISTER_PRIM(rmsnorm_forward, PrimId::RMSNORM_FORWARD);
 
 void rmsnorm_forward::initialize() {
     auto &p = param_value;
@@ -23,8 +24,9 @@ void rmsnorm_forward::taskCore(TaskCoreContext &context, string prim_name,
     checkStaticData(context, dram_time, data_chunk_addr["weight"],
                     GetFromPairedVector(data_chunk, "weight"), label_weight);
 
-    auto &p = param_value;
-    exu_ops = 0;
-    sfu_ops = (u_int64_t)p["N"];
-    vec_ops = (u_int64_t)p["B"] * p["T"] * (4 * p["C"] + 1);
+    const NpuOps ops =
+        EvaluatePublishedNpuOps(Opcode::RMSNORM, param_value);
+    exu_ops = ops.exu;
+    sfu_ops = ops.sfu;
+    vec_ops = ops.vec;
 }

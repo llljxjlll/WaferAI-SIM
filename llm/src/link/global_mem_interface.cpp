@@ -1,4 +1,5 @@
 #include <atomic>
+#include <stdexcept>
 #include <vector>
 
 #include "link/chip_config_helper.h"
@@ -20,8 +21,17 @@ GlobalMemInterface::GlobalMemInterface(const sc_module_name &n, Event_engine *ev
     load_global_prims(config_name);
 }
 
-GlobalMemInterface::GlobalMemInterface(const sc_module_name &n, Event_engine *event_engine, config_helper_base *input_config){
-    assert(0);
+GlobalMemInterface::GlobalMemInterface(
+    const sc_module_name &n, Event_engine *event_engine,
+    config_helper_base *input_config)
+    : sc_module(n), event_engine(event_engine), config_helper(nullptr), cid(0) {
+    if (input_config == nullptr)
+        throw std::invalid_argument(
+            "GlobalMemInterface injected helper must not be null");
+    // Program Format v1 has no GLOBAL_* capability. Keep the existing chip
+    // memory endpoint available for socket binding, but intentionally load no
+    // chip-global instructions from the core program helper.
+    init();
 }
 
 GlobalMemInterface::GlobalMemInterface() {
@@ -141,30 +151,25 @@ void GlobalMemInterface::task_logic() {
 }
 
 void GlobalMemInterface::instr_executor() {
-    while(true) {
-        chip_instr_base *p = global_instrs_queue.front();
-        // global_instrs_queue.pop_front();
-
-        if(global_instrs_queue.size() == 0){
-            //
+    while (true) {
+        if (global_instrs_queue.empty()) {
             wait();
-        } else{
-            p = global_instrs_queue.front();
-            ev_task.notify(CYCLE, SC_NS);
-            event_engine->add_event("Chip " + ToHexString(cid), "Comp_prim",
-                                    "B", Trace_event_util(p->name));
-            wait(chip_prim_block.negedge_event());
-            event_engine->add_event("Chip " + ToHexString(cid), "Comp_prim",
-                                    "E", Trace_event_util(p->name));
-                                    
-            if(chip_prim_refill){
-                bool flag = false;
-                global_instrs_queue.emplace_back(p);
-            }
-
-            global_instrs_queue.pop_front();
-            wait(CYCLE, SC_NS);
+            continue;
         }
+        chip_instr_base *p = global_instrs_queue.front();
+        ev_task.notify(CYCLE, SC_NS);
+        event_engine->add_event("Chip " + ToHexString(cid), "Comp_prim",
+                                "B", Trace_event_util(p->name));
+        wait(chip_prim_block.negedge_event());
+        event_engine->add_event("Chip " + ToHexString(cid), "Comp_prim",
+                                "E", Trace_event_util(p->name));
+
+        if (chip_prim_refill) {
+            global_instrs_queue.emplace_back(p);
+        }
+
+        global_instrs_queue.pop_front();
+        wait(CYCLE, SC_NS);
     }
 }
 

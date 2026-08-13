@@ -5,7 +5,7 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(matmul_forward_pd);
+REGISTER_PRIM(matmul_forward_pd, PrimId::MATMUL_FORWARD_PD);
 
 void matmul_forward_pd::initialize() {
     auto &p = param_value;

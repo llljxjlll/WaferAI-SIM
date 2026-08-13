@@ -94,8 +94,8 @@ def main() -> int:
         timeout=20,
     )
     tests.append(("R1 canonical config contract",
-                  unit.returncode == 0 and "PASS (42 checks)" in unit.stdout,
-                  "42 checks"))
+                  unit.returncode == 0 and "PASS (45 checks)" in unit.stdout,
+                  "45 checks"))
 
     with tempfile.TemporaryDirectory(prefix="coll_r1_") as td:
         tmp = Path(td)
@@ -144,12 +144,16 @@ def main() -> int:
         tier2 = tmp / "tier2.json"
         tier2.write_text(json.dumps(simulation({"tier": 2})))
         result = run(reduce_work, tier2)
-        tests.append(("tier=2 aliases new DCA without legacy fallback",
-                      result.returncode == 0 and
-                      "[COLL_STREAM_RESULT]" in result.stdout and
+        tests.append(("tier=2 selects DCA and rejects behavioral SRAM without fallback",
+                      result.returncode != 0 and
+                      "profile=reduce_broadcast" in result.stdout and
+                      "reduce_backend=dca_offload" in result.stdout and
+                      "DCA stream TX requires the real SRAM data path"
+                          in result.stdout and
                       "[COLL_V5_RESULT]" not in result.stdout,
-                      f"exit={result.returncode} stream="
-                      f"{'[COLL_STREAM_RESULT]' in result.stdout}"))
+                      f"exit={result.returncode} dca_selected="
+                      f"{'reduce_backend=dca_offload' in result.stdout} "
+                      f"fallback={'[COLL_V5_RESULT]' in result.stdout}"))
 
         int64_workload = collective_workload("reduce")
         int64_desc = int64_workload["chips"][0]["collectives"][0]

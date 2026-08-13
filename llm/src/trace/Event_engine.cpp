@@ -158,6 +158,9 @@ void Event_engine::writeEvents(bool final) {
         json_stream << ", \"tid\": ";
         json_stream << thread_idx[make_pair(m_name, t_name)];
 
+        if (event_type == "i")
+            json_stream << ", \"s\": \"t\"";
+
         // 针对 flow event 的特殊处理
         if (event_type == "s" || event_type == "f") {
             json_stream << ", \"id\": ";
@@ -169,18 +172,29 @@ void Event_engine::writeEvents(bool final) {
             }
         }
 
-        // 写入通用 args 字段
+        // 写入通用 args 字段。整数计数器用于需要精确 u64 的
+        // runtime 统计；旧事件未设置计数器时输出保持不变。
         json_stream << ", \"args\": {";
+        bool wrote_arg = false;
         if (event_type == "C") {
             string value_name = (!iter->util.m_bar_name.empty())
                                     ? iter->util.m_bar_name
                                     : t_name;
             json_stream << "\"" << value_name << "\": ";
             json_stream << iter->util.m_value;
+            wrote_arg = true;
         } else if (!iter->util.m_bar_name.empty()) {
             json_stream << "\"name\": \"";
             json_stream << iter->util.m_bar_name;
             json_stream << "\"";
+            wrote_arg = true;
+        }
+        for (const auto &counter : iter->util.m_counters) {
+            if (wrote_arg)
+                json_stream << ", ";
+            json_stream << "\"" << counter.first << "\": "
+                        << counter.second;
+            wrote_arg = true;
         }
         json_stream << "}";
 

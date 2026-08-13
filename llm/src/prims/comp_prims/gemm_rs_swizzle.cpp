@@ -10,7 +10,7 @@
 #include <numeric>
 #include <stdexcept>
 
-REGISTER_PRIM(Gemm_rs_swizzle);
+REGISTER_PRIM(Gemm_rs_swizzle, PrimId::GEMM_RS_SWIZZLE);
 
 namespace {
 double NowNs() { return sc_time_stamp().to_seconds() * 1.0e9; }

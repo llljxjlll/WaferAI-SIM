@@ -50,7 +50,7 @@ def main() -> int:
                 in completed.stdout
         )
         tests.append(("legacy Tier2 32 chunks completes",
-                      completed.returncode == 0 and time_ns == 6328 and drained,
+                      completed.returncode == 0 and time_ns == 6330 and drained,
                       f"exit={completed.returncode} time={time_ns}ns drain={drained}"))
 
         for bits, chunks in ((5120, 40), (8192, 64)):

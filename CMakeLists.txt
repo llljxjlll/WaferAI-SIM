@@ -33,6 +33,24 @@ include_directories(
 )
 
 
+option(BUILD_RUNTIME_SANITIZER_TESTS
+    "Build the representative npusim ASan/UBSan/LSan runtime gate" OFF)
+option(SYSTEMC_PTHREAD_COROUTINES
+    "Assert that SYSTEMC_HOME was built with ENABLE_PTHREADS=ON" OFF)
+if(BUILD_RUNTIME_SANITIZER_TESTS)
+    if(NOT SYSTEMC_PTHREAD_COROUTINES)
+        message(FATAL_ERROR
+            "BUILD_RUNTIME_SANITIZER_TESTS requires a SystemC build with "
+            "ENABLE_PTHREADS=ON and -DSYSTEMC_PTHREAD_COROUTINES=ON; "
+            "QuickThreads uses unregistered fiber stacks and yields false "
+            "ASan stack-buffer-overflow reports.")
+    endif()
+    # This must precede add_subdirectory(DRAMSys) so every SystemC client uses
+    # the coroutine ABI selected by the external pthread SystemC library.
+    add_compile_definitions(SC_USE_PTHREADS)
+endif()
+
+
 add_subdirectory(DRAMSys)
 
 # 搜索所有.cpp文件
@@ -53,6 +71,12 @@ message(STATUS "Source files: ${SRC_FILES}")
 # include_directories(${CAIRO_INCLUDE_DIRS})
 
 option(BUILD_DEBUG_TARGETS "Build debug versions of executables" OFF)
+option(BUILD_SANITIZER_TESTS
+    "Build the focused Program Format ASan/UBSan/LSan gate" OFF)
+if(BUILD_RUNTIME_SANITIZER_TESTS AND NOT BUILD_SANITIZER_TESTS)
+    message(FATAL_ERROR
+        "BUILD_RUNTIME_SANITIZER_TESTS requires BUILD_SANITIZER_TESTS=ON")
+endif()
 # 设置 L1/L2 缓存大小（支持命令行传入，带默认值）
 set(L1CACHESIZE ${L1CACHESIZE} CACHE STRING "L1 Cache Size in bytes")
 set(L2CACHESIZE ${L2CACHESIZE} CACHE STRING "L2 Cache Size in bytes")
@@ -133,7 +157,646 @@ function(add_test_executable target_name test_main_file)
 endfunction()
 
 add_test_executable(npusim       "./llm/unittest/npusim.cpp")
+
+if(BUILD_RUNTIME_SANITIZER_TESTS)
+    # Rebuild the production simulator sources with instrumentation.  The
+    # P8 runtime CTest below executes the same artifact/probe/trace runner as
+    # the normal gate, rather than substituting a parser-only harness.
+    add_test_executable(npusim_runtime_sanitizer
+        "./llm/unittest/npusim.cpp")
+    target_compile_options(npusim_runtime_sanitizer PRIVATE
+        -O1 -fno-omit-frame-pointer -fsanitize=address,undefined)
+    target_link_libraries(npusim_runtime_sanitizer PRIVATE
+        -fsanitize=address,undefined)
+endif()
+
+# Small compiler-backend reference utility. It links only the public ISA
+# container/record codecs, so producing an artifact does not initialize
+# SystemC or simulator-global state.
+add_executable(npusim_program_fixture
+    ./llm/unittest/program_fixture.cpp
+    ./llm/src/isa/opcode.cpp
+    ./llm/src/isa/record_codec.cpp
+    ./llm/src/isa/program_format.cpp)
+target_compile_options(npusim_program_fixture PRIVATE
+    -Wall -Wextra -Werror)
+
+if(BUILD_SANITIZER_TESTS)
+    add_executable(npusim_program_format_sanitizer_selftest
+        ./llm/unittest/program_format_selftest_main.cpp
+        ./llm/src/isa/opcode.cpp
+        ./llm/src/isa/record_codec.cpp
+        ./llm/src/isa/program_format.cpp
+        ./llm/src/isa/program_format_selftest.cpp)
+    target_compile_options(npusim_program_format_sanitizer_selftest PRIVATE
+        -Wall -Wextra -Werror -O1 -fno-omit-frame-pointer
+        -fsanitize=address,undefined)
+    target_link_libraries(npusim_program_format_sanitizer_selftest PRIVATE
+        -fsanitize=address,undefined)
+endif()
+
 if(BUILD_TESTING)
+    if(TARGET npusim_program_format_sanitizer_selftest)
+        add_test(NAME program_format_v1_sanitizer_selftest
+            COMMAND npusim_program_format_sanitizer_selftest)
+        set_tests_properties(program_format_v1_sanitizer_selftest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            RUN_SERIAL TRUE
+            LABELS "isa;program;p8;negative;sanitizer"
+            ENVIRONMENT
+                "ASAN_OPTIONS=detect_leaks=1:strict_string_checks=1:halt_on_error=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+    endif()
+
+    add_test(NAME isa_v1_selftest
+             COMMAND npusim --isa-v1-selftest)
+    set_tests_properties(isa_v1_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa")
+
+    add_test(NAME collective_data_v1_prim_selftest
+             COMMAND npusim --collective-data-v1-prim-selftest)
+    set_tests_properties(collective_data_v1_prim_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa")
+
+    add_test(NAME collective_phase_barrier_v1_prim_selftest
+             COMMAND npusim --collective-phase-barrier-v1-prim-selftest)
+    set_tests_properties(collective_phase_barrier_v1_prim_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa")
+
+    add_test(NAME sync_runtime_selftest
+             COMMAND npusim --sync-runtime-selftest)
+    set_tests_properties(sync_runtime_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa;runtime")
+
+    add_test(NAME p2p_payload_selftest
+             COMMAND npusim --p2p-payload-selftest)
+    set_tests_properties(p2p_payload_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa;runtime;p2p")
+
+    add_test(NAME p2p_session_selftest
+             COMMAND npusim --p2p-session-selftest)
+    set_tests_properties(p2p_session_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa;runtime;p2p")
+
+    add_test(NAME p5_memory_probe_selftest
+             COMMAND npusim --p5-memory-probe-selftest)
+    set_tests_properties(p5_memory_probe_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "isa;program;p2p;memory-probe")
+
+    # Program runtime tests write traces, event logs, and result files. Keep
+    # them below one dedicated binary-tree directory. The compatibility links
+    # preserve the simulator existing ../font and ../DRAMSys lookup contract.
+    set(program_runtime_dir "${CMAKE_BINARY_DIR}/program-runtime-ctest")
+    file(MAKE_DIRECTORY "${program_runtime_dir}")
+    if(NOT EXISTS "${CMAKE_BINARY_DIR}/font")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "${CMAKE_SOURCE_DIR}/font" "${CMAKE_BINARY_DIR}/font")
+    endif()
+    if(NOT EXISTS "${CMAKE_BINARY_DIR}/DRAMSys/configs")
+        execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "${CMAKE_SOURCE_DIR}/DRAMSys/configs"
+            "${CMAKE_BINARY_DIR}/DRAMSys/configs")
+    endif()
+
+    set(program_fixture_path
+        "${program_runtime_dir}/program fixture 路径.npup")
+    add_test(NAME program_fixture_generate
+             COMMAND npusim_program_fixture "${program_fixture_path}")
+    set_tests_properties(program_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP program_artifact
+        LABELS "isa;program;sram-bind")
+
+    add_test(NAME program_cli_smoke
+             COMMAND npusim
+                --program "${program_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/default/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --trace-window 1000000)
+    set_tests_properties(program_cli_smoke PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED program_artifact
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;startup;runtime;sram-bind"
+        PASS_REGULAR_EXPRESSION "Core 0 end compute primitive Dummy_p"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    add_test(NAME program_cli_mutual_exclusion
+             COMMAND npusim
+                --program "${program_fixture_path}"
+                --workload-config ${CMAKE_SOURCE_DIR}/llm/test/default/workload.json)
+    set_tests_properties(program_cli_mutual_exclusion PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED program_artifact
+        WILL_FAIL TRUE
+        LABELS "isa;program;negative")
+
+    add_test(NAME program_cli_missing_file
+             COMMAND npusim --program
+                "${program_runtime_dir}/missing program artifact.npup")
+    set_tests_properties(program_cli_missing_file PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        WILL_FAIL TRUE
+        LABELS "isa;program;negative")
+
+    set(program_corrupt_fixture_path
+        "${program_runtime_dir}/corrupt program artifact.npup")
+    add_test(NAME program_corrupt_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_corrupt_fixture_path}" --corrupt-crc)
+    set_tests_properties(program_corrupt_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP corrupt_program_artifact
+        LABELS "isa;program;negative")
+
+    add_test(NAME program_cli_corrupt_crc
+             COMMAND npusim --program "${program_corrupt_fixture_path}")
+    set_tests_properties(program_cli_corrupt_crc PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED corrupt_program_artifact
+        WILL_FAIL TRUE
+        LABELS "isa;program;negative")
+
+    set(program_missing_bind_fixture_path
+        "${program_runtime_dir}/missing bind program.npup")
+    add_test(NAME program_missing_bind_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_missing_bind_fixture_path}" --missing-bind)
+    set_tests_properties(program_missing_bind_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP missing_bind_program_artifact
+        LABELS "isa;program;negative;sram-bind")
+
+    add_test(NAME program_cli_missing_bind
+             COMMAND npusim
+                --program "${program_missing_bind_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/default/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec)
+    set_tests_properties(program_cli_missing_bind PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED missing_bind_program_artifact
+        WILL_FAIL TRUE
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;negative;sram-bind"
+        FAIL_REGULAR_EXPRESSION "Loaded Program Format")
+
+    set(program_wrong_arity_fixture_path
+        "${program_runtime_dir}/wrong arity program.npup")
+    add_test(NAME program_wrong_arity_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_wrong_arity_fixture_path}" --wrong-arity)
+    set_tests_properties(program_wrong_arity_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP wrong_arity_program_artifact
+        LABELS "isa;program;negative;sram-bind")
+
+    add_test(NAME program_cli_wrong_bind_arity
+             COMMAND npusim
+                --program "${program_wrong_arity_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/default/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec)
+    set_tests_properties(program_cli_wrong_bind_arity PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED wrong_arity_program_artifact
+        WILL_FAIL TRUE
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;negative;sram-bind"
+        FAIL_REGULAR_EXPRESSION "Loaded Program Format")
+
+    set(program_sync_event_fixture_path
+        "${program_runtime_dir}/sync event program.npup")
+    add_test(NAME program_sync_event_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_sync_event_fixture_path}" --p4-sync-event)
+    set_tests_properties(program_sync_event_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP sync_event_program_artifact
+        LABELS "isa;program;sync;event")
+
+    add_test(NAME program_cli_sync_event
+             COMMAND npusim
+                --program "${program_sync_event_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/default/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --trace-window 1000000)
+    set_tests_properties(program_cli_sync_event PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED sync_event_program_artifact
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;runtime;sync;event"
+        PASS_REGULAR_EXPRESSION
+            "\\[COLL_DRAIN\\].*barriers=0.*event=0"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(program_sync_bad_endpoint_fixture_path
+        "${program_runtime_dir}/sync bad endpoint program.npup")
+    add_test(NAME program_sync_bad_endpoint_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_sync_bad_endpoint_fixture_path}"
+                --p4-sync-bad-endpoint)
+    set_tests_properties(program_sync_bad_endpoint_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP sync_bad_endpoint_program_artifact
+        LABELS "isa;program;negative;sync;event")
+
+    add_test(NAME program_cli_sync_bad_endpoint
+             COMMAND npusim
+                --program "${program_sync_bad_endpoint_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/default/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec)
+    set_tests_properties(program_cli_sync_bad_endpoint PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED sync_bad_endpoint_program_artifact
+        WILL_FAIL TRUE
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;negative;sync;event"
+        FAIL_REGULAR_EXPRESSION "Loaded Program Format")
+
+    set(program_lifecycle_fixture_path
+        "${program_runtime_dir}/sram lifecycle program.npup")
+    add_test(NAME program_lifecycle_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_lifecycle_fixture_path}" --p4-lifecycle)
+    set_tests_properties(program_lifecycle_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP lifecycle_program_artifact
+        LABELS "isa;program;sram;lifecycle")
+
+    add_test(NAME program_cli_sram_lifecycle
+             COMMAND npusim
+                --program "${program_lifecycle_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/sram/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --trace-window 1000000)
+    set_tests_properties(program_cli_sram_lifecycle PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED lifecycle_program_artifact
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;runtime;sram;lifecycle"
+        PASS_REGULAR_EXPRESSION "End DONE reception"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(program_lifecycle_dangling_fixture_path
+        "${program_runtime_dir}/sram lifecycle dangling program.npup")
+    add_test(NAME program_lifecycle_dangling_fixture_generate
+             COMMAND npusim_program_fixture
+                "${program_lifecycle_dangling_fixture_path}"
+                --p4-lifecycle-dangling)
+    set_tests_properties(program_lifecycle_dangling_fixture_generate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_SETUP lifecycle_dangling_program_artifact
+        LABELS "isa;program;negative;sram;lifecycle")
+
+    add_test(NAME program_cli_sram_lifecycle_dangling
+             COMMAND npusim
+                --program "${program_lifecycle_dangling_fixture_path}"
+                --hardware-config ${CMAKE_SOURCE_DIR}/llm/test/sram/hardware.json
+                --simulation-config ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --mapping-config ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec)
+    set_tests_properties(program_cli_sram_lifecycle_dangling PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        FIXTURES_REQUIRED lifecycle_dangling_program_artifact
+        WILL_FAIL TRUE
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "isa;program;negative;sram;lifecycle"
+        FAIL_REGULAR_EXPRESSION "Loaded Program Format")
+
+    find_package(PythonInterp 3 REQUIRED)
+    function(add_p5_endpoint_fixture fixture_name fixture_option)
+        set(fixture_path
+            "${program_runtime_dir}/p5_${fixture_name}.npup")
+        add_test(NAME program_p5_${fixture_name}_fixture_generate
+            COMMAND npusim_program_fixture
+                "${fixture_path}" "${fixture_option}")
+        set_tests_properties(
+            program_p5_${fixture_name}_fixture_generate PROPERTIES
+            WORKING_DIRECTORY "${program_runtime_dir}"
+            LABELS "isa;program;p2p;fixture")
+    endfunction()
+
+    add_p5_endpoint_fixture(sram_sync_129 --p5-sram-sync-129)
+    add_p5_endpoint_fixture(sram_async_4k --p5-sram-async-4k)
+    add_p5_endpoint_fixture(hbm_sync_129 --p5-hbm-sync-129)
+    add_p5_endpoint_fixture(pair_missing --p5-pair-missing)
+    add_p5_endpoint_fixture(pair_mismatch --p5-pair-mismatch)
+
+    set(p5_endpoint_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/program/run_p5_endpoint_program.py")
+    set(p5_endpoint_oracle
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p5_endpoint_oracle.json")
+    set(p5_endpoint_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/sram/hardware_numa.json")
+
+    add_test(NAME program_p5_endpoint_runner_selftest
+        COMMAND ${PYTHON_EXECUTABLE} ${p5_endpoint_runner} --selftest)
+    set_tests_properties(program_p5_endpoint_runner_selftest PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        LABELS "isa;program;p2p;fixture"
+        PASS_REGULAR_EXPRESSION
+            "\\[P5 ENDPOINT PROGRAM\\] PASS: manifest/category selftest")
+
+    add_test(NAME program_p5_endpoint_loader_negatives
+        COMMAND ${PYTHON_EXECUTABLE} ${p5_endpoint_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --oracle ${p5_endpoint_oracle}
+            --hardware ${p5_endpoint_hardware}
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR}
+            --negative-only)
+    set_tests_properties(program_p5_endpoint_loader_negatives PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 120
+        RUN_SERIAL TRUE
+        LABELS "isa;program;p2p;negative;loader"
+        PASS_REGULAR_EXPRESSION
+            "\\[P5 ENDPOINT PROGRAM\\] PASS: loader negatives"
+        FAIL_REGULAR_EXPRESSION "Loaded Program Format")
+
+    set(p5_endpoint_simulation
+        "${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json")
+    set(p5_endpoint_streaming_simulation
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p5_streaming_simulation.json")
+    set(p5_endpoint_bounded_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p5_bounded_hardware.json")
+    set(p5_endpoint_large_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p5_large_hardware.json")
+    set(p5_endpoint_behavioral_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p5_behavioral_hardware.json")
+    set(p5_endpoint_behavioral_simulation
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p5_behavioral_simulation.json")
+
+    # The production endpoint matrix is serialized because the runner shares
+    # trace/VCD output paths across simulations.
+    function(add_p5_endpoint_runtime variant)
+        add_test(NAME program_p5_endpoint_runtime_${variant}
+            COMMAND ${PYTHON_EXECUTABLE} ${p5_endpoint_runner}
+                --npusim $<TARGET_FILE:npusim>
+                --program-fixture $<TARGET_FILE:npusim_program_fixture>
+                --oracle ${p5_endpoint_oracle}
+                --hardware ${p5_endpoint_hardware}
+                --simulation ${p5_endpoint_simulation}
+                --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --runtime-root ${CMAKE_BINARY_DIR}
+                --large-hardware ${p5_endpoint_large_hardware}
+                --variant ${variant}
+                ${ARGN})
+        set_tests_properties(
+            program_p5_endpoint_runtime_${variant} PROPERTIES
+            WORKING_DIRECTORY "${program_runtime_dir}"
+            TIMEOUT 1200
+            RUN_SERIAL TRUE
+            LABELS
+                "isa;program;p2p;runtime;${variant}"
+            PASS_REGULAR_EXPRESSION
+                "\\[P5 ENDPOINT PROGRAM\\] PASS: runtime positives"
+            FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+    endfunction()
+
+    add_p5_endpoint_runtime(base)
+    add_p5_endpoint_runtime(streaming
+        --streaming-simulation ${p5_endpoint_streaming_simulation})
+    add_p5_endpoint_runtime(bounded
+        --bounded-hardware ${p5_endpoint_bounded_hardware})
+    add_p5_endpoint_runtime(behavioral
+        --behavioral-hardware ${p5_endpoint_behavioral_hardware}
+        --behavioral-simulation ${p5_endpoint_behavioral_simulation})
+
+    set(p6_collective_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/program/run_p6_collective_program.py")
+    set(p6_collective_oracle
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p6_collective_oracle.json")
+    set(p6_collective_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p6_collective_hardware.json")
+
+    add_test(NAME program_p6_collective_runner_selftest
+        COMMAND ${PYTHON_EXECUTABLE} ${p6_collective_runner} --selftest)
+    set_tests_properties(program_p6_collective_runner_selftest PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        LABELS "isa;program;collective;p6;fixture"
+        PASS_REGULAR_EXPRESSION
+            "\\[P6 COLLECTIVE PROGRAM\\] PASS: trace/stats/drain/oracle selftest")
+
+    add_test(NAME program_p6_collective_fixture_matrix
+        COMMAND ${PYTHON_EXECUTABLE} ${p6_collective_runner}
+            --fixture-selftest
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --npusim $<TARGET_FILE:npusim>
+            --oracle ${p6_collective_oracle}
+            --hardware ${p6_collective_hardware}
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(program_p6_collective_fixture_matrix PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+        LABELS "isa;program;collective;p6;fixture"
+        PASS_REGULAR_EXPRESSION
+            "\\[P6 COLLECTIVE PROGRAM\\] PASS: 37 positive \\+ 6 negative artifacts \\+ 1 fixture rejection \\+ 6 loader rejections")
+
+    add_test(NAME program_p6_collective_runtime_matrix
+        COMMAND ${PYTHON_EXECUTABLE} ${p6_collective_runner}
+            --runtime-all
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --oracle ${p6_collective_oracle}
+            --hardware ${p6_collective_hardware}
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(program_p6_collective_runtime_matrix PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 3600
+        RUN_SERIAL TRUE
+        LABELS "isa;program;collective;p6;runtime"
+        PASS_REGULAR_EXPRESSION
+            "\\[P6 COLLECTIVE PROGRAM\\] PASS: runtime matrix 37 fixtures"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(p7_accelerated_32k_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/program/run_p7_accelerated_32k_program.py")
+    set(p7_accelerated_32k_oracle
+        "${CMAKE_SOURCE_DIR}/llm/test/program/p7_accelerated_32k_oracle.json")
+
+    add_test(NAME program_p7_accelerated_32k_runtime_matrix
+        COMMAND ${PYTHON_EXECUTABLE} ${p7_accelerated_32k_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --oracle ${p7_accelerated_32k_oracle}
+            --p6-oracle ${p6_collective_oracle}
+            --hardware ${p6_collective_hardware}
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(program_p7_accelerated_32k_runtime_matrix PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 3600
+        RUN_SERIAL TRUE
+        LABELS "isa;program;collective;p7;runtime;profile;32k"
+        PASS_REGULAR_EXPRESSION
+            "\\[P7 ACCELERATED 32K\\] PASS: cases=2 profiles=4 isolated_processes=8 K=1"
+        FAIL_REGULAR_EXPRESSION
+            "\\[PROTO_WAIT\\]|requested collective backend rejected|fallback")
+
+    set(p8_double_buffer_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/isa/run_p8_double_buffer_program.py")
+    set(p8_double_buffer_oracle
+        "${CMAKE_SOURCE_DIR}/llm/test/isa/p8_double_buffer_oracle.json")
+    set(p8_double_buffer_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/isa/p8_double_buffer_hardware.json")
+
+    add_test(NAME program_p8_double_buffer_runner_selftest
+        COMMAND ${PYTHON_EXECUTABLE} ${p8_double_buffer_runner}
+            --selftest --oracle ${p8_double_buffer_oracle})
+    set_tests_properties(program_p8_double_buffer_runner_selftest PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        LABELS "isa;program;p8;fixture;memory"
+        PASS_REGULAR_EXPRESSION
+            "\\[P8 DOUBLE BUFFER\\] PASS: runner/oracle selftest")
+
+    add_test(NAME program_p8_double_buffer_runtime
+        COMMAND ${PYTHON_EXECUTABLE} ${p8_double_buffer_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --oracle ${p8_double_buffer_oracle}
+            --hardware ${p8_double_buffer_hardware}
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(program_p8_double_buffer_runtime PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 180
+        RUN_SERIAL TRUE
+        LABELS "isa;program;p8;runtime;memory;double-buffer"
+        PASS_REGULAR_EXPRESSION
+            "\\[P8 DOUBLE BUFFER\\] PASS: exact token lifecycle and full drain"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    if(TARGET npusim_runtime_sanitizer)
+        add_test(NAME program_p8_double_buffer_runtime_sanitizer
+            COMMAND ${PYTHON_EXECUTABLE} ${p8_double_buffer_runner}
+                --npusim $<TARGET_FILE:npusim_runtime_sanitizer>
+                --program-fixture $<TARGET_FILE:npusim_program_fixture>
+                --oracle ${p8_double_buffer_oracle}
+                --hardware ${p8_double_buffer_hardware}
+                --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --runtime-root ${CMAKE_BINARY_DIR})
+        set_tests_properties(program_p8_double_buffer_runtime_sanitizer
+            PROPERTIES
+            WORKING_DIRECTORY "${program_runtime_dir}"
+            TIMEOUT 300
+            RUN_SERIAL TRUE
+            LABELS
+                "isa;program;p8;runtime;memory;double-buffer;sanitizer"
+            PASS_REGULAR_EXPRESSION
+                "\\[P8 DOUBLE BUFFER\\] PASS: exact token lifecycle and full drain"
+            FAIL_REGULAR_EXPRESSION
+                "\\[PROTO_WAIT\\]|AddressSanitizer|runtime error:|LeakSanitizer"
+            ENVIRONMENT
+                "ASAN_OPTIONS=detect_leaks=1:strict_string_checks=1:halt_on_error=1:abort_on_error=1;LSAN_OPTIONS=exitcode=23:report_objects=1;UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+    endif()
+
+    set(p8_program_b_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/isa/run_p8_program_b.py")
+    set(p8_program_b_oracle
+        "${CMAKE_SOURCE_DIR}/llm/test/isa/p8_program_b_oracle.json")
+    set(p8_program_b_hardware
+        "${CMAKE_SOURCE_DIR}/llm/test/isa/p8_program_b_hardware.json")
+
+    add_test(NAME program_p8_program_b_runner_selftest
+        COMMAND ${PYTHON_EXECUTABLE} ${p8_program_b_runner}
+            --selftest --oracle ${p8_program_b_oracle})
+    set_tests_properties(program_p8_program_b_runner_selftest PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        LABELS "isa;program;p8;fixture;collective"
+        PASS_REGULAR_EXPRESSION
+            "\\[P8 PROGRAM B\\] PASS: artifact/byte/profile/repeat runner selftest")
+
+    add_test(NAME program_p8_program_b_runtime
+        COMMAND ${PYTHON_EXECUTABLE} ${p8_program_b_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --oracle ${p8_program_b_oracle}
+            --hardware ${p8_program_b_hardware}
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR}
+            --profiles baseline,broadcast_only,reduce_only,reduce_broadcast
+            --repeat 3
+            --require-accelerated)
+    set_tests_properties(program_p8_program_b_runtime PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 1800
+        RUN_SERIAL TRUE
+        LABELS "isa;program;p8;runtime;collective;profile"
+        PASS_REGULAR_EXPRESSION
+            "\\[P8 PROGRAM B\\] PASS: profiles=baseline,broadcast_only,reduce_only,reduce_broadcast repeat=3 isolated_processes=12"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    add_test(NAME program_isa_v1_mutation_gate
+        COMMAND ${PYTHON_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/llm/test/isa/run_isa_program_mutation.py
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(program_isa_v1_mutation_gate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 180
+        RUN_SERIAL TRUE
+        LABELS "isa;program;p8;negative;mutation"
+        PASS_REGULAR_EXPRESSION
+            "\\[ISA MUTATION\\] PASS: 58 deterministic container/record mutations")
+
+    add_test(NAME program_legacy_compute_diff
+        COMMAND ${PYTHON_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/llm/test/program/run_compute_chain_diff.py
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --legacy-workload
+                ${CMAKE_SOURCE_DIR}/llm/test/program/compute_chain_legacy.json
+            --hardware
+                ${CMAKE_SOURCE_DIR}/llm/test/program/compute_chain_hardware.json
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/default/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(program_legacy_compute_diff PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 120
+        RUN_SERIAL TRUE
+        LABELS "isa;program;runtime;sram-bind;compute-cost;legacy"
+        PASS_REGULAR_EXPRESSION
+            "\\[P3 COMPUTE DIFF\\] PASS: lifecycle matches with no temporary residual"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
     foreach(hbm_stage RANGE 0 4)
         add_test(NAME hbm_r${hbm_stage}_selftest
                  COMMAND npusim --hbm-r${hbm_stage}-selftest)

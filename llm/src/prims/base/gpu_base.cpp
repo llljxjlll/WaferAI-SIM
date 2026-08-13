@@ -4,17 +4,31 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
 vector<sc_bv<128>> GpuBase::serialize() {
     LOG_DEBUG(CONFIG_DEBUG) << "Start serialize " << name;
 
     vector<sc_bv<128>> segments;
+    if (datatype != INT8 && datatype != FP16)
+        throw std::invalid_argument(name + " has an invalid datatype");
+    if (fetch_index < 0 || req_sm < 0)
+        throw std::overflow_error(
+            name + " GPU index fields must be non-negative");
+    for (const auto &entry : param_value)
+        if (entry.second < 0 || entry.second > 0x3fffffff)
+            throw std::overflow_error(name + " parameter " + entry.first +
+                                      " exceeds the 30-bit Prim wire");
+
 
     // metadata
-    sc_bv<128> metadata;
+    sc_bv<128> metadata = 0;
     metadata.range(7, 0) = sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
-    metadata.range(8, 8) = sc_bv<1>(datatype);
-    metadata.range(24, 9) = sc_bv<16>(fetch_index);
-    metadata.range(56, 41) = sc_bv<16>(req_sm);
+    metadata.range(9, 8) = sc_bv<2>(datatype);
+    metadata.range(41, 10) = sc_bv<32>(static_cast<uint32_t>(fetch_index));
+    metadata.range(73, 42) = sc_bv<32>(static_cast<uint32_t>(req_sm));
     segments.push_back(metadata);
 
     std::vector<std::pair<std::string, int>> vec(param_value.begin(),
@@ -24,7 +38,7 @@ vector<sc_bv<128>> GpuBase::serialize() {
 
     // 规定一个参数使用32位存储，即一个segment存储4个参数
     for (auto it = vec.begin(); it != vec.end();) {
-        sc_bv<128> d;
+        sc_bv<128> d = 0;
         d.range(7, 0) = sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
         int pos = 8;
         for (int i = 0; i < 4 && it != vec.end(); i++, it++, pos += 30) {
@@ -41,38 +55,83 @@ vector<sc_bv<128>> GpuBase::serialize() {
 
 void GpuBase::deserialize(vector<sc_bv<128>> segments) {
     LOG_DEBUG(CONFIG_DEBUG) << "Start deserialize " << name;
-
-    // 解析metadata
-    auto buffer = segments[0];
-    datatype = DATATYPE(buffer.range(8, 8).to_uint64());
-    fetch_index = buffer.range(24, 9).to_uint64();
-    req_sm = buffer.range(56, 41).to_uint64();
+    if (segments.empty())
+        throw std::invalid_argument(name + " GPU Prim wire has no segments");
 
     vector<string> vec(param_name.begin(), param_name.end());
     sort(vec.begin(), vec.end());
+    const size_t expected_segments = 1 + (vec.size() + 3) / 4;
+    if (segments.size() != expected_segments)
+        throw std::invalid_argument(
+            name + " GPU Prim wire segment count does not match parameters");
 
-    // 依次解析参数，每一个segment存储4个参数
-    if (segments.size() - 1 != (vec.size() + 3) / 4)
-        LOG_ERROR(gpu_base.cpp) << "In deserialize " << name
-                                << ": the number of segments does not match "
-                                   "the number of parameters";
+    const uint64_t expected_id = static_cast<uint64_t>(
+        PrimFactory::getInstance().getPrimId(name));
+    for (const auto &segment : segments)
+        if (segment.range(7, 0).to_uint64() != expected_id)
+            throw std::invalid_argument(
+                name + " GPU Prim wire contains inconsistent segment IDs");
 
-    for (int i = 1; i < segments.size(); i++) {
-        auto buffer = segments[i];
-        for (int j = 0; j < 4; j++) {
-            int index = (i - 1) * 4 + j;
-            if (index >= vec.size())
+    const auto &metadata = segments[0];
+    const bool legacy = prim_wire::LegacyCompatibilityEnabled();
+    if (legacy) {
+        if (metadata.range(127, 57).or_reduce() ||
+            metadata.range(40, 25).or_reduce())
+            throw std::invalid_argument(
+                name + " legacy GPU Prim reserved bits are set");
+        datatype = static_cast<DATATYPE>(
+            metadata.range(8, 8).to_uint64());
+        fetch_index = metadata.range(24, 9).to_uint64();
+        req_sm = metadata.range(56, 41).to_uint64();
+    } else {
+        if (metadata.range(127, 74).or_reduce())
+            throw std::invalid_argument(
+                name + " GPU Prim wire reserved bits are set");
+        const uint64_t raw_datatype = metadata.range(9, 8).to_uint64();
+        if (raw_datatype > static_cast<uint64_t>(FP16))
+            throw std::invalid_argument(
+                name + " GPU Prim datatype is invalid");
+        datatype = static_cast<DATATYPE>(raw_datatype);
+        const uint64_t raw_fetch = metadata.range(41, 10).to_uint64();
+        const uint64_t raw_req_sm = metadata.range(73, 42).to_uint64();
+        if (raw_fetch >
+                static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+            raw_req_sm >
+                static_cast<uint64_t>(std::numeric_limits<int>::max()))
+            throw std::invalid_argument(
+                name + " GPU index field exceeds runtime int range");
+        fetch_index = static_cast<int>(raw_fetch);
+        req_sm = static_cast<int>(raw_req_sm);
+    }
+
+    decltype(param_value) decoded_param_value;
+    for (size_t i = 1; i < segments.size(); ++i) {
+        const auto &segment = segments[i];
+        for (size_t j = 0; j < 4; ++j) {
+            const size_t index = (i - 1) * 4 + j;
+            const int low = static_cast<int>(8 + j * 30);
+            if (legacy && index >= vec.size())
                 break;
-            param_value[vec[index]] =
-                buffer.range(29 + j * 30, j * 30 + 8).to_uint64();
-            LOG_DEBUG(CONFIG_DEBUG) << "In deserialize " << name << ": " << vec[index]
-                              << " = " << param_value[vec[index]];
+            const int high = legacy
+                ? static_cast<int>(29 + j * 30)
+                : low + 29;
+            const uint64_t value = segment.range(high, low).to_uint64();
+            if (index >= vec.size()) {
+                if (value != 0)
+                    throw std::invalid_argument(
+                        name + " GPU Prim unused parameter bits are set");
+                continue;
+            }
+            decoded_param_value[vec[index]] = static_cast<int>(value);
+            LOG_DEBUG(CONFIG_DEBUG)
+                << "In deserialize " << name << ": " << vec[index]
+                << " = " << decoded_param_value[vec[index]];
         }
     }
 
+    param_value = std::move(decoded_param_value);
     initialize();
     initializeDefault();
-
     LOG_DEBUG(CONFIG) << "Finish deserialize " << name;
 }
 

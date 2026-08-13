@@ -32,6 +32,14 @@ public:
     // 原语的输入输出标签
     AddrDatapassLabel *datapass_label_;
 
+    // Program-ISA SRAM_BIND is independent of legacy Set_addr. It may pass
+    // intervening memory/synchronization/communication Prims, but is consumed
+    // by exactly one NPU compute.
+    bool program_mode_ = false;
+    bool sram_bind_pending_ = false;
+    uint32_t sram_bind_input_count_ = 0;
+    AddrDatapassLabel sram_bind_pending_labels_;
+
     // moe相关
     vector<int> selected_experts_;   // 选中的专家列表
     vector<int> selected_freq_;      // 专家被选中的次数

@@ -1,10 +1,12 @@
+#include "isa/published_npu_ops.h"
+
 #include "prims/moe_prims.h"
 #include "utils/memory_utils.h"
 #include "utils/prim_utils.h"
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(matmul_forward_moe);
+REGISTER_PRIM(matmul_forward_moe, PrimId::MATMUL_FORWARD_MOE);
 
 void matmul_forward_moe::initialize() {
     auto &p = param_value;
@@ -25,7 +27,10 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
     auto &p = param_value;
     auto &selected_experts = prim_context->selected_experts_;
     auto &selected_freq = prim_context->selected_freq_;
-    auto &prefetched_experts = prim_context->prefetched_experts_;
+
+    if (p["E_N"] <= 0 || p["K"] < 0 || p["K"] > p["E_N"])
+        throw std::invalid_argument(
+            "MOE_MATMUL requires 0 <= K <= E_N and E_N > 0");
 
     // 判断是否需要重选专家
     if (p["need_choose"]) {
@@ -61,18 +66,18 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
             selected_experts.push_back(s_exp);
         }
 
-        while (selected_freq.size() < p["E_N"])
+        while (selected_freq.size() < static_cast<std::size_t>(p["E_N"]))
             selected_freq.push_back(0);
 
         for (auto e : selected_experts)
             selected_freq[e]++;
 
     } else {
-        if (selected_experts.size() != p["K"]) {
-            LOG_ERROR(matmul_forward_moe.cpp)
-                << "selected_experts size mismatch: " << selected_experts.size()
-                << " != " << p["K"];
-            return;
+        if (selected_experts.size() != static_cast<std::size_t>(p["K"])) {
+            throw std::runtime_error(
+                "MOE_MATMUL selected_experts size mismatch: " +
+                std::to_string(selected_experts.size()) + " != " +
+                std::to_string(p["K"]));
         }
     }
 
@@ -81,11 +86,13 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
     }
 
     // 优先查看是否有被prefetch的专家
-    bool checked[selected_experts.size()];
-    for (int i = 0; i < selected_experts.size(); i++)
-        checked[i] = false;
+    std::vector<bool> checked(static_cast<std::size_t>(p["E_N"]), false);
 
     for (auto e : selected_experts) {
+        if (e < 0 || e >= p["E_N"])
+            throw std::runtime_error(
+                "MOE_MATMUL selected expert is outside [0,E_N)");
+
         // if (std::find(prefetched_experts.begin(), prefetched_experts.end(),
         //               e) == prefetched_experts.end())
         //     continue;
@@ -127,12 +134,6 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
         checked[e] = true;
     }
 
-    if (p["is_merge"])
-        exu_ops = (u_int64_t)p["B"] * p["T"] * p["C"] * p["OC"] * p["K"] * 2 +
-                  (u_int64_t)p["B"] * p["T"] * p["OC"] * p["K"];
-    else
-        exu_ops = (uint64_t)p["B"] * p["T"] * p["C"] * p["OC"] * p["K"] * 2;
-
     if (SPEC_USE_PERF_GEMM) {
         ExuConfig *exu = GetCoreHWConfig(context.cid)->exu;
 
@@ -147,9 +148,6 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
             (exu->x_dims + exu->x_dims + padding_input_x) * weight_tile_x *
             weight_tile_y;
 
-        uint64_t performance_comp =
-            performance_cycle * exu->x_dims * exu->x_dims * HW_COMP_UTIL;
-
         LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
                         << " performance_cycle " << performance_cycle;
 
@@ -157,7 +155,7 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
             weight_tile_y - 1; // read loop_input_count Repetitive input
 
         for (int loop = 0; loop < loop_input_count; loop++) {
-            for (int p = 0; p < data_size_input.size(); p++) {
+            for (std::size_t p = 0; p < data_size_input.size(); ++p) {
                 if (prim_context->datapass_label_->indata[p].find(DRAM_LABEL) ==
                     0) {
 
@@ -166,9 +164,14 @@ void matmul_forward_moe::taskCore(TaskCoreContext &context, string prim_name,
                 }
             }
         }
-
-        exu_ops = performance_comp;
     }
+
+    const NpuOps ops = EvaluatePublishedNpuOps(
+        Opcode::MOE_MATMUL, param_value,
+        PublishedNpuHardwareForCore(context.cid));
+    exu_ops = ops.exu;
+    sfu_ops = ops.sfu;
+    vec_ops = ops.vec;
 
     cout << "Core" << prim_context->cid << " selected experts: " << endl;
 }

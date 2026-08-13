@@ -1,5 +1,6 @@
 #include "systemc.h"
 
+#include "isa/published_npu_ops.h"
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 #include "utils/config_utils.h"
@@ -8,7 +9,7 @@
 #include "utils/system_utils.h"
 #include <sys/types.h>
 
-REGISTER_PRIM(Attention_f);
+REGISTER_PRIM(Attention_f, PrimId::ATTENTION_F);
 
 void Attention_f::initialize() {
     auto &p = param_value;
@@ -55,8 +56,9 @@ void Attention_f::taskCore(TaskCoreContext &context, string prim_name,
                            data_byte * GetFromPairedVector(data_chunk, "att"),
                            temp_sram_addr_prior, dram_time);
 
-    auto &p = param_value;
-    exu_ops = (uint64_t)p["B"] * p["C"] * p["T"] * p["T"] * 4;
-    sfu_ops = (uint64_t)p["B"] * p["NH"] * p["T"] * p["T"];
-    vec_ops = (u_int64_t)p["B"] * p["NH"] * p["T"] * p["T"] * 2;
+    const NpuOps ops =
+        EvaluatePublishedNpuOps(Opcode::ATTENTION, param_value);
+    exu_ops = ops.exu;
+    sfu_ops = ops.sfu;
+    vec_ops = ops.vec;
 }

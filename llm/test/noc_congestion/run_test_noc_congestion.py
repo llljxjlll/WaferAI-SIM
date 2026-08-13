@@ -43,8 +43,8 @@ NS_RE = re.compile(r"(\d+)\s*ns")
 
 # 冻结基线（V0-exit 阻塞门）：任一进程非零 / 结束时间缺失 / 数值不符 → sys.exit(1)。
 EXPECT = {
-    "no_congestion": {"beha": 14781, "cycle": 29109},
-    "congestion":    {"beha": 14833, "cycle": 45441},
+    "no_congestion": {"beha": 14777, "cycle": 37295},
+    "congestion":    {"beha": 14829, "cycle": 61763},
 }
 
 
@@ -140,7 +140,7 @@ def main():
             print("  " + f_)
         sys.exit(1)
     print("\n==== NoC regression PASS: 4/4 == frozen baseline "
-          "(no_cong 14781/29109, cong 14833/45441) ====")
+          "(no_cong 14777/37295, cong 14829/61763) ====")
     sys.exit(0)
 
 

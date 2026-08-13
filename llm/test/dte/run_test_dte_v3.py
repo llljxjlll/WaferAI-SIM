@@ -113,7 +113,7 @@ def main() -> int:
     )
     tests.append((
         "V3a token/dependency SystemC selftest",
-        selftest.returncode == 0 and "PASS (31/31 checks)" in selftest.stdout,
+        selftest.returncode == 0 and "PASS (33/33 checks)" in selftest.stdout,
         f"exit={selftest.returncode}",
     ))
 
@@ -260,7 +260,7 @@ def main() -> int:
     ))
     tests.append((
         "pipeline refill reuses token only after prior wait",
-        refill.returncode == 0 and refill.finish_ns == 218
+        refill.returncode == 0 and refill.finish_ns == 220
         and issue_xfers(refill.trace_events, 5) == [0, 1],
         f"finish={refill.finish_ns} ns, xfers={issue_xfers(refill.trace_events, 5)}",
     ))

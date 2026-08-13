@@ -114,7 +114,7 @@ def main() -> int:
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
     tests.append(("V4 SystemC resource selftest",
                   selftest.returncode == 0 and
-                  "PASS (19/19 checks)" in selftest.stdout,
+                  "PASS (23/23 checks)" in selftest.stdout,
                   f"exit={selftest.returncode}"))
 
     directions = run_sim(SIM, workload("v4_directions"), HARDWARE)
@@ -219,7 +219,7 @@ def main() -> int:
     )
     tests.append((
         "blocking SEND/RECV share bounded credits with async descriptors",
-        mixed.returncode == 0 and mixed.finish_ns == 24742 and
+        mixed.returncode == 0 and mixed.finish_ns == 24744 and
         "credits exhausted" not in mixed.stdout and
         source_credit_wait and destination_credit_wait and
         set(mixed_stats) == {0, 1} and

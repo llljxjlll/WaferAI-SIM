@@ -299,7 +299,7 @@ void config_helper_gpu_pd::generate_prims(int i) {
                                   recv_data_1->serialize()[0]));
 
         PrimBase *set_batch = new Set_batch(iter_status.batchInfo, false);
-        auto segments = set_batch->serialize();
+        auto segments = prim_wire::LegacyTransportSegments(set_batch);
         for (int seg = 0; seg < segments.size(); seg++)
             temp_config.push_back(Msg(false, MSG_TYPE::CONFIG, ++prim_seq, c,
                                       seg == segments.size() - 1,
@@ -317,14 +317,14 @@ void config_helper_gpu_pd::generate_prims(int i) {
             }
             label->outdata = prim->prim_context->datapass_label_->outdata;
 
-            auto segments = set_addr->serialize();
+            auto segments = prim_wire::LegacyTransportSegments(set_addr);
             for (int seg = 0; seg < segments.size(); seg++)
                 temp_config.push_back(
                     Msg(false, MSG_TYPE::CONFIG, ++prim_seq, c,
                         seg == segments.size() - 1, segments[seg]));
 
             prim->fetch_index = c + r * GRID_SIZE;
-            segments = prim->serialize();
+            segments = prim_wire::LegacyTransportSegments(prim);
             for (int seg = 0; seg < segments.size(); seg++)
                 temp_config.push_back(Msg(false, MSG_TYPE::CONFIG, ++prim_seq,
                                           c, seg == segments.size() - 1,

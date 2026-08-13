@@ -9,7 +9,7 @@
 #include <limits>
 #include <stdexcept>
 
-REGISTER_PRIM(Reduce_compute_prim);
+REGISTER_PRIM(Reduce_compute_prim, PrimId::REDUCE_COMPUTE);
 
 vector<sc_bv<128>> Reduce_compute_prim::serialize() {
     auto wire = SerializeCollDescriptor(descriptor);
@@ -18,12 +18,16 @@ vector<sc_bv<128>> Reduce_compute_prim::serialize() {
         sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
     marker.range(23, 8) = static_cast<uint16_t>(descriptor.group.size());
     wire.insert(wire.begin(), marker);
-    return wire;
+    return prim_wire::WrapSegments(std::move(wire), name);
 }
 
 void Reduce_compute_prim::deserialize(vector<sc_bv<128>> segments) {
+    segments = prim_wire::UnwrapSegments(segments, name);
     if (segments.size() < 2)
         throw std::invalid_argument("Reduce_compute_prim wire is truncated");
+    if (segments.front().range(127, 24).or_reduce())
+        throw std::invalid_argument(
+            "Reduce_compute_prim marker reserved bits are non-zero");
     const uint16_t group_size = segments.front().range(23, 8).to_uint();
     segments.erase(segments.begin());
     descriptor = DeserializeCollDescriptor(segments);

@@ -17,9 +17,12 @@ struct BarrierState {
     std::set<uint16_t> arrived;
     uint16_t departed = 0;
     uint16_t release_tree_id = 0;
+    bool aborted = false;
     sc_event release;
 };
-std::map<BarrierKey, std::unique_ptr<BarrierState>> states;
+using BarrierStatePtr = std::shared_ptr<BarrierState>;
+std::map<BarrierKey, BarrierStatePtr> states;
+CollectiveBarrierRuntimeCapacity barrier_capacity;
 
 using GatherStateKey = std::tuple<CollectiveKey, uint16_t>;
 std::map<GatherStateKey, std::unique_ptr<GatherReorderBuffer>> gather_states;
@@ -55,51 +58,131 @@ std::vector<GatherExpectedSlot> ExpectedGatherSlots(const CollDescriptor &d) {
 }
 }
 
+void ConfigureCollectiveBarrierRuntime(
+    CollectiveBarrierRuntimeCapacity capacity) {
+    if (capacity.max_active_states == 0)
+        throw std::invalid_argument(
+            "collective barrier runtime capacity must be non-zero");
+    if (!states.empty())
+        throw std::logic_error(
+            "collective barrier runtime cannot reconfigure active states");
+    barrier_capacity = capacity;
+}
+
+CollectiveBarrierRuntimeCapacity
+CollectiveBarrierRuntimeConfiguredCapacity() noexcept {
+    return barrier_capacity;
+}
+
+CollectiveBarrierRuntimeResidual
+CollectiveBarrierRuntimeResidualState() noexcept {
+    CollectiveBarrierRuntimeResidual residual;
+    residual.active_states = states.size();
+    for (const auto &[key, state] : states) {
+        (void)key;
+        residual.arrived_ranks += state->arrived.size();
+        residual.departed_ranks += state->departed;
+        residual.waiting_ranks +=
+            state->arrived.size() - state->departed;
+    }
+    return residual;
+}
+
+std::size_t AbortCollectiveBarrierKey(const CollectiveKey &key) {
+    std::vector<BarrierStatePtr> aborted;
+    aborted.reserve(states.size());
+    for (auto iterator = states.begin(); iterator != states.end();) {
+        if (!(std::get<0>(iterator->first) == key)) {
+            ++iterator;
+            continue;
+        }
+        iterator->second->aborted = true;
+        aborted.push_back(iterator->second);
+        iterator = states.erase(iterator);
+    }
+    for (const BarrierStatePtr &state : aborted)
+        state->release.notify(SC_ZERO_TIME);
+    return aborted.size();
+}
+
+void ResetCollectiveBarrierRuntime() {
+    std::vector<BarrierStatePtr> aborted;
+    aborted.reserve(states.size());
+    for (auto &[key, state] : states) {
+        (void)key;
+        state->aborted = true;
+        aborted.push_back(state);
+    }
+    states.clear();
+    for (const BarrierStatePtr &state : aborted)
+        state->release.notify(SC_ZERO_TIME);
+}
+
 void WaitCollectiveBarrier(const CollectiveKey &key, uint16_t phase_id,
                            uint16_t rank, uint16_t group_size,
                            uint16_t release_tree_id) {
     if (group_size == 0 || rank >= group_size)
         throw std::invalid_argument("collective barrier rank/group invalid");
-    BarrierKey barrier_key{key, phase_id};
-    auto &slot = states[barrier_key];
-    if (!slot) {
-        slot = std::make_unique<BarrierState>();
-        slot->expected = group_size;
-        slot->release_tree_id = release_tree_id;
-    } else if (slot->expected != group_size) {
-        throw std::runtime_error("collective barrier group size mismatch");
-    } else if (slot->release_tree_id != release_tree_id) {
-        throw std::runtime_error("collective barrier tree-release mismatch");
+    const BarrierKey barrier_key{key, phase_id};
+    BarrierStatePtr state;
+    const auto existing = states.find(barrier_key);
+    if (existing == states.end()) {
+        if (states.size() >= barrier_capacity.max_active_states)
+            throw std::overflow_error(
+                "collective barrier runtime capacity exhausted");
+        auto candidate = std::make_shared<BarrierState>();
+        candidate->expected = group_size;
+        candidate->release_tree_id = release_tree_id;
+        state = candidate;
+        states.emplace(barrier_key, std::move(candidate));
+    } else {
+        state = existing->second;
+        if (state->expected != group_size)
+            throw std::runtime_error(
+                "collective barrier group size mismatch");
+        if (state->release_tree_id != release_tree_id)
+            throw std::runtime_error(
+                "collective barrier tree-release mismatch");
     }
-    BarrierState *state = slot.get();
     if (!state->arrived.insert(rank).second)
-        throw std::runtime_error("duplicate collective barrier arrival");
+        throw std::runtime_error(
+            "duplicate collective barrier arrival");
     const bool last = state->arrived.size() == state->expected;
-    if (last) state->release.notify(SC_ZERO_TIME);
-    else wait(state->release);
-    ++state->departed;
-    if (state->departed == state->expected) {
-        const uint16_t tree_id = state->release_tree_id;
-        states.erase(barrier_key);
-        if (tree_id != 0) {
-            const size_t tree_entries = EraseCollectiveTree(tree_id);
-            const size_t reduce_nodes =
-                EraseCollectiveReduceTree(tree_id);
-            // reduce_only intentionally has no multicast table entries: its
-            // tree exists solely in the streaming reduce registry. Treat a
-            // release as unknown only when neither registry owned the id.
-            if (tree_entries == 0 && reduce_nodes == 0)
-                throw std::runtime_error(
-                    "collective final barrier released an unknown tree");
-            std::cout << "[COLL_V6_RELEASE] tree=" << tree_id
-                      << " entries=" << tree_entries
-                      << " reduce_nodes=" << reduce_nodes << std::endl;
-        }
+    if (group_size > 1) {
+        if (last) state->release.notify(SC_ZERO_TIME);
+        wait(state->release);
+        if (state->aborted)
+            throw std::runtime_error(
+                "collective barrier aborted");
     }
+
+    ++state->departed;
+    if (state->departed != state->expected) return;
+
+    const auto current = states.find(barrier_key);
+    if (current == states.end() || current->second != state)
+        throw std::logic_error(
+            "collective barrier lost active state");
+    const uint16_t tree_id = state->release_tree_id;
+    states.erase(current);
+    if (tree_id == 0) return;
+
+    const size_t tree_entries = EraseCollectiveTree(tree_id);
+    const size_t reduce_nodes = EraseCollectiveReduceTree(tree_id);
+    // reduce_only intentionally has no multicast table entries: its tree
+    // exists solely in the streaming reduce registry.
+    if (tree_entries == 0 && reduce_nodes == 0)
+        throw std::runtime_error(
+            "collective final barrier released an unknown tree");
+    std::cout << "[COLL_V6_RELEASE] tree=" << tree_id
+              << " entries=" << tree_entries
+              << " reduce_nodes=" << reduce_nodes << std::endl;
 }
 
 size_t CollectiveBarrierStateCount() { return states.size(); }
-void ResetCollectiveBarrierStateForTest() { states.clear(); }
+void ResetCollectiveBarrierStateForTest() {
+    ResetCollectiveBarrierRuntime();
+}
 
 void ProcessGatherReorderArrival(const CollDescriptor &d, uint16_t phase_id) {
     ValidateCollDescriptor(d);

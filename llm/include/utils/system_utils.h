@@ -14,6 +14,14 @@ CoreHWConfig *GetCoreHWConfig(int id);
 CoreHWConfig *GetCoreHWConfigForGlobal(int global_id);
 int CeilingDivision(int a, int b);
 
+// Initializes hardware, simulation, and mapping state without consulting a
+// workload file. Program mode sets SYSTEM_MODE explicitly and calls this path.
+void InitPlatform(string hardware_config_path,
+                  string simulation_config_path,
+                  string mapping_config_path);
+
+// Legacy JSON entry point: parse its mode first, then initialize the same
+// platform state used by program mode.
 void InitGrid(string workload_config_path, string hardware_config_path,
               string simulation_config_path, string mapping_config_path);
 void InitGlobalMembers();

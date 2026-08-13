@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""R6 reduce-only and R7 reduce+broadcast production matrix."""
+"""R6/R7 pure contracts, real multicast, and behavioral-DCA rejection."""
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -96,6 +95,22 @@ def drained(out: str, rc: int) -> bool:
             "gather=0 reduce_rx=0 endpoints=0 dte_tokens=0" in out)
 
 
+def behavioral_dca_rejected(
+        result: subprocess.CompletedProcess[str], profile: str) -> bool:
+    """Behavioral-SRAM fixtures must not impersonate production DCA bytes."""
+    out = result.stdout
+    return (
+        result.returncode != 0 and
+        f"profile={profile}" in out and
+        "reduce_backend=dca_offload" in out and
+        "DCA stream TX requires the real SRAM data path" in out and
+        "[COLL_STREAM_RESULT]" not in out and
+        "[COLL_DCA_RESULT]" not in out and
+        "[COLL_V5_RESULT]" not in out and
+        "value=" not in out
+    )
+
+
 def selftest(flag: str, marker: str) -> tuple[bool, str]:
     result = subprocess.run(
         [str(NPUSIM), flag], cwd=ROOT / "build", text=True,
@@ -125,8 +140,8 @@ def main() -> int:
             path.write_text(json.dumps(simulation("reduce_only", mode)))
             sims[("reduce_only", mode)] = path
 
-        # R6: no multicast is allowed for standalone distribution or
-        # AllReduce result; reductions still use the real stream/DCA path.
+        # R6 behavioral SRAM remains a valid broadcast/allgather fixture, but
+        # cannot stand in for the production AccessUnit required by DCA.
         r6_cases = [
             ("broadcast", [0, 1, 2, 3], 2, 65, "uint8", "sum"),
             ("allgather", [0, 2, 3], 2, 33, "uint8", "sum"),
@@ -142,31 +157,29 @@ def main() -> int:
                 op, group, root, count, dtype, reduce_op, 800 + index)))
             result = run(work, sims[("reduce_only", "integer_exact")])
             reduction = op in ("reduce", "reducescatter", "allreduce")
-            ok = drained(result.stdout, result.returncode)
-            ok = ok and result.stdout.count("[COLL_V4_TX]") == 0
             if reduction:
-                ok = (ok and result.stdout.count("[COLL_STREAM_TX]") ==
-                      len(group) and
-                      result.stdout.count("[COLL_STREAM_RESULT]") == 1 and
-                      "value=verified" in result.stdout)
-            detail = "unicast distribution; " + (
-                "stream value verified" if reduction else "no multicast")
+                ok = behavioral_dca_rejected(result, "reduce_only")
+                detail = ("behavioral SRAM rejected before DCA source read; "
+                          "no stream result/V5 fallback/value")
+            else:
+                ok = (drained(result.stdout, result.returncode) and
+                      result.stdout.count("[COLL_V4_TX]") == 0)
+                detail = "unicast distribution; no multicast"
             if not ok:
                 detail += f"; rc={result.returncode}; tail={result.stdout[-1000:]}"
             tests.append((f"R6 {op}/N={len(group)}", ok, detail))
 
-        # FP exact and timing-only are distinct contracts.
+        # FP/timing behavioral fixtures select DCA but must fail at the same
+        # real-SRAM gate before producing a value or fallback result.
         for mode in ("fp_exact", "timing_only"):
             work = tmp / f"r5_{mode}.json"
             work.write_text(json.dumps(workload(
                 "reduce", [0, 1, 2], 0, 37, "fp32", "sum",
                 880 if mode == "fp_exact" else 881)))
             result = run(work, sims[("reduce_only", mode)])
-            marker = "value=verified" if mode == "fp_exact" else "value=timing-only"
-            fp_ok = (drained(result.stdout, result.returncode) and
-                     marker in result.stdout)
-            fp_detail = ("deterministic value" if mode == "fp_exact"
-                         else "no value assertion")
+            fp_ok = behavioral_dca_rejected(result, "reduce_only")
+            fp_detail = ("DCA selected; behavioral SRAM rejected without "
+                         "stream result/V5 fallback/value")
             if not fp_ok:
                 fp_detail += (f"; rc={result.returncode}; "
                               f"tail={result.stdout[-1200:]}")
@@ -179,44 +192,28 @@ def main() -> int:
                 884 + index)))
             result = run(work, sims[("reduce_only", "timing_only")])
             tests.append((f"R5 {dtype.upper()}/timing_only",
-                          drained(result.stdout, result.returncode) and
-                          "value=timing-only" in result.stdout,
-                          "wire+lanes+L/II, no value assertion"))
+                          behavioral_dca_rejected(result, "reduce_only"),
+                          "DCA selected; behavioral SRAM rejected without fallback"))
 
-        # A real endpoint session injects CORE requests into the same pool
-        # while peer streams are already arriving at the root Router.
+        # This legacy behavioral fixture used to impersonate shared-pool
+        # production; it must now stop at the real-SRAM DCA source gate.
         shared = workload("reduce", [0, 1, 2, 3], 0, 129,
                           "uint8", "sum", 889)
         shared["chips"][0]["collectives"][0]["core_contention_beats"] = 12
         work = tmp / "r5_shared_production.json"
         work.write_text(json.dumps(shared))
         result = run(work, sims[("reduce_only", "integer_exact")])
-        pool_rows = [tuple(map(int, row)) for row in re.findall(
-            r"\[COLL_DCA\] router=\d+ core_issues=(\d+) "
-            r"dca_issues=(\d+) completions=(\d+) "
-            r"core_stalls=(\d+) dca_stalls=(\d+) "
-            r"submit_stalls=(\d+)", result.stdout)]
-        core_issues = sum(row[0] for row in pool_rows)
-        dca_issues = sum(row[1] for row in pool_rows)
-        shared_ok = (drained(result.stdout, result.returncode) and
-                     result.stdout.count("[COLL_CORE_START]") == 1 and
-                     result.stdout.count("[COLL_CORE_DONE]") == 1 and
-                     core_issues == 12 and dca_issues == 9 and
-                     sum(row[2] for row in pool_rows) == 21 and
-                     sum(row[3] + row[4] + row[5]
-                         for row in pool_rows) > 0)
-        shared_detail = (f"same pool core/dca issues={core_issues}/"
-                         f"{dca_issues}, completions=21")
+        shared_ok = behavioral_dca_rejected(result, "reduce_only")
+        shared_detail = ("DCA selected; behavioral SRAM rejected before "
+                         "CORE/DCA result or fallback")
         if not shared_ok:
             shared_detail += (f"; rc={result.returncode}; "
                               f"tail={result.stdout[-1400:]}")
-        tests.append(("R5 production CORE+DCA contention",
+        tests.append(("R5 behavioral CORE+DCA real-SRAM gate",
                       shared_ok, shared_detail))
 
-        # Production mixed traffic: while rank 3 handles a regular source
-        # message and sends DATA to rank 0, the other ranks can already feed
-        # the same root's stream-DCA reduce.  The assertion is intentionally
-        # made on Router output accounting, not merely on config expansion.
+        # A normal-unicast side flow does not authorize the behavioral
+        # collective source to bypass the production SRAM byte gate.
         mixed = workload("reduce", [0, 2], 0, 257,
                          "uint8", "sum", 890)
         mixed["vars"].update(B=1, T=4, C=16, OC=16,
@@ -239,24 +236,13 @@ def main() -> int:
         work = tmp / "r6_mixed_regular_unicast.json"
         work.write_text(json.dumps(mixed))
         result = run(work, sims[("reduce_only", "integer_exact")])
-        link_rows = [tuple(map(int, row)) for row in re.findall(
-            r"\[COLL_SHARED\] router=(\d+) output=(\d+) "
-            r"normal_flits=(\d+) collective_flits=(\d+)",
-            result.stdout)]
-        shared_outputs = [(router, output, normal, coll)
-                          for router, output, normal, coll in link_rows
-                          if normal > 0 and coll > 0]
-        mixed_ok = (drained(result.stdout, result.returncode) and
-                    result.stdout.count("[COLL_STREAM_TX]") == 2 and
-                    result.stdout.count("[COLL_STREAM_RESULT]") == 1 and
-                    "value=verified" in result.stdout and
-                    (2, 3, 4, 18) in shared_outputs)
-        mixed_detail = ("shared Router output normal/collective=" +
-                        str(shared_outputs[:3]))
+        mixed_ok = behavioral_dca_rejected(result, "reduce_only")
+        mixed_detail = ("DCA selected; behavioral SRAM rejected before "
+                        "mixed stream result or fallback")
         if not mixed_ok:
             mixed_detail += (f"; rc={result.returncode}; "
                              f"tail={result.stdout[-1600:]}")
-        tests.append(("R6 stream-DCA + regular unicast",
+        tests.append(("R6 behavioral DCA + regular-unicast gate",
                       mixed_ok, mixed_detail))
 
         # R7 multicast mapping: one injection per Broadcast/source/result.
@@ -273,12 +259,16 @@ def main() -> int:
                 op, group, root, count, "uint8", "sum", 900 + index)))
             result = run(work, sims[("reduce_broadcast", "integer_exact")])
             reduction = op in ("reduce", "reducescatter", "allreduce")
-            ok = (drained(result.stdout, result.returncode) and
-                  result.stdout.count("[COLL_V4_TX]") == txs and
-                  result.stdout.count("[COLL_V4_RX]") == rxs)
             if reduction:
-                ok = ok and result.stdout.count("[COLL_STREAM_TX]") == 4
-            detail = f"multicast tx/rx={txs}/{rxs}"
+                ok = behavioral_dca_rejected(
+                    result, "reduce_broadcast")
+                detail = ("DCA selected; behavioral SRAM rejected before "
+                          "stream result/V5 fallback/value")
+            else:
+                ok = (drained(result.stdout, result.returncode) and
+                      result.stdout.count("[COLL_V4_TX]") == txs and
+                      result.stdout.count("[COLL_V4_RX]") == rxs)
+                detail = f"multicast tx/rx={txs}/{rxs}"
             if not ok:
                 detail += f"; rc={result.returncode}; tail={result.stdout[-1000:]}"
             tests.append((f"R7 {op}", ok, detail))

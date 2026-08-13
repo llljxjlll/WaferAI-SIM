@@ -7,11 +7,14 @@
 #include "common/msg.h"
 #include "defs/const.h"
 #include "defs/global.h"
+#include "dte/coll_byte_wire_v1.h"
 #include "dte/coll_multicast.h"
 #include "dte/coll_innetwork_reduce.h"
 #include "dte/coll_stream_engine.h"
 #include "memory/hbm_mem_wire.h"
 #include "macros/macros.h"
+#include "router/control_output_pulse_gate.h"
+#include "router/endpoint_output_flow_lock.h"
 #include "trace/Event_engine.h"
 #include "utils/memory_utils.h"
 #include "utils/msg_utils.h"
@@ -70,7 +73,21 @@ public:
     int input_lock_ref[5];
     int output_lock[5];
     int output_lock_ref[5];
+    // Only bit-255 P2P endpoint DATA uses this strict complete-flow owner.
+    // Legacy DATA deliberately retains the tag-only/refcount aggregation
+    // semantics in output_lock/output_lock_ref.
+    EndpointOutputFlowLock endpoint_output_lock[DIRECTIONS];
     AtomicMulticastFork collective_fork;
+    // START is the only place that carries the full CollectiveKey. Every
+    // Router on the programmed tree retains it until the matching DATA tail,
+    // making stale/unknown (tree,session,epoch) DATA a hard protocol error.
+    struct StrictMulticastRouterStream {
+        IsaV1CollectiveByteStart start;
+        uint32_t fragment_count = 0;
+        uint32_t next_sequence = 1;
+    };
+    std::map<IsaV1CollectiveByteLock, StrictMulticastRouterStream>
+        strict_multicast_streams;
     bool reduce_header_pending[DIRECTIONS] = {};
     sc_bv<256> reduce_header_wire[DIRECTIONS];
     CollOperandMatchBuffer reduce_match{16, 64};
@@ -84,6 +101,11 @@ public:
     sc_time reduce_dca_available = SC_ZERO_TIME;
     int collective_rr_start = 0;
     bool collective_output_cooldown[DIRECTIONS] = {};
+    // Every control output uses an explicit low cycle between packets.  The
+    // receivers consume a level signal, so a false/true rewrite in one delta
+    // would otherwise collapse into one observable high and duplicate or
+    // lose back-to-back control packets at Router and core boundaries.
+    ControlOutputPulseGate ctrl_output_gate[DIRECTIONS];
     bool center_collective_armed = true;
     std::unique_ptr<coll_refactor::RouterReduceStreamEngine>
         reduce_stream_engine;

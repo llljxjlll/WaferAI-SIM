@@ -90,4 +90,41 @@ uint64_t Storage::Signature(uint64_t address, uint64_t size_bytes) const {
     return hash;
 }
 
+
+DebugSnapshot Storage::DebugPeek(uint64_t address,
+                                 uint64_t size_bytes) const {
+    if (size_bytes == 0)
+        throw std::invalid_argument(
+            "SRAM debug peek size must be non-zero");
+    CheckRange(address, size_bytes);
+    const size_t begin = static_cast<size_t>(address);
+    const size_t count = static_cast<size_t>(size_bytes);
+    DebugSnapshot snapshot;
+    snapshot.payload.resize(count);
+    const auto &source = payload_mode_ ? bytes_ : fingerprints_;
+    std::copy_n(source.begin() + begin, count, snapshot.payload.begin());
+    snapshot.valid.assign(valid_.begin() + begin,
+                          valid_.begin() + begin + count);
+    return snapshot;
+}
+
+void Storage::DebugRestore(uint64_t address,
+                           const DebugSnapshot &snapshot) {
+    if (snapshot.payload.empty() ||
+        snapshot.payload.size() != snapshot.valid.size())
+        throw std::invalid_argument(
+            "SRAM debug snapshot payload/valid size mismatch");
+    if (!std::all_of(snapshot.valid.begin(), snapshot.valid.end(),
+                     [](uint8_t value) { return value <= 1; }))
+        throw std::invalid_argument(
+            "SRAM debug snapshot validity must be zero or one");
+    CheckRange(address, snapshot.payload.size());
+    const size_t begin = static_cast<size_t>(address);
+    auto &target = payload_mode_ ? bytes_ : fingerprints_;
+    std::copy(snapshot.payload.begin(), snapshot.payload.end(),
+              target.begin() + begin);
+    std::copy(snapshot.valid.begin(), snapshot.valid.end(),
+              valid_.begin() + begin);
+}
+
 } // namespace sram

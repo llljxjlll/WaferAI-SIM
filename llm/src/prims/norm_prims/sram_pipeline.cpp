@@ -11,12 +11,16 @@
 #include <iostream>
 #include <stdexcept>
 
-REGISTER_PRIM(Sram_pipeline_prim);
+REGISTER_PRIM(Sram_pipeline_prim, PrimId::SRAM_PIPELINE);
 
 namespace {
 constexpr size_t kMaxRegionName = 64;
 
 void Validate(const Sram_pipeline_prim &p) {
+    if (static_cast<uint8_t>(p.engine) >
+        static_cast<uint8_t>(SramPipelineEngine::kDte))
+        throw std::invalid_argument(
+            "Sram_pipeline engine encoding is invalid");
     if (p.tile_count == 0 || p.tile_bytes == 0)
         throw std::invalid_argument(
             "Sram_pipeline requires non-zero tile_count and tile_bytes");
@@ -123,13 +127,20 @@ std::vector<sc_bv<128>> Sram_pipeline_prim::serialize() {
     std::vector<sc_bv<128>> wire = {metadata, sizes, addresses};
     AppendText(wire, region_a);
     AppendText(wire, region_b);
-    return wire;
+    return prim_wire::WrapSegments(std::move(wire), name);
 }
 
 void Sram_pipeline_prim::deserialize(std::vector<sc_bv<128>> wire) {
+    wire = prim_wire::UnwrapSegments(wire, name);
     if (wire.size() < 3)
         throw std::invalid_argument(
             "Sram_pipeline wire encoding requires at least three segments");
+    if (wire[0].range(127, 114).or_reduce())
+        throw std::invalid_argument(
+            "Sram_pipeline metadata reserved bits are non-zero");
+    if (wire[1].range(127, 110).or_reduce())
+        throw std::invalid_argument(
+            "Sram_pipeline sizes reserved bits are non-zero");
     engine = wire[0][8].to_bool() ? SramPipelineEngine::kDte
                                   : SramPipelineEngine::kLsu;
     double_buffer = wire[0][9].to_bool();
@@ -148,6 +159,20 @@ void Sram_pipeline_prim::deserialize(std::vector<sc_bv<128>> wire) {
         wire.size() != expected)
         throw std::invalid_argument(
             "Sram_pipeline wire region-name lengths are inconsistent");
+    const size_t a_segments = (a_size + 15) / 16;
+    const size_t b_start = 3 + a_segments;
+    if ((a_size % 16) != 0 &&
+        wire[b_start - 1]
+            .range(127, static_cast<int>((a_size % 16) * 8))
+            .or_reduce())
+        throw std::invalid_argument(
+            "Sram_pipeline region_a padding is non-zero");
+    if ((b_size % 16) != 0 &&
+        wire.back()
+            .range(127, static_cast<int>((b_size % 16) * 8))
+            .or_reduce())
+        throw std::invalid_argument(
+            "Sram_pipeline region_b padding is non-zero");
     size_t segment = 3;
     region_a = ReadText(wire, segment, a_size);
     region_b = ReadText(wire, segment, b_size);

@@ -32,6 +32,8 @@ public:
     uint64_t dte_stream_source_first_ns_ = 0; // 48-bit wire
     uint64_t dte_stream_source_done_ns_ = 0;  // 48-bit wire
     uint32_t dte_stream_network_tail_cycles_ = 0; // 32-bit wire
+    // P4: only EVENT uses this field; wire location is data_[31:0].
+    uint32_t event_tag_ = 0;
     // V5：同一逻辑 (source,tag) flow 的条带子流号。MVP 支持 stripe=1/2/4，
     // 故 2 bit 足够。wire 上对 REQUEST/ACK/DATA 与 refill_/config_end_ 做
     // tagged-union；这些标志只对 CONFIG 生效，旧流量 subflow=0 的编码不变。
@@ -39,6 +41,9 @@ public:
     // V1-c0：跨 die pinned 出口端口（源 die CrossDieSelectExit 选一次并钉死，随包携带；
     // 离开源 die 前不重选）。-1=未 pin / 非跨 die 包。V1-c1+ 才填充与使用。
     int exit_port_ = -1;
+    // Wire bit255 is the endpoint discriminator. It is transport metadata,
+    // never business payload; legacy messages leave it false.
+    bool p2p_endpoint_ = false;
     sc_bv<128> data_ = sc_bv<128>(0);
 
     Msg(bool e, MSG_TYPE m, int seq, int des, int offset, int tag, int length,
@@ -83,6 +88,7 @@ public:
 
     //判断消息是否为控制信号 (ACK/REQ/DONE)
     bool IsControlMsg() const {
-        return msg_type_ == ACK || msg_type_ == REQUEST || msg_type_ == DONE;
+        return msg_type_ == ACK || msg_type_ == REQUEST || msg_type_ == DONE ||
+               msg_type_ == EVENT;
     }
 };

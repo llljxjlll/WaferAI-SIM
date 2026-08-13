@@ -2,7 +2,7 @@
 #include "utils/memory_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(switch_data);
+REGISTER_PRIM(switch_data, PrimId::SWITCH_DATA);
 
 void switch_data::initialize() {
     auto &p = param_value;

@@ -2,7 +2,7 @@
 #include "utils/memory_utils.h"
 #include "utils/prim_utils.h"
 
-REGISTER_PRIM(rope_forward_pd);
+REGISTER_PRIM(rope_forward_pd, PrimId::ROPE_FORWARD_PD);
 
 void rope_forward_pd::initialize() {
     auto &p = param_value;

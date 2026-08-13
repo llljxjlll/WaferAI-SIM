@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <string>
 
-REGISTER_PRIM(Dte_async_prim);
+REGISTER_PRIM(Dte_async_prim, PrimId::DTE_ASYNC);
 
 namespace {
 DteAsyncOp ParseOp(const std::string &value) {
@@ -27,6 +27,62 @@ DteDir ParseDirection(const std::string &value) {
     if (value == "DRAM_TO_SPM") return DteDir::DRAM_TO_SPM;
     if (value == "DRAM_TO_REMOTE") return DteDir::DRAM_TO_REMOTE;
     throw std::invalid_argument("DTE async direction is unknown: " + value);
+}
+
+constexpr uint32_t kLocalRegionMarker = 0x5352414dU;
+constexpr uint32_t kDestinationRegionMarker = 0x44535452U;
+
+void AppendRegionBlock(vector<sc_bv<128>> &segments, uint32_t marker,
+                       uint64_t offset, const std::string &name) {
+    if (name.empty()) return;
+    sc_bv<128> region_metadata = 0;
+    region_metadata.range(63, 0) = sc_bv<64>(offset);
+    region_metadata.range(79, 64) = sc_bv<16>(name.size());
+    region_metadata.range(127, 96) = sc_bv<32>(marker);
+    segments.push_back(region_metadata);
+    for (size_t base = 0; base < name.size(); base += 16) {
+        sc_bv<128> text = 0;
+        const size_t count = std::min<size_t>(16, name.size() - base);
+        for (size_t i = 0; i < count; ++i)
+            text.range(static_cast<int>(8 * i + 7),
+                       static_cast<int>(8 * i)) =
+                sc_bv<8>(static_cast<uint8_t>(name[base + i]));
+        segments.push_back(text);
+    }
+}
+
+size_t DecodeRegionBlock(const vector<sc_bv<128>> &segments, size_t index,
+                         std::string &name, uint64_t &offset) {
+    if (index >= segments.size())
+        throw std::invalid_argument(
+            "Dte_async wire region metadata is truncated");
+    if (segments[index].range(95, 80).or_reduce())
+        throw std::invalid_argument(
+            "Dte_async wire region reserved bits are non-zero");
+    offset = segments[index].range(63, 0).to_uint64();
+    const size_t name_size =
+        segments[index].range(79, 64).to_uint64();
+    const size_t text_segments = (name_size + 15) / 16;
+    if (name_size == 0 || name_size > 64 ||
+        text_segments > segments.size() - index - 1)
+        throw std::invalid_argument(
+            "Dte_async wire region name length is inconsistent");
+    name.clear();
+    name.reserve(name_size);
+    for (size_t name_index = 0; name_index < name_size; ++name_index) {
+        const auto &text =
+            segments[index + 1 + name_index / 16];
+        const int lo = static_cast<int>(8 * (name_index % 16));
+        name.push_back(static_cast<char>(
+            text.range(lo + 7, lo).to_uint()));
+    }
+    const size_t used = name_size % 16;
+    if (used != 0 &&
+        segments[index + text_segments]
+            .range(127, static_cast<int>(used * 8)).or_reduce())
+        throw std::invalid_argument(
+            "Dte_async wire region-name padding is non-zero");
+    return index + 1 + text_segments;
 }
 
 void Validate(const Dte_async_prim &prim) {
@@ -53,10 +109,44 @@ void Validate(const Dte_async_prim &prim) {
             throw std::invalid_argument(
                 "Dte_async issue spm_size must be > 0");
         }
+        if (!prim.sram_region.empty()) {
+            if (prim.sram_region.size() > 64)
+                throw std::invalid_argument(
+                    "Dte_async sram_region exceeds the 64-byte wire limit");
+            if (prim.direction != DteDir::DRAM_TO_SPM &&
+                prim.direction != DteDir::SPM_TO_DRAM &&
+                prim.direction != DteDir::SPM_TO_SPM)
+                throw std::invalid_argument(
+                    "Dte_async named source/local SRAM region is unsupported "
+                    "for this direction");
+            if (prim.spm_addr != 0)
+                throw std::invalid_argument(
+                    "Dte_async source region form must not carry spm_addr");
+        } else if (prim.sram_offset != 0) {
+            throw std::invalid_argument(
+                "Dte_async absolute source form must not carry sram_offset");
+        }
+        if (!prim.destination_sram_region.empty()) {
+            if (prim.destination_sram_region.size() > 64)
+                throw std::invalid_argument(
+                    "Dte_async destination_sram_region exceeds the 64-byte "
+                    "wire limit");
+            if (prim.direction != DteDir::SPM_TO_SPM)
+                throw std::invalid_argument(
+                    "Dte_async named destination SRAM region requires SPM_TO_SPM");
+            if (prim.remote_addr != 0)
+                throw std::invalid_argument(
+                    "Dte_async destination region form must not carry remote_addr");
+        } else if (prim.destination_sram_offset != 0) {
+            throw std::invalid_argument(
+                "Dte_async absolute destination form must not carry destination_sram_offset");
+        }
         return;
     }
     if (prim.payload_bits != 0 || prim.spm_addr != 0 || prim.spm_size != 0 ||
         !prim.sram_region.empty() || prim.sram_offset != 0 ||
+        !prim.destination_sram_region.empty() ||
+        prim.destination_sram_offset != 0 ||
         prim.remote_peer != DTE_ASYNC_INVALID_REMOTE_PEER ||
         prim.remote_addr != 0 || prim.address_block != 0)
         throw std::invalid_argument(
@@ -66,6 +156,25 @@ void Validate(const Dte_async_prim &prim) {
             "Dte_async fence must not carry a logical token");
 }
 } // namespace
+void Dte_async_prim::refreshPrimType() {
+    if (op != DteAsyncOp::ISSUE) {
+        setPrimMainCategory(SYNC_PRIM);
+        return;
+    }
+    switch (direction) {
+    case DteDir::SPM_TO_REMOTE:
+    case DteDir::REMOTE_TO_SPM:
+    case DteDir::DRAM_TO_REMOTE:
+        setPrimMainCategory(COMM_PRIM);
+        return;
+    case DteDir::SPM_TO_SPM:
+    case DteDir::SPM_TO_DRAM:
+    case DteDir::DRAM_TO_SPM:
+        setPrimMainCategory(MEM_PRIM);
+        return;
+    }
+}
+
 
 void Dte_async_prim::printSelf() {}
 
@@ -81,6 +190,8 @@ void Dte_async_prim::parseJson(json j) {
     spm_size = 0;
     sram_region.clear();
     sram_offset = 0;
+    destination_sram_region.clear();
+    destination_sram_offset = 0;
     remote_peer = DTE_ASYNC_INVALID_REMOTE_PEER;
     remote_addr = 0;
     address_block = 0;
@@ -100,9 +211,11 @@ void Dte_async_prim::parseJson(json j) {
                 throw std::invalid_argument(
                     "Dte_async requires exactly one of spm_addr or sram_region");
             if (has_region && direction != DteDir::DRAM_TO_SPM &&
-                direction != DteDir::SPM_TO_DRAM)
+                direction != DteDir::SPM_TO_DRAM &&
+                direction != DteDir::SPM_TO_SPM)
                 throw std::invalid_argument(
-                    "named SRAM region is supported only for DRAM directions");
+                    "named source/local SRAM region is unsupported for this "
+                    "direction");
             spm_addr = j.value("spm_addr", uint64_t(0));
             sram_region = j.value("sram_region", std::string{});
             sram_offset = j.value("sram_offset", uint64_t(0));
@@ -113,6 +226,22 @@ void Dte_async_prim::parseJson(json j) {
         spm_size = j.value("spm_size", uint64_t(0));
         remote_peer = j.value("remote_peer", DTE_ASYNC_INVALID_REMOTE_PEER);
         remote_addr = j.value("remote_addr", uint64_t(0));
+        if (j.contains("destination_sram_region")) {
+            if (direction != DteDir::SPM_TO_SPM)
+                throw std::invalid_argument(
+                    "Dte_async destination_sram_region requires SPM_TO_SPM");
+            if (j.contains("remote_addr"))
+                throw std::invalid_argument(
+                    "Dte_async SPM_TO_SPM destination requires exactly one "
+                    "of remote_addr or destination_sram_region");
+            destination_sram_region =
+                j.at("destination_sram_region").get<std::string>();
+            destination_sram_offset =
+                j.value("destination_sram_offset", uint64_t(0));
+        } else if (j.contains("destination_sram_offset")) {
+            throw std::invalid_argument(
+                "Dte_async destination_sram_offset requires destination_sram_region");
+        }
         if (j.contains("hbm_addr")) {
             if (direction != DteDir::DRAM_TO_SPM &&
                 direction != DteDir::SPM_TO_DRAM &&
@@ -128,10 +257,12 @@ void Dte_async_prim::parseJson(json j) {
         address_block = j.value("address_block", uint32_t(0));
     }
     Validate(*this);
+    refreshPrimType();
 }
 
 vector<sc_bv<128>> Dte_async_prim::serialize() {
     Validate(*this);
+    refreshPrimType();
     sc_bv<128> metadata = 0;
     metadata.range(7, 0) =
         sc_bv<8>(PrimFactory::getInstance().getPrimId(name));
@@ -149,32 +280,21 @@ vector<sc_bv<128>> Dte_async_prim::serialize() {
     remote_range.range(31, 0) = sc_bv<32>(remote_peer);
     remote_range.range(95, 32) = sc_bv<64>(remote_addr);
     remote_range.range(127, 96) = sc_bv<32>(address_block);
-    if (sram_region.empty()) {
-        if (remote_peer == DTE_ASYNC_INVALID_REMOTE_PEER &&
-            remote_addr == 0 && address_block == 0)
-            return {metadata, local_range};
-        return {metadata, local_range, remote_range};
-    }
 
-    sc_bv<128> region_metadata = 0;
-    region_metadata.range(63, 0) = sc_bv<64>(sram_offset);
-    region_metadata.range(79, 64) = sc_bv<16>(sram_region.size());
-    region_metadata.range(127, 96) = sc_bv<32>(0x5352414dU);
-    vector<sc_bv<128>> result = {metadata, local_range, remote_range,
-                                 region_metadata};
-    for (size_t base = 0; base < sram_region.size(); base += 16) {
-        sc_bv<128> text = 0;
-        const size_t count = std::min<size_t>(16, sram_region.size() - base);
-        for (size_t i = 0; i < count; ++i)
-            text.range(static_cast<int>(8 * i + 7),
-                       static_cast<int>(8 * i)) =
-                sc_bv<8>(static_cast<uint8_t>(sram_region[base + i]));
-        result.push_back(text);
-    }
-    return result;
+    vector<sc_bv<128>> result = {metadata, local_range};
+    const bool needs_remote_range =
+        remote_peer != DTE_ASYNC_INVALID_REMOTE_PEER || remote_addr != 0 ||
+        address_block != 0 || !sram_region.empty() ||
+        !destination_sram_region.empty();
+    if (needs_remote_range) result.push_back(remote_range);
+    AppendRegionBlock(result, kLocalRegionMarker, sram_offset, sram_region);
+    AppendRegionBlock(result, kDestinationRegionMarker,
+                      destination_sram_offset, destination_sram_region);
+    return prim_wire::WrapSegments(std::move(result), name);
 }
 
 void Dte_async_prim::deserialize(vector<sc_bv<128>> segments) {
+    segments = prim_wire::UnwrapSegments(segments, name);
     if (segments.size() < 2)
         throw std::invalid_argument(
             "Dte_async wire encoding requires at least two segments");
@@ -184,6 +304,9 @@ void Dte_async_prim::deserialize(vector<sc_bv<128>> segments) {
         throw std::invalid_argument("Dte_async wire op is invalid");
     if (raw_direction > static_cast<uint8_t>(DteDir::DRAM_TO_REMOTE))
         throw std::invalid_argument("Dte_async wire direction is invalid");
+    if (segments[0].range(127, 110).or_reduce())
+        throw std::invalid_argument(
+            "Dte_async wire metadata reserved bits are non-zero");
     op = static_cast<DteAsyncOp>(raw_op);
     poll_complete = false;
     direction = static_cast<DteDir>(raw_direction);
@@ -196,37 +319,43 @@ void Dte_async_prim::deserialize(vector<sc_bv<128>> segments) {
     address_block = 0;
     sram_region.clear();
     sram_offset = 0;
+    destination_sram_region.clear();
+    destination_sram_offset = 0;
     if (segments.size() >= 3) {
         remote_peer = segments[2].range(31, 0).to_uint64();
         remote_addr = segments[2].range(95, 32).to_uint64();
         address_block = segments[2].range(127, 96).to_uint64();
     }
-    if (segments.size() > 3) {
-        if (segments[3].range(127, 96).to_uint64() != 0x5352414dU)
+    size_t index = std::min<size_t>(segments.size(), 3);
+    while (index < segments.size()) {
+        const uint32_t marker = static_cast<uint32_t>(
+            segments[index].range(127, 96).to_uint64());
+        if (marker == kLocalRegionMarker) {
+            if (!sram_region.empty())
+                throw std::invalid_argument(
+                    "Dte_async wire has duplicate source region metadata");
+            index = DecodeRegionBlock(segments, index, sram_region,
+                                      sram_offset);
+            spm_addr = 0;
+        } else if (marker == kDestinationRegionMarker) {
+            if (!destination_sram_region.empty())
+                throw std::invalid_argument(
+                    "Dte_async wire has duplicate destination region metadata");
+            index = DecodeRegionBlock(segments, index,
+                                      destination_sram_region,
+                                      destination_sram_offset);
+            remote_addr = 0;
+        } else {
             throw std::invalid_argument(
                 "Dte_async region metadata marker is invalid");
-        sram_offset = segments[3].range(63, 0).to_uint64();
-        const size_t name_size = segments[3].range(79, 64).to_uint64();
-        const size_t expected = 4 + (name_size + 15) / 16;
-        if (name_size == 0 || name_size > 64 || segments.size() != expected)
-            throw std::invalid_argument(
-                "Dte_async wire region name length is inconsistent");
-        sram_region.reserve(name_size);
-        for (size_t index = 0; index < name_size; ++index) {
-            const auto &text = segments[4 + index / 16];
-            const int lo = static_cast<int>(8 * (index % 16));
-            sram_region.push_back(
-                static_cast<char>(text.range(lo + 7, lo).to_uint()));
         }
-        spm_addr = 0;
-    } else if (segments.size() != 2 && segments.size() != 3) {
-        throw std::invalid_argument(
-            "Dte_async legacy wire encoding requires two or three segments");
     }
     Validate(*this);
+    refreshPrimType();
 }
 
 int Dte_async_prim::taskCoreDefault(TaskCoreContext &context) {
+    refreshPrimType();
     (void)context;
     return 0;
 }

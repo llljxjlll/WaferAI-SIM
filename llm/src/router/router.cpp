@@ -210,6 +210,21 @@ void RouterUnit::router_execute() {
                 (coll_refactor::IsReduceStreamHeaderWire(wire) ||
                  coll_refactor::IsReduceStreamDataWire(wire));
         };
+        const auto requires_pulse_gap = [&](const sc_bv<256> &wire) {
+            // P2P endpoint DATA uses the normal Msg route, but its bit-255
+            // discriminator makes every fragment a strict, non-collapsible
+            // transport unit. Consecutive writes of false then true in the
+            // same SystemC delta do not create a new posedge at the next hop,
+            // so give endpoint wires the same explicit low cycle as the
+            // strict collective streams.
+            return IsIsaV1CollectiveByteStartWire(wire) ||
+                   IsIsaV1CollectiveByteDataWire(wire) ||
+                   IsCollDataWire(wire) ||
+                   IsCollReduceHeaderWire(wire) ||
+                   IsCollReducePayloadWire(wire) ||
+                   is_stream_wire(wire) ||
+                   (!IsMemWireFlit(wire) && wire[255].to_bool());
+        };
 
         if (reduce_stream_engine) {
             const uint64_t cycle = sc_time_stamp().value() /
@@ -276,10 +291,7 @@ void RouterUnit::router_execute() {
             if (data_sent_i[i].read()) {
                 // move the data into the buffer
                 sc_bv<256> temp = channel_i[i].read();
-                const bool collective_wire = IsCollDataWire(temp) ||
-                    IsCollReduceHeaderWire(temp) ||
-                    IsCollReducePayloadWire(temp) ||
-                    is_stream_wire(temp);
+                const bool collective_wire = requires_pulse_gap(temp);
                 if (i == CENTER && collective_wire &&
                     !center_collective_armed)
                     continue;
@@ -288,6 +300,11 @@ void RouterUnit::router_execute() {
                 // V2-b：该方向是 peer-connected C2C 边 ⇒ 本包刚跨 link 进入本 die，
                 // 入口处清除上一跳 pin 并按本 die 重新 pin（见 RepinOnC2CIngress）。
                 bool from_c2c = IsC2CEgressEdge(rid, Directions(i));
+                if (from_c2c &&
+                    (IsIsaV1CollectiveByteStartWire(temp) ||
+                     IsIsaV1CollectiveByteDataWire(temp)))
+                    throw std::runtime_error(
+                        "ISA-v1 strict collective wire cannot cross dies");
                 if (from_c2c && !IsMemWireFlit(temp))
                     temp = RepinOnC2CIngress(temp);
                 CountDieRouterPkt(i, from_c2c); // V2-c：本 die NoC 活动
@@ -371,10 +388,7 @@ void RouterUnit::router_execute() {
 
             channel_o[i].write(temp);
             data_sent_o[i].write(true);
-            const bool collective_wire = IsCollDataWire(temp) ||
-                IsCollReduceHeaderWire(temp) ||
-                IsCollReducePayloadWire(temp) ||
-                is_stream_wire(temp);
+            const bool collective_wire = requires_pulse_gap(temp);
             if (collective_wire)
                 collective_output_cooldown[i] = true;
             if (collective_wire) {
@@ -409,6 +423,15 @@ void RouterUnit::router_execute() {
         for (int i = 0; i < DIRECTIONS - 1; i++) {
             // global update once
             ctrl_sent_o[i].write(false);
+
+            // Make the low phase externally observable before another
+            // control packet is launched on this Router-to-Router link.
+            if (ctrl_output_gate[i].CoolingDown()) {
+                ctrl_output_gate[i].BeginCycle();
+                if (!ctrl_buffer_o[i].empty())
+                    flag_trigger = true;
+                continue;
+            }
             // bounded C2C 使用真实 credit；其它输出保持 legacy ready 信号。
             if (d2d_ctrl_credit_enabled[i]) {
                 if (d2d_ctrl_credits[i] <= 0)
@@ -425,6 +448,7 @@ void RouterUnit::router_execute() {
 
             ctrl_channel_o[i].write(temp);
             ctrl_sent_o[i].write(true);
+            ctrl_output_gate[i].MarkSent();
             if (d2d_ctrl_credit_enabled[i])
                 d2d_ctrl_credits[i]--;
             if (IsMemWireFlit(temp)) {
@@ -499,9 +523,7 @@ void RouterUnit::router_execute() {
 
                 channel_o[CENTER].write(temp);
                 data_sent_o[CENTER].write(true);
-                if (IsCollDataWire(temp) || IsCollReduceHeaderWire(temp) ||
-                    IsCollReducePayloadWire(temp) ||
-                    is_stream_wire(temp))
+                if (requires_pulse_gap(temp))
                     collective_output_cooldown[CENTER] = true;
             }
 
@@ -513,7 +535,11 @@ void RouterUnit::router_execute() {
         // 输出控制消息到本地core
         ctrl_sent_o[CENTER].write(false);
         // 控制信道输出到本地core内的buffer非空
-        if (ctrl_buffer_o[CENTER].size()) {
+        if (ctrl_output_gate[CENTER].CoolingDown()) {
+            ctrl_output_gate[CENTER].BeginCycle();
+            if (!ctrl_buffer_o[CENTER].empty())
+                flag_trigger = true;
+        } else if (ctrl_buffer_o[CENTER].size()) {
             sc_bv<256> front = ctrl_buffer_o[CENTER].front();
             if (IsMemWireFlit(front)) {
                 if (!ActiveHBMNetwork())
@@ -534,6 +560,7 @@ void RouterUnit::router_execute() {
 
                 ctrl_channel_o[CENTER].write(temp);
                 ctrl_sent_o[CENTER].write(true);
+                ctrl_output_gate[CENTER].MarkSent();
             }
 
             // need trigger again
@@ -616,6 +643,118 @@ void RouterUnit::router_execute() {
                 continue;
 
             sc_bv<256> temp = buffer_i[i].front();
+            if (IsIsaV1CollectiveByteStartWire(temp)) {
+                const IsaV1CollectiveByteStart start =
+                    DeserializeIsaV1CollectiveByteStart(temp);
+                if (start.kind != IsaV1CollectiveByteKind::MULTICAST)
+                    throw std::runtime_error(
+                        "strict byte START kind is not a multicast stream");
+                const IsaV1CollectiveByteLock route{
+                    start.tree_id, start.session_id,
+                    start.collective.epoch};
+                if (strict_multicast_streams.count(route) != 0)
+                    throw std::runtime_error(
+                        "duplicate strict multicast START at Router");
+                const uint8_t outputs = LookupCollectiveTreeEntry(
+                    {start.tree_id, static_cast<uint16_t>(rid),
+                     static_cast<uint8_t>(i)});
+                bool available[DIRECTIONS] = {};
+                for (int d = 0; d < DIRECTIONS; ++d) {
+                    if ((outputs & (1U << d)) != 0 && d != CENTER &&
+                        IsC2CEgressEdge(rid, static_cast<Directions>(d)))
+                        throw std::runtime_error(
+                            "strict multicast topology enters a D2D link");
+                    available[d] =
+                        buffer_o[d].size() < MAX_BUFFER_PACKET_SIZE;
+                }
+                const CollBranchLockKey lock_key{
+                    start.tree_id, start.collective, start.session_id, 0};
+                const bool can_commit = collective_fork.CanCommit(
+                    outputs, available, lock_key);
+                RecordCollectiveForkAttempt(
+                    start.tree_id, static_cast<uint16_t>(rid), outputs,
+                    can_commit);
+                if (!can_commit) continue;
+                const uint32_t fragments =
+                    start.total_bytes / P2P_PAYLOAD_FRAGMENT_BYTES +
+                    (start.total_bytes % P2P_PAYLOAD_FRAGMENT_BYTES != 0);
+                const auto inserted = strict_multicast_streams.emplace(
+                    route, StrictMulticastRouterStream{start, fragments, 1});
+                if (!inserted.second)
+                    throw std::logic_error(
+                        "strict multicast START insertion failed");
+                collective_fork.Commit(outputs, true, false, lock_key);
+                buffer_i[i].pop();
+                for (int d = 0; d < DIRECTIONS; ++d)
+                    if ((outputs & (1U << d)) != 0)
+                        buffer_o[d].emplace(temp);
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
+            if (IsIsaV1CollectiveByteDataWire(temp)) {
+                const IsaV1CollectiveByteData data =
+                    InspectIsaV1CollectiveByteDataWire(temp);
+                if (data.kind != IsaV1CollectiveByteKind::MULTICAST)
+                    throw std::runtime_error(
+                        "strict byte DATA kind is not a multicast stream");
+                const auto state = strict_multicast_streams.find(data.lock);
+                if (state == strict_multicast_streams.end())
+                    throw std::runtime_error(
+                        "strict multicast DATA has no Router START state");
+                if (state->second.start.kind != data.kind)
+                    throw std::runtime_error(
+                        "strict multicast DATA kind mismatches Router START");
+                if (data.sequence != state->second.next_sequence)
+                    throw std::runtime_error(
+                        "strict multicast DATA sequence is not contiguous");
+                const bool expected_tail =
+                    state->second.next_sequence ==
+                    state->second.fragment_count;
+                const uint32_t consumed =
+                    (state->second.next_sequence - 1) *
+                    P2P_PAYLOAD_FRAGMENT_BYTES;
+                const uint8_t expected_length = static_cast<uint8_t>(
+                    std::min<uint32_t>(
+                        P2P_PAYLOAD_FRAGMENT_BYTES,
+                        state->second.start.total_bytes - consumed));
+                if (data.tail != expected_tail ||
+                    data.length_bytes != expected_length)
+                    throw std::runtime_error(
+                        "strict multicast DATA tail shape mismatches START");
+                const uint8_t outputs = LookupCollectiveTreeEntry(
+                    {data.lock.tree_id, static_cast<uint16_t>(rid),
+                     static_cast<uint8_t>(i)});
+                bool available[DIRECTIONS] = {};
+                for (int d = 0; d < DIRECTIONS; ++d) {
+                    if ((outputs & (1U << d)) != 0 && d != CENTER &&
+                        IsC2CEgressEdge(rid, static_cast<Directions>(d)))
+                        throw std::runtime_error(
+                            "strict multicast topology enters a D2D link");
+                    available[d] =
+                        buffer_o[d].size() < MAX_BUFFER_PACKET_SIZE;
+                }
+                const CollBranchLockKey lock_key{
+                    data.lock.tree_id, state->second.start.collective,
+                    data.lock.session_id, 0};
+                const bool can_commit = collective_fork.CanCommit(
+                    outputs, available, lock_key);
+                RecordCollectiveForkAttempt(
+                    data.lock.tree_id, static_cast<uint16_t>(rid), outputs,
+                    can_commit);
+                if (!can_commit) continue;
+                collective_fork.Commit(outputs, false, data.tail, lock_key);
+                buffer_i[i].pop();
+                for (int d = 0; d < DIRECTIONS; ++d)
+                    if ((outputs & (1U << d)) != 0)
+                        buffer_o[d].emplace(temp);
+                ++state->second.next_sequence;
+                if (data.tail)
+                    strict_multicast_streams.erase(state);
+                collective_rr_start = (i + 1) % DIRECTIONS;
+                flag_trigger = true;
+                continue;
+            }
             if (reduce_stream_engine &&
                 coll_refactor::IsReduceStreamHeaderWire(temp)) {
                 const auto header =
@@ -746,6 +885,11 @@ void RouterUnit::router_execute() {
             // core 目的 DATA：跨 die 时消费 SEND_DATA 原语一次选定、随所有包携带的
             // exit_port；进入目标 die 后退回片内 XY。HOST 目的仍使用 source anchor。
             Directions out = DataMsgNextHop(m, rid);
+            const bool endpoint_data = m.p2p_endpoint_ &&
+                m.msg_type_ == MSG_TYPE::DATA &&
+                !IsHostEndpoint(m.des_) && !IsHostEndpoint(m.source_);
+            const EndpointOutputFlowKey endpoint_flow{
+                m.source_, m.des_, m.tag_id_, m.subflow_};
 
             // HOST 路由只能落在挂载 tile；直接同时查指针，杜绝空指针解引用
             // （3b-2 改此核心路径，此检查作兜底）。
@@ -754,10 +898,30 @@ void RouterUnit::router_execute() {
                 throw std::runtime_error(
                     "HOST data route reached a non-attachment tile");
 
-            if (!IsHostEndpoint(m.des_) && output_lock[out] != -1 &&
-                output_lock[out] !=
-                    m.tag_id_) // 如果不发往host，且目标通道上锁，且目标上锁tag不等同于自己的tag：continue
-                continue;
+            if (!IsHostEndpoint(m.des_)) {
+                if (endpoint_output_lock[out].Active()) {
+                    // An endpoint owner is exclusive even against legacy
+                    // same-tag DATA: no other flow may split its fragments.
+                    if (!endpoint_data ||
+                        !endpoint_output_lock[out].OwnedBy(endpoint_flow))
+                        continue;
+                    if (m.seq_id_ == 1)
+                        throw std::runtime_error(
+                            "duplicate P2P endpoint DATA seq1 while Router "
+                            "output flow is active");
+                } else if (endpoint_data) {
+                    if (m.seq_id_ != 1)
+                        throw std::runtime_error(
+                            "P2P endpoint DATA continuation has no Router "
+                            "output flow owner");
+                    // A legacy tag/refcount flow already owns this output.
+                    if (output_lock[out] != -1)
+                        continue;
+                } else if (output_lock[out] != -1 &&
+                           output_lock[out] != m.tag_id_) {
+                    continue;
+                }
+            }
             if (out == HOST &&
                 host_buffer_o->size() >=
                     MAX_BUFFER_PACKET_SIZE) // 如果发往host，但通道已满：continue
@@ -769,14 +933,26 @@ void RouterUnit::router_execute() {
                 continue;
 
 
-            // output_lock 按 tag 锁是**有意设计**（非缺陷）：tag == 接收核 recv_tag == 全局核
+            // Legacy output_lock 按 tag 锁是**有意设计**（非缺陷）：tag == 接收核 recv_tag == 全局核
             // id（唯一），即「接收端聚合槽」。同 tag 的包（多源发一个核=多发一）共享锁、交错通过，
             // 接收端按包内地址重组。全局 tag 下无「不同接收核撞 tag」别名，故不加 source 维
             // （加了会把多发一错误拆成串行）。跨 die 时 out 由 DataMsgNextHop 给出，锁在正确方向。
             // 详见 common/flow.h。
             // FIX 上锁应该在第一个DATA 包
-            if (m.msg_type_ == DATA && m.seq_id_ == 1 && !IsHostEndpoint(m.des_) &&
-                !IsHostEndpoint(m.source_)) {
+            if (endpoint_data && m.seq_id_ == 1) {
+                if (output_lock[out] != -1 || output_lock_ref[out] != 0 ||
+                    endpoint_output_lock[out].Active())
+                    throw std::logic_error(
+                        "P2P endpoint Router output acquisition state is "
+                        "inconsistent");
+                endpoint_output_lock[out].Acquire(endpoint_flow);
+                output_lock[out] = m.tag_id_;
+                output_lock_ref[out] = 1;
+                if (output_lock_ref[out] > g_max_output_lock_ref)
+                    g_max_output_lock_ref = output_lock_ref[out];
+            } else if (!endpoint_data && m.msg_type_ == DATA &&
+                       m.seq_id_ == 1 && !IsHostEndpoint(m.des_) &&
+                       !IsHostEndpoint(m.source_)) {
                 // i 是 ACK 的进入方向，需要计算 ACK 的输出方向
                 if (output_lock[out] == -1) {
                     // 上锁
@@ -815,8 +991,19 @@ void RouterUnit::router_execute() {
             // DTODO
             // 排除了Config DATA 包，不会减少 lock
             // START DATA 包也不会上锁？
-            if (m.msg_type_ == DATA && m.is_end_ && !IsHostEndpoint(m.source_) &&
-                !IsHostEndpoint(m.des_)) {
+            if (endpoint_data && m.is_end_) {
+                if (!endpoint_output_lock[out].OwnedBy(endpoint_flow) ||
+                    output_lock[out] != m.tag_id_ ||
+                    output_lock_ref[out] != 1)
+                    throw std::runtime_error(
+                        "P2P endpoint DATA tail mismatches Router output "
+                        "flow owner");
+                endpoint_output_lock[out].Release(endpoint_flow);
+                output_lock_ref[out] = 0;
+                output_lock[out] = -1;
+            } else if (!endpoint_data && m.msg_type_ == DATA && m.is_end_ &&
+                       !IsHostEndpoint(m.source_) &&
+                       !IsHostEndpoint(m.des_)) {
                 // 必须使用本轮 DataMsgNextHop 已解析出的同一 out；跨 die 源侧若回退到
                 // GetNextHop(des,rid) 会把全局 dest 当作片内坐标并解错锁。
 
@@ -935,6 +1122,7 @@ long RouterUnit::residual() const {
     const long reduce_match_residual =
         static_cast<long>(reduce_match.Residual());
     long r = static_cast<long>(collective_fork.Residual());
+    r += static_cast<long>(strict_multicast_streams.size());
     r += reduce_match_residual + static_cast<long>(reduce_active.size() +
                                                    reduce_scheduled.size());
     if (reduce_stream_engine)
@@ -942,6 +1130,12 @@ long RouterUnit::residual() const {
     for (int i = 0; i < DIRECTIONS; ++i)
         if (reduce_header_pending[i]) ++r;
     for (int i = 0; i < DIRECTIONS; i++) {
+        r += static_cast<long>(ctrl_output_gate[i].Residual());
+        // Normally output_lock_ref already accounts for an endpoint owner.
+        // Count a stranded owner separately if accounting was corrupted, so
+        // drain/watchdog can never report a false zero.
+        if (endpoint_output_lock[i].Active() && output_lock_ref[i] <= 0)
+            r += static_cast<long>(endpoint_output_lock[i].Residual());
         if (input_lock_ref[i] > 0)
             r += input_lock_ref[i];
         if (output_lock_ref[i] > 0)

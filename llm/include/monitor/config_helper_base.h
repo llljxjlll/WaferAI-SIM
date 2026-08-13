@@ -4,6 +4,12 @@
 #include "common/config.h"
 #include "common/msg.h"
 
+#include <memory>
+
+class CoreGroupRegistry;
+class IsaV1CollectiveProgramImage;
+class IsaV1CollectiveProfileProgramImage;
+
 using namespace std;
 
 class config_helper_base {
@@ -25,7 +31,7 @@ public:
 
     virtual void fill_queue_config(queue<Msg> *q) = 0; // 下发原语配置
     virtual void fill_queue_start(queue<Msg> *q) = 0;  // 下发初始数据
-    void fill_queue_data(queue<Msg> *q);               // 下发权重数据
+    virtual void fill_queue_data(queue<Msg> *q);       // 下发权重数据
 
     bool judge_is_end_core(int i);
     bool judge_is_end_work(CoreJob work);
@@ -41,5 +47,20 @@ public:
 
     virtual void printSelf() = 0;
     virtual config_helper_base *clone() const = 0;
+    // Program-mode helpers may expose one immutable registry for injection
+    // into every active WorkerCoreExecutor. Legacy helpers intentionally
+    // return null and retain their existing behavior.
+    virtual std::shared_ptr<const CoreGroupRegistry>
+    core_group_registry() const noexcept {
+        return nullptr;
+    }
+    virtual std::shared_ptr<const IsaV1CollectiveProgramImage>
+    collective_program_image() const noexcept {
+        return nullptr;
+    }
+    virtual std::shared_ptr<const IsaV1CollectiveProfileProgramImage>
+    collective_profile_program_image() const noexcept {
+        return nullptr;
+    }
     virtual ~config_helper_base() = default;
 };

@@ -223,6 +223,7 @@ void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescripto
                     auto *req = new Send_prim(SEND_TYPE::SEND_REQ,
                                               d.group[dst], tag);
                     auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+                    ack->tag_id = tag;
                     auto *data = new Send_prim(SEND_TYPE::SEND_DATA,
                                                d.group[dst], tag);
                     SetCollectiveFlowSize(req, bits);
@@ -315,6 +316,7 @@ void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescripto
                     auto *req = new Send_prim(SEND_TYPE::SEND_REQ,
                                               d.group[dst], tag);
                     auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+                    ack->tag_id = tag;
                     auto *data = new Send_prim(SEND_TYPE::SEND_DATA,
                                                d.group[dst], tag);
                     SetCollectiveFlowSize(req, bits);
@@ -382,6 +384,7 @@ void AppendCollectiveActions(std::vector<PrimBase *> &prims, const CollDescripto
             const int tag = CollectiveFlowTag(d, action.phase_id, action.peer_rank);
             auto *req = new Send_prim(SEND_TYPE::SEND_REQ, dest, tag);
             auto *ack = new Recv_prim(RECV_TYPE::RECV_ACK);
+            ack->tag_id = tag;
             auto *data = new Send_prim(SEND_TYPE::SEND_DATA, dest, tag);
             SetCollectiveFlowSize(req, action.payload_bits);
             SetCollectiveFlowSize(data, action.payload_bits);
@@ -821,7 +824,7 @@ std::vector<HostEnvelope> config_helper_core::BuildConfigMessages() {
                     }
                 }
 
-                auto segments = prim->serialize();
+                auto segments = prim_wire::LegacyTransportSegments(prim);
                 for (int seg = 0; seg < segments.size(); seg++)
                     msgs.emplace_back(
                         Msg(false, MSG_TYPE::CONFIG, msgs.size() + 1, config.id,
@@ -871,7 +874,8 @@ std::vector<HostEnvelope> config_helper_core::BuildConfigMessages() {
             // 如果 默认的 loop = 1 其实 in_loop 和 next_loop 都不会执行
             // 这里的loop 不为 1 就是 decoding 的数量
             for (int i = 0; i < config.loop - 1; i++) {
-                auto segments = set_batch->serialize();
+                auto segments = prim_wire::LegacyTransportSegments(
+                    set_batch->serialize(), set_batch->name);
                 for (int seg = 0; seg < segments.size(); seg++)
                     push_msg(Msg(false, MSG_TYPE::CONFIG, 0, config.id,
                                  seg == segments.size() - 1, segments[seg]));
@@ -881,7 +885,8 @@ std::vector<HostEnvelope> config_helper_core::BuildConfigMessages() {
                     push_msg(m);
             }
             // 默认执行最后一个循环
-            auto segments = set_batch->serialize();
+            auto segments = prim_wire::LegacyTransportSegments(
+                set_batch->serialize(), set_batch->name);
             for (int seg = 0; seg < segments.size(); seg++) {
                 Msg m(false, MSG_TYPE::CONFIG, 0, config.id,
                       seg == segments.size() - 1, segments[seg]);
@@ -933,7 +938,7 @@ void config_helper_core::generate_prims(int i) {
             }
             PrimBase *p = PrimFactory::getInstance().createPrim("Set_addr");
             auto label = p->prim_context->datapass_label_;
-            if (prim->prim_type & PRIM_TYPE::COMP_PRIM) {
+            if (dynamic_cast<CompBase *>(prim) != nullptr) {
                 for (int i = 0; i < MAX_SPLIT_NUM; i++)
                     label->indata[i] =
                         prim->prim_context->datapass_label_->indata[i];
@@ -1035,8 +1040,7 @@ void config_helper_core::calculate_address(bool do_loop) {
             for (int j = v->size() - 1; j >= 0; j--) {
                 auto p = (*v)[j];
 
-                if (p->prim_type & PRIM_TYPE::COMP_PRIM) {
-                    CompBase *cp = (CompBase *)p;
+                if (auto *cp = dynamic_cast<CompBase *>(p)) {
                     output_size = cp->out_size;
                     // output_offset = cp->out_offset;
                     output_label = cp->prim_context->datapass_label_->outdata;
@@ -1079,7 +1083,11 @@ void config_helper_core::calculate_address(bool do_loop) {
                     if (temp->max_packet <= 0 ||
                         (unsigned)temp->max_packet > M_D_FLOW_PACKETS_MAX)
                         throw std::runtime_error(
-                            "DATA flow packet count is not encodable in REQUEST flow_packets");
+                            "DATA flow packet count " +
+                            std::to_string(temp->max_packet) +
+                            " for output elements " + std::to_string(output_size) +
+                            " label " + output_label +
+                            " is not encodable in REQUEST flow_packets");
                     // Send_prim wire 上 max_packet 对 SEND_REQ 是 tagged union：把后续 DATA 的 F
                     // 带到源核，源核再写入 REQUEST Msg.flow_packets_。
                     pending_req->max_packet = temp->max_packet;

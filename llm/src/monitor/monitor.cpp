@@ -1,14 +1,24 @@
 #include "monitor/monitor.h"
+#pragma push_macro("DUMMY")
+#undef DUMMY
+#include "dte/coll_program_profile_v1.h"
+#include "dte/coll_tree_registry_bridge_v1.h"
+#include "dte/coll_accel_runtime_v1.h"
+#include "dte/collective_executor_v1.h"
+#pragma pop_macro("DUMMY")
 #include "defs/global.h"
 #include "die/d2d_link.h"
 #include "monitor/watchdog.h"
 #include "monitor/start_data_tracker.h"
 #include "die/port.h"
+#include "dte/p2p_payload.h"
 #include "monitor/config_helper_gpu.h"
 #include "monitor/config_helper_gpu_pd.h"
 #include "utils/system_utils.h"
 #include "memory/hbm_runtime.h"
 #include "memory/hbm_network.h"
+#include <algorithm>
+#include <limits>
 
 // 独立统计 SystemC 层级中的 RouterUnit / WorkerCore 实例数（按类型 dynamic_cast，
 // 不依赖自报计数），供多 die 实例化验收独立核对模块数量。
@@ -83,13 +93,18 @@ Monitor::~Monitor() {
     delete hbmNetwork;
     delete hbmRuntime;
     delete routerMonitor;
-    // WorkerCore 对象当前有意“泄漏”（不逐个析构）：其析构链存在既有 teardown 隐患
-    // （SystemC 拆解顺序 / 成员释放），启用逐个 delete 会在退出时段错误（已实测）。
-    // 故仅用 delete[] 释放指针数组本身；g_dram_kvtable 数组同理由 Monitor 用 delete[]
-    // 释放（其元素随 Worker 一起泄漏，但不产生 double-free / use-after-free）。
-    // 说明：不析构 Worker 时，扩容到 TOTAL_CORES 也不会触发 g_dram_kvtable 的多核 double-free。
+    // WorkerCore objects are intentionally not destroyed here: their legacy
+    // SystemC teardown order is unsafe.  Release the pointer array and the
+    // independent DramKVTable elements that Monitor allocated for each core.
+    // WorkerCoreExecutor null-checks the same slots for future explicit
+    // WorkerCore teardown, preventing double-free.
     delete[] workerCores;
+    for (int i = 0; i < TOTAL_CORES; ++i) {
+        delete g_dram_kvtable[i];
+        g_dram_kvtable[i] = nullptr;
+    }
     delete[] g_dram_kvtable;
+    g_dram_kvtable = nullptr;
     delete memInterface;
 }
 
@@ -126,6 +141,72 @@ void Monitor::init() {
         workerCores[i] =
             new WorkerCore(sc_gen_unique_name("workercore"), i,
                            this->event_engine, GetCoreHWConfigForGlobal(i)->dram_config);
+    }
+
+    if (auto registry =
+            memInterface->config_helper->core_group_registry()) {
+        for (const CoreConfig &config :
+             memInterface->config_helper->coreconfigs) {
+            if (config.id < 0 || config.id >= TOTAL_CORES)
+                throw std::runtime_error(
+                    "core-group registry injection found an invalid active core");
+            workerCores[config.id]->executor->ConfigureCoreGroups(registry);
+        }
+    }
+
+    if (auto image =
+            memInterface->config_helper->collective_program_image()) {
+        auto profile_image = memInterface->config_helper->
+            collective_profile_program_image();
+        if (profile_image == nullptr ||
+            profile_image->BaseGeneration() != image->Generation() ||
+            profile_image->BaseCookie() != image->Cookie())
+            throw std::runtime_error(
+                "collective profile/base image injection mismatch");
+        ResetCollectiveFabric();
+        ResetCollectiveReduceFabric();
+        IsaV1CollectiveTreeBatchRuntimeConfig tree_config;
+        tree_config.max_registered_schedules = std::max<size_t>(
+            1, profile_image->Plans().size());
+        tree_config.max_registered_trees = std::max<size_t>(
+            1, profile_image->TreeCount());
+        tree_config.max_planned_entries = std::max<size_t>(
+            1, profile_image->TreeEntryCount());
+        tree_config.max_trace_events = std::max<size_t>(
+            1, profile_image->BatchCount() * 2);
+        auto tree_bridge =
+            std::make_shared<IsaV1CollectiveTreeRegistryBridge>(
+                tree_config);
+        tree_bridge->RegisterImage(*profile_image);
+        auto acceleration_runtime =
+            std::make_shared<IsaV1CollectiveAccelerationRuntime>(
+                image, profile_image, tree_bridge);
+        for (const IsaV1CollectiveProfilePlanImage &plan :
+             profile_image->Plans())
+            std::cout << "[P7 PROFILE] " << plan.decision.trace
+                      << " trees=" << plan.trees.size()
+                      << " batches=" << plan.tree_schedule.batches.size()
+                      << " conflicts="
+                      << plan.tree_schedule.conflict_graph.edges.size()
+                      << std::endl;
+
+        const auto capacity =
+            CollectiveWaveAdmissionCapacityForImageV1(
+                *image, static_cast<uint32_t>(MAX_BUFFER_PACKET_SIZE),
+                kDteEndpointP2pMaxBytes);
+        auto coordinator =
+            std::make_shared<CollectiveWaveAdmissionCoordinatorV1>(
+                capacity);
+        coordinator->RegisterImage(*image);
+        for (const IsaV1CollectiveCoreProgramImage &core :
+             image->Cores()) {
+            if (core.core_id >= static_cast<uint32_t>(TOTAL_CORES))
+                throw std::runtime_error(
+                    "collective image injection found an invalid core");
+            workerCores[core.core_id]->executor->ConfigureCollectiveProgram(
+                image, coordinator, profile_image, tree_bridge,
+                acceleration_runtime);
+        }
     }
 
     // 根据Config的设置连接到Globalmem
@@ -364,6 +445,22 @@ void Monitor::init() {
     // 取代 C2C 出口边的终结：link 读上游 A 的边缘输出、延迟后驱动下游 B 的边缘输入。
     // 两条有向 link 一起覆盖两端所有被延后的输入端口（每个恰绑定一次）。
     ResetD2DLinkStats();
+    if (TOTAL_CORES <= 0 ||
+        static_cast<size_t>(TOTAL_CORES) >
+            std::numeric_limits<size_t>::max() /
+                static_cast<size_t>(MAX_BUFFER_PACKET_SIZE))
+        throw std::overflow_error(
+            "P2P shared timing capacity overflows size_t");
+    const size_t p2p_timing_capacity =
+        static_cast<size_t>(TOTAL_CORES) *
+        static_cast<size_t>(MAX_BUFFER_PACKET_SIZE);
+    if (P2pSharedTimingSidebandRuntime::Capacity() == 0)
+        P2pSharedTimingSidebandRuntime::Configure(p2p_timing_capacity);
+    else if (P2pSharedTimingSidebandRuntime::Capacity() <
+             p2p_timing_capacity)
+        throw std::runtime_error(
+            "P2P shared timing capacity is below platform session capacity");
+    P2pSharedTimingSidebandRuntime::Reset();
     ResetProtocolWatchdog();
     ResetStartDataTracking();
     // V2-d2：仿真器内部协议进展 watchdog（主动诊断，不依赖外部 wall-clock 超时）

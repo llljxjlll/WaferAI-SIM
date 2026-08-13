@@ -12,7 +12,7 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Matmul_f_mla);
+REGISTER_PRIM(Matmul_f_mla, PrimId::MATMUL_F_MLA);
 
 void Matmul_f_mla::initialize() {
     auto &p = param_value;

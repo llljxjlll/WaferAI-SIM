@@ -128,16 +128,16 @@ def validate_flow(
 def main() -> int:
     tests: list[tuple[str, bool, str]] = []
     expected_cycle = {
-        "v2b_source_slow": (1067, 931),
-        "v2b_network_slow": (563, 545),
-        "v2b_destination_slow": (1067, 935),
-        "v2b_equal": (803, 553),
+        "v2b_source_slow": (1125, 927),
+        "v2b_network_slow": (621, 603),
+        "v2b_destination_slow": (1125, 931),
+        "v2b_equal": (861, 605),
     }
     expected_beha = {
-        "v2b_source_slow": (1005, 927),
-        "v2b_network_slow": (501, 483),
-        "v2b_destination_slow": (1005, 935),
-        "v2b_equal": (741, 551),
+        "v2b_source_slow": (1001, 923),
+        "v2b_network_slow": (497, 479),
+        "v2b_destination_slow": (1001, 931),
+        "v2b_equal": (737, 547),
     }
 
     cycle_payloads: set[int] = set()
@@ -198,8 +198,8 @@ def main() -> int:
         f"physical={cycle_payloads}, behavioral={beha_payloads}",
     ))
 
-    width_expected = {64: 935, 128: 679, 256: 551, 512: 487,
-                      1024: 483, 2048: 483, 4096: 483}
+    width_expected = {64: 931, 128: 675, 256: 547, 512: 483,
+                      1024: 479, 2048: 479, 4096: 479}
     width_results = []
     width_ok = True
     for width, expected in width_expected.items():
@@ -207,7 +207,7 @@ def main() -> int:
         width_results.append(result.finish_ns)
         width_ok &= result.returncode == 0 and result.finish_ns == expected
     width_ok &= all(a >= b for a, b in zip(width_results, width_results[1:]))
-    width_ok &= width_results[-3:] == [483, 483, 483]
+    width_ok &= width_results[-3:] == [479, 479, 479]
     tests.append((
         "width scan crosses into network bottleneck",
         width_ok,
@@ -224,7 +224,7 @@ def main() -> int:
     )
     tests.append((
         "small payload fill/launch",
-        small.returncode == 0 and small.finish_ns == 256 and small_ok,
+        small.returncode == 0 and small.finish_ns == 252 and small_ok,
         f"finish={small.finish_ns} ns; {small_detail}",
     ))
 
@@ -243,7 +243,7 @@ def main() -> int:
     tx_times = {(event["phase"]): event["ns"] for event in source_transmit}
     tests.append((
         "non-divisible 16,416-bit payload",
-        nondiv.returncode == 0 and nondiv.finish_ns == 570
+        nondiv.returncode == 0 and nondiv.finish_ns == 626
         and nondiv_ok and tx_times.get("E", 0) - tx_times.get("B", 0) == 130,
         f"finish={nondiv.finish_ns} ns, source transmit=130 ns; {nondiv_detail}",
     ))
@@ -287,7 +287,7 @@ def main() -> int:
     )
     tests.append((
         "multi-source destination contexts",
-        multi.returncode == 0 and multi.finish_ns == 751
+        multi.returncode == 0 and multi.finish_ns == 747
         and multi_starts == Counter({
             (0, "SPM_TO_REMOTE", 16384): 1,
             (1, "SPM_TO_REMOTE", 16384): 1,
@@ -325,7 +325,7 @@ def main() -> int:
     )
     tests.append((
         "streaming repeated source/tag lifecycle",
-        repeated.returncode == 0 and repeated.finish_ns == 1179
+        repeated.returncode == 0 and repeated.finish_ns == 1235
         and {core: sorted(ids) for core, ids in repeated_ids.items()} == {
             0: [0, 1], 1: [0, 1], 2: [0, 1, 2, 3]
         } and repeated_flow_ok,

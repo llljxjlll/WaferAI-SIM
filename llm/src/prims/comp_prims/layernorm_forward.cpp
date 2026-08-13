@@ -1,5 +1,6 @@
 #include "systemc.h"
 
+#include "isa/published_npu_ops.h"
 #include "memory/dram/Dcachecore.h"
 #include "prims/base.h"
 #include "prims/comp_prims.h"
@@ -7,7 +8,7 @@
 #include "utils/prim_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Layernorm_f)
+REGISTER_PRIM(Layernorm_f, PrimId::LAYERNORM_F)
 
 void Layernorm_f::initialize() {
     auto &p = param_value;
@@ -33,8 +34,9 @@ void Layernorm_f::taskCore(TaskCoreContext &context, string prim_name,
     checkStaticData(context, dram_time, data_chunk_addr["bias"],
                     GetFromPairedVector(data_chunk, "bias"), label_bias);
 
-    auto &p = param_value;
-    exu_ops = 0;
-    sfu_ops = (u_int64_t)p["B"] * p["T"];
-    vec_ops = (u_int64_t)p["B"] * p["T"] * (8 * p["C"] + 3);
+    const NpuOps ops =
+        EvaluatePublishedNpuOps(Opcode::LAYERNORM, param_value);
+    exu_ops = ops.exu;
+    sfu_ops = ops.sfu;
+    vec_ops = ops.vec;
 }

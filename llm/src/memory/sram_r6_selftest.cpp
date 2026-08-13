@@ -3,6 +3,7 @@
 #include "prims/base.h"
 #include "memory/sram/sram_selftest.h"
 #include "prims/norm_prims.h"
+#include "prims/sram_lifecycle_prim.h"
 #include "utils/memory_utils.h"
 #include "utils/system_utils.h"
 
@@ -122,6 +123,15 @@ struct R6Bench : sc_module {
         std::cerr << "[SRAM R6] FAIL: " << message << std::endl;
     }
 
+    template <typename Function> bool Rejects(Function function) {
+        try {
+            function();
+        } catch (const std::exception &) {
+            return true;
+        }
+        return false;
+    }
+
     void Run() {
         CoreHWConfig fallback_core;
         CoreHWConfig *test_core = nullptr;
@@ -144,6 +154,7 @@ struct R6Bench : sc_module {
         TaskCoreContext context(
             nullptr, nullptr, nullptr, nullptr, &legacy_sram_addr, nullptr,
             nullptr, nullptr, nullptr, uint64_t{0}, unsigned{0});
+        context.cid = 0;
         context.lsu_memory = &lsu;
         context.sram_regions = &regions;
         context.sram_access = &access;
@@ -287,12 +298,281 @@ struct R6Bench : sc_module {
         Check(regions.FindAllocation(renamed_allocation).label ==
                   renamed_protected,
               "label rename updates its bound region allocation metadata");
+
+        AddrPosKey legacy_input_key(0, 16);
+        legacy_input_key.preferred_region = "scratch";
+        std::string legacy_input_label = INPUT_LABEL;
+        clear.prim_context->sram_pos_locator_->addPair(
+            legacy_input_label, legacy_input_key, context, label_time);
+        const uint64_t legacy_input_allocation =
+            labels.at(legacy_input_label).region_allocation_id;
+        const std::size_t allocations_before_reuse =
+            regions.AllocationCount();
+        Check(Rejects([&] {
+                  clear.prim_context->sram_pos_locator_->changePairName(
+                      legacy_input_label, renamed_protected);
+              }) &&
+                  labels.at(legacy_input_label).region_allocation_id ==
+                      legacy_input_allocation &&
+                  labels.at(renamed_protected).region_allocation_id ==
+                      renamed_allocation &&
+                  regions.AllocationCount() == allocations_before_reuse,
+              "strict label rename rejects an existing destination atomically");
+        clear.prim_context->sram_pos_locator_->changePairName(
+            legacy_input_label, renamed_protected, true);
+        Check(labels.count(legacy_input_label) == 0 &&
+                  labels.at(renamed_protected).region_allocation_id ==
+                      legacy_input_allocation &&
+                  regions.FindAllocation(legacy_input_allocation).label ==
+                      renamed_protected &&
+                  Rejects([&] {
+                      (void)regions.FindAllocation(renamed_allocation);
+                  }) &&
+                  regions.AllocationCount() + 1 == allocations_before_reuse,
+              "legacy input-label reuse replaces an existing destination "
+              "without leaking its region allocation");
         clear.prim_context->sram_pos_locator_->deletePair(renamed_protected);
+        clear.prim_context->sram_pos_locator_->deletePair(layer_label);
         const auto recycled_comm = regions.AllocateAt(
             "comm", 0, 32, "recycled_comm");
         Check(recycled_comm.range.address == 128,
               "deletePair releases its bound region allocation");
         regions.Free(recycled_comm.id);
+        Check(labels.empty() && regions.AllocationCount() == 0,
+              "pre-lifecycle labels and allocations are fully drained");
+
+        auto lifecycle_context = std::make_shared<PrimCoreContext>(0);
+        auto RunLifecycle = [&](Sram_lifecycle &prim) {
+            prim.prim_context = lifecycle_context;
+            return prim.taskCoreDefault(context);
+        };
+        auto &lifecycle_labels =
+            lifecycle_context->sram_pos_locator_->data_map;
+
+        Sram_lifecycle spill_mismatch;
+        spill_mismatch.op = SramLifecycleOp::ALLOC;
+        spill_mismatch.region_name = "scratch";
+        spill_mismatch.label = "p4_spill_mismatch";
+        spill_mismatch.size_bytes = 8;
+        spill_mismatch.alignment_bytes = 64;
+        spill_mismatch.spillable = false;
+        Check(Rejects([&] { RunLifecycle(spill_mismatch); }) &&
+                  lifecycle_labels.empty(),
+              "ALLOC rejects a spillable flag inconsistent with its region");
+
+        Sram_lifecycle fixed_alloc = spill_mismatch;
+        fixed_alloc.region_name = "protected";
+        fixed_alloc.label = "p4_fixed";
+        Check(Rejects([&] { RunLifecycle(fixed_alloc); }) &&
+                  lifecycle_labels.empty(),
+              "ALLOC rejects fixed regions without partial metadata");
+
+        Sram_lifecycle lifecycle_alloc;
+        lifecycle_alloc.op = SramLifecycleOp::ALLOC;
+        lifecycle_alloc.region_name = "scratch";
+        lifecycle_alloc.label = "p4_live";
+        lifecycle_alloc.size_bytes = 17;
+        lifecycle_alloc.alignment_bytes = 64;
+        lifecycle_alloc.spillable = true;
+        const sc_time alloc_time = sc_time_stamp();
+        const size_t alloc_requests = access.trace().size();
+        Check(RunLifecycle(lifecycle_alloc) == 0 &&
+                  sc_time_stamp() == alloc_time &&
+                  access.trace().size() == alloc_requests &&
+                  lifecycle_labels.count("p4_live") == 1,
+              "ALLOC commits locator metadata with zero modeled traffic");
+        const AddrPosKey live_key = lifecycle_labels.at("p4_live");
+        const auto &live_allocation =
+            regions.FindAllocation(live_key.region_allocation_id);
+        Check(live_key.pos == 0 && live_key.size == 17 &&
+                  live_key.region_id == live_allocation.range.region_id &&
+                  live_allocation.range.address == 0 &&
+                  live_allocation.range.size_bytes == 17 &&
+                  live_allocation.label == "p4_live",
+              "ALLOC keeps locator and RegionTable metadata consistent");
+
+        const std::vector<uint8_t> live_sentinel(48, 0xa7);
+        storage.Write(0, live_sentinel);
+        sram::Request lifecycle_read;
+        lifecycle_read.initiator = sram::Initiator::kCompute;
+        lifecycle_read.command = sram::Command::kRead;
+        lifecycle_read.address = 0;
+        lifecycle_read.size_bytes = 17;
+        Check(access.Access(lifecycle_read).payload ==
+                  std::vector<uint8_t>(17, 0xa7),
+              "a lifecycle allocation is immediately readable by AccessUnit");
+        Check(Rejects([&] { RunLifecycle(lifecycle_alloc); }) &&
+                  lifecycle_labels.size() == 1 &&
+                  regions.FindAllocation(live_key.region_allocation_id).label ==
+                      "p4_live",
+              "duplicate ALLOC rejects without changing existing metadata");
+
+        lifecycle_context->sram_bind_pending_ = true;
+        lifecycle_context->sram_bind_input_count_ = 1;
+        lifecycle_context->sram_bind_pending_labels_.indata[0] = "p4_live";
+        lifecycle_context->sram_bind_pending_labels_.outdata = "p4_live";
+        Sram_lifecycle lifecycle_rename;
+        lifecycle_rename.op = SramLifecycleOp::RENAME;
+        lifecycle_rename.label = "p4_live";
+        lifecycle_rename.new_label = "p4_renamed";
+        Check(RunLifecycle(lifecycle_rename) == 0 &&
+                  lifecycle_labels.count("p4_live") == 0 &&
+                  lifecycle_labels.count("p4_renamed") == 1 &&
+                  lifecycle_context->sram_bind_pending_labels_.indata[0] ==
+                      "p4_renamed" &&
+                  lifecycle_context->sram_bind_pending_labels_.outdata ==
+                      "p4_renamed" &&
+                  regions.FindAllocation(live_key.region_allocation_id).label ==
+                      "p4_renamed",
+              "RENAME atomically follows a pending one-shot SRAM_BIND");
+
+        Sram_lifecycle lifecycle_resize;
+        lifecycle_resize.op = SramLifecycleOp::RESIZE;
+        lifecycle_resize.label = "p4_renamed";
+        lifecycle_resize.size_bytes = 33;
+        Sram_lifecycle lifecycle_free;
+        lifecycle_free.op = SramLifecycleOp::FREE;
+        lifecycle_free.label = "p4_renamed";
+        Sram_lifecycle lifecycle_clear = lifecycle_free;
+        lifecycle_clear.op = SramLifecycleOp::CLEAR_TARGETED;
+        const size_t pending_requests = access.trace().size();
+        Check(Rejects([&] { RunLifecycle(lifecycle_resize); }) &&
+                  Rejects([&] { RunLifecycle(lifecycle_free); }) &&
+                  Rejects([&] { RunLifecycle(lifecycle_clear); }) &&
+                  lifecycle_labels.at("p4_renamed").size == 17 &&
+                  regions.FindAllocation(live_key.region_allocation_id)
+                          .range.size_bytes == 17 &&
+                  access.trace().size() == pending_requests,
+              "pending SRAM_BIND rejects resize/free/clear atomically");
+        lifecycle_context->sram_bind_pending_ = false;
+        lifecycle_context->sram_bind_input_count_ = 0;
+        lifecycle_context->sram_bind_pending_labels_ = AddrDatapassLabel();
+
+        const uint64_t lifecycle_lease = access.DeclareRangeLease(
+            sram::Initiator::kCompute, sram::Command::kWrite, 0, 17);
+        Check(Rejects([&] { RunLifecycle(lifecycle_resize); }) &&
+                  Rejects([&] { RunLifecycle(lifecycle_free); }) &&
+                  Rejects([&] { RunLifecycle(lifecycle_clear); }) &&
+                  lifecycle_labels.at("p4_renamed").size == 17 &&
+                  storage.IsValid(0, 17),
+              "busy allocation rejects resize/free/targeted clear atomically");
+        access.ReleaseRangeLease(lifecycle_lease);
+
+        const sc_time resize_time = sc_time_stamp();
+        const size_t resize_requests = access.trace().size();
+        Check(RunLifecycle(lifecycle_resize) == 0 &&
+                  lifecycle_labels.at("p4_renamed").size == 33 &&
+                  regions.FindAllocation(live_key.region_allocation_id)
+                          .range.size_bytes == 33 &&
+                  sc_time_stamp() == resize_time &&
+                  access.trace().size() == resize_requests,
+              "RESIZE grows logical and physical metadata without traffic");
+        lifecycle_resize.size_bytes = 9;
+        Check(RunLifecycle(lifecycle_resize) == 0 &&
+                  lifecycle_labels.at("p4_renamed").size == 9 &&
+                  regions.FindAllocation(live_key.region_allocation_id)
+                          .range.size_bytes == 9,
+              "RESIZE shrink returns capacity and preserves label identity");
+
+        const sc_time free_time = sc_time_stamp();
+        const size_t free_requests = access.trace().size();
+        Check(RunLifecycle(lifecycle_free) == 0 &&
+                  lifecycle_labels.count("p4_renamed") == 0 &&
+                  Rejects([&] {
+                      regions.FindAllocation(live_key.region_allocation_id);
+                  }) &&
+                  sc_time_stamp() == free_time &&
+                  access.trace().size() == free_requests &&
+                  storage.Read(0, live_sentinel.size()) == live_sentinel,
+              "FREE removes metadata only and leaves all SRAM bytes intact");
+        Check(Rejects([&] { RunLifecycle(lifecycle_free); }),
+              "double FREE and missing labels reject deterministically");
+
+        Sram_lifecycle targeted_alloc = lifecycle_alloc;
+        targeted_alloc.label = "p4_targeted";
+        targeted_alloc.size_bytes = 9;
+        Check(RunLifecycle(targeted_alloc) == 0 &&
+                  lifecycle_labels.at("p4_targeted").pos == 0,
+              "freed lifecycle capacity is reusable at the same address");
+        const std::vector<uint8_t> targeted_sentinel(16, 0x5c);
+        storage.Write(0, targeted_sentinel);
+        Sram_lifecycle targeted_clear;
+        targeted_clear.op = SramLifecycleOp::CLEAR_TARGETED;
+        targeted_clear.label = "p4_targeted";
+        const sc_time clear_time = sc_time_stamp();
+        const size_t clear_requests = access.trace().size();
+        const uint64_t targeted_id =
+            lifecycle_labels.at("p4_targeted").region_allocation_id;
+        Check(RunLifecycle(targeted_clear) == 0 &&
+                  sc_time_stamp() > clear_time &&
+                  access.trace().size() == clear_requests + 1 &&
+                  lifecycle_labels.count("p4_targeted") == 0 &&
+                  Rejects([&] { regions.FindAllocation(targeted_id); }) &&
+                  !storage.IsValid(0, 9) && storage.IsValid(9, 7) &&
+                  storage.Read(9, 7) == std::vector<uint8_t>(7, 0x5c),
+              "CLEAR_TARGETED clears logical bytes then frees metadata only");
+
+        Sram_lifecycle nonspill_alloc = lifecycle_alloc;
+        nonspill_alloc.region_name = "comm";
+        nonspill_alloc.label = "p4_nonspill";
+        nonspill_alloc.size_bytes = 16;
+        nonspill_alloc.spillable = false;
+        Check(RunLifecycle(nonspill_alloc) == 0,
+              "ALLOC accepts a matching non-spillable region contract");
+        storage.Write(128, std::vector<uint8_t>(16, 0x39));
+        Sram_lifecycle nonspill_clear;
+        nonspill_clear.op = SramLifecycleOp::CLEAR_TARGETED;
+        nonspill_clear.label = "p4_nonspill";
+        Check(Rejects([&] { RunLifecycle(nonspill_clear); }) &&
+                  lifecycle_labels.count("p4_nonspill") == 1 &&
+                  storage.Read(128, 16) == std::vector<uint8_t>(16, 0x39),
+              "CLEAR_TARGETED rejects non-spillable labels without data change");
+        Sram_lifecycle nonspill_free;
+        nonspill_free.op = SramLifecycleOp::FREE;
+        nonspill_free.label = "p4_nonspill";
+        RunLifecycle(nonspill_free);
+
+        Sram_lifecycle layer_alloc = lifecycle_alloc;
+        layer_alloc.label = "p4_layer";
+        layer_alloc.size_bytes = 8;
+        layer_alloc.lifetime = sram::AllocationLifetime::kLayer;
+        RunLifecycle(layer_alloc);
+        Sram_lifecycle layer_clear;
+        layer_clear.op = SramLifecycleOp::CLEAR_TARGETED;
+        layer_clear.label = "p4_layer";
+        Check(Rejects([&] { RunLifecycle(layer_clear); }) &&
+                  lifecycle_labels.count("p4_layer") == 1,
+              "CLEAR_TARGETED rejects non-task lifetime labels");
+        Sram_lifecycle layer_free;
+        layer_free.op = SramLifecycleOp::FREE;
+        layer_free.label = "p4_layer";
+        RunLifecycle(layer_free);
+
+        Sram_lifecycle full_alloc = lifecycle_alloc;
+        full_alloc.label = "p4_full";
+        full_alloc.size_bytes = 64;
+        RunLifecycle(full_alloc);
+        Sram_lifecycle capacity_alloc = lifecycle_alloc;
+        capacity_alloc.label = "p4_capacity";
+        capacity_alloc.size_bytes = 1;
+        Check(Rejects([&] { RunLifecycle(capacity_alloc); }) &&
+                  lifecycle_labels.count("p4_capacity") == 0 &&
+                  lifecycle_labels.count("p4_full") == 1,
+              "ALLOC capacity failure leaves existing metadata unchanged");
+        Sram_lifecycle full_free;
+        full_free.op = SramLifecycleOp::FREE;
+        full_free.label = "p4_full";
+        RunLifecycle(full_free);
+
+        Sram_lifecycle oversized_alloc = lifecycle_alloc;
+        oversized_alloc.label = "p4_oversized";
+        oversized_alloc.size_bytes =
+            static_cast<uint64_t>(std::numeric_limits<int>::max()) + 1;
+        Check(Rejects([&] { RunLifecycle(oversized_alloc); }) &&
+                  lifecycle_labels.empty(),
+              "ALLOC rejects locator integer overflow before region mutation");
+        Check(lifecycle_labels.empty() && regions.AllocationCount() == 0,
+              "completed lifecycle program leaves no labels or allocations");
 
         context.lsu_memory = nullptr;
         Load_prim historical_empty_load;

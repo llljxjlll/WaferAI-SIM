@@ -3,7 +3,7 @@
 #include "utils/prim_utils.h"
 #include <stdexcept>
 
-REGISTER_PRIM(Collective_data_prim);
+REGISTER_PRIM(Collective_data_prim, PrimId::COLLECTIVE_DATA);
 
 std::vector<sc_bv<128>> Collective_data_prim::serialize() {
     if (tree_id == 0) throw std::invalid_argument("collective data tree_id is zero");
@@ -19,11 +19,15 @@ std::vector<sc_bv<128>> Collective_data_prim::serialize() {
     marker.range(31, 24) = static_cast<uint8_t>(mode);
     marker.range(63, 32) = core_vector_beats;
     encoded.insert(encoded.begin(), marker);
-    return encoded;
+    return prim_wire::WrapSegments(std::move(encoded), name);
 }
 
 void Collective_data_prim::deserialize(std::vector<sc_bv<128>> segments) {
+    segments = prim_wire::UnwrapSegments(segments, name);
     if (segments.size() < 2) throw std::invalid_argument("collective data primitive is truncated");
+    if (segments.front().range(127, 64).or_reduce())
+        throw std::invalid_argument(
+            "collective data marker reserved bits are non-zero");
     tree_id = segments.front().range(23, 8).to_uint();
     const unsigned encoded_mode = segments.front().range(31, 24).to_uint();
     core_vector_beats = segments.front().range(63, 32).to_uint64();

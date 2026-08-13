@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "scenario": "p7_accelerated_32k_production_matrix",
+  "cores": [1, 3, 7, 11],
+  "profiles": ["baseline", "broadcast_only", "reduce_only", "reduce_broadcast"],
+  "max_trees_per_batch": 1,
+  "cases": [
+    {
+      "option": "--p6-broadcast-gather-n4-l32768-u8-none",
+      "op": "ALLGATHER",
+      "broadcast": {"baseline": "unicast", "broadcast_only": "multicast", "reduce_only": "unicast", "reduce_broadcast": "multicast"},
+      "reduce": "not_applicable",
+      "multicast_trees": 4,
+      "dca_trees": 0
+    },
+    {
+      "option": "--p6-broadcast-reduce-n4-l32768-i32-sum",
+      "op": "ALLREDUCE",
+      "broadcast": {"baseline": "unicast", "broadcast_only": "multicast", "reduce_only": "unicast", "reduce_broadcast": "multicast"},
+      "reduce": {"baseline": "endpoint", "broadcast_only": "endpoint", "reduce_only": "dca_offload", "reduce_broadcast": "dca_offload"},
+      "multicast_trees": 4,
+      "dca_trees": 4
+    }
+  ]
+}

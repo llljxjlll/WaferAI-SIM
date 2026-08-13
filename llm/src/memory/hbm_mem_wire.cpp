@@ -10,8 +10,14 @@ constexpr unsigned kMagic = 0xD7;
 constexpr unsigned kVersion = 1;
 
 void Put(MemWireFlit &w, int lo, int bits, uint64_t value) {
-    sc_dt::sc_bv<64> encoded(value);
-    w.range(lo + bits - 1, lo) = encoded.range(bits - 1, 0);
+    if (lo < 0 || bits <= 0 || bits > 64 || lo + bits > w.length())
+        throw std::runtime_error("SerializeMemMsg: invalid wire bit range");
+    // Avoid assigning one SystemC sub-reference to another.  SystemC 2.3.3
+    // routes that operation through sc_lv_base::clean_tail(), whose 32-bit
+    // word boundary case shifts by 32 and is undefined.  Explicit bits keep
+    // the wire representation identical and are well-defined for bits == 64.
+    for (int bit = 0; bit < bits; ++bit)
+        w[lo + bit] = ((value >> bit) & uint64_t{1}) != 0;
 }
 
 uint64_t Get(const MemWireFlit &w, int lo, int bits) {

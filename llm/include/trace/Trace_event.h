@@ -1,6 +1,9 @@
 #pragma once
 #include "systemc.h"
+#include <cstdint>
 #include <iostream>
+#include <map>
+#include <utility>
 
 
 using namespace std;
@@ -12,16 +15,22 @@ public:
         m_value = 0;
     };
     Trace_event_util(float value, string color = "None")
-        : m_value(value), m_color(color) {};
+        : m_color(std::move(color)), m_value(value) {};
     Trace_event_util(string nm, string color = "None")
         : m_bar_name(nm), m_color(color) {};
     Trace_event_util(string nm, float value, string color = "None")
-        : m_bar_name(nm), m_value(value), m_color(color) {}
+        : m_bar_name(std::move(nm)), m_color(std::move(color)),
+          m_value(value) {}
+    Trace_event_util(string nm, map<string, uint64_t> counters,
+                     string color = "None")
+        : m_bar_name(std::move(nm)), m_color(std::move(color)),
+          m_value(0), m_counters(std::move(counters)) {}
 
 public:
     string m_bar_name;
     string m_color;
     float m_value;
+    map<string, uint64_t> m_counters;
 };
 
 

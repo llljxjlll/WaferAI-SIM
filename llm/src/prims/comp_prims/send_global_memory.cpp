@@ -9,7 +9,7 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
-REGISTER_PRIM(Send_global_memory);
+REGISTER_PRIM(Send_global_memory, PrimId::SEND_GLOBAL_MEMORY);
 
 void Send_global_memory::initialize() {
     LOG_ERROR(PRIM) << "Send_global_memory::initialize() not implemented";

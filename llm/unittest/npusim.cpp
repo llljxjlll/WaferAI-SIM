@@ -1,8 +1,16 @@
+#include "isa/opcode.h"
+
 #include "assert.h"
 #include "defs/global.h"
 #include "defs/spec.h"
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "isa/isa_v1_selftest.h"
+#include "isa/p5_memory_probe.h"
+#include "isa/p5_memory_probe_selftest.h"
+#include "isa/p8_double_buffer_probe.h"
+#include "isa/prim_manifest.h"
+#include "utils/prim_utils.h"
 #include "memory/hbm_r0_selftest.h"
 #include "memory/hbm_r1_selftest.h"
 #include "memory/hbm_r2_selftest.h"
@@ -12,16 +20,24 @@
 #include "dte/dte_async.h"
 #include "dte/dte_unit.h"
 #include "dte/coll_runtime.h"
+#include "dte/p2p_payload.h"
+#include "dte/p2p_payload_selftest.h"
+#include "dte/p2p_session_runtime_selftest.h"
+#include "dte/sync_runtime_selftest.h"
 #include "dte/coll_multicast.h"
 #include "dte/coll_innetwork_reduce.h"
 #include "monitor/monitor.h"
+#include "monitor/config_helper_program.h"
 #include "monitor/watchdog.h"
 #include "monitor/start_data_tracker.h"
 #include "monitor/workload_rendezvous_selftest.h"
+#include "prims/collective_data_v1_prim_selftest.h"
+#include "prims/collective_phase_barrier_v1_prim_selftest.h"
 #include "router/router.h"
 #include "systemc.h"
 #include "trace/Event_engine.h"
 #include "utils/print_utils.h"
+#include "utils/router_utils.h"
 #include "utils/config_preflight.h"
 #include "utils/simple_flags.h"
 #include "utils/system_utils.h"
@@ -30,9 +46,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <optional>
 
 // 假设 json.hpp 文件在当前目录或包含路径中
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 
 #include <SFML/Graphics.hpp>
@@ -44,10 +63,43 @@ using namespace std;
 
 Define_bool_opt("--help", g_flag_help, false, "show these help information");
 
-Define_string_opt("--workload-config", g_flag_workload_config,
-                  std::string(NPUSIM_SOURCE_ROOT) +
-                      "/llm/test/default/workload.json",
-                  "workload config file");
+Define_bool_opt("--isa-v1-selftest", g_flag_isa_v1_selftest, false,
+                "run ISA v1 manifest, codec, graph, and lowering self-tests and exit");
+
+Define_bool_opt("--collective-data-v1-prim-selftest",
+                g_flag_collective_data_v1_prim_selftest, false,
+                "run ID58 collective data SystemC self-test and exit");
+
+Define_bool_opt("--collective-phase-barrier-v1-prim-selftest",
+                g_flag_collective_phase_barrier_v1_prim_selftest, false,
+                "run ID59 collective phase barrier SystemC self-test and exit");
+
+Define_bool_opt("--sync-runtime-selftest", g_flag_sync_runtime_selftest, false,
+                "run GROUP_SYNC and EVENT runtime self-test and exit");
+
+Define_bool_opt("--p2p-payload-selftest", g_flag_p2p_payload_selftest, false,
+                "run P2P payload codec/reassembly self-test and exit");
+
+Define_bool_opt("--p2p-session-selftest", g_flag_p2p_session_selftest, false,
+                "run P2P endpoint session runtime self-test and exit");
+
+Define_bool_opt("--p5-memory-probe-selftest",
+                g_flag_p5_memory_probe_selftest, false,
+                "run P5 memory probe foundation self-test and exit");
+
+Define_string_opt("--program", g_flag_program, std::string{},
+                  "Program Format v1 artifact file");
+Define_string_opt("--p5-memory-probe", g_flag_p5_memory_probe,
+                  std::string{},
+                  "test-only P5 memory preload/post-run probe sidecar");
+Define_string_opt("--p6-memory-probe", g_flag_p6_memory_probe,
+                  std::string{},
+                  "test-only P6 multi-core/multi-region probe sidecar");
+Define_string_opt("--p8-double-buffer-probe",
+                  g_flag_p8_double_buffer_probe, std::string{},
+                  "test-only P8 HBM/SRAM double-buffer probe sidecar");
+Define_string_opt("--workload-config", g_flag_workload_config, std::string{},
+                  "legacy JSON workload config file");
 Define_string_opt("--hardware-config", g_flag_hardware_config,
                   std::string(NPUSIM_SOURCE_ROOT) +
                       "/llm/test/default/hardware.json",
@@ -172,6 +224,51 @@ Define_bool_opt("--workload-rendezvous-selftest",
                 g_flag_workload_rendezvous_selftest, false,
                 "run workload rendezvous validation self-test and exit");
 
+namespace {
+const std::string kDefaultWorkloadConfig =
+    std::string(NPUSIM_SOURCE_ROOT) + "/llm/test/default/workload.json";
+
+std::vector<uint8_t> ReadProgramFile(const std::string &path) {
+    const std::filesystem::path input(path);
+    if (!std::filesystem::exists(input))
+        throw std::runtime_error("program artifact does not exist: " + path);
+    if (!std::filesystem::is_regular_file(input))
+        throw std::runtime_error(
+            "program artifact is not a regular file: " + path);
+    const uintmax_t size = std::filesystem::file_size(input);
+    if (size > kMaxProgramFileBytes)
+        throw std::runtime_error("program artifact exceeds 64 MiB: " + path);
+    std::ifstream stream(input, std::ios::binary);
+    if (!stream)
+        throw std::runtime_error("cannot open program artifact: " + path);
+    std::vector<uint8_t> bytes(static_cast<std::size_t>(size));
+    if (!bytes.empty() &&
+        !stream.read(reinterpret_cast<char *>(bytes.data()), bytes.size()))
+        throw std::runtime_error("cannot read program artifact: " + path);
+    return bytes;
+}
+
+void ValidateIsaV1StartupInvariants() {
+    std::string error;
+    if (!ValidateOpcodeManifest(&error))
+        throw std::logic_error("invalid external opcode manifest: " + error);
+    error.clear();
+    if (!ValidatePrimManifest(&error))
+        throw std::logic_error("invalid internal Prim manifest: " + error);
+
+    const std::vector<int> ids =
+        PrimFactory::getInstance().registeredIds();
+    if (ids.size() != kPrimManifestSize)
+        throw std::logic_error(
+            "PrimFactory registration count disagrees with frozen manifest");
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] != static_cast<int>(i + 1))
+            throw std::logic_error(
+                "PrimFactory registrations are not the frozen contiguous IDs");
+    }
+}
+} // namespace
+
 int sc_main(int argc, char *argv[]) {
     clock_t start = clock();
 
@@ -194,6 +291,111 @@ int sc_main(int argc, char *argv[]) {
     if (g_flag_help) {
         simple_flags::print_args_info();
         return 0;
+    }
+
+    const unsigned memory_probe_count =
+        (!g_flag_p5_memory_probe.empty() ? 1U : 0U) +
+        (!g_flag_p6_memory_probe.empty() ? 1U : 0U) +
+        (!g_flag_p8_double_buffer_probe.empty() ? 1U : 0U);
+    if (memory_probe_count > 1) {
+        LOG_ERROR(CONFIG)
+            << "P5, P6, and P8 memory probes are mutually exclusive";
+        return 2;
+    }
+
+    if (!g_flag_p5_memory_probe.empty()) {
+        if (g_flag_program.empty()) {
+            LOG_ERROR(CONFIG)
+                << "--p5-memory-probe requires --program";
+            return 2;
+        }
+        const std::filesystem::path probe_path(g_flag_p5_memory_probe);
+        if (!std::filesystem::exists(probe_path) ||
+            !std::filesystem::is_regular_file(probe_path)) {
+            LOG_ERROR(CONFIG)
+                << "P5 memory probe sidecar does not exist or is not a "
+                   "regular file: "
+                << probe_path.string();
+            return 2;
+        }
+    }
+
+    if (!g_flag_p6_memory_probe.empty()) {
+        if (g_flag_program.empty()) {
+            LOG_ERROR(CONFIG)
+                << "--p6-memory-probe requires --program";
+            return 2;
+        }
+        const std::filesystem::path probe_path(g_flag_p6_memory_probe);
+        if (!std::filesystem::exists(probe_path) ||
+            !std::filesystem::is_regular_file(probe_path)) {
+            LOG_ERROR(CONFIG)
+                << "P6 memory probe sidecar does not exist or is not a "
+                   "regular file: "
+                << probe_path.string();
+            return 2;
+        }
+    }
+
+    if (!g_flag_p8_double_buffer_probe.empty()) {
+        if (g_flag_program.empty()) {
+            LOG_ERROR(CONFIG)
+                << "--p8-double-buffer-probe requires --program";
+            return 2;
+        }
+        const std::filesystem::path probe_path(
+            g_flag_p8_double_buffer_probe);
+        if (!std::filesystem::exists(probe_path) ||
+            !std::filesystem::is_regular_file(probe_path)) {
+            LOG_ERROR(CONFIG)
+                << "P8 double-buffer probe sidecar does not exist or is not "
+                   "a regular file: "
+                << probe_path.string();
+            return 2;
+        }
+    }
+
+    try {
+        ValidateIsaV1StartupInvariants();
+    } catch (const std::exception &error) {
+        LOG_ERROR(CONFIG) << "ISA v1 startup validation failed: "
+                          << error.what();
+        return 2;
+    }
+
+    if (g_flag_isa_v1_selftest) {
+        int fails = RunIsaV1SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    if (g_flag_collective_data_v1_prim_selftest) {
+        int fails = RunCollectiveDataV1PrimSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    if (g_flag_collective_phase_barrier_v1_prim_selftest) {
+        int fails = RunCollectivePhaseBarrierV1PrimSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    if (g_flag_sync_runtime_selftest) {
+        int fails = RunSyncRuntimeSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    if (g_flag_p2p_payload_selftest) {
+        int fails = RunP2pPayloadSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    if (g_flag_p2p_session_selftest) {
+        int fails = RunP2pSessionRuntimeSelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+
+    if (g_flag_p5_memory_probe_selftest) {
+        int fails = RunP5MemoryProbeSelfTest();
+        return fails == 0 ? 0 : 1;
     }
 
     // D2D V0 L0 自测：纯函数（编址/端点/矩形拓扑/端口校验），不建仿真
@@ -348,9 +550,77 @@ int sc_main(int argc, char *argv[]) {
         return fails == 0 ? 0 : 1;
     }
 
+    const bool program_mode = !g_flag_program.empty();
+    const bool p5_memory_probe_requested =
+        !g_flag_p5_memory_probe.empty();
+    if (p5_memory_probe_requested && !program_mode) {
+        LOG_ERROR(CONFIG)
+            << "--p5-memory-probe requires --program";
+        return 2;
+    }
+    const bool p6_memory_probe_requested =
+        !g_flag_p6_memory_probe.empty();
+    if (p6_memory_probe_requested && !program_mode) {
+        LOG_ERROR(CONFIG)
+            << "--p6-memory-probe requires --program";
+        return 2;
+    }
+    const bool p8_double_buffer_probe_requested =
+        !g_flag_p8_double_buffer_probe.empty();
+    if (p8_double_buffer_probe_requested && !program_mode) {
+        LOG_ERROR(CONFIG)
+            << "--p8-double-buffer-probe requires --program";
+        return 2;
+    }
+    if (program_mode && !g_flag_workload_config.empty()) {
+        LOG_ERROR(CONFIG)
+            << "--program and --workload-config are mutually exclusive";
+        return 2;
+    }
+    if (!program_mode && g_flag_workload_config.empty())
+        g_flag_workload_config = kDefaultWorkloadConfig;
+
+    std::vector<uint8_t> program_bytes;
+    std::optional<p5_probe::Spec> p5_memory_probe_spec;
+    std::optional<p6_probe::Spec> p6_memory_probe_spec;
+    std::optional<p8_double_buffer_probe::Spec>
+        p8_double_buffer_probe_spec;
     try {
-        ValidateConfigInputs(g_flag_workload_config, g_flag_hardware_config,
-                             g_flag_simulation_config, g_flag_mapping_config);
+        if (program_mode) {
+            ValidatePlatformConfigInputs(
+                g_flag_hardware_config, g_flag_simulation_config,
+                g_flag_mapping_config);
+            program_bytes = ReadProgramFile(g_flag_program);
+            (void)DecodeProgramArtifact(program_bytes);
+            if (p5_memory_probe_requested) {
+                const std::filesystem::path probe_path(
+                    g_flag_p5_memory_probe);
+                if (!std::filesystem::exists(probe_path))
+                    throw std::runtime_error(
+                        "P5 memory probe sidecar does not exist: " +
+                        probe_path.string());
+                if (!std::filesystem::is_regular_file(probe_path))
+                    throw std::runtime_error(
+                        "P5 memory probe sidecar is not a regular file: " +
+                        probe_path.string());
+                p5_memory_probe_spec = p5_probe::Load(probe_path);
+            }
+            if (p6_memory_probe_requested) {
+                const std::filesystem::path probe_path(
+                    g_flag_p6_memory_probe);
+                p6_memory_probe_spec = p6_probe::Load(probe_path);
+            }
+            if (p8_double_buffer_probe_requested) {
+                const std::filesystem::path probe_path(
+                    g_flag_p8_double_buffer_probe);
+                p8_double_buffer_probe_spec =
+                    p8_double_buffer_probe::Load(probe_path);
+            }
+        } else {
+            ValidateConfigInputs(
+                g_flag_workload_config, g_flag_hardware_config,
+                g_flag_simulation_config, g_flag_mapping_config);
+        }
     } catch (const std::exception &error) {
         LOG_ERROR(CONFIG) << "Configuration preflight failed: "
                           << error.what();
@@ -361,10 +631,26 @@ int sc_main(int argc, char *argv[]) {
     DeleteCoreLogFiles();
     DeleteMemoryLogFiles();
 
-    // 收集所有配置文件，统一解析
+    // 收集所有配置文件，统一解析。Program v1 固定使用 dataflow，
+    // 不读取或伪造 workload JSON。
+    std::unique_ptr<config_helper_program> program_helper;
     try {
-        InitGrid(g_flag_workload_config, g_flag_hardware_config,
-                 g_flag_simulation_config, g_flag_mapping_config);
+        if (program_mode) {
+            SYSTEM_MODE = SIM_DATAFLOW;
+            InitPlatform(g_flag_hardware_config, g_flag_simulation_config,
+                         g_flag_mapping_config);
+            program_helper =
+                std::make_unique<config_helper_program>(program_bytes);
+            std::cout << "Loaded Program Format " << kProgramFormatMajor
+                      << "." << kProgramFormatMinor << ", ISA "
+                      << kProgramIsaMajor << "." << kProgramIsaMinor
+                      << ", capabilities=0x" << std::hex
+                      << program_helper->artifact().capabilities << std::dec
+                      << "\n";
+        } else {
+            InitGrid(g_flag_workload_config, g_flag_hardware_config,
+                     g_flag_simulation_config, g_flag_mapping_config);
+        }
         InitGlobalMembers();
         InitializeMemorySpec();
     } catch (const std::exception &error) {
@@ -378,11 +664,293 @@ int sc_main(int argc, char *argv[]) {
 
     Event_engine *event_engine =
         new Event_engine("event-engine", g_flag_trace_window);
-    Monitor monitor("monitor", event_engine, g_flag_workload_config.c_str());
+    std::unique_ptr<Monitor> monitor;
+    if (program_mode)
+        monitor = std::make_unique<Monitor>(
+            "monitor", event_engine, program_helper.get());
+    else
+        monitor = std::make_unique<Monitor>(
+            "monitor", event_engine, g_flag_workload_config.c_str());
+
+    std::optional<p5_probe::Applied> p5_memory_probe_applied;
+    if (p5_memory_probe_spec.has_value()) {
+        try {
+            p5_probe::Bindings bindings;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || !worker->sram_access)
+                    throw std::runtime_error(
+                        "P5 memory probe found a missing core SRAM AccessUnit");
+                bindings.sram_by_core.emplace(
+                    static_cast<uint32_t>(core),
+                    worker->sram_access.get());
+            }
+            bindings.hbm_runtime = monitor->hbmRuntime;
+            bindings.current_die_for_core = [](uint32_t core) {
+                if (core >= static_cast<uint32_t>(TOTAL_CORES))
+                    throw p5_probe::Error(
+                        "P5 memory probe core is outside the platform");
+                return DieOfGlobal(static_cast<int>(core));
+            };
+            p5_memory_probe_applied = p5_probe::ApplyBeforeSimulation(
+                *p5_memory_probe_spec, bindings);
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG)
+                << "P5 memory probe pre-simulation apply failed: "
+                << error.what();
+            return 2;
+        }
+    }
+
+    std::optional<p6_probe::Applied> p6_memory_probe_applied;
+    if (p6_memory_probe_spec.has_value()) {
+        try {
+            p5_probe::Bindings bindings;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || !worker->sram_access)
+                    throw std::runtime_error(
+                        "P6 memory probe found a missing core SRAM AccessUnit");
+                bindings.sram_by_core.emplace(
+                    static_cast<uint32_t>(core),
+                    worker->sram_access.get());
+            }
+            p6_memory_probe_applied =
+                p6_probe::ApplyBeforeSimulation(
+                    *p6_memory_probe_spec, bindings);
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG)
+                << "P6 memory probe pre-simulation apply failed: "
+                << error.what();
+            return 2;
+        }
+    }
+
+    std::optional<p8_double_buffer_probe::Applied>
+        p8_double_buffer_probe_applied;
+    if (p8_double_buffer_probe_spec.has_value()) {
+        try {
+            p8_double_buffer_probe::Bindings bindings;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || !worker->sram_access)
+                    throw std::runtime_error(
+                        "P8 probe found a missing core SRAM AccessUnit");
+                bindings.sram_by_core.emplace(
+                    static_cast<uint32_t>(core),
+                    worker->sram_access.get());
+            }
+            bindings.hbm_runtime = monitor->hbmRuntime;
+            bindings.current_die_for_core = [](uint32_t core) {
+                if (core >= static_cast<uint32_t>(TOTAL_CORES))
+                    throw p8_double_buffer_probe::Error(
+                        "P8 probe core is outside the platform");
+                return DieOfGlobal(static_cast<int>(core));
+            };
+            p8_double_buffer_probe_applied =
+                p8_double_buffer_probe::ApplyBeforeSimulation(
+                    *p8_double_buffer_probe_spec, bindings);
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG)
+                << "P8 double-buffer probe pre-simulation apply failed: "
+                << error.what();
+            return 2;
+        }
+    }
+
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
     sc_clock clk("clk", CYCLE, SC_NS);
 
     sc_start();
+
+    bool p5_memory_probe_failed = false;
+    if (p5_memory_probe_applied.has_value()) {
+        try {
+            const p5_probe::Result result =
+                p5_probe::VerifyAfterSimulation(
+                    *p5_memory_probe_applied);
+            std::cout
+                << "[P5 MEMORY PROBE] scenario=" << result.scenario
+                << " source_initialized="
+                << (result.source_initialized ? 1 : 0)
+                << " payload_bytes=" << result.payload_bytes
+                << " expected_checksum=" << result.expected_checksum
+                << " destination_checksum="
+                << result.destination_checksum
+                << " payload_match=" << (result.payload_match ? 1 : 0)
+                << " sentinels_intact="
+                << (result.sentinels_intact ? 1 : 0) << "\n";
+            p5_memory_probe_failed =
+                !result.source_initialized || !result.payload_match ||
+                !result.sentinels_intact ||
+                result.destination_checksum != result.expected_checksum;
+        } catch (const std::exception &error) {
+            p5_memory_probe_failed = true;
+            LOG_ERROR(SYSTEM)
+                << "P5 memory probe post-simulation verify failed: "
+                << error.what();
+        }
+    }
+
+    bool p6_memory_probe_failed = false;
+    if (p6_memory_probe_applied.has_value()) {
+        try {
+            const p6_probe::Result result =
+                p6_probe::VerifyAfterSimulation(
+                    *p6_memory_probe_applied);
+            for (const p6_probe::SourceResult &source : result.sources) {
+                std::cout
+                    << "[P6 MEMORY SOURCE] scenario=" << result.scenario
+                    << " core=" << source.core
+                    << " region=" << source.region
+                    << " checksum=" << source.checksum
+                    << " source_initialized="
+                    << (source.source_initialized ? 1 : 0)
+                    << " payload_match="
+                    << (source.payload_match ? 1 : 0)
+                    << " sentinels_intact="
+                    << (source.sentinels_intact ? 1 : 0) << "\n";
+            }
+            for (const p6_probe::VerificationResult &verification :
+                 result.verifications) {
+                std::cout
+                    << "[P6 MEMORY PROBE] scenario=" << result.scenario
+                    << " core=" << verification.core
+                    << " region=" << verification.region
+                    << " checksum=" << verification.checksum
+                    << " payload_match="
+                    << (verification.payload_match ? 1 : 0)
+                    << " sentinels_intact="
+                    << (verification.sentinels_intact ? 1 : 0) << "\n";
+            }
+            const auto image = program_helper
+                ? program_helper->collective_program_image()
+                : nullptr;
+            if (!image)
+                throw std::logic_error(
+                    "P6 memory probe requires a collective program image");
+            uint64_t action_count = 0;
+            for (const auto &core : image->Cores()) {
+                if (action_count > UINT64_MAX - core.actions.size())
+                    throw std::overflow_error(
+                        "P6 collective action statistic overflows u64");
+                action_count += core.actions.size();
+            }
+            uint64_t wave_count = 0;
+            for (const auto &plan : image->Lowering().plans) {
+                if (wave_count > UINT64_MAX - plan.waves.size())
+                    throw std::overflow_error(
+                        "P6 collective wave statistic overflows u64");
+                wave_count += plan.waves.size();
+            }
+            std::cout
+                << "[P6 COLLECTIVE STATS] scenario=" << result.scenario
+                << " child_count=" << image->Lowering().children.size()
+                << " action_count=" << action_count
+                << " wave_count=" << wave_count << "\n";
+
+            uint64_t aggregate_residual = 0;
+            uint64_t endpoint_residual = 0;
+            for (const auto &core : image->Cores()) {
+                const WorkerCoreExecutor *executor =
+                    monitor->workerCores[core.core_id]->executor;
+                aggregate_residual +=
+                    executor->CollectiveProgramResidual();
+                endpoint_residual += executor->P2pEndpointResidual();
+            }
+            const CollectiveBarrierRuntimeResidual barrier =
+                CollectiveBarrierRuntimeResidualState();
+            const uint64_t barrier_residual =
+                barrier.active_states + barrier.arrived_ranks +
+                barrier.departed_ranks + barrier.waiting_ranks;
+            const uint64_t timing_residual =
+                P2pSharedTimingSidebandRuntime::Residual();
+            std::cout
+                << "[P6 COLLECTIVE DRAIN] scenario=" << result.scenario
+                << " aggregate=" << aggregate_residual
+                << " admission=" << aggregate_residual
+                << " barrier=" << barrier_residual
+                << " endpoint=" << endpoint_residual
+                << " timing=" << timing_residual << "\n";
+            if (aggregate_residual != 0 || endpoint_residual != 0 ||
+                barrier_residual != 0 || timing_residual != 0)
+                p6_memory_probe_failed = true;
+            p6_memory_probe_failed =
+                p6_memory_probe_failed || !result.Passed();
+        } catch (const std::exception &error) {
+            p6_memory_probe_failed = true;
+            LOG_ERROR(SYSTEM)
+                << "P6 memory probe post-simulation verify failed: "
+                << error.what();
+        }
+    }
+
+    bool p8_double_buffer_probe_failed = false;
+    if (p8_double_buffer_probe_applied.has_value()) {
+        try {
+            const p8_double_buffer_probe::Result result =
+                p8_double_buffer_probe::VerifyAfterSimulation(
+                    *p8_double_buffer_probe_applied);
+            for (const p8_double_buffer_probe::RangeResult &range :
+                 result.ranges) {
+                std::cout
+                    << "[P8 DOUBLE BUFFER PROBE] scenario="
+                    << result.scenario
+                    << " space="
+                    << (range.space == p8_double_buffer_probe::Space::kSram
+                            ? "SRAM" : "HBM")
+                    << " core=" << range.core
+                    << " region=" << range.region
+                    << " absolute_address_bytes="
+                    << range.absolute_address_bytes
+                    << " payload_bytes=" << range.payload_bytes
+                    << " expected_checksum=" << range.expected_checksum
+                    << " checksum=" << range.checksum
+                    << " payload_match="
+                    << (range.payload_match ? 1 : 0)
+                    << " sentinels_intact="
+                    << (range.sentinels_intact ? 1 : 0) << "\n";
+            }
+
+            WorkerCore *worker = monitor->workerCores[0];
+            if (worker == nullptr || !worker->lsu_memory ||
+                !worker->dte_memory_bridge || !worker->executor)
+                throw std::runtime_error(
+                    "P8 probe found missing core-0 memory engines");
+            const sram::LsuStats &lsu = worker->lsu_memory->stats();
+            const DteMemoryStats &dte =
+                worker->dte_memory_bridge->stats();
+            std::cout
+                << "[P8 DOUBLE BUFFER STATS] core=0"
+                << " lsu_issued=" << lsu.issued
+                << " lsu_completed=" << lsu.completed
+                << " lsu_hbm_read_bytes=" << lsu.hbm_read_bytes
+                << " lsu_hbm_write_bytes=" << lsu.hbm_write_bytes
+                << " lsu_sram_read_bytes=" << lsu.sram_read_bytes
+                << " lsu_sram_write_bytes=" << lsu.sram_write_bytes
+                << " lsu_residual="
+                << worker->lsu_memory->OutstandingCount()
+                << " dte_issued=" << dte.issued
+                << " dte_completed=" << dte.completed
+                << " dte_hbm_read_bytes=" << dte.hbm_read_bytes
+                << " dte_hbm_write_bytes=" << dte.hbm_write_bytes
+                << " dte_sram_read_bytes=" << dte.sram_read_bytes
+                << " dte_sram_write_bytes=" << dte.sram_write_bytes
+                << " dte_residual="
+                << worker->dte_memory_bridge->OutstandingCount()
+                << " dte_tracker_residual="
+                << worker->executor->DteOutstandingCount() << "\n";
+            p8_double_buffer_probe_failed = !result.Passed() ||
+                worker->lsu_memory->OutstandingCount() != 0 ||
+                worker->dte_memory_bridge->OutstandingCount() != 0 ||
+                worker->executor->DteOutstandingCount() != 0;
+        } catch (const std::exception &error) {
+            p8_double_buffer_probe_failed = true;
+            LOG_ERROR(SYSTEM)
+                << "P8 double-buffer probe post-simulation verify failed: "
+                << error.what();
+        }
+    }
 
     // 运行结束后 dump D2D 端口/链路统计（V0b-2A：无 C2C 端口时恒为 0，供 runner 断言）
     {
@@ -579,13 +1147,50 @@ int sc_main(int argc, char *argv[]) {
                 << " normal_flits=" << stat.normal_flits
                 << " collective_flits=" << stat.collective_flits;
         }
-        size_t endpoint_residual = 0, dte_tokens = 0;
+        size_t endpoint_residual = 0, dte_tokens = 0, event_residual = 0;
+        std::vector<WorkerCoreExecutor *> p2p_active_cores;
         std::function<void(const std::vector<sc_object *> &)> coll_drain =
             [&](const std::vector<sc_object *> &objs) {
             for (auto *o : objs) {
                 if (auto *core = dynamic_cast<WorkerCoreExecutor *>(o)) {
-                    endpoint_residual += core->CollectiveEndpointResidual();
+                    const auto endpoint =
+                        core->CollectiveEndpointResidualState();
+                    endpoint_residual += endpoint.Total();
+                    if (endpoint.Total() != 0) {
+                        LOG_INFO(SYSTEM)
+                            << "[COLL_ENDPOINT_RESIDUAL] core=" << core->cid
+                            << " data=" << endpoint.collective_data
+                            << " reduce=" << endpoint.collective_reduce
+                            << " stream_routes=" << endpoint.stream_routes
+                            << " stream_sessions=" << endpoint.stream_sessions
+                            << " stream_assembler=" << endpoint.stream_assembler
+                            << " multicast_posts=" << endpoint.multicast_posts
+                            << " multicast_routes=" << endpoint.multicast_routes
+                            << " serialized_wires=" << endpoint.serialized_wires
+                            << " multicast_reassembly="
+                            << endpoint.multicast_reassembly
+                            << " core_vector_sessions="
+                            << endpoint.core_vector_sessions
+                            << " p2p=" << endpoint.p2p;
+                    }
                     dte_tokens += core->DteOutstandingCount();
+                    event_residual += core->EventResidual();
+                    const auto &p2p = core->P2pStats();
+                    if (p2p.source_read_bytes != 0 || p2p.wire_bytes != 0 ||
+                        p2p.wire_fragments != 0 ||
+                        p2p.noc_rx_write_bytes != 0 ||
+                        p2p.tx_local_completions != 0 ||
+                        p2p.rx_local_completions != 0 ||
+                        p2p.admission_requests_sent != 0 ||
+                        p2p.admission_requests_received != 0 ||
+                        p2p.admission_acks_sent != 0 ||
+                        p2p.admission_acks_received != 0 ||
+                        p2p.duplicate_requests_suppressed != 0 ||
+                        p2p.request_conflicts_rejected != 0 ||
+                        p2p.request_aborts != 0 ||
+                        p2p.completion_acks_sent != 0 ||
+                        p2p.completion_acks_received != 0)
+                        p2p_active_cores.push_back(core);
                 }
                 if (auto *router = dynamic_cast<RouterUnit *>(o)) {
                     if (router->reduce_stream_engine) {
@@ -621,6 +1226,56 @@ int sc_main(int argc, char *argv[]) {
             }
         };
         coll_drain(sc_get_top_level_objects());
+        const size_t timing_residual =
+            P2pSharedTimingSidebandRuntime::Residual();
+        endpoint_residual += timing_residual;
+        for (const WorkerCoreExecutor *core : p2p_active_cores) {
+            const auto &p2p = core->P2pStats();
+            LOG_INFO(SYSTEM)
+                << "[P5 P2P STATS] core=" << core->cid
+                << " source_read_bytes=" << p2p.source_read_bytes
+                << " sram_source_read_bytes="
+                << p2p.sram_source_read_bytes
+                << " hbm_source_read_bytes="
+                << p2p.hbm_source_read_bytes
+                << " wire_bytes=" << p2p.wire_bytes
+                << " wire_fragments=" << p2p.wire_fragments
+                << " noc_rx_write_bytes=" << p2p.noc_rx_write_bytes
+                << " tx_local_completions="
+                << p2p.tx_local_completions
+                << " rx_local_completions="
+                << p2p.rx_local_completions
+                << " admission_requests_sent="
+                << p2p.admission_requests_sent
+                << " admission_requests_received="
+                << p2p.admission_requests_received
+                << " admission_acks_sent="
+                << p2p.admission_acks_sent
+                << " admission_acks_received="
+                << p2p.admission_acks_received
+                << " duplicate_requests_suppressed="
+                << p2p.duplicate_requests_suppressed
+                << " request_conflicts_rejected="
+                << p2p.request_conflicts_rejected
+                << " request_aborts=" << p2p.request_aborts
+                << " completion_acks_sent="
+                << p2p.completion_acks_sent
+                << " completion_acks_received="
+                << p2p.completion_acks_received
+                << " source_checksum=" << p2p.last_source_checksum
+                << " wire_checksum=" << p2p.last_wire_checksum
+                << " destination_checksum="
+                << p2p.last_destination_checksum;
+            const size_t p2p_residual =
+                core->P2pEndpointResidual() +
+                static_cast<size_t>(WholeFlowSafReservedPackets()) +
+                static_cast<size_t>(WholeFlowSafGroupReservedPackets());
+            LOG_INFO(SYSTEM)
+                << "[P5 P2P DRAIN] core=" << core->cid
+                << " residual=" << p2p_residual;
+        }
+        LOG_INFO(SYSTEM)
+            << "[P5 P2P TIMING DRAIN] residual=" << timing_residual;
         LOG_INFO(SYSTEM)
             << "[COLL_DRAIN] tree_entries=" << CollectiveTreeEntryCount()
             << " reduce_nodes=" << CollectiveReduceNodeCount()
@@ -628,7 +1283,8 @@ int sc_main(int argc, char *argv[]) {
             << " gather=" << CollectiveGatherReorderStateCount()
             << " reduce_rx=" << CollectiveReduceRxStateCount()
             << " endpoints=" << endpoint_residual
-            << " dte_tokens=" << dte_tokens;
+            << " dte_tokens=" << dte_tokens
+            << " event=" << event_residual;
     }
 
     // 结束态 drain 不变量（V1 验收）：遍历 SystemC 层级，累加所有 RouterUnit 的残留
@@ -747,5 +1403,11 @@ int sc_main(int argc, char *argv[]) {
                           << g_protocol_stall_cycle;
         return 3;
     }
+    if (p5_memory_probe_failed)
+        return 4;
+    if (p6_memory_probe_failed)
+        return 5;
+    if (p8_double_buffer_probe_failed)
+        return 6;
     return 0;
 }

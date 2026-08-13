@@ -23,9 +23,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: systemc-2.3.3
-          key: systemc-2.3.3-${{ runner.os }}-install
+          key: systemc-2.3.3-pthreads-${{ runner.os }}-install
           restore-keys: |
-            systemc-2.3.3-
+            systemc-2.3.3-pthreads-
 
       - name: Install SystemC 2.3.3
         if: steps.cache-systemc.outputs.cache-hit != 'true'
@@ -36,34 +36,34 @@ jobs:
           mkdir -p build && cd build
           cmake .. -DCMAKE_INSTALL_PREFIX=$PWD/.. \
                    -DCMAKE_INSTALL_LIBDIR=lib-linux64 \
-                   -DCMAKE_CXX_STANDARD=17
+                   -DCMAKE_CXX_STANDARD=17 \
+                   -DENABLE_PTHREADS=ON
           make -j$(nproc)
           make install
 
-      - name: Cache DRAMsys build
-        id: cache-dramsys
-        uses: actions/cache@v4
-        with:
-          path: DRAMSys/src
-          key: dramsys-build-${{ runner.os }}
-
-      - name: Cache project build
-        id: cache-project
-        uses: actions/cache@v4
-        with:
-          path: build
-          key: project-build-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
+      - name: Prepare CI evidence
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence test_logs
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            git status --short
+            cmake --version
+            c++ --version
+            find "$SYSTEMC_HOME" -maxdepth 2 \( -type f -o -type l \) | sort
+          } > ci-evidence/environment.txt
 
       - name: Configure and build repository
         run: |
-          set -e
-          if [ ! -f build/Makefile ]; then
-            mkdir -p build && cd build
-            cmake .. -DSYSTEMC_HOME=${SYSTEMC_HOME}
-          else
-            cd build
-          fi
-          cmake --build . -- -j$(nproc)
+          set -euo pipefail
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSYSTEMC_HOME=${SYSTEMC_HOME} \
+            -DBUILD_TESTING=ON \
+            -DBUILD_SANITIZER_TESTS=ON \
+            -DBUILD_RUNTIME_SANITIZER_TESTS=ON \
+            -DSYSTEMC_PTHREAD_COROUTINES=ON 2>&1 | tee ci-evidence/quick-configure.log
+          cmake --build build -- -j2 2>&1 | tee ci-evidence/quick-build.log
 
       - name: Test all chores JSON files
         run: |
@@ -120,17 +120,171 @@ jobs:
             echo "All tests passed."
           fi
 
-      - name: Run D2D V5 aggregate regression gate
-        timeout-minutes: 10
+      # Never reuse a project build cache for release evidence. Runtime tests
+      # remain serial because legacy runners and program artifacts share paths.
+      - name: Clean Release configure build and full CTest
+        timeout-minutes: 120
         run: |
           set -euo pipefail
-          export LD_LIBRARY_PATH=$SYSTEMC_HOME/lib-linux64:$LD_LIBRARY_PATH
-          export CPLUS_INCLUDE_PATH=$SYSTEMC_HOME/include:$CPLUS_INCLUDE_PATH
-          python3 llm/test/run_v5_exit.py
+          cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release \
+            -DSYSTEMC_HOME="$SYSTEMC_HOME" -DBUILD_TESTING=ON \
+            -DBUILD_SANITIZER_TESTS=ON -DSYSTEMC_PTHREAD_COROUTINES=ON \
+            2>&1 | tee ci-evidence/release-configure.log
+          cmake --build build-release -- -j2 2>&1 | tee ci-evidence/release-build.log
+          ctest --test-dir build-release -j1 --output-on-failure \
+            2>&1 | tee ci-evidence/release-ctest-full.log
 
-      - name: Upload npusim logs
-        if: failure()
+      - name: Clean Debug configure build and full CTest
+        timeout-minutes: 150
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug \
+            -DSYSTEMC_HOME="$SYSTEMC_HOME" -DBUILD_TESTING=ON \
+            -DBUILD_SANITIZER_TESTS=ON -DSYSTEMC_PTHREAD_COROUTINES=ON \
+            2>&1 | tee ci-evidence/debug-configure.log
+          cmake --build build-debug -- -j2 2>&1 | tee ci-evidence/debug-build.log
+          ctest --test-dir build-debug -j1 --output-on-failure \
+            2>&1 | tee ci-evidence/debug-ctest-full.log
+
+      - name: Release P8-B four-profile repeat20 stability gate
+        timeout-minutes: 360
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SYSTEMC_HOME/lib-linux64:$LD_LIBRARY_PATH"
+          python3 llm/test/isa/run_p8_program_b.py \
+            --oracle llm/test/isa/p8_program_b_oracle.json \
+            --npusim build-release/npusim \
+            --program-fixture build-release/npusim_program_fixture \
+            --hardware llm/test/isa/p8_program_b_hardware.json \
+            --simulation llm/test/sram/simulation.json \
+            --mapping llm/test/default/mapping.spec \
+            --runtime-root build-release/p8-program-b-repeat20 \
+            --profiles baseline,broadcast_only,reduce_only,reduce_broadcast \
+            --repeat 20 --require-accelerated --timeout 300 \
+            2>&1 | tee ci-evidence/release-p8-b-repeat20.log
+
+      - name: Complete serial DTE D2D NoC SRAM HBM compatibility matrix
+        timeout-minutes: 180
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SYSTEMC_HOME/lib-linux64:$LD_LIBRARY_PATH"
+          export CPLUS_INCLUDE_PATH="$SYSTEMC_HOME/include:$CPLUS_INCLUDE_PATH"
+          exec > >(tee ci-evidence/compatibility-matrix.log) 2>&1
+          python3 llm/test/dte/run_test_dte_v0.py
+          python3 llm/test/dte/run_test_dte_v1.py
+          python3 llm/test/dte/run_test_dte_v2.py
+          python3 llm/test/dte/run_test_dte_v2b.py
+          python3 llm/test/dte/run_test_dte_v3.py
+          python3 llm/test/dte/run_test_dte_v3b.py
+          python3 llm/test/dte/run_test_dte_v4.py
+          python3 llm/test/d2d_link/run_test_d2d_v0.py
+          python3 llm/test/d2d_link/run_test_d2d_v3.py
+          python3 llm/test/d2d_link/run_test_d2d_v4.py
+          python3 llm/test/d2d_link/run_test_d2d_v5.py
+          python3 llm/test/noc_collective/run_test_coll_r0.py
+          python3 llm/test/noc_collective/run_test_coll_r1.py
+          python3 llm/test/noc_collective/run_test_coll_r2.py
+          python3 llm/test/noc_collective/run_test_coll_r3.py
+          python3 llm/test/noc_collective/run_test_coll_r4.py
+          ./build/npusim --coll-r5-selftest
+          python3 llm/test/noc_collective/run_test_coll_r6_r7.py
+          python3 llm/test/noc_collective/run_experiment_profiles.py
+          python3 llm/test/noc_collective/run_test_coll_v0.py
+          python3 llm/test/noc_collective/run_test_coll_v1.py
+          python3 llm/test/noc_collective/run_test_coll_v2.py
+          python3 llm/test/noc_collective/run_test_coll_v3.py
+          python3 llm/test/noc_collective/run_test_coll_v4_v5.py
+          python3 llm/test/noc_collective/run_test_coll_v6.py
+          python3 llm/test/noc_collective/run_test_coll_legacy_pressure.py
+          python3 llm/test/sram/run_test_sram_pipeline.py
+          python3 llm/test/sram/run_test_sram_compat.py
+          python3 llm/test/sram/run_test_sram_legacy.py
+          python3 llm/test/sram/run_test_sram_numa.py
+          python3 llm/test/sram/run_test_sram_dramsys.py
+          for n in {0..4}; do
+            ./build/npusim "--hbm-r${n}-selftest"
+          done
+          for n in {0..6}; do
+            ./build/npusim "--sram-r${n}-selftest"
+          done
+          timeout 900s bash llm/test/hbm/run_hbm_contention_experiment.sh build/npusim
+          python3 llm/test/noc_congestion/run_test_noc_congestion.py
+          python3 llm/test/run_v5_exit.py
+        shell: bash
+
+      - name: Fresh pthread-SystemC ASan UBSan runtime matrix
+        timeout-minutes: 180
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$SYSTEMC_HOME/lib-linux64:$LD_LIBRARY_PATH"
+          cmake -S . -B build-asan-final -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSYSTEMC_HOME="$SYSTEMC_HOME" -DBUILD_TESTING=ON \
+            -DBUILD_SANITIZER_TESTS=ON -DBUILD_RUNTIME_SANITIZER_TESTS=ON \
+            -DSYSTEMC_PTHREAD_COROUTINES=ON 2>&1 | tee ci-evidence/asan-configure.log
+          cmake --build build-asan-final --target npusim_runtime_sanitizer npusim_program_fixture npusim_program_format_sanitizer_selftest -- -j2 \
+            2>&1 | tee ci-evidence/asan-build.log
+          export ASAN_OPTIONS=detect_leaks=1:strict_string_checks=1:halt_on_error=1:abort_on_error=1
+          export LSAN_OPTIONS=exitcode=23:report_objects=1
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          ctest --test-dir build-asan-final -j1 -R '^(program_format_v1_sanitizer_selftest|program_p8_double_buffer_runtime_sanitizer)$' --output-on-failure
+          timeout 3600s python3 llm/test/program/run_p6_collective_program.py --runtime-all \
+            --npusim build-asan-final/npusim_runtime_sanitizer --program-fixture build-asan-final/npusim_program_fixture \
+            --oracle llm/test/program/p6_collective_oracle.json --hardware llm/test/program/p6_collective_hardware.json \
+            --simulation llm/test/sram/simulation.json --mapping llm/test/default/mapping.spec \
+            --runtime-root build-asan-final/p6-runtime
+          timeout 3600s python3 llm/test/program/run_p7_accelerated_32k_program.py \
+            --oracle llm/test/program/p7_accelerated_32k_oracle.json --p6-oracle llm/test/program/p6_collective_oracle.json \
+            --npusim build-asan-final/npusim_runtime_sanitizer --program-fixture build-asan-final/npusim_program_fixture \
+            --hardware llm/test/program/p6_collective_hardware.json --simulation llm/test/sram/simulation.json \
+            --mapping llm/test/default/mapping.spec --runtime-root build-asan-final/p7-32k --timeout 600
+          timeout 3600s python3 llm/test/isa/run_p8_program_b.py \
+            --oracle llm/test/isa/p8_program_b_oracle.json --npusim build-asan-final/npusim_runtime_sanitizer \
+            --program-fixture build-asan-final/npusim_program_fixture --hardware llm/test/isa/p8_program_b_hardware.json \
+            --simulation llm/test/sram/simulation.json --mapping llm/test/default/mapping.spec \
+            --runtime-root build-asan-final/p8-program-b --profiles baseline,broadcast_only,reduce_only,reduce_broadcast \
+            --repeat 3 --require-accelerated --timeout 300
+        shell: bash
+
+      - name: Whitespace and documentation link audit
+        run: |
+          set -euo pipefail
+          git diff --check
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          errors = []
+          link = re.compile(r'(?<!!)\[[^\]]*\]\(([^)]+)\)')
+          sources = list(Path('notes/instr').rglob('*.md'))
+          sources += [path for path in (Path('README.md'), Path('CONTRIBUTING.md'))
+                      if path.exists()]
+          for source in sources:
+              for target in link.findall(source.read_text(encoding='utf-8')):
+                  target = target.strip().strip('<>').split('#', 1)[0]
+                  if not target or '://' in target or target.startswith(('mailto:', '/')):
+                      continue
+                  if not (source.parent / target).exists():
+                      errors.append(f'{source}: missing local link {target}')
+          if errors:
+              print('\n'.join(errors), file=sys.stderr)
+              raise SystemExit(1)
+          print('Markdown local links: OK')
+          PY
+        shell: bash
+
+      - name: Finalize CI evidence manifest
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p ci-evidence
+          find ci-evidence test_logs -type f -print0 | sort -z | xargs -0 -r sha256sum > ci-evidence/SHA256SUMS.txt
+
+      - name: Upload CI evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: npusim-logs
-          path: test_logs/
+          name: npusim-ci-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ci-evidence/
+            test_logs/
+          if-no-files-found: warn

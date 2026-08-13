@@ -5,6 +5,7 @@
 
 #include <deque>
 #include <memory>
+#include <list>
 #include <string>
 #include <string_view>
 #include <tlm>
@@ -52,14 +53,35 @@ public:
     uint64_t EncodeBackendAddress(DRAMSys::DecodedAddress address) const;
 
 private:
-    struct Inflight {
-        Inflight(std::shared_ptr<HBMBackendTransaction> t,
-                 tlm::tlm_mm_interface *mm)
-            : tx(std::move(t)), payload(mm) {}
+    struct LogicalRequest {
+        explicit LogicalRequest(std::shared_ptr<HBMBackendTransaction> t)
+            : tx(std::move(t)) {}
         std::shared_ptr<HBMBackendTransaction> tx;
+        size_t remaining = 0;
+        size_t trace_index = 0;
+        bool issued = false;
+        sc_core::sc_time issued_at = sc_core::SC_ZERO_TIME;
+        int status = 0;
+        std::string error;
+    };
+
+    struct PhysicalRequest {
+        std::shared_ptr<LogicalRequest> logical;
+        uint64_t address = 0;
+        std::vector<uint8_t> payload;
+        std::vector<uint8_t> byte_enable;
+        size_t logical_offset = 0;
+        size_t burst_offset = 0;
+        size_t copy_length = 0;
+    };
+
+    struct Inflight {
+        Inflight(std::shared_ptr<PhysicalRequest> r,
+                 tlm::tlm_mm_interface *mm)
+            : request(std::move(r)), payload(mm) {}
+        std::shared_ptr<PhysicalRequest> request;
         tlm::tlm_generic_payload payload;
         sc_core::sc_time issued = sc_core::SC_ZERO_TIME;
-        size_t trace_index = 0;
     };
 
     tlm::tlm_sync_enum nb_transport_bw(tlm::tlm_generic_payload &payload,
@@ -75,7 +97,7 @@ private:
     gem5::memory::DRAMSysWrapper *dram_sys_wrapper_ = nullptr;
     tlm_utils::simple_initiator_socket<DRAMSysHBMBackend> initiator_socket_;
     tlm_utils::peq_with_cb_and_phase<DRAMSysHBMBackend> peq_;
-    std::deque<std::shared_ptr<HBMBackendTransaction>> pending_;
+    std::list<std::shared_ptr<PhysicalRequest>> pending_;
     std::unordered_map<tlm::tlm_generic_payload *, std::unique_ptr<Inflight>>
         inflight_;
     bool begin_req_in_progress_ = false;
@@ -85,5 +107,7 @@ private:
     HBMBackendStats stats_;
     size_t peak_inflight_ = 0;
     std::vector<DRAMSysHBMAccessRecord> access_trace_;
-    std::unordered_map<const HBMBackendTransaction *, size_t> trace_index_;
+    std::unordered_map<const HBMBackendTransaction *,
+                       std::shared_ptr<LogicalRequest>>
+        active_logical_;
 };
