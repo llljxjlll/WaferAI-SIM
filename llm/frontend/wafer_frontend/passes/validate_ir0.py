@@ -412,11 +412,10 @@ class DenseIR0Validator:
         if len(graph.instances) != 1:
             _fail("S2-Lite requires exactly one logical instance", f"{path}.instances")
         instance = graph.instances[0]
-        expected_dp = (
-            2
-            if graph.producer_pass == "s2_lite_dp2_rooted_ar_source"
-            else 1
-        )
+        expected_dp = {
+            "s2_lite_dp2_rooted_ar_source": 2,
+            "s2_lite_dp4_tree_ar_source": 4,
+        }.get(graph.producer_pass, 1)
         if (
             instance.role is not LogicalRole.TRAIN
             or instance.replicas != 1

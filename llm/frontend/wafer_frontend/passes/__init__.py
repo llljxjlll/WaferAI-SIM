@@ -27,6 +27,13 @@ from .lite_train_dp2 import (
 from .lite_train_rooted_ar_n6 import build_s2_lite_rooted_ar_n6_intent
 from .lite_train_rooted_ar_lower_program import lower_s2_lite_rooted_ar
 from .lite_train_rooted_ar_link_program import link_s2_lite_rooted_ar
+from .lite_train_dp4 import (
+    build_s2_lite_dp4_tree_ar_global_action,
+    build_s2_lite_dp4_tree_ar_source,
+)
+from .lite_train_dp4_n6 import build_s2_lite_dp4_tree_ar_n6_intent
+from .lite_train_dp4_lower_program import lower_s2_lite_dp4_tree_ar
+from .lite_train_dp4_link_program import link_s2_lite_dp4_tree_ar
 from .lite_moe import build_lite_moe_oracle
 from .lite_moe_graph import build_lite_moe_ir0_adapter
 from .lite_moe_n4 import (
@@ -161,6 +168,11 @@ __all__ = [
     "build_s2_lite_rooted_ar_n6_intent",
     "lower_s2_lite_rooted_ar",
     "link_s2_lite_rooted_ar",
+    "build_s2_lite_dp4_tree_ar_global_action",
+    "build_s2_lite_dp4_tree_ar_source",
+    "build_s2_lite_dp4_tree_ar_n6_intent",
+    "lower_s2_lite_dp4_tree_ar",
+    "link_s2_lite_dp4_tree_ar",
     "build_lite_moe_oracle",
     "build_lite_moe_ir0_adapter",
     "build_lite_moe_n4",

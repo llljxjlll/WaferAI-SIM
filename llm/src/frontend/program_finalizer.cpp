@@ -3049,6 +3049,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         const bool train_link = !train_inputs.empty();
         const bool s3_lite_link = !s3_lite_inputs.empty();
         const bool rooted_ar_link = !rooted_ar_inputs.empty();
+        const bool dp4_rooted_ar_link =
+            rooted_ar_link &&
+            rooted_ar_inputs.front()->schema_version ==
+                "wafer_frontend.s2_lite_dp4_tree_ar_lowered_program/v1alpha1";
         const bool s3_lite_backward_link =
             s3_lite_link &&
             s3_lite_inputs.front()->schema_version ==
@@ -3094,7 +3098,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         } else if (rooted_ar_link) {
             const ManifestInputDigestDto &rooted = *rooted_ar_inputs.front();
             if (rooted.schema_version !=
-                "wafer_frontend.s2_lite_rooted_ar_lowered_program/v1alpha1")
+                    "wafer_frontend.s2_lite_rooted_ar_lowered_program/v1alpha1" &&
+                !dp4_rooted_ar_link)
                 Fail("linked_program_manifest.input_digests",
                      "rooted-AR lowered-program schema version mismatch");
             expected_inputs.emplace(rooted.kind, rooted.artifact_id,
@@ -3102,9 +3107,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             for (const auto &entry : train_lineage_schemas) {
                 const std::set<std::string> &ids =
                     train_lineage_ids[entry.first];
-                if (ids.size() != 2)
+                if (ids.size() != (dp4_rooted_ar_link ? 4 : 2))
                     Fail("linked_program_manifest.input_digests",
-                         "rooted-AR requires two exact lineage inputs per stage");
+                         "rooted-AR requires the exact lineage count per stage");
                 for (const ManifestInputDigestDto &digest :
                      manifest.input_digests) {
                     if (digest.kind != entry.first)
@@ -3150,6 +3155,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::size_t standalone_fragment_count = 0;
         std::set<std::string> rooted_local_dag_ids;
         std::vector<std::vector<Opcode>> rooted_overlay_sequences;
+        std::size_t rooted_overlay_claims = 0;
+        std::size_t rooted_overlay_records = 0;
+        std::size_t all_fragment_records = 0;
         std::map<std::vector<Opcode>, std::size_t>
             s3_backward_sequences;
         std::map<FragmentKindDto, std::size_t> s3_backward_kinds;
@@ -3166,6 +3174,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::set<std::string> fragment_global_dag_ids;
         for (const LinkedFragmentDto &linked : manifest.fragments) {
             const CommandFragmentDto &fragment = Leaf(linked);
+            for (const CoreFragmentStreamDto &stream : fragment.core_streams)
+                all_fragment_records += stream.records.size();
             fragment_global_dag_ids.insert(fragment.source_global_dag_id);
             if (s3_lite_backward_link) {
                 if (!std::holds_alternative<CommandFragmentDto>(linked) ||
@@ -3266,9 +3276,38 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         Fail("linked_program_manifest.fragments",
                              "rooted-AR overlay kind/producer/top-carrier/core-stream contract mismatch");
                     std::vector<Opcode> sequence;
+                    rooted_overlay_claims +=
+                        fragment.claimed_action_ids.size();
                     for (const RelocatableRecordDto &record :
-                         fragment.core_streams.front().records)
+                         fragment.core_streams.front().records) {
                         sequence.push_back(record.opcode);
+                        ++rooted_overlay_records;
+                        if (dp4_rooted_ar_link &&
+                            record.opcode == Opcode::DTE_SEND &&
+                            LiteralU64(record.operands[7],
+                                       "DP4 rooted DTE_SEND bytes") != 2048)
+                            Fail("linked_program_manifest.fragments",
+                                 "DP4 rooted DTE_SEND must carry 2048 bytes");
+                        if (dp4_rooted_ar_link &&
+                            record.opcode == Opcode::DTE_RECV &&
+                            LiteralU64(record.operands[6],
+                                       "DP4 rooted DTE_RECV bytes") != 2048)
+                            Fail("linked_program_manifest.fragments",
+                                 "DP4 rooted DTE_RECV must carry 2048 bytes");
+                        if (dp4_rooted_ar_link &&
+                            record.opcode == Opcode::LOCAL_REDUCE &&
+                            (LiteralU64(record.operands[0], "reduce input dtype") != 1 ||
+                             LiteralU64(record.operands[1], "reduce accumulator dtype") != 1 ||
+                             LiteralU64(record.operands[2], "reduce output dtype") != 1 ||
+                             LiteralU64(record.operands[3], "reduce op") != 1 ||
+                             LiteralU64(record.operands[4], "reduce rounding") != 0 ||
+                             LiteralU64(record.operands[5], "reduce order") != 0 ||
+                             LiteralU64(record.operands[6], "reduce input count") != 2 ||
+                             LiteralU64(record.operands[7], "reduce elements") != 512 ||
+                             LiteralU64(record.operands[8], "reduce stride") != 2048))
+                            Fail("linked_program_manifest.fragments",
+                                 "DP4 rooted LOCAL_REDUCE literals changed");
+                    }
                     rooted_overlay_sequences.push_back(std::move(sequence));
                 } else {
                     rooted_local_dag_ids.insert(
@@ -3373,17 +3412,42 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             Fail("linked_program_manifest.fragments",
                  "train fragments must witness every replica global DAG digest");
         if (rooted_ar_link) {
-            std::vector<std::vector<Opcode>> expected_sequences{{
-                {Opcode::SRAM_ALLOC_AT, Opcode::DTE_ISSUE,
-                 Opcode::DTE_WAIT},
-                {Opcode::DTE_SEND},
-                {Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
-                 Opcode::DTE_WAIT},
-                {Opcode::LOCAL_REDUCE},
-                {Opcode::DTE_SEND, Opcode::SRAM_FREE,
-                 Opcode::SRAM_FREE},
-                {Opcode::DTE_RECV, Opcode::DTE_WAIT},
-            }};
+            std::vector<std::vector<Opcode>> expected_sequences;
+            if (dp4_rooted_ar_link) {
+                expected_sequences = {
+                    {Opcode::SRAM_ALLOC_AT, Opcode::DTE_ISSUE,
+                     Opcode::DTE_WAIT},
+                    {Opcode::SRAM_ALLOC_AT, Opcode::DTE_ISSUE,
+                     Opcode::DTE_WAIT},
+                    {Opcode::DTE_SEND}, {Opcode::DTE_SEND},
+                    {Opcode::DTE_SEND}, {Opcode::DTE_SEND},
+                    {Opcode::DTE_SEND, Opcode::SRAM_FREE},
+                    {Opcode::DTE_SEND, Opcode::SRAM_FREE},
+                    {Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
+                     Opcode::DTE_WAIT},
+                    {Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
+                     Opcode::DTE_WAIT},
+                    {Opcode::DTE_RECV, Opcode::DTE_WAIT},
+                    {Opcode::DTE_RECV, Opcode::DTE_WAIT},
+                    {Opcode::DTE_RECV, Opcode::DTE_WAIT},
+                    {Opcode::DTE_RECV, Opcode::DTE_WAIT},
+                    {Opcode::LOCAL_REDUCE},
+                    {Opcode::LOCAL_REDUCE, Opcode::SRAM_FREE},
+                    {Opcode::LOCAL_REDUCE, Opcode::SRAM_FREE},
+                };
+            } else {
+                expected_sequences = {
+                    {Opcode::SRAM_ALLOC_AT, Opcode::DTE_ISSUE,
+                     Opcode::DTE_WAIT},
+                    {Opcode::DTE_SEND},
+                    {Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
+                     Opcode::DTE_WAIT},
+                    {Opcode::LOCAL_REDUCE},
+                    {Opcode::DTE_SEND, Opcode::SRAM_FREE,
+                     Opcode::SRAM_FREE},
+                    {Opcode::DTE_RECV, Opcode::DTE_WAIT},
+                };
+            }
             std::sort(rooted_overlay_sequences.begin(),
                       rooted_overlay_sequences.end());
             std::sort(expected_sequences.begin(), expected_sequences.end());
@@ -3392,7 +3456,16 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         ManifestInputKindDto::GLOBAL_ACTION_DAG] ||
                 rooted_overlay_sequences != expected_sequences)
                 Fail("linked_program_manifest.fragments",
-                     "rooted-AR requires both local DAG lineages and its exact six overlay record sequences");
+                     "rooted-AR requires every local DAG lineage and exact overlay record sequences");
+            if (dp4_rooted_ar_link &&
+                (manifest.fragments.size() != 201 ||
+                 manifest.core_streams.size() != 4 ||
+                 all_fragment_records != 709 ||
+                 rooted_overlay_sequences.size() != 17 ||
+                 rooted_overlay_records != 33 ||
+                 rooted_overlay_claims != 23))
+                Fail("linked_program_manifest",
+                     "DP4 rooted production quotient changed");
         }
         std::set<std::tuple<ManifestInputKindDto, std::string, std::string>>
             actual_inputs;

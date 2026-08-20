@@ -3639,6 +3639,203 @@ void RunLiteRootedArProducedManifest() {
               << " overlay_records=" << overlay_records << '\n';
 }
 
+void RunLiteDp4TreeArProducedManifest() {
+    const std::string text((std::istreambuf_iterator<char>(std::cin)),
+                           std::istreambuf_iterator<char>());
+    const frontend::LinkedProgramManifestDto dto =
+        ProgramArtifactFinalizer::Parse(text);
+    const ProgramArtifactFinalizer finalizer;
+    const ProgramArtifact artifact = finalizer.Finalize(dto);
+    const std::vector<uint8_t> bytes = finalizer.FinalizeEncoded(text);
+    Require(bytes == finalizer.FinalizeEncoded(text) &&
+                bytes == EncodeProgramArtifact(artifact) &&
+                EncodeProgramArtifact(DecodeProgramArtifact(bytes)) == bytes,
+            "DP4 rooted artifact is not byte deterministic");
+
+    auto leaf = [](const LinkedFragmentDto &linked)
+        -> const CommandFragmentDto & {
+        if (const auto *command = std::get_if<CommandFragmentDto>(&linked))
+            return *command;
+        return std::get<frontend::RegionManifestDto>(linked).fragment;
+    };
+    auto literal = [](const frontend::RecordOperandDto &operand) {
+        return std::get<uint64_t>(operand.literal_value);
+    };
+    std::map<frontend::ManifestInputKindDto, std::set<std::string>> lineage;
+    std::size_t top_inputs = 0;
+    for (const frontend::ManifestInputDigestDto &digest : dto.input_digests) {
+        if (digest.kind == frontend::ManifestInputKindDto::S2_LITE_ROOTED_AR) {
+            ++top_inputs;
+            Require(digest.schema_version ==
+                        "wafer_frontend.s2_lite_dp4_tree_ar_lowered_program/v1alpha1",
+                    "DP4 rooted top schema changed");
+        } else if (digest.kind == frontend::ManifestInputKindDto::IR1 ||
+                   digest.kind == frontend::ManifestInputKindDto::IR2_PROJECTION ||
+                   digest.kind == frontend::ManifestInputKindDto::SCHEDULE_SET ||
+                   digest.kind == frontend::ManifestInputKindDto::GLOBAL_ACTION_DAG) {
+            lineage[digest.kind].insert(digest.artifact_id);
+        }
+    }
+    Require(top_inputs == 1 &&
+                lineage[frontend::ManifestInputKindDto::IR1].size() == 4 &&
+                lineage[frontend::ManifestInputKindDto::IR2_PROJECTION].size() == 4 &&
+                lineage[frontend::ManifestInputKindDto::SCHEDULE_SET].size() == 4 &&
+                lineage[frontend::ManifestInputKindDto::GLOBAL_ACTION_DAG].size() == 4,
+            "DP4 rooted manifest must close four exact lineages");
+
+    std::size_t overlay_fragments = 0;
+    std::size_t overlay_records = 0;
+    std::size_t overlay_claims = 0;
+    std::size_t fragment_records = 0;
+    std::map<Opcode, std::size_t> overlay_opcodes;
+    std::set<std::string> local_dags;
+    std::size_t exact_reduce_bindings = 0;
+    for (const LinkedFragmentDto &linked : dto.fragments) {
+        const CommandFragmentDto &fragment = leaf(linked);
+        for (const auto &stream : fragment.core_streams)
+            fragment_records += stream.records.size();
+        if (fragment.kind != FragmentKindDto::S2_LITE_ROOTED_AR) {
+            local_dags.insert(fragment.source_global_dag_id);
+            continue;
+        }
+        ++overlay_fragments;
+        overlay_claims += fragment.claimed_action_ids.size();
+        Require(fragment.producer_pass == "s2_lite_rooted_ar_lowering" &&
+                    fragment.source_global_dag_id == dto.source_global_dag_id &&
+                    fragment.core_streams.size() == 1,
+                "DP4 rooted overlay producer/top/core contract changed");
+        const auto &stream = fragment.core_streams.front();
+        for (std::size_t index = 0; index < stream.records.size(); ++index) {
+            const auto &record = stream.records[index];
+            ++overlay_records;
+            ++overlay_opcodes[record.opcode];
+            if (record.opcode == Opcode::DTE_SEND)
+                Require(literal(record.operands[7]) == 2048,
+                        "DP4 rooted send bytes changed");
+            if (record.opcode == Opcode::DTE_RECV)
+                Require(literal(record.operands[6]) == 2048,
+                        "DP4 rooted recv bytes changed");
+            if (record.opcode != Opcode::LOCAL_REDUCE) continue;
+            Require(record.operands.size() == 11 &&
+                        literal(record.operands[0]) == 1 &&
+                        literal(record.operands[1]) == 1 &&
+                        literal(record.operands[2]) == 1 &&
+                        literal(record.operands[3]) == 1 &&
+                        literal(record.operands[4]) == 0 &&
+                        literal(record.operands[5]) == 0 &&
+                        literal(record.operands[6]) == 2 &&
+                        literal(record.operands[7]) == 512 &&
+                        literal(record.operands[8]) == 2048,
+                    "DP4 rooted FP32 LOCAL_REDUCE operands changed");
+            const AddressOperandBindingDto *source_binding = nullptr;
+            const AddressOperandBindingDto *destination_binding = nullptr;
+            for (const AddressOperandBindingDto &binding : dto.address_operand_bindings) {
+                if (binding.fragment_id != fragment.id ||
+                    !(binding.logical_core == stream.logical_core) ||
+                    binding.fragment_record_index != index)
+                    continue;
+                if (binding.operand_id == SemanticOperandId::SOURCE_ADDRESS)
+                    source_binding = &binding;
+                if (binding.operand_id == SemanticOperandId::DESTINATION_ADDRESS)
+                    destination_binding = &binding;
+            }
+            Require(source_binding != nullptr && destination_binding != nullptr &&
+                        source_binding->buffer_abi_ids.size() == 2 &&
+                        destination_binding->buffer_abi_ids.size() == 1 &&
+                        destination_binding->buffer_abi_ids.front() ==
+                            source_binding->buffer_abi_ids.front(),
+                    "DP4 rooted reduce ABI alias changed");
+            ++exact_reduce_bindings;
+        }
+    }
+    Require(dto.fragments.size() == 201 && dto.core_streams.size() == 4 &&
+                fragment_records == 709 && dto.input_digests.size() == 218 &&
+                overlay_fragments == 17 && overlay_records == 33 &&
+                overlay_claims == 23 && exact_reduce_bindings == 3 &&
+                overlay_opcodes[Opcode::SRAM_ALLOC_AT] == 4 &&
+                overlay_opcodes[Opcode::SRAM_FREE] == 4 &&
+                overlay_opcodes[Opcode::DTE_ISSUE] == 2 &&
+                overlay_opcodes[Opcode::DTE_SEND] == 6 &&
+                overlay_opcodes[Opcode::DTE_RECV] == 6 &&
+                overlay_opcodes[Opcode::DTE_WAIT] == 8 &&
+                overlay_opcodes[Opcode::LOCAL_REDUCE] == 3 &&
+                local_dags == lineage[frontend::ManifestInputKindDto::GLOBAL_ACTION_DAG],
+            "DP4 rooted production manifest quotient changed");
+
+    auto find_overlay = [](Json &manifest,
+                           const std::function<bool(const Json &)> &match)
+        -> Json & {
+        for (Json &linked : manifest["fragments"]) {
+            Json *candidate = &linked;
+            if (linked.contains("fragment")) candidate = &linked["fragment"];
+            if ((*candidate)["kind"] == "s2_lite_rooted_ar" && match(*candidate))
+                return *candidate;
+        }
+        throw std::runtime_error("missing DP4 rooted overlay fixture");
+    };
+
+    Json wrong_top = Json::parse(text);
+    for (Json &digest : wrong_top["input_digests"])
+        if (digest["kind"] == "s2_lite_rooted_ar") {
+            digest["schema_version"] =
+                "wafer_frontend.s2_lite_rooted_ar_lowered_program/v1alpha1";
+            break;
+        }
+    RefreshManifestIds(wrong_top);
+    ExpectFailure([&] { finalizer.FinalizeJson(wrong_top.dump()); },
+                  "restable DP4 rooted wrong top schema");
+
+    Json missing_lineage = Json::parse(text);
+    auto lineage_it = std::find_if(
+        missing_lineage["input_digests"].begin(),
+        missing_lineage["input_digests"].end(),
+        [](const Json &digest) { return digest["kind"] == "global_action_dag"; });
+    Require(lineage_it != missing_lineage["input_digests"].end(),
+            "DP4 rooted fixture lacks lineage");
+    missing_lineage["input_digests"].erase(lineage_it);
+    RefreshManifestIds(missing_lineage);
+    ExpectFailure([&] { finalizer.FinalizeJson(missing_lineage.dump()); },
+                  "restable DP4 rooted missing lineage");
+
+    Json bad_send = Json::parse(text);
+    Json &send_leaf = find_overlay(bad_send, [](const Json &candidate) {
+        return std::any_of(candidate["core_streams"][0]["records"].begin(),
+                           candidate["core_streams"][0]["records"].end(),
+                           [](const Json &record) { return record["opcode"] == 0x40; });
+    });
+    for (Json &record : send_leaf["core_streams"][0]["records"])
+        if (record["opcode"] == 0x40) record["operands"][7]["literal_value"] = 1024;
+    RefreshManifestIds(bad_send);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_send.dump()); },
+                  "restable DP4 rooted send bytes");
+
+    Json bad_reduce = Json::parse(text);
+    Json &reduce_leaf = find_overlay(bad_reduce, [](const Json &candidate) {
+        return std::any_of(candidate["core_streams"][0]["records"].begin(),
+                           candidate["core_streams"][0]["records"].end(),
+                           [](const Json &record) { return record["opcode"] == 0x43; });
+    });
+    for (Json &record : reduce_leaf["core_streams"][0]["records"])
+        if (record["opcode"] == 0x43) record["operands"][6]["literal_value"] = 4;
+    RefreshManifestIds(bad_reduce);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_reduce.dump()); },
+                  "restable DP4 rooted reduce count");
+
+    Json bad_claims = Json::parse(text);
+    find_overlay(bad_claims, [](const Json &) { return true; })
+        ["claimed_action_ids"] = Json::array();
+    RefreshManifestIds(bad_claims);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_claims.dump()); },
+                  "restable DP4 rooted claims");
+
+    std::cout << "lite_dp4_tree_ar_bytes=" << bytes.size()
+              << " cores=" << artifact.cores.size()
+              << " records=" << fragment_records
+              << " relocations=" << artifact.relocations.size()
+              << " fragments=" << dto.fragments.size()
+              << " overlay_records=" << overlay_records << '\n';
+}
+
 void RunLiteMoeBackwardProducedManifest() {
     const std::string text((std::istreambuf_iterator<char>(std::cin)),
                            std::istreambuf_iterator<char>());
@@ -3824,13 +4021,16 @@ int main(int argc, char **argv) {
                    std::string(argv[1]) == "--lite-rooted-ar-stdin") {
             RunLiteRootedArProducedManifest();
         } else if (argc == 2 &&
+                   std::string(argv[1]) == "--lite-dp4-tree-ar-stdin") {
+            RunLiteDp4TreeArProducedManifest();
+        } else if (argc == 2 &&
                    std::string(argv[1]) ==
                        "--lite-moe-backward-stdin") {
             RunLiteMoeBackwardProducedManifest();
         } else {
             throw std::runtime_error(
                 "usage: program_finalizer_selftest "
-                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-moe-backward-stdin]");
+                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-dp4-tree-ar-stdin|--lite-moe-backward-stdin]");
         }
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

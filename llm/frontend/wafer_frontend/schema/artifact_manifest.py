@@ -4370,13 +4370,24 @@ class LinkedProgramManifest:
                     "train input requires equal non-zero IR1/projection/schedule/global digest coverage",
                     path=f"{path}.input_digests",
                 )
-        if rooted_ar_inputs and any(
-            len(ids) != 2 for ids in train_lineage_ids.values()
-        ):
-            raise SchemaError(
-                "S2-Lite rooted-AR input requires two exact IR1/projection/schedule/global lineages",
-                path=f"{path}.input_digests",
-            )
+        if rooted_ar_inputs:
+            rooted_lineage_count = {
+                "wafer_frontend.s2_lite_rooted_ar_lowered_program/v1alpha1": 2,
+                "wafer_frontend.s2_lite_dp4_tree_ar_lowered_program/v1alpha1": 4,
+            }.get(rooted_ar_inputs[0].schema_version)
+            if rooted_lineage_count is None:
+                raise SchemaError(
+                    "S2-Lite rooted-AR input has an unsupported top schema version",
+                    path=f"{path}.input_digests",
+                )
+            if any(
+                len(ids) != rooted_lineage_count
+                for ids in train_lineage_ids.values()
+            ):
+                raise SchemaError(
+                    "S2-Lite rooted-AR input has wrong exact replica lineage cardinality",
+                    path=f"{path}.input_digests",
+                )
         if s3_lite_inputs:
             if any(len(ids) != 1 for ids in train_lineage_ids.values()):
                 raise SchemaError(
@@ -4452,7 +4463,7 @@ class LinkedProgramManifest:
                 ManifestInputKind.GLOBAL_ACTION_DAG
             ]:
                 raise SchemaError(
-                    "rooted-AR local fragments must witness both replica global DAG digests",
+                    "rooted-AR local fragments must witness every replica global DAG digest",
                     path=f"{path}.fragments",
                 )
             if not overlay_fragments:

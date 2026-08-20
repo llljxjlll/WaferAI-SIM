@@ -17,6 +17,7 @@ from .lite_moe_backward import (
     validate_lite_moe_backward_fragments,
 )
 from .lite_moe_backward_linker import link_lite_moe_backward_manifest
+from .lite_train_dp4_linker import link_s2_lite_dp4_tree_ar_manifest
 from .standalone import NaiveStandaloneCollectiveLowering
 from .state import NaiveStateDmaLowering
 from .state_transfer import NaiveStateTransferLowering
@@ -46,6 +47,7 @@ __all__ = [
     "lower_lite_moe_backward",
     "validate_lite_moe_backward_fragments",
     "link_lite_moe_backward_manifest",
+    "link_s2_lite_dp4_tree_ar_manifest",
     "CoarseLowering",
     "IsaRegionLowering",
     "ManifestLinker",

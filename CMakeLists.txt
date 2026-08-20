@@ -740,6 +740,26 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "\\[S2-LITE DP2 ROOTED-AR\\] PASS"
         FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
 
+    set(s2_lite_dp4_tree_ar_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_lite_train_dp4_tree_ar_runtime.py")
+    add_test(NAME s2_lite_dp4_tree_ar_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${s2_lite_dp4_tree_ar_runtime_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --runtime-root ${program_runtime_dir}
+            --timeout 900)
+    set_tests_properties(s2_lite_dp4_tree_ar_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 900
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;s2-lite;train;backward;dp4;tp1;tree-ar;runtime"
+        PASS_REGULAR_EXPRESSION "\\[S2-LITE DP4 TREE-AR\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
     set(s3_lite_moe_backward_runtime_runner
         "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_lite_moe_backward_runtime.py")
     add_test(NAME s3_lite_moe_backward_runtime

@@ -36,6 +36,10 @@ from ..schema.lite_train_rooted_ar_n6 import (
     RootedArExecutableKind,
     S2LiteRootedArLinkedProgram,
 )
+from ..schema.lite_train_dp4_n6 import (
+    Dp4TreeExecutableKind,
+    S2LiteDp4TreeArLinkedProgram,
+)
 from ..schema.lite_moe_execution import LiteMoeBufferAccess
 from ..schema.lite_moe_n6 import LiteMoeLinkedProgram
 from ..schema.lite_moe_backward_n6 import LiteMoeBackwardLinkedProgram
@@ -140,6 +144,7 @@ LinkedProgramSource = (
     | TrainLinkedProgram
     | S2LiteTrainLinkedProgram
     | S2LiteRootedArLinkedProgram
+    | S2LiteDp4TreeArLinkedProgram
     | LiteMoeLinkedProgram
     | LiteMoeBackwardLinkedProgram
 )
@@ -151,6 +156,7 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     TrainLinkedProgram,
     S2LiteTrainLinkedProgram,
     S2LiteRootedArLinkedProgram,
+    S2LiteDp4TreeArLinkedProgram,
     LiteMoeLinkedProgram,
     LiteMoeBackwardLinkedProgram,
 )
@@ -166,7 +172,10 @@ def _lowering_contexts(
         )
     if type(source) is S2LiteTrainLinkedProgram:
         return ((0, source.source.lowering_context),)
-    if type(source) is S2LiteRootedArLinkedProgram:
+    if type(source) in (
+        S2LiteRootedArLinkedProgram,
+        S2LiteDp4TreeArLinkedProgram,
+    ):
         return tuple(enumerate(source.source.intent.lowering_contexts))
     if type(source) is LiteMoeLinkedProgram:
         raise SchemaError(
@@ -184,6 +193,7 @@ def _lowering_contexts(
 _LITE_TRAIN_SOURCE_TYPES = (
     S2LiteTrainLinkedProgram,
     S2LiteRootedArLinkedProgram,
+    S2LiteDp4TreeArLinkedProgram,
 )
 _TRAIN_SOURCE_TYPES = (TrainLinkedProgram, *_LITE_TRAIN_SOURCE_TYPES)
 
@@ -392,7 +402,10 @@ def _semantic_uses(
                 )
             result[abi_id] = ordered
         return result  # type: ignore[return-value]
-    if type(source) is S2LiteRootedArLinkedProgram:
+    if type(source) in (
+        S2LiteRootedArLinkedProgram,
+        S2LiteDp4TreeArLinkedProgram,
+    ):
         by_binding = {
             (abi.schedule_id, abi.binding_id): abi
             for abi in abis.values()
@@ -482,26 +495,44 @@ def _semantic_uses(
                     "rooted-AR unit core does not identify one replica",
                     path="source.source.intent.units",
                 )
-            input_role = {
-                RootedArExecutableKind.LOCAL_COPY:
-                    BufferUseRole.LOCAL_COPY_SOURCE,
-                RootedArExecutableKind.UPLOAD_SEND:
-                    BufferUseRole.SEND_SOURCE,
-                RootedArExecutableKind.ROOT_REDUCE:
-                    BufferUseRole.REDUCE_INPUT,
-                RootedArExecutableKind.DOWNLOAD_SEND:
-                    BufferUseRole.SEND_SOURCE,
-            }.get(unit.kind)
-            output_role = {
-                RootedArExecutableKind.LOCAL_COPY:
-                    BufferUseRole.LOCAL_COPY_DESTINATION,
-                RootedArExecutableKind.UPLOAD_RECV:
-                    BufferUseRole.RECV_DESTINATION,
-                RootedArExecutableKind.ROOT_REDUCE:
-                    BufferUseRole.REDUCE_OUTPUT,
-                RootedArExecutableKind.DOWNLOAD_RECV:
-                    BufferUseRole.RECV_DESTINATION,
-            }.get(unit.kind)
+            if type(source) is S2LiteRootedArLinkedProgram:
+                input_role = {
+                    RootedArExecutableKind.LOCAL_COPY:
+                        BufferUseRole.LOCAL_COPY_SOURCE,
+                    RootedArExecutableKind.UPLOAD_SEND:
+                        BufferUseRole.SEND_SOURCE,
+                    RootedArExecutableKind.ROOT_REDUCE:
+                        BufferUseRole.REDUCE_INPUT,
+                    RootedArExecutableKind.DOWNLOAD_SEND:
+                        BufferUseRole.SEND_SOURCE,
+                }.get(unit.kind)
+                output_role = {
+                    RootedArExecutableKind.LOCAL_COPY:
+                        BufferUseRole.LOCAL_COPY_DESTINATION,
+                    RootedArExecutableKind.UPLOAD_RECV:
+                        BufferUseRole.RECV_DESTINATION,
+                    RootedArExecutableKind.ROOT_REDUCE:
+                        BufferUseRole.REDUCE_OUTPUT,
+                    RootedArExecutableKind.DOWNLOAD_RECV:
+                        BufferUseRole.RECV_DESTINATION,
+                }.get(unit.kind)
+            else:
+                input_role = {
+                    Dp4TreeExecutableKind.LOCAL_COPY:
+                        BufferUseRole.LOCAL_COPY_SOURCE,
+                    Dp4TreeExecutableKind.FLOW_SEND:
+                        BufferUseRole.SEND_SOURCE,
+                    Dp4TreeExecutableKind.LOCAL_REDUCE:
+                        BufferUseRole.REDUCE_INPUT,
+                }.get(unit.kind)
+                output_role = {
+                    Dp4TreeExecutableKind.LOCAL_COPY:
+                        BufferUseRole.LOCAL_COPY_DESTINATION,
+                    Dp4TreeExecutableKind.FLOW_RECV:
+                        BufferUseRole.RECV_DESTINATION,
+                    Dp4TreeExecutableKind.LOCAL_REDUCE:
+                        BufferUseRole.REDUCE_OUTPUT,
+                }.get(unit.kind)
             if unit.input_buffer_abi_refs and input_role is None:
                 raise SchemaError(
                     "rooted-AR unit kind cannot consume buffers",
@@ -718,6 +749,7 @@ def _train_ce_nodes(
         TrainLinkedProgram
         | S2LiteTrainLinkedProgram
         | S2LiteRootedArLinkedProgram
+        | S2LiteDp4TreeArLinkedProgram
     ),
 ) -> tuple[tuple[int, CrossEntropyForwardWorkload, str, str], ...]:
     result: list[
@@ -947,6 +979,8 @@ def _lite_loss_gradient_seed_overrides(
 
 
 def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
+    if type(source) is S2LiteDp4TreeArLinkedProgram:
+        return set()
     if type(source) is LiteMoeBackwardLinkedProgram:
         return set()
     if type(source) is LiteMoeLinkedProgram:
@@ -1652,6 +1686,60 @@ def _state_probe(
     )
 
 
+def _validate_dp4_updated_weight_probes(
+    source: LinkedProgramSource,
+    contract: ProgramIoContract,
+    resolved_state: tuple[_ResolvedStateAbi, ...],
+) -> None:
+    if type(source) is not S2LiteDp4TreeArLinkedProgram:
+        return
+    updated = tuple(
+        item
+        for item in resolved_state
+        if item.abi.kind is StateKind.TRAINABLE_PARAMETER
+        and item.abi.access is PersistentStateAccess.READ_WRITE
+        and any(access is StateUseAccess.WRITE for _index, access in item.uses)
+    )
+    if (
+        len(updated) != 4
+        or tuple(sorted(item.abi.die_id for item in updated)) != (0, 1, 2, 3)
+        or any(item.abi.size_bytes != 1024 for item in updated)
+        or len({item.abi.state_ref for item in updated}) != 1
+    ):
+        raise SchemaError(
+            "DP4 requires four replica-local 1024B updated LM-head StateABIs",
+            path="source.manifest.fragments",
+        )
+    expected_ids = {item.abi.id for item in updated}
+    probes = tuple(
+        probe
+        for probe in contract.output_probes
+        if type(probe.target) is ProgramHbmTarget
+    )
+    if (
+        len(contract.output_probes) != 4
+        or len(probes) != 4
+        or {probe.target.state_abi_id for probe in probes} != expected_ids
+        or sum(probe.length_bytes for probe in probes) != 4096
+    ):
+        raise SchemaError(
+            "DP4 output probes must exactly cover four updated LM-head HBM states",
+            path="program_io_contract.output_probes",
+        )
+    initializations = {
+        item.target.state_abi_id: item
+        for item in contract.initializations
+        if type(item.target) is ProgramHbmTarget
+    }
+    for index, probe in enumerate(probes):
+        initialization = initializations.get(probe.target.state_abi_id)
+        if initialization is None or probe.blob_ref != initialization.blob_ref:
+            raise SchemaError(
+                "DP4 updated-weight probe must reuse its exact deterministic state seed",
+                path=f"program_io_contract.output_probes[{index}]",
+            )
+
+
 def build_timing_program_io(
     source: LinkedProgramSource,
     program_artifact_sha256: str,
@@ -1767,8 +1855,11 @@ def build_timing_program_io(
                 )
 
     terminal_values = _terminal_value_ids(source)
-    backward_hbm_terminals = type(source) is LiteMoeBackwardLinkedProgram
-    if not terminal_values and not backward_hbm_terminals:
+    hbm_state_terminals = type(source) in (
+        LiteMoeBackwardLinkedProgram,
+        S2LiteDp4TreeArLinkedProgram,
+    )
+    if not terminal_values and not hbm_state_terminals:
         raise SchemaError(
             "timing ProgramIo requires at least one IR1 terminal value",
             path="source.lowering_context.ir1.values",
@@ -1787,11 +1878,12 @@ def build_timing_program_io(
             "every IR1 terminal value must map only to one or more OWNED BufferABIs",
             path="source.lowering_context.ir1.values",
         )
-    _validate_train_terminal_abis(
-        source,
-        terminal_values,
-        resolved_terminal,
-    )
+    if type(source) is not S2LiteDp4TreeArLinkedProgram:
+        _validate_train_terminal_abis(
+            source,
+            terminal_values,
+            resolved_terminal,
+        )
 
     initialization_blobs_by_abi = {
         item.abi.id: ProgramBlob.create(
@@ -1828,7 +1920,7 @@ def build_timing_program_io(
         state_ref: ProgramBlob.create(payload)
         for state_ref, payload in expected.items()
     }
-    if backward_hbm_terminals:
+    if hbm_state_terminals:
         expected_blobs.update(
             (
                 state_ref,
@@ -1869,4 +1961,5 @@ def build_timing_program_io(
         output_probes=(*sram_probes, *state_probes),
     )
     contract.validate_against(source.manifest)
+    _validate_dp4_updated_weight_probes(source, contract, resolved_state)
     return contract
