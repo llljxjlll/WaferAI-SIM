@@ -633,11 +633,18 @@ void TestCollectiveDataV1Wire(TestState &state) {
                     local_decoded.key == CollectiveKey{} &&
                     local_decoded.phase_id == 0,
                 "Collective_data_v1_prim wire dtype code 3 explicitly maps FP16");
-    state.Throws("Collective_data_v1_prim FP32 rejected", [&] {
-        Collective_data_v1_prim bad = local;
-        bad.dtype = CollDType::FP32;
-        (void)bad.serialize();
-    });
+    Collective_data_v1_prim local_fp32 = local;
+    local_fp32.length_bytes = 64;
+    local_fp32.input_count = 2;
+    local_fp32.dtype = CollDType::FP32;
+    CheckRoundTrip(state, "Collective_data_v1_prim local FP32", local_fp32);
+    const Wire local_fp32_wire = local_fp32.serialize();
+    Collective_data_v1_prim local_fp32_decoded;
+    local_fp32_decoded.deserialize(local_fp32_wire);
+    state.Check(local_fp32_wire[0].range(34, 33).to_uint() == 0 &&
+                    local_fp32_wire[0].range(37, 37).to_uint() == 1 &&
+                    local_fp32_decoded.dtype == CollDType::FP32,
+                "Collective_data_v1_prim wire dtype code 4 explicitly maps FP32");
     state.Throws("Collective_data_v1_prim FP8 rejected", [&] {
         Collective_data_v1_prim bad = local;
         bad.dtype = CollDType::FP8;

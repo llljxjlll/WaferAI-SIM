@@ -5709,11 +5709,18 @@ class IntraDieSchedule:
                     path=f"{path}.task_buffer_uses",
                 )
             output = outputs[0]
-            if any(
-                binding.dtype is not DType.FP16 for binding in inputs + outputs
-            ):
+            fp32_dp2 = (
+                task.reduction.input_dtype is DType.FP32
+                and task.reduction.accumulation_dtype is DType.FP32
+                and task.reduction.output_dtype is DType.FP32
+                and task.reduction.input_ranks == (0, 1)
+                and task.dtype is DType.FP32
+                and task.bytes == 2048
+            )
+            expected_dtype = DType.FP32 if fp32_dp2 else DType.FP16
+            if any(binding.dtype is not expected_dtype for binding in inputs + outputs):
                 raise SchemaError(
-                    "LOCAL_REDUCE bindings must be FP16",
+                    "LOCAL_REDUCE bindings must match its exact FP16 or DP2 FP32 contract",
                     path=f"{path}.task_buffer_uses",
                 )
             core_ids = {binding.core_id for binding in inputs + outputs}
@@ -5751,9 +5758,10 @@ class IntraDieSchedule:
             absolute_source = region.base_bytes + source_base
             output_region = resolved_regions[output.id]
             absolute_output = output_region.base_bytes + output_start
-            if absolute_source % 2 or absolute_output % 2:
+            alignment = 4 if fp32_dp2 else 2
+            if absolute_source % alignment or absolute_output % alignment:
                 raise SchemaError(
-                    "LOCAL_REDUCE source/output must be 2-byte aligned",
+                    "LOCAL_REDUCE source/output must be 2-byte aligned for FP16 or 4-byte aligned for exact DP2 FP32",
                     path=f"{path}.task_buffer_uses",
                 )
         storage_groups: dict[str, list[BufferBinding]] = {}

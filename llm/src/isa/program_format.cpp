@@ -333,7 +333,9 @@ void ValidateRecordReferences(const ExternalRecord &record,
                 where + " references an unknown core group");
     } else if (const auto *o =
                    std::get_if<LocalReduceOperands>(&record.operands)) {
-        const uint64_t length_bytes = o->element_count * 2;
+        const uint64_t element_bytes =
+            o->input_dtype == LocalReduceDataType::FP32 ? 4 : 2;
+        const uint64_t length_bytes = o->element_count * element_bytes;
         const uint64_t source_bytes = o->input_count * length_bytes;
         ValidateAddressReference(o->source, artifact, where + " source",
                                  source_bytes);

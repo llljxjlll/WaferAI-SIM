@@ -430,16 +430,31 @@ def _reduce_record(
     tuple[BufferBinding, ...],
 ]:
     reduction = action.reduction
-    if (
-        reduction is None
-        or action.dtype is not DType.FP16
-        or action.bytes == 0
-        or action.bytes % 2
-    ):
+    legacy = (
+        reduction is not None
+        and action.dtype is DType.FP16
+        and action.bytes > 0
+        and action.bytes % 2 == 0
+        and reduction.input_dtype is DType.FP16
+        and reduction.accumulation_dtype is DType.FP32
+        and reduction.output_dtype is DType.FP16
+    )
+    dp2_fp32 = (
+        reduction is not None
+        and action.dtype is DType.FP32
+        and action.bytes == 2048
+        and reduction.input_dtype is DType.FP32
+        and reduction.accumulation_dtype is DType.FP32
+        and reduction.output_dtype is DType.FP32
+        and reduction.input_ranks == (0, 1)
+    )
+    if not (legacy or dp2_fp32):
         raise SchemaError(
-            "LOCAL_REDUCE requires a positive even-byte FP16 reduction",
+            "LOCAL_REDUCE requires its exact FP16 contract or DP2 2048-byte FP32 contract",
             path="action.reduction",
         )
+    dtype_literal = 1 if dp2_fp32 else 0
+    element_bytes = 4 if dp2_fp32 else 2
     input_uses = tuple(
         sorted(
             (
@@ -496,14 +511,14 @@ def _reduce_record(
         action.id,
         RecordOpcode.LOCAL_REDUCE,
         (
-            RecordOperand.literal("input_dtype", 0),
+            RecordOperand.literal("input_dtype", dtype_literal),
             RecordOperand.literal("accumulator_dtype", 1),
-            RecordOperand.literal("output_dtype", 0),
+            RecordOperand.literal("output_dtype", dtype_literal),
             RecordOperand.literal("reduce_op", 1),
             RecordOperand.literal("rounding", 0),
             RecordOperand.literal("order", 0),
             RecordOperand.literal("input_count", len(input_bindings)),
-            RecordOperand.literal("element_count", action.bytes // 2),
+            RecordOperand.literal("element_count", action.bytes // element_bytes),
             RecordOperand.literal("input_stride_bytes", action.bytes),
             RecordOperand.address(
                 "source_address", SemanticOperandId.SOURCE_ADDRESS, source.id

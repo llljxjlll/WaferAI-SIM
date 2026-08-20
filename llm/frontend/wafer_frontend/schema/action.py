@@ -396,15 +396,24 @@ class ReductionContract:
     input_ranks: tuple[int, ...]
 
     def validate(self, path: str) -> None:
-        if (
-            self.reduce_op is not ReduceOp.SUM
-            or self.input_dtype is not DType.FP16
-            or self.accumulation_dtype is not DType.FP32
-            or self.output_dtype is not DType.FP16
-            or self.rounding is not RoundingMode.RNE
-        ):
+        legacy = (
+            self.reduce_op is ReduceOp.SUM
+            and self.input_dtype is DType.FP16
+            and self.accumulation_dtype is DType.FP32
+            and self.output_dtype is DType.FP16
+            and self.rounding is RoundingMode.RNE
+        )
+        dp2_fp32 = (
+            self.reduce_op is ReduceOp.SUM
+            and self.input_dtype is DType.FP32
+            and self.accumulation_dtype is DType.FP32
+            and self.output_dtype is DType.FP32
+            and self.rounding is RoundingMode.RNE
+            and self.input_ranks == (0, 1)
+        )
+        if not (legacy or dp2_fp32):
             raise SchemaError(
-                "naive backend v1 requires SUM FP16->FP32->FP16 with RNE",
+                "naive backend v1 requires SUM FP16->FP32->FP16 with RNE or exact DP2 FP32->FP32->FP32 with ranks (0, 1)",
                 path=path,
             )
         if not self.input_ranks:

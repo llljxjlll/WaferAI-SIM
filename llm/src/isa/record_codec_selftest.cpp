@@ -1095,9 +1095,57 @@ void CheckTypedRejections(Checks &checks) {
 
     record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
                         Boundary::TYPICAL);
+    {
+        auto &fp32 = std::get<LocalReduceOperands>(record.operands);
+        fp32.input_dtype = LocalReduceDataType::FP32;
+        fp32.accumulator_dtype = LocalReduceDataType::FP32;
+        fp32.output_dtype = LocalReduceDataType::FP32;
+        fp32.input_count = 2;
+        fp32.element_count = 512;
+        fp32.input_stride_bytes = 2048;
+        fp32.source.absolute_address_bytes = 0x1000;
+        fp32.destination.absolute_address_bytes = 0x3000;
+    }
+    checks.Accept("exact DP2 FP32 LOCAL_REDUCE round trips", [&] {
+        const auto bytes = EncodeExternalRecord(record);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        const auto &got = std::get<LocalReduceOperands>(decoded.operands);
+        checks.Check(decoded.opcode == Opcode::LOCAL_REDUCE &&
+                         got.input_dtype == LocalReduceDataType::FP32 &&
+                         got.accumulator_dtype == LocalReduceDataType::FP32 &&
+                         got.output_dtype == LocalReduceDataType::FP32 &&
+                         got.input_count == 2 && got.element_count == 512 &&
+                         got.input_stride_bytes == 2048,
+                     "exact DP2 FP32 LOCAL_REDUCE wire is stable");
+    });
+    auto bad_fp32 = record;
+    std::get<LocalReduceOperands>(bad_fp32.operands).input_count = 3;
+    checks.Reject("FP32 LOCAL_REDUCE rejects count other than two",
+                  [&] { EncodeExternalRecord(bad_fp32); });
+    bad_fp32 = record;
+    std::get<LocalReduceOperands>(bad_fp32.operands).element_count = 511;
+    checks.Reject("FP32 LOCAL_REDUCE rejects non-512 elements",
+                  [&] { EncodeExternalRecord(bad_fp32); });
+    bad_fp32 = record;
+    std::get<LocalReduceOperands>(bad_fp32.operands).input_stride_bytes = 2044;
+    checks.Reject("FP32 LOCAL_REDUCE rejects non-2048 stride",
+                  [&] { EncodeExternalRecord(bad_fp32); });
+    bad_fp32 = record;
+    std::get<LocalReduceOperands>(bad_fp32.operands).reduce_op =
+        ReduceOperator::MAX;
+    checks.Reject("FP32 LOCAL_REDUCE rejects non-SUM",
+                  [&] { EncodeExternalRecord(bad_fp32); });
+    bad_fp32 = record;
+    std::get<LocalReduceOperands>(bad_fp32.operands)
+        .destination.absolute_address_bytes = 0x3002;
+    checks.Reject("FP32 LOCAL_REDUCE rejects non-4-byte alignment",
+                  [&] { EncodeExternalRecord(bad_fp32); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
     std::get<LocalReduceOperands>(record.operands).input_dtype =
         LocalReduceDataType::FP32;
-    checks.Reject("LOCAL_REDUCE input must be FP16",
+    checks.Reject("LOCAL_REDUCE rejects mixed FP32/FP16 dtype",
                   [&] { EncodeExternalRecord(record); });
     record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
                         Boundary::TYPICAL);

@@ -351,6 +351,25 @@ def reduction_contract(input_ranks: tuple[int, ...] = (0, 1)) -> ReductionContra
 
 
 class ActionSchemaTest(unittest.TestCase):
+    def test_exact_dp2_fp32_reduction_contract_is_narrow(self) -> None:
+        contract = ReductionContract(
+            ReduceOp.SUM,
+            DType.FP32,
+            DType.FP32,
+            DType.FP32,
+            RoundingMode.RNE,
+            (0, 1),
+        )
+        contract.validate("reduction")
+        for changed in (
+            replace(contract, input_ranks=(0,)),
+            replace(contract, input_ranks=(0, 1, 2)),
+            replace(contract, output_dtype=DType.FP16),
+            replace(contract, reduce_op=ReduceOp.MAX),
+        ):
+            with self.assertRaisesRegex(SchemaError, "exact DP2"):
+                changed.validate("reduction")
+
     def test_fusion_and_standalone_round_trip_with_stable_digest(self) -> None:
         self.assertEqual(
             FUSION_PLAN_SCHEMA_VERSION,

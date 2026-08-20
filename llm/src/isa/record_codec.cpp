@@ -336,12 +336,18 @@ void ValidateReduceCompute(const ReduceComputeOperands &operands) {
 }
 
 void ValidateLocalReduce(const LocalReduceOperands &operands) {
-    Require(operands.input_dtype == LocalReduceDataType::FP16,
-            "LOCAL_REDUCE input_dtype must be FP16");
-    Require(operands.accumulator_dtype == LocalReduceDataType::FP32,
-            "LOCAL_REDUCE accumulator_dtype must be FP32");
-    Require(operands.output_dtype == LocalReduceDataType::FP16,
-            "LOCAL_REDUCE output_dtype must be FP16");
+    const bool legacy =
+        operands.input_dtype == LocalReduceDataType::FP16 &&
+        operands.accumulator_dtype == LocalReduceDataType::FP32 &&
+        operands.output_dtype == LocalReduceDataType::FP16;
+    const bool dp2_fp32 =
+        operands.input_dtype == LocalReduceDataType::FP32 &&
+        operands.accumulator_dtype == LocalReduceDataType::FP32 &&
+        operands.output_dtype == LocalReduceDataType::FP32 &&
+        operands.input_count == 2 && operands.element_count == 512 &&
+        operands.input_stride_bytes == 2048;
+    Require(legacy || dp2_fp32,
+            "LOCAL_REDUCE dtype/count/shape must be legacy FP16 or exact DP2 FP32");
     Require(operands.reduce_op == ReduceOperator::SUM,
             "LOCAL_REDUCE reduce_op must be SUM");
     Require(operands.rounding == LocalReduceRoundingMode::RNE,
@@ -353,12 +359,13 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
             "LOCAL_REDUCE input_count must be non-zero");
     Require(operands.element_count != 0,
             "LOCAL_REDUCE element_count must be non-zero");
+    const uint64_t element_bytes = dp2_fp32 ? 4 : 2;
     Require(operands.element_count <=
-                std::numeric_limits<uint64_t>::max() / 2,
-            "LOCAL_REDUCE element_count*2 overflows u64");
-    const uint64_t length_bytes = operands.element_count * 2;
+                std::numeric_limits<uint64_t>::max() / element_bytes,
+            "LOCAL_REDUCE element_count*dtype_bytes overflows u64");
+    const uint64_t length_bytes = operands.element_count * element_bytes;
     Require(operands.input_stride_bytes == length_bytes,
-            "LOCAL_REDUCE input_stride_bytes must equal element_count*2");
+            "LOCAL_REDUCE input_stride_bytes must equal one input byte span");
     Require(length_bytes <=
                 std::numeric_limits<uint64_t>::max() /
                     operands.input_count,
@@ -370,9 +377,9 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
     Require(operands.source.kind == SramAddressKind::ABSOLUTE &&
                 operands.destination.kind == SramAddressKind::ABSOLUTE,
             "LOCAL_REDUCE V1 addresses must be ABSOLUTE");
-    Require((operands.source.absolute_address_bytes & 1) == 0 &&
-                (operands.destination.absolute_address_bytes & 1) == 0,
-            "LOCAL_REDUCE addresses must be FP16 aligned");
+    Require(operands.source.absolute_address_bytes % element_bytes == 0 &&
+                operands.destination.absolute_address_bytes % element_bytes == 0,
+            "LOCAL_REDUCE addresses must be dtype aligned");
     Require(operands.source.absolute_address_bytes <=
                 std::numeric_limits<uint64_t>::max() -
                     (source_bytes - 1),

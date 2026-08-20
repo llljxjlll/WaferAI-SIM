@@ -30,6 +30,10 @@ from ..schema.ir2 import (
 )
 from ..schema.n6 import LinkedProgramProfile, Stage4LinkedProgram
 from ..schema.lite_train_n6 import S2LiteTrainLinkedProgram
+from ..schema.lite_train_rooted_ar_n6 import (
+    RootedArExecutableKind,
+    S2LiteRootedArLinkedProgram,
+)
 from ..schema.lite_moe_execution import LiteMoeBufferAccess
 from ..schema.lite_moe_n6 import LiteMoeLinkedProgram
 from ..schema.persistent_state import PersistentStateAccess, StateKind
@@ -132,6 +136,7 @@ LinkedProgramSource = (
     | Stage4LinkedProgram
     | TrainLinkedProgram
     | S2LiteTrainLinkedProgram
+    | S2LiteRootedArLinkedProgram
     | LiteMoeLinkedProgram
 )
 
@@ -141,6 +146,7 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     Stage4LinkedProgram,
     TrainLinkedProgram,
     S2LiteTrainLinkedProgram,
+    S2LiteRootedArLinkedProgram,
     LiteMoeLinkedProgram,
 )
 
@@ -155,12 +161,21 @@ def _lowering_contexts(
         )
     if type(source) is S2LiteTrainLinkedProgram:
         return ((0, source.source.lowering_context),)
+    if type(source) is S2LiteRootedArLinkedProgram:
+        return tuple(enumerate(source.source.intent.lowering_contexts))
     if type(source) is LiteMoeLinkedProgram:
         raise SchemaError(
             "S3-Lite uses its dedicated execution carrier",
             path="source",
         )
     return ((0, source.lowering_context),)
+
+
+_LITE_TRAIN_SOURCE_TYPES = (
+    S2LiteTrainLinkedProgram,
+    S2LiteRootedArLinkedProgram,
+)
+_TRAIN_SOURCE_TYPES = (TrainLinkedProgram, *_LITE_TRAIN_SOURCE_TYPES)
 
 
 def _unique_abis(source: LinkedProgramSource) -> dict[str, BufferABI]:
@@ -252,6 +267,188 @@ def _semantic_uses(
                 )
             result[abi_id] = ordered
         return result  # type: ignore[return-value]
+    if type(source) is S2LiteRootedArLinkedProgram:
+        by_binding = {
+            (abi.schedule_id, abi.binding_id): abi
+            for abi in abis.values()
+        }
+        collected: dict[str, list[_LiteSemanticUse]] = {
+            abi_id: [] for abi_id in abis
+        }
+        action_order: dict[str, tuple[LogicalCoreRef, int]] = {}
+        for stream in source.manifest.core_streams:
+            for record_index, record_ref in enumerate(stream.records):
+                previous = action_order.get(record_ref.source_global_action_id)
+                if previous is not None and previous[0] != stream.logical_core:
+                    raise SchemaError(
+                        "rooted-AR action appears on multiple core streams",
+                        path="source.manifest.core_streams",
+                    )
+                if previous is None or record_index < previous[1]:
+                    action_order[record_ref.source_global_action_id] = (
+                        stream.logical_core,
+                        record_index,
+                    )
+
+        flattened_action_index = 0
+        for replica_index, context in _lowering_contexts(source):
+            for action_index, action in enumerate(context.global_dag.actions):
+                order = action_order.get(action.id)
+                if order is None or order[0] != action.logical_core:
+                    raise SchemaError(
+                        "rooted-AR local action lacks its exact linked-core position",
+                        path=(
+                            "source.source.intent.lowering_contexts"
+                            f"[{replica_index}].global_dag.actions[{action_index}]"
+                        ),
+                    )
+                for use_index, use in enumerate(action.buffer_uses):
+                    abi = by_binding.get(
+                        (action.source.schedule_id, use.binding_id)
+                    )
+                    if abi is None or abi.logical_core != action.logical_core:
+                        raise SchemaError(
+                            "rooted-AR local use has no exact manifest BufferABI",
+                            path="source.manifest.fragments",
+                        )
+                    expected_access = (
+                        BufferAccess.READ
+                        if use.role in _READ_ROLES
+                        else BufferAccess.WRITE
+                        if use.role in _WRITE_ROLES
+                        else None
+                    )
+                    if expected_access is None or use.access is not expected_access:
+                        raise SchemaError(
+                            "rooted-AR local buffer role/access is inconsistent",
+                            path="source.source.intent.lowering_contexts",
+                        )
+                    collected[abi.id].append(
+                        _LiteSemanticUse(
+                            flattened_action_index,
+                            use_index,
+                            action,
+                            use.access,
+                            use.role,
+                            use.operand_index,
+                            order[1],
+                            replica_index,
+                        )
+                    )
+                flattened_action_index += 1
+
+        replica_by_core = {
+            abi.logical_core: replica_index
+            for replica_index, abi in enumerate(
+                source.source.intent.gradient_buffer_abis
+            )
+        }
+        unit_base = flattened_action_index
+        for unit_index, unit in enumerate(source.source.intent.units):
+            order = action_order.get(unit.id)
+            if order is None or order[0] != unit.logical_core:
+                raise SchemaError(
+                    "rooted-AR executable unit lacks its exact linked-core position",
+                    path="source.manifest.core_streams",
+                )
+            replica_index = replica_by_core.get(unit.logical_core)
+            if replica_index is None:
+                raise SchemaError(
+                    "rooted-AR unit core does not identify one replica",
+                    path="source.source.intent.units",
+                )
+            input_role = {
+                RootedArExecutableKind.LOCAL_COPY:
+                    BufferUseRole.LOCAL_COPY_SOURCE,
+                RootedArExecutableKind.UPLOAD_SEND:
+                    BufferUseRole.SEND_SOURCE,
+                RootedArExecutableKind.ROOT_REDUCE:
+                    BufferUseRole.REDUCE_INPUT,
+                RootedArExecutableKind.DOWNLOAD_SEND:
+                    BufferUseRole.SEND_SOURCE,
+            }.get(unit.kind)
+            output_role = {
+                RootedArExecutableKind.LOCAL_COPY:
+                    BufferUseRole.LOCAL_COPY_DESTINATION,
+                RootedArExecutableKind.UPLOAD_RECV:
+                    BufferUseRole.RECV_DESTINATION,
+                RootedArExecutableKind.ROOT_REDUCE:
+                    BufferUseRole.REDUCE_OUTPUT,
+                RootedArExecutableKind.DOWNLOAD_RECV:
+                    BufferUseRole.RECV_DESTINATION,
+            }.get(unit.kind)
+            if unit.input_buffer_abi_refs and input_role is None:
+                raise SchemaError(
+                    "rooted-AR unit kind cannot consume buffers",
+                    path="source.source.intent.units",
+                )
+            if unit.output_buffer_abi_ref is not None and output_role is None:
+                raise SchemaError(
+                    "rooted-AR unit kind cannot produce a buffer",
+                    path="source.source.intent.units",
+                )
+            for use_index, abi_id in enumerate(unit.input_buffer_abi_refs):
+                abi = abis.get(abi_id)
+                if abi is None or abi.logical_core != unit.logical_core:
+                    raise SchemaError(
+                        "rooted-AR unit input lacks a core-local BufferABI",
+                        path="source.source.intent.units",
+                    )
+                assert input_role is not None
+                collected[abi.id].append(
+                    _LiteSemanticUse(
+                        unit_base + unit_index,
+                        use_index,
+                        unit,
+                        BufferAccess.READ,
+                        input_role,
+                        use_index,
+                        order[1],
+                        replica_index,
+                    )
+                )
+            if unit.output_buffer_abi_ref is not None:
+                abi = abis.get(unit.output_buffer_abi_ref)
+                if abi is None or abi.logical_core != unit.logical_core:
+                    raise SchemaError(
+                        "rooted-AR unit output lacks a core-local BufferABI",
+                        path="source.source.intent.units",
+                    )
+                assert output_role is not None
+                collected[abi.id].append(
+                    _LiteSemanticUse(
+                        unit_base + unit_index,
+                        len(unit.input_buffer_abi_refs),
+                        unit,
+                        BufferAccess.WRITE,
+                        output_role,
+                        0,
+                        order[1],
+                        replica_index,
+                    )
+                )
+
+        result: dict[str, tuple[_LiteSemanticUse, ...]] = {}
+        for abi_id, uses in collected.items():
+            if not uses:
+                raise SchemaError(
+                    "rooted-AR BufferABI has no typed semantic use",
+                    path="source.manifest.fragments",
+                )
+            ordered = tuple(sorted(uses, key=lambda item: item.order_key))
+            ownership = abis[abi_id].ownership
+            valid_first = (
+                ordered[0].access is BufferAccess.READ
+                if ownership is BufferOwnership.BORROWED
+                else ordered[0].access is BufferAccess.WRITE
+            )
+            if not valid_first:
+                raise SchemaError(
+                    "rooted-AR BufferABI first use violates ownership",
+                    path="source.manifest.core_streams",
+                )
+            result[abi_id] = ordered
+        return result  # type: ignore[return-value]
     by_binding = {
         (abi.schedule_id, abi.binding_id): abi for abi in abis.values()
     }
@@ -331,7 +528,7 @@ def _semantic_uses(
             else BufferAccess.WRITE
             if (
                 ownership is BufferOwnership.ALIASED
-                and type(source) is S2LiteTrainLinkedProgram
+                and type(source) in _LITE_TRAIN_SOURCE_TYPES
             )
             else None
         )
@@ -392,19 +589,16 @@ def _resolved_abis(source: LinkedProgramSource) -> tuple[_ResolvedAbi, ...]:
 
 
 def _train_ce_nodes(
-    source: TrainLinkedProgram | S2LiteTrainLinkedProgram,
+    source: (
+        TrainLinkedProgram
+        | S2LiteTrainLinkedProgram
+        | S2LiteRootedArLinkedProgram
+    ),
 ) -> tuple[tuple[int, CrossEntropyForwardWorkload, str, str], ...]:
     result: list[
         tuple[int, CrossEntropyForwardWorkload, str, str]
     ] = []
-    replicas = (
-        tuple(
-            (replica.replica_index, replica.lowering_context)
-            for replica in source.source.replicas
-        )
-        if type(source) is TrainLinkedProgram
-        else ((0, source.source.lowering_context),)
-    )
+    replicas = _lowering_contexts(source)
     for replica_index, context in replicas:
         nodes = tuple(
             node
@@ -441,7 +635,7 @@ def _train_label_seed_overrides(
     source: LinkedProgramSource,
     resolved: tuple[_ResolvedAbi, ...],
 ) -> dict[str, bytes]:
-    if type(source) not in (TrainLinkedProgram, S2LiteTrainLinkedProgram):
+    if type(source) not in _TRAIN_SOURCE_TYPES:
         return {}
 
     result: dict[str, bytes] = {}
@@ -478,7 +672,7 @@ def _train_label_seed_overrides(
             )
         for item in labels:
             abi = item.abi
-            if type(source) is S2LiteTrainLinkedProgram:
+            if type(source) in _LITE_TRAIN_SOURCE_TYPES:
                 valid_uses = (
                     len(item.uses) == 2
                     and {
@@ -560,64 +754,70 @@ def _lite_loss_gradient_seed_overrides(
     source: LinkedProgramSource,
     resolved: tuple[_ResolvedAbi, ...],
 ) -> dict[str, bytes]:
-    if type(source) is not S2LiteTrainLinkedProgram:
+    if type(source) not in _LITE_TRAIN_SOURCE_TYPES:
         return {}
-    context = source.source.lowering_context
-    nodes = tuple(
-        node for node in context.ir1.nodes if node.kind is OpKind.CE_BACKWARD
-    )
-    if len(nodes) != 1:
-        raise SchemaError(
-            "S2-Lite requires exactly one CE_BACKWARD node",
-            path="source.source.lowering_context.ir1.nodes",
-        )
-    node = nodes[0]
-    if (
-        type(node.workload) is not CrossEntropyBackwardWorkload
-        or len(node.inputs) != 3
-        or len(node.outputs) != 1
-    ):
-        raise SchemaError(
-            "S2-Lite CE_BACKWARD contract is not exact",
-            path="source.source.lowering_context.ir1.nodes",
-        )
-    workload = node.workload
-    loss_gradient_value_id = node.inputs[2]
-    items = tuple(
-        item for item in resolved if item.abi.value_id == loss_gradient_value_id
-    )
-    rank_rows = workload.rank_loss_gradient_shape[0]
-    logical_rows = workload.logical_loss_gradient_shape[0]
-    if (
-        logical_rows % rank_rows
-        or len(items) != logical_rows // rank_rows
-        or tuple(sorted(item.abi.tensor_slice.offset[0] for item in items))
-        != tuple(range(0, logical_rows, rank_rows))
-    ):
-        raise SchemaError(
-            "S2-Lite loss-gradient BufferABIs must partition logical rows",
-            path="source.manifest.fragments",
-        )
     result: dict[str, bytes] = {}
-    for item in items:
-        abi = item.abi
+    for replica_index, context in _lowering_contexts(source):
+        nodes = tuple(
+            node
+            for node in context.ir1.nodes
+            if node.kind is OpKind.CE_BACKWARD
+        )
+        if len(nodes) != 1:
+            raise SchemaError(
+                "S2-Lite requires exactly one CE_BACKWARD node per replica",
+                path="source.source.lowering_context.ir1.nodes",
+            )
+        node = nodes[0]
         if (
-            abi.ownership is not BufferOwnership.BORROWED
-            or abi.dtype is not DType.FP32
-            or abi.tensor_slice.shape != (rank_rows,)
-            or len(abi.tensor_slice.offset) != 1
-            or abi.size_bytes != rank_rows * 4
-            or len(item.uses) != 1
-            or item.uses[0].action.op_kind is not OpKind.CE_BACKWARD
-            or item.uses[0].use.role is not BufferUseRole.COMP_INPUT
-            or item.uses[0].use.operand_index != 2
-            or item.uses[0].use.access is not BufferAccess.READ
+            type(node.workload) is not CrossEntropyBackwardWorkload
+            or len(node.inputs) != 3
+            or len(node.outputs) != 1
         ):
             raise SchemaError(
-                "S2-Lite loss gradient requires exact BORROWED FP32 CE_BACKWARD input2",
+                "S2-Lite CE_BACKWARD contract is not exact",
+                path="source.source.lowering_context.ir1.nodes",
+            )
+        workload = node.workload
+        loss_gradient_value_id = node.inputs[2]
+        items = tuple(
+            item
+            for item in resolved
+            if item.abi.value_id == loss_gradient_value_id
+            and {use.replica_index for use in item.uses} == {replica_index}
+        )
+        rank_rows = workload.rank_loss_gradient_shape[0]
+        logical_rows = workload.logical_loss_gradient_shape[0]
+        if (
+            logical_rows % rank_rows
+            or len(items) != logical_rows // rank_rows
+            or tuple(sorted(item.abi.tensor_slice.offset[0] for item in items))
+            != tuple(range(0, logical_rows, rank_rows))
+        ):
+            raise SchemaError(
+                "S2-Lite loss-gradient BufferABIs must partition each replica's logical rows",
                 path="source.manifest.fragments",
             )
-        result[abi.id] = bytes(abi.size_bytes)
+        for item in items:
+            abi = item.abi
+            if (
+                abi.id in result
+                or abi.ownership is not BufferOwnership.BORROWED
+                or abi.dtype is not DType.FP32
+                or abi.tensor_slice.shape != (rank_rows,)
+                or len(abi.tensor_slice.offset) != 1
+                or abi.size_bytes != rank_rows * 4
+                or len(item.uses) != 1
+                or item.uses[0].action.op_kind is not OpKind.CE_BACKWARD
+                or item.uses[0].use.role is not BufferUseRole.COMP_INPUT
+                or item.uses[0].use.operand_index != 2
+                or item.uses[0].use.access is not BufferAccess.READ
+            ):
+                raise SchemaError(
+                    "S2-Lite loss gradient requires exact replica-local BORROWED FP32 CE_BACKWARD input2",
+                    path="source.manifest.fragments",
+                )
+            result[abi.id] = bytes(abi.size_bytes)
     return result
 
 
@@ -642,29 +842,35 @@ def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
         for value in context.ir1.values
         if not value.consumers
     }
-    if type(source) is not S2LiteTrainLinkedProgram:
+    if type(source) not in _LITE_TRAIN_SOURCE_TYPES:
         return actual
-    context = source.source.lowering_context
-    ce_nodes = tuple(
-        node for node in context.ir1.nodes if node.kind is OpKind.CE_FORWARD
-    )
-    sgd_nodes = tuple(
-        node
-        for node in context.ir1.nodes
-        if node.kind is OpKind.OPTIMIZER_UPDATE
-    )
-    if len(ce_nodes) != 1 or len(sgd_nodes) != 1:
-        raise SchemaError(
-            "S2-Lite requires one CE_FORWARD and one OPTIMIZER_UPDATE",
-            path="source.source.lowering_context.ir1.nodes",
+    expected: set[str] = set()
+    losses: set[str] = set()
+    for _replica_index, context in _lowering_contexts(source):
+        ce_nodes = tuple(
+            node
+            for node in context.ir1.nodes
+            if node.kind is OpKind.CE_FORWARD
         )
-    expected = {ce_nodes[0].outputs[0], sgd_nodes[0].outputs[0]}
+        sgd_nodes = tuple(
+            node
+            for node in context.ir1.nodes
+            if node.kind is OpKind.OPTIMIZER_UPDATE
+        )
+        if len(ce_nodes) != 1 or len(sgd_nodes) != 1:
+            raise SchemaError(
+                "S2-Lite requires one CE_FORWARD and one OPTIMIZER_UPDATE per replica",
+                path="source.source.lowering_context.ir1.nodes",
+            )
+        loss_id = ce_nodes[0].outputs[0]
+        losses.add(loss_id)
+        expected.update((loss_id, sgd_nodes[0].outputs[0]))
     if actual != expected:
         raise SchemaError(
-            "S2-Lite IR1 terminals must be exactly loss and updated weight",
+            "S2-Lite IR1 terminals must be exactly each replica's loss and updated weight",
             path="source.source.lowering_context.ir1.values",
         )
-    return {ce_nodes[0].outputs[0]}
+    return losses
 
 
 def _validate_train_terminal_abis(
@@ -672,7 +878,7 @@ def _validate_train_terminal_abis(
     terminal_values: set[str],
     resolved_terminal: tuple[_ResolvedAbi, ...],
 ) -> None:
-    if type(source) not in (TrainLinkedProgram, S2LiteTrainLinkedProgram):
+    if type(source) not in _TRAIN_SOURCE_TYPES:
         return
     ce_nodes = _train_ce_nodes(source)
     expected_values = {item[3] for item in ce_nodes}
@@ -737,83 +943,119 @@ def _validate_lite_train_state_update(
     resolved: tuple[_ResolvedAbi, ...],
     resolved_state: tuple[_ResolvedStateAbi, ...],
 ) -> None:
-    if type(source) is not S2LiteTrainLinkedProgram:
+    if type(source) not in _LITE_TRAIN_SOURCE_TYPES:
         return
-    context = source.source.lowering_context
-    sgd_actions = tuple(
-        (index, action)
-        for index, action in enumerate(context.global_dag.actions)
-        if action.op_kind is OpKind.OPTIMIZER_UPDATE
-    )
-    if len(sgd_actions) != 1:
-        raise SchemaError(
-            "S2-Lite requires one exact SGD GlobalAction",
-            path="source.source.lowering_context.global_dag.actions",
+    covered_state_abis: set[str] = set()
+    covered_alias_abis: set[str] = set()
+    flattened_offset = 0
+    for replica_index, context in _lowering_contexts(source):
+        actions = context.global_dag.actions
+        replica_start = flattened_offset
+        replica_end = replica_start + len(actions)
+        sgd_actions = tuple(
+            (replica_start + index, action)
+            for index, action in enumerate(actions)
+            if action.op_kind is OpKind.OPTIMIZER_UPDATE
         )
-    sgd_index, sgd_action = sgd_actions[0]
-    trainable = tuple(
-        item
+        if len(sgd_actions) != 1:
+            raise SchemaError(
+                "S2-Lite requires one exact SGD GlobalAction per replica",
+                path="source.source.lowering_context.global_dag.actions",
+            )
+        sgd_index, sgd_action = sgd_actions[0]
+        active_dies = {action.logical_core.die_id for action in actions}
+        trainable = tuple(
+            item
+            for item in resolved_state
+            if item.abi.kind is StateKind.TRAINABLE_PARAMETER
+            and item.abi.die_id in active_dies
+            and item.uses
+            and all(
+                replica_start <= index < replica_end
+                for index, _access in item.uses
+            )
+        )
+        if (
+            len(trainable) != 1
+            or trainable[0].abi.id in covered_state_abis
+            or trainable[0].abi.access
+            is not PersistentStateAccess.READ_WRITE
+            or tuple(access for _index, access in trainable[0].uses)
+            != (
+                StateUseAccess.READ,
+                StateUseAccess.READ,
+                StateUseAccess.WRITE,
+            )
+            or any(
+                index >= sgd_index
+                for index, access in trainable[0].uses
+                if access is StateUseAccess.READ
+            )
+            or any(
+                index <= sgd_index
+                for index, access in trainable[0].uses
+                if access is StateUseAccess.WRITE
+            )
+        ):
+            raise SchemaError(
+                "each S2-Lite replica requires two trainable-state loads before SGD and one store after",
+                path="source.manifest.fragments",
+            )
+        covered_state_abis.add(trainable[0].abi.id)
+
+        sgd_nodes = tuple(
+            node
+            for node in context.ir1.nodes
+            if node.kind is OpKind.OPTIMIZER_UPDATE
+        )
+        if len(sgd_nodes) != 1:
+            raise SchemaError(
+                "S2-Lite requires one exact SGD IR1 node per replica",
+                path="source.source.lowering_context.ir1.nodes",
+            )
+        aliases = tuple(
+            item
+            for item in resolved
+            if item.abi.value_id == sgd_nodes[0].outputs[0]
+            and {use.replica_index for use in item.uses} == {replica_index}
+        )
+        if len(aliases) != 1 or aliases[0].abi.id in covered_alias_abis:
+            raise SchemaError(
+                "each S2-Lite replica requires one alias BufferABI",
+                path="source.manifest.fragments",
+            )
+        alias = aliases[0]
+        roots = tuple(
+            item
+            for item in resolved
+            if item.abi.schedule_id == alias.abi.schedule_id
+            and item.abi.binding_id == alias.abi.alias_of
+        )
+        if (
+            alias.abi.ownership is not BufferOwnership.ALIASED
+            or len(roots) != 1
+            or roots[0].abi.storage_id != alias.abi.storage_id
+            or len(alias.uses) != 1
+            or alias.uses[0].replica_index != replica_index
+            or alias.uses[0].action != sgd_action
+            or alias.uses[0].use.role is not BufferUseRole.COMP_OUTPUT
+            or alias.uses[0].use.operand_index != 0
+            or alias.uses[0].use.access is not BufferAccess.WRITE
+        ):
+            raise SchemaError(
+                "each S2-Lite updated weight must exactly alias its replica-local trainable staging root",
+                path="source.manifest.fragments",
+            )
+        covered_alias_abis.add(alias.abi.id)
+        flattened_offset = replica_end
+
+    if covered_state_abis != {
+        item.abi.id
         for item in resolved_state
         if item.abi.kind is StateKind.TRAINABLE_PARAMETER
-    )
-    if (
-        len(trainable) != 1
-        or trainable[0].abi.access is not PersistentStateAccess.READ_WRITE
-        or tuple(access for _index, access in trainable[0].uses)
-        != (
-            StateUseAccess.READ,
-            StateUseAccess.READ,
-            StateUseAccess.WRITE,
-        )
-        or any(
-            index >= sgd_index
-            for index, access in trainable[0].uses
-            if access is StateUseAccess.READ
-        )
-        or any(
-            index <= sgd_index
-            for index, access in trainable[0].uses
-            if access is StateUseAccess.WRITE
-        )
-    ):
+    }:
         raise SchemaError(
-            "S2-Lite trainable state requires two loads before SGD and one store after",
-            path="source.manifest.fragments",
-        )
-    sgd_node = next(
-        node
-        for node in context.ir1.nodes
-        if node.kind is OpKind.OPTIMIZER_UPDATE
-    )
-    aliases = tuple(
-        item
-        for item in resolved
-        if item.abi.value_id == sgd_node.outputs[0]
-    )
-    if len(aliases) != 1:
-        raise SchemaError(
-            "S2-Lite updated weight requires one alias BufferABI",
-            path="source.manifest.fragments",
-        )
-    alias = aliases[0]
-    roots = tuple(
-        item
-        for item in resolved
-        if item.abi.schedule_id == alias.abi.schedule_id
-        and item.abi.binding_id == alias.abi.alias_of
-    )
-    if (
-        alias.abi.ownership is not BufferOwnership.ALIASED
-        or len(roots) != 1
-        or roots[0].abi.storage_id != alias.abi.storage_id
-        or len(alias.uses) != 1
-        or alias.uses[0].action != sgd_action
-        or alias.uses[0].use.role is not BufferUseRole.COMP_OUTPUT
-        or alias.uses[0].use.operand_index != 0
-        or alias.uses[0].use.access is not BufferAccess.WRITE
-    ):
-        raise SchemaError(
-            "S2-Lite updated weight must exactly alias the trainable staging root",
+            "S2-Lite trainable StateABIs must be replica-disjoint and complete",
             path="source.manifest.fragments",
         )
 
@@ -1287,7 +1529,7 @@ def build_timing_program_io(
         BufferOwnership.OWNED,
         "sram_expected_overrides",
     )
-    if type(source) in (TrainLinkedProgram, S2LiteTrainLinkedProgram) and sram_expected:
+    if type(source) in _TRAIN_SOURCE_TYPES and sram_expected:
         raise SchemaError(
             "Train timing ProgramIo does not accept numeric loss expectations",
             path="sram_expected_overrides",
@@ -1339,7 +1581,7 @@ def build_timing_program_io(
             "state_expected_overrides may reference only stored READ_WRITE state",
             path="state_expected_overrides",
         )
-    if type(source) is S2LiteTrainLinkedProgram and expected:
+    if type(source) in _LITE_TRAIN_SOURCE_TYPES and expected:
         raise SchemaError(
             "S2-Lite timing does not claim numeric updated-weight expectations",
             path="state_expected_overrides",

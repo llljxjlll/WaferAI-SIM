@@ -85,6 +85,7 @@ class FragmentKind(str, Enum):
     STATE_IO = "state_io"
     STATE_TRANSFER = "state_transfer"
     MOE_TRANSFER = "moe_transfer"
+    S2_LITE_ROOTED_AR = "s2_lite_rooted_ar"
 
 
 _FRAGMENT_KIND_BY_LOWERING = {
@@ -2641,6 +2642,31 @@ class CommandFragment:
                 "STATE_IO fragments require StateABI and all other fragments forbid it",
                 path=f"{path}.state_abi",
             )
+        rooted_ar = self.kind is FragmentKind.S2_LITE_ROOTED_AR
+        if rooted_ar != (self.producer_pass == "s2_lite_rooted_ar_lowering"):
+            raise SchemaError(
+                "S2_LITE_ROOTED_AR kind is reserved for its exact dedicated producer",
+                path=f"{path}.kind",
+            )
+        if rooted_ar:
+            allowed = {
+                RecordOpcode.SRAM_ALLOC_AT,
+                RecordOpcode.SRAM_FREE,
+                RecordOpcode.DTE_ISSUE,
+                RecordOpcode.DTE_SEND,
+                RecordOpcode.DTE_RECV,
+                RecordOpcode.DTE_WAIT,
+                RecordOpcode.LOCAL_REDUCE,
+            }
+            if any(
+                record.opcode not in allowed
+                for stream in self.core_streams
+                for record in stream.records
+            ):
+                raise SchemaError(
+                    "rooted-AR fragments only permit scratch/DTE/reduce records",
+                    path=f"{path}.core_streams",
+                )
         witnessed_state_ids: set[str] = set()
         for stream_index, stream in enumerate(self.core_streams):
             for relocation_index, relocation in enumerate(stream.address_relocations):
@@ -3165,19 +3191,28 @@ class CommandFragment:
                     operand.name: operand
                     for operand in records[indices[0]].operands
                 }
+                fp32_dp2 = (
+                    reduction.input_dtype is DType.FP32
+                    and reduction.accumulation_dtype is DType.FP32
+                    and reduction.output_dtype is DType.FP32
+                    and reduction.input_ranks == (0, 1)
+                    and action.dtype is DType.FP32
+                    and action.bytes == 2048
+                )
+                dtype_literal = 1 if fp32_dp2 else 0
                 if any(
                     operands[name].literal_value != expected
                     for name, expected in (
-                        ("input_dtype", 0),
+                        ("input_dtype", dtype_literal),
                         ("accumulator_dtype", 1),
-                        ("output_dtype", 0),
+                        ("output_dtype", dtype_literal),
                         ("reduce_op", 1),
                         ("rounding", 0),
                         ("order", 0),
                     )
                 ):
                     raise SchemaError(
-                        "LOCAL_REDUCE requires fixed FP16/FP32/FP16, SUM, RNE and rank-major literals",
+                        "LOCAL_REDUCE literals do not match fixed FP16/FP32/FP16 or exact DP2 FP32/FP32/FP32",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
                 input_count = operands["input_count"].literal_value
@@ -3191,14 +3226,15 @@ class CommandFragment:
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
                 element_count = operands["element_count"].literal_value
+                element_bytes = 4 if fp32_dp2 else 2
                 if (
                     action.bytes == 0
-                    or action.bytes % 2
+                    or action.bytes % element_bytes
                     or element_count == 0
-                    or element_count != action.bytes // 2
+                    or element_count != action.bytes // element_bytes
                 ):
                     raise SchemaError(
-                        "LOCAL_REDUCE requires positive even FP16 bytes and exact non-zero element_count",
+                        "LOCAL_REDUCE requires positive even FP16 bytes or exact 4-byte-aligned DP2 FP32 bytes and exact non-zero element_count",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
                 if operands["input_stride_bytes"].literal_value != action.bytes:
@@ -3498,6 +3534,7 @@ LinkedFragment = CommandFragment | RegionManifest
 
 class ManifestInputKind(str, Enum):
     S3_LITE_MOE = "s3_lite_moe"
+    S2_LITE_ROOTED_AR = "s2_lite_rooted_ar"
     TRAIN_LOWERED_PROGRAM = "train_lowered_program"
     IR1 = "ir1"
     FUSION_PLAN = "fusion_plan"
@@ -3984,11 +4021,11 @@ def _validate_address_operand_closure(
 
 
 def _validate_local_reduce_absolute_alignment(
-    absolute_starts: tuple[int, ...], path: str
+    absolute_starts: tuple[int, ...], path: str, *, alignment: int = 2
 ) -> None:
-    if not absolute_starts or any(start % 2 for start in absolute_starts):
+    if not absolute_starts or any(start % alignment for start in absolute_starts):
         raise SchemaError(
-            "LOCAL_REDUCE absolute closure starts must be 2-byte aligned",
+            "LOCAL_REDUCE absolute closure starts must be dtype aligned",
             path=path,
         )
 
@@ -4292,14 +4329,23 @@ class LinkedProgramManifest:
             for digest in self.input_digests
             if digest.kind is ManifestInputKind.S3_LITE_MOE
         )
-        if len(s3_lite_inputs) > 1 or (train_inputs and s3_lite_inputs):
+        rooted_ar_inputs = tuple(
+            digest
+            for digest in self.input_digests
+            if digest.kind is ManifestInputKind.S2_LITE_ROOTED_AR
+        )
+        top_input_count = sum(
+            bool(inputs)
+            for inputs in (train_inputs, s3_lite_inputs, rooted_ar_inputs)
+        )
+        if (
+            len(train_inputs) > 1
+            or len(s3_lite_inputs) > 1
+            or len(rooted_ar_inputs) > 1
+            or top_input_count > 1
+        ):
             raise SchemaError(
-                "train and S3-Lite top-level inputs are exclusive and singular",
-                path=f"{path}.input_digests",
-            )
-        if len(train_inputs) > 1:
-            raise SchemaError(
-                "train link permits exactly one TRAIN_LOWERED_PROGRAM input",
+                "Train, S3-Lite and S2-Lite rooted-AR top-level inputs are exclusive and singular",
                 path=f"{path}.input_digests",
             )
         train_lineage_ids = {
@@ -4324,6 +4370,13 @@ class LinkedProgramManifest:
                     "train input requires equal non-zero IR1/projection/schedule/global digest coverage",
                     path=f"{path}.input_digests",
                 )
+        if rooted_ar_inputs and any(
+            len(ids) != 2 for ids in train_lineage_ids.values()
+        ):
+            raise SchemaError(
+                "S2-Lite rooted-AR input requires two exact IR1/projection/schedule/global lineages",
+                path=f"{path}.input_digests",
+            )
         if s3_lite_inputs:
             if any(len(ids) != 1 for ids in train_lineage_ids.values()):
                 raise SchemaError(
@@ -4352,7 +4405,21 @@ class LinkedProgramManifest:
             leaf = linked.fragment if isinstance(linked, RegionManifest) else linked
             if leaf.id in leaf_fragments:
                 raise SchemaError("duplicate leaf CommandFragment", path=linked_path)
-            if train_inputs:
+            if rooted_ar_inputs:
+                if leaf.kind is FragmentKind.S2_LITE_ROOTED_AR:
+                    if leaf.source_global_dag_id != self.source_global_dag_id:
+                        raise SchemaError(
+                            "rooted-AR overlay fragment must reference the top carrier",
+                            path=f"{linked_path}.source_global_dag_id",
+                        )
+                elif leaf.source_global_dag_id not in train_lineage_ids[
+                    ManifestInputKind.GLOBAL_ACTION_DAG
+                ]:
+                    raise SchemaError(
+                        "rooted-AR local fragment global DAG lacks an exact input digest",
+                        path=f"{linked_path}.source_global_dag_id",
+                    )
+            elif train_inputs:
                 if leaf.source_global_dag_id not in train_lineage_ids[
                     ManifestInputKind.GLOBAL_ACTION_DAG
                 ]:
@@ -4370,6 +4437,29 @@ class LinkedProgramManifest:
                 "train fragments must witness every replica global DAG digest",
                 path=f"{path}.fragments",
             )
+        if rooted_ar_inputs:
+            local_dag_ids = {
+                leaf.source_global_dag_id
+                for leaf in leaf_fragments.values()
+                if leaf.kind is not FragmentKind.S2_LITE_ROOTED_AR
+            }
+            overlay_fragments = tuple(
+                leaf
+                for leaf in leaf_fragments.values()
+                if leaf.kind is FragmentKind.S2_LITE_ROOTED_AR
+            )
+            if local_dag_ids != train_lineage_ids[
+                ManifestInputKind.GLOBAL_ACTION_DAG
+            ]:
+                raise SchemaError(
+                    "rooted-AR local fragments must witness both replica global DAG digests",
+                    path=f"{path}.fragments",
+                )
+            if not overlay_fragments:
+                raise SchemaError(
+                    "rooted-AR input requires dedicated overlay fragments",
+                    path=f"{path}.fragments",
+                )
         if fragment_ids != sorted(set(fragment_ids)):
             raise SchemaError("linked fragments must have unique canonical artifact ids", path=f"{path}.fragments")
 
@@ -5279,6 +5369,11 @@ class LinkedProgramManifest:
                         _validate_local_reduce_absolute_alignment(
                             tuple(absolute_starts),
                             f"{path}.address_operand_bindings",
+                            alignment=(
+                                4
+                                if record.operands[0].literal_value == 1
+                                else 2
+                            ),
                         )
                     if definition.symbol.kind is ProgramSymbolKind.SRAM_REGION:
                         expected_region = resolved_regions[0]

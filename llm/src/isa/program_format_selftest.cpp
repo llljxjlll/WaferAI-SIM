@@ -193,6 +193,29 @@ ProgramArtifact LocalReduceArtifact(uint64_t source = 0x100) {
     a.envelope.expected_done_cores = {0};
     return a;
 }
+ProgramArtifact Fp32LocalReduceArtifact() {
+    ProgramArtifact a;
+    a.strings = {"fp32-local-reduce-sram"};
+    a.symbols = {{0, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 6144}};
+    ExternalRecord record;
+    record.opcode = Opcode::LOCAL_REDUCE;
+    LocalReduceOperands operands;
+    operands.input_dtype = LocalReduceDataType::FP32;
+    operands.accumulator_dtype = LocalReduceDataType::FP32;
+    operands.output_dtype = LocalReduceDataType::FP32;
+    operands.input_count = 2;
+    operands.element_count = 512;
+    operands.input_stride_bytes = 2048;
+    operands.source = {SramAddressKind::ABSOLUTE, 0x100, 0, 0};
+    operands.destination = {SramAddressKind::ABSOLUTE, 0x1100, 0, 0};
+    record.operands = operands;
+    a.cores = {{0, {record}}};
+    a.envelope.active_cores = {0};
+    a.envelope.terminal_cores = {0};
+    a.envelope.expected_ack_cores = {0};
+    a.envelope.expected_done_cores = {0};
+    return a;
+}
 ProgramArtifact DteSendRelocationArtifact(EndpointSourceSpace source_space,
                                           SemanticOperandId operand) {
     ProgramArtifact a;
@@ -712,6 +735,24 @@ void CheckSymbolsAndRelocations(Checks &c) {
              [&] { EncodeProgramArtifact(a); });
     c.Accept("LOCAL_REDUCE absolute spans fit declared SRAM region",
              [&] { EncodeProgramArtifact(LocalReduceArtifact()); });
+    c.Accept("FP32 LOCAL_REDUCE source 4096B and destination 2048B spans fit",
+             [&] { EncodeProgramArtifact(Fp32LocalReduceArtifact()); });
+    a = Fp32LocalReduceArtifact();
+    a.symbols = {
+        {0, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 4095},
+        {1, ProgramSymbolKind::SRAM_REGION, 0, 0x1100, 2048},
+    };
+    a.strings.push_back("fp32-local-reduce-destination");
+    c.Reject("FP32 LOCAL_REDUCE source rejects a one-byte-short 4096B region",
+             [&] { EncodeProgramArtifact(a); });
+    a = Fp32LocalReduceArtifact();
+    a.symbols = {
+        {0, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 4096},
+        {1, ProgramSymbolKind::SRAM_REGION, 0, 0x1100, 2047},
+    };
+    a.strings.push_back("fp32-local-reduce-destination");
+    c.Reject("FP32 LOCAL_REDUCE destination rejects a one-byte-short 2048B region",
+             [&] { EncodeProgramArtifact(a); });
     a = LocalReduceArtifact();
     a.symbols.clear();
     c.Reject("LOCAL_REDUCE requires a declared SRAM region witness",

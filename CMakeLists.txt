@@ -720,6 +720,26 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "\\[TRAIN FORWARD DP2 TP2\\] PASS"
         FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
 
+    set(s2_lite_dp2_rooted_ar_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_lite_train_rooted_ar_runtime.py")
+    add_test(NAME s2_lite_dp2_rooted_ar_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${s2_lite_dp2_rooted_ar_runtime_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --runtime-root ${program_runtime_dir}
+            --timeout 600)
+    set_tests_properties(s2_lite_dp2_rooted_ar_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 600
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;s2-lite;train;dp2;tp1;rooted-ar;runtime"
+        PASS_REGULAR_EXPRESSION "\\[S2-LITE DP2 ROOTED-AR\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
     set(stage3_static_profiles_runner
         "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage3_static_profiles.py")
     foreach(stage3_case IN ITEMS prefill mixed decode)

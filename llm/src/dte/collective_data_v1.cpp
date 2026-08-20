@@ -23,13 +23,13 @@ uint64_t DTypeBytes(CollDType dtype) {
     case CollDType::UINT8: return 1;
     case CollDType::INT32: return 4;
     case CollDType::INT64: return 8;
+    case CollDType::FP32: return 4;
     case CollDType::FP16: return 2;
-    case CollDType::FP32:
     case CollDType::FP8:
         break;
     }
     throw std::invalid_argument(
-        "ISA-v1 endpoint reduce supports UINT8, INT32, INT64, and FP16 only");
+        "ISA-v1 endpoint reduce supports UINT8, INT32, INT64, FP16, and FP32 only");
 }
 
 uint64_t DecodeLittleEndian(const uint8_t *bytes, uint64_t width) {
@@ -93,10 +93,8 @@ uint64_t ShiftRightJam(uint64_t value, unsigned distance) {
     return (value >> distance) | (discarded != 0);
 }
 
-// Deterministic IEEE-754 binary32 add, round-to-nearest ties-to-even.  The
-// inputs reachable from FP16 are zero, infinity, NaN, or normal binary32
-// values; every finite non-zero result is a multiple of 2^-24 and therefore
-// also normal binary32.  Three explicit GRS bits make host -Ofast irrelevant.
+// Deterministic IEEE-754 binary32 add, round-to-nearest ties-to-even. Three
+// explicit GRS bits make host floating-point flags and -Ofast irrelevant.
 uint32_t AddBinary32Rne(uint32_t left, uint32_t right) {
     const uint32_t left_abs = left & 0x7fffffffu;
     const uint32_t right_abs = right & 0x7fffffffu;
@@ -125,10 +123,17 @@ uint32_t AddBinary32Rne(uint32_t left, uint32_t right) {
     uint32_t b = right;
     if ((a & 0x7fffffffu) < (b & 0x7fffffffu))
         std::swap(a, b);
-    int exponent = static_cast<int>((a >> 23) & 0xffu);
-    const int b_exponent = static_cast<int>((b >> 23) & 0xffu);
-    uint64_t a_sig = (uint64_t{0x800000u} | (a & 0x7fffffu)) << 3;
-    uint64_t b_sig = (uint64_t{0x800000u} | (b & 0x7fffffu)) << 3;
+    const uint32_t a_raw_exp = (a >> 23) & 0xffu;
+    const uint32_t b_raw_exp = (b >> 23) & 0xffu;
+    int exponent = static_cast<int>(a_raw_exp == 0 ? 1 : a_raw_exp);
+    const int b_exponent =
+        static_cast<int>(b_raw_exp == 0 ? 1 : b_raw_exp);
+    uint64_t a_sig =
+        (uint64_t{a & 0x7fffffu} |
+         (a_raw_exp == 0 ? uint64_t{0} : uint64_t{0x800000u})) << 3;
+    uint64_t b_sig =
+        (uint64_t{b & 0x7fffffu} |
+         (b_raw_exp == 0 ? uint64_t{0} : uint64_t{0x800000u})) << 3;
     b_sig = ShiftRightJam(
         b_sig, static_cast<unsigned>(exponent - b_exponent));
 
@@ -144,7 +149,7 @@ uint32_t AddBinary32Rne(uint32_t left, uint32_t right) {
         result_sig = a_sig - b_sig;
         if (result_sig == 0)
             return 0;
-        while ((result_sig & (uint64_t{1} << 26)) == 0) {
+        while ((result_sig & (uint64_t{1} << 26)) == 0 && exponent > 1) {
             result_sig <<= 1;
             --exponent;
         }
@@ -162,10 +167,11 @@ uint32_t AddBinary32Rne(uint32_t left, uint32_t right) {
     }
     if (exponent >= 0xff)
         return sign | 0x7f800000u;
-    if (exponent <= 0)
-        throw std::logic_error(
-            "FP16 rank-major sum produced an unreachable binary32 subnormal");
-    return sign | (static_cast<uint32_t>(exponent) << 23) |
+    const uint32_t encoded_exponent =
+        exponent == 1 && significand < 0x800000u
+            ? 0
+            : static_cast<uint32_t>(exponent);
+    return sign | (encoded_exponent << 23) |
            (significand & 0x7fffffu);
 }
 
@@ -299,9 +305,10 @@ std::vector<uint8_t> IsaV1CollectiveDataBuffer::TakeReduced(
         throw std::invalid_argument(
             "ISA-v1 endpoint reduce requires SUM or MAX");
     const uint64_t width = DTypeBytes(dtype);
-    if (dtype == CollDType::FP16 && reduce_op != CollReduceOp::SUM)
+    if ((dtype == CollDType::FP16 || dtype == CollDType::FP32) &&
+        reduce_op != CollReduceOp::SUM)
         throw std::invalid_argument(
-            "ISA-v1 FP16 reduce supports SUM only");
+            "ISA-v1 floating-point reduce supports SUM only");
     if (bytes_per_rank_ % width != 0)
         throw std::invalid_argument(
             "ISA-v1 endpoint reduce bytes are not dtype aligned");
@@ -311,25 +318,36 @@ std::vector<uint8_t> IsaV1CollectiveDataBuffer::TakeReduced(
                     "ISA-v1 reduce result exceeds host size_t"));
     const uint64_t mask = WidthMask(width);
     for (uint64_t offset = 0; offset < bytes_per_rank_; offset += width) {
-        if (dtype == CollDType::FP16) {
+        if (dtype == CollDType::FP16 || dtype == CollDType::FP32) {
+            const bool fp32 = dtype == CollDType::FP32;
             uint32_t accumulator = DecodeFp16Bits(static_cast<uint16_t>(
-                DecodeLittleEndian(
+                fp32 ? 0 : DecodeLittleEndian(
                     &staging_[CheckedSize(
                         offset, "ISA-v1 FP16 reduce offset overflow")],
                     width)));
+            if (fp32)
+                accumulator = static_cast<uint32_t>(DecodeLittleEndian(
+                    &staging_[CheckedSize(
+                        offset, "ISA-v1 FP32 reduce offset overflow")],
+                    width));
             for (uint16_t rank = 1; rank < rank_count_; ++rank) {
                 const uint64_t index = CheckedMultiply(
                     rank, bytes_per_rank_,
                     "ISA-v1 FP16 reduce rank offset overflows") + offset;
-                const uint32_t operand = DecodeFp16Bits(static_cast<uint16_t>(
-                    DecodeLittleEndian(
+                uint32_t operand = DecodeFp16Bits(static_cast<uint16_t>(
+                    fp32 ? 0 : DecodeLittleEndian(
                         &staging_[CheckedSize(
                             index, "ISA-v1 FP16 reduce index overflow")],
                         width)));
+                if (fp32)
+                    operand = static_cast<uint32_t>(DecodeLittleEndian(
+                        &staging_[CheckedSize(
+                            index, "ISA-v1 FP32 reduce index overflow")],
+                        width));
                 accumulator = AddBinary32Rne(accumulator, operand);
             }
             EncodeLittleEndian(
-                EncodeFp16Rne(accumulator), width,
+                fp32 ? accumulator : EncodeFp16Rne(accumulator), width,
                 &result[CheckedSize(
                     offset, "ISA-v1 FP16 reduce output overflow")]);
             continue;

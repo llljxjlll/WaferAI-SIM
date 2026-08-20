@@ -253,6 +253,8 @@ FragmentKindDto ParseFragmentKind(const Json &value,
         return FragmentKindDto::STATE_TRANSFER;
     if (raw == "moe_transfer")
         return FragmentKindDto::MOE_TRANSFER;
+    if (raw == "s2_lite_rooted_ar")
+        return FragmentKindDto::S2_LITE_ROOTED_AR;
     Fail(path, "unknown FragmentKind");
 }
 
@@ -366,6 +368,8 @@ ManifestInputKindDto ParseInputKind(const Json &value,
                                     const std::string &path) {
     const std::string raw = String(value, path);
     if (raw == "s3_lite_moe") return ManifestInputKindDto::S3_LITE_MOE;
+    if (raw == "s2_lite_rooted_ar")
+        return ManifestInputKindDto::S2_LITE_ROOTED_AR;
     if (raw == "train_lowered_program")
         return ManifestInputKindDto::TRAIN_LOWERED_PROGRAM;
     if (raw == "ir1") return ManifestInputKindDto::IR1;
@@ -1156,6 +1160,8 @@ bool SameStateAbi(const StateAbiDto &left, const StateAbiDto &right) {
 std::string_view InputKindKey(ManifestInputKindDto kind) {
     switch (kind) {
     case ManifestInputKindDto::S3_LITE_MOE: return "s3_lite_moe";
+    case ManifestInputKindDto::S2_LITE_ROOTED_AR:
+        return "s2_lite_rooted_ar";
     case ManifestInputKindDto::TRAIN_LOWERED_PROGRAM:
         return "train_lowered_program";
     case ManifestInputKindDto::IR1: return "ir1";
@@ -1526,7 +1532,12 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
     case Opcode::LOCAL_REDUCE: {
         const uint64_t elements =
             LiteralU64(record.operands[7], path + ".element_count");
-        const uint64_t one_input = CheckedMultiply(elements, 2, path);
+        const uint64_t dtype =
+            LiteralU64(record.operands[0], path + ".input_dtype");
+        if (dtype > 1)
+            Fail(path, "LOCAL_REDUCE input_dtype is invalid");
+        const uint64_t one_input =
+            CheckedMultiply(elements, dtype == 1 ? 4 : 2, path);
         if (operand_id == SemanticOperandId::DESTINATION_ADDRESS)
             return one_input;
         const uint64_t count =
@@ -1586,6 +1597,10 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
         if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
             return BufferDTypeDto::FP32;
         return std::nullopt;
+    case Opcode::LOCAL_REDUCE:
+        return LiteralU64(record.operands[0], "LOCAL_REDUCE.input_dtype") == 1
+                   ? BufferDTypeDto::FP32
+                   : BufferDTypeDto::FP16;
     default:
         return std::nullopt;
     }
@@ -2986,6 +3001,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             expected_inputs;
         std::vector<const ManifestInputDigestDto *> train_inputs;
         std::vector<const ManifestInputDigestDto *> s3_lite_inputs;
+        std::vector<const ManifestInputDigestDto *> rooted_ar_inputs;
         std::map<ManifestInputKindDto, std::set<std::string>>
             train_lineage_ids;
         for (const ManifestInputDigestDto &digest : manifest.input_digests) {
@@ -2998,16 +3014,25 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 s3_lite_inputs.push_back(&digest);
                 continue;
             }
+            if (digest.kind == ManifestInputKindDto::S2_LITE_ROOTED_AR) {
+                rooted_ar_inputs.push_back(&digest);
+                continue;
+            }
             const auto lineage = train_lineage_schemas.find(digest.kind);
             if (lineage != train_lineage_schemas.end())
                 train_lineage_ids[digest.kind].insert(digest.artifact_id);
         }
+        const std::size_t top_input_kinds =
+            (!train_inputs.empty() ? 1 : 0) +
+            (!s3_lite_inputs.empty() ? 1 : 0) +
+            (!rooted_ar_inputs.empty() ? 1 : 0);
         if (train_inputs.size() > 1 || s3_lite_inputs.size() > 1 ||
-            (!train_inputs.empty() && !s3_lite_inputs.empty()))
+            rooted_ar_inputs.size() > 1 || top_input_kinds > 1)
             Fail("linked_program_manifest.input_digests",
-                 "train and S3-Lite top-level inputs are exclusive and singular");
+                 "train, S3-Lite and rooted-AR top-level inputs are exclusive and singular");
         const bool train_link = !train_inputs.empty();
         const bool s3_lite_link = !s3_lite_inputs.empty();
+        const bool rooted_ar_link = !rooted_ar_inputs.empty();
         if (s3_lite_link) {
             const ManifestInputDigestDto &s3 = *s3_lite_inputs.front();
             if (s3.schema_version !=
@@ -3043,6 +3068,32 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                             digest.schema_version);
                 }
             }
+        } else if (rooted_ar_link) {
+            const ManifestInputDigestDto &rooted = *rooted_ar_inputs.front();
+            if (rooted.schema_version !=
+                "wafer_frontend.s2_lite_rooted_ar_lowered_program/v1alpha1")
+                Fail("linked_program_manifest.input_digests",
+                     "rooted-AR lowered-program schema version mismatch");
+            expected_inputs.emplace(rooted.kind, rooted.artifact_id,
+                                    rooted.schema_version);
+            for (const auto &entry : train_lineage_schemas) {
+                const std::set<std::string> &ids =
+                    train_lineage_ids[entry.first];
+                if (ids.size() != 2)
+                    Fail("linked_program_manifest.input_digests",
+                         "rooted-AR requires two exact lineage inputs per stage");
+                for (const ManifestInputDigestDto &digest :
+                     manifest.input_digests) {
+                    if (digest.kind != entry.first)
+                        continue;
+                    if (digest.schema_version != entry.second)
+                        Fail("linked_program_manifest.input_digests",
+                             "rooted-AR lineage schema version mismatch");
+                    expected_inputs.emplace(digest.kind,
+                                            digest.artifact_id,
+                                            digest.schema_version);
+                }
+            }
         } else if (train_link) {
             const ManifestInputDigestDto &train = *train_inputs.front();
             if (train.schema_version !=
@@ -3074,7 +3125,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             }
         }
         std::size_t standalone_fragment_count = 0;
-        if (!train_link && !s3_lite_link) {
+        std::set<std::string> rooted_local_dag_ids;
+        std::vector<std::vector<Opcode>> rooted_overlay_sequences;
+        if (!train_link && !s3_lite_link && !rooted_ar_link) {
             for (const auto &entry : upstream_inputs)
                 expected_inputs.emplace(entry.first, entry.second.first,
                                         entry.second.second);
@@ -3083,6 +3136,25 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         for (const LinkedFragmentDto &linked : manifest.fragments) {
             const CommandFragmentDto &fragment = Leaf(linked);
             fragment_global_dag_ids.insert(fragment.source_global_dag_id);
+            if (rooted_ar_link) {
+                if (fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR) {
+                    if (fragment.producer_pass !=
+                            "s2_lite_rooted_ar_lowering" ||
+                        fragment.source_global_dag_id !=
+                            manifest.source_global_dag_id ||
+                        fragment.core_streams.size() != 1)
+                        Fail("linked_program_manifest.fragments",
+                             "rooted-AR overlay kind/producer/top-carrier/core-stream contract mismatch");
+                    std::vector<Opcode> sequence;
+                    for (const RelocatableRecordDto &record :
+                         fragment.core_streams.front().records)
+                        sequence.push_back(record.opcode);
+                    rooted_overlay_sequences.push_back(std::move(sequence));
+                } else {
+                    rooted_local_dag_ids.insert(
+                        fragment.source_global_dag_id);
+                }
+            }
             if (fragment.kind == FragmentKindDto::STANDALONE_COLLECTIVE)
                 ++standalone_fragment_count;
             expected_inputs.emplace(
@@ -3118,6 +3190,28 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 train_lineage_ids[ManifestInputKindDto::GLOBAL_ACTION_DAG])
             Fail("linked_program_manifest.fragments",
                  "train fragments must witness every replica global DAG digest");
+        if (rooted_ar_link) {
+            std::vector<std::vector<Opcode>> expected_sequences{{
+                {Opcode::SRAM_ALLOC_AT, Opcode::DTE_ISSUE,
+                 Opcode::DTE_WAIT},
+                {Opcode::DTE_SEND},
+                {Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
+                 Opcode::DTE_WAIT},
+                {Opcode::LOCAL_REDUCE},
+                {Opcode::DTE_SEND, Opcode::SRAM_FREE,
+                 Opcode::SRAM_FREE},
+                {Opcode::DTE_RECV, Opcode::DTE_WAIT},
+            }};
+            std::sort(rooted_overlay_sequences.begin(),
+                      rooted_overlay_sequences.end());
+            std::sort(expected_sequences.begin(), expected_sequences.end());
+            if (rooted_local_dag_ids !=
+                    train_lineage_ids[
+                        ManifestInputKindDto::GLOBAL_ACTION_DAG] ||
+                rooted_overlay_sequences != expected_sequences)
+                Fail("linked_program_manifest.fragments",
+                     "rooted-AR requires both local DAG lineages and its exact six overlay record sequences");
+        }
         std::set<std::tuple<ManifestInputKindDto, std::string, std::string>>
             actual_inputs;
         for (const ManifestInputDigestDto &digest : manifest.input_digests)
@@ -3156,8 +3250,22 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                    fragment.kind == FragmentKindDto::STANDALONE_COLLECTIVE ||
                    fragment.kind == FragmentKindDto::STATE_IO ||
                    fragment.kind == FragmentKindDto::STATE_TRANSFER ||
-                   fragment.kind == FragmentKindDto::MOE_TRANSFER);
-            const bool valid_source_global_dag = train_link
+                   fragment.kind == FragmentKindDto::MOE_TRANSFER ||
+                   fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR);
+            const bool rooted_fragment =
+                fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR;
+            if (rooted_fragment !=
+                (fragment.producer_pass == "s2_lite_rooted_ar_lowering"))
+                Fail("linked_program_manifest.fragments",
+                     "S2_LITE_ROOTED_AR kind is reserved for its exact producer");
+            const bool valid_source_global_dag = rooted_ar_link
+                ? (rooted_fragment
+                       ? fragment.source_global_dag_id ==
+                             manifest.source_global_dag_id
+                       : train_lineage_ids[
+                             ManifestInputKindDto::GLOBAL_ACTION_DAG]
+                                 .count(fragment.source_global_dag_id) == 1)
+                : train_link
                 ? train_lineage_ids[ManifestInputKindDto::GLOBAL_ACTION_DAG]
                       .count(fragment.source_global_dag_id) == 1
                 : fragment.source_global_dag_id ==
@@ -4344,7 +4452,13 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 if (!local && !remote)
                     Fail("runtime_symbol_definition",
                          "DTE_TOKEN uses must be ISSUE/WAIT or RECV/WAIT");
-                if (local && definition.destination_action_id)
+                const bool rooted_local =
+                    local && rooted_ar_link &&
+                    uses[0].fragment_id == uses[1].fragment_id &&
+                    fragments.at(uses[0].fragment_id)->kind ==
+                        FragmentKindDto::S2_LITE_ROOTED_AR;
+                if (local && !rooted_local &&
+                    definition.destination_action_id)
                     Fail("runtime_symbol_definition",
                          "local ISSUE/WAIT token must not name a destination action");
                 if (remote && !definition.destination_action_id)
@@ -4363,6 +4477,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     definition.source_action_id !=
                         std::optional<std::string>(producer->action_id) ||
                     (remote && definition.destination_action_id !=
+                        std::optional<std::string>(wait->action_id)) ||
+                    (rooted_local && definition.destination_action_id !=
                         std::optional<std::string>(wait->action_id)) ||
                     (local && producer->action_id != wait->action_id))
                     Fail("runtime_symbol_definition",

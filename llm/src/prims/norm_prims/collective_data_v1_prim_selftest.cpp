@@ -41,6 +41,16 @@ std::vector<uint8_t> Fp16(std::initializer_list<uint16_t> values) {
     return bytes;
 }
 
+std::vector<uint8_t> Fp32(std::initializer_list<uint32_t> values) {
+    std::vector<uint8_t> bytes;
+    bytes.reserve(values.size() * 4);
+    for (uint32_t value : values) {
+        const auto encoded = Le32(value);
+        bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+    }
+    return bytes;
+}
+
 void Append(std::vector<uint8_t> *target,
             const std::vector<uint8_t> &bytes) {
     target->insert(target->end(), bytes.begin(), bytes.end());
@@ -48,7 +58,7 @@ void Append(std::vector<uint8_t> *target,
 
 sram::Config TestConfig() {
     sram::Config config;
-    config.capacity_bytes = 512;
+    config.capacity_bytes = 1024;
     config.allocation_alignment_bytes = 1;
     config.bank_count = 4;
     config.bank_interleave_bytes = 16;
@@ -85,7 +95,7 @@ struct CollectiveDataV1PrimBench final : sc_module {
     CoreHWConfig *hardware = nullptr;
 
     explicit CollectiveDataV1PrimBench(sc_module_name name)
-        : sc_module(name), storage(512, true), regions(TestConfig()),
+        : sc_module(name), storage(1024, true), regions(TestConfig()),
           access("collective_data_v1_access", regions, storage) {
         hardware = new CoreHWConfig(
             0, nullptr, nullptr, new VectorConfig(2, 1), "", 0, 128);
@@ -260,6 +270,45 @@ struct CollectiveDataV1PrimBench final : sc_module {
               "key-zero FP16 N=1 canonicalizes instead of memcpy");
     }
 
+    void TestLocalFp32(TaskCoreContext &context) {
+        std::vector<uint8_t> source;
+        Append(&source, Fp32({
+            0x3f800000u, 0xbfc00000u, 0x3f800000u, 0x3f800001u,
+            0x7f800000u, 0x7f800000u, 0x00000001u,
+        }));
+        Append(&source, Fp32({
+            0x40000000u, 0x3f000000u, 0x33800000u, 0x33800000u,
+            0x3f800000u, 0xff800000u, 0x00000001u,
+        }));
+        Seed(0x200, source);
+
+        Collective_data_v1_prim prim;
+        prim.mode = CollectiveDataV1PrimMode::REDUCE;
+        prim.key = {};
+        prim.phase_id = 0;
+        prim.source_address_bytes = 0x200;
+        prim.destination_address_bytes = 0x280;
+        prim.length_bytes = 28;
+        prim.input_count = 2;
+        prim.dtype = CollDType::FP32;
+        prim.reduce_op = CollReduceOp::SUM;
+        const auto expected = Fp32({
+            0x40400000u, 0xbf800000u, 0x3f800000u, 0x3f800002u,
+            0x7f800000u, 0x7fc00000u, 0x00000002u,
+        });
+        Check(prim.taskCoreDefault(context) == 4 * CYCLE &&
+                  storage.Read(0x280, expected.size()) == expected,
+              "key-zero FP32 local REDUCE is bit-exact for finite, RNE, Inf, NaN, and subnormal vectors");
+
+        const auto wire = prim.serialize();
+        Collective_data_v1_prim decoded;
+        decoded.deserialize(wire);
+        Check(decoded.dtype == CollDType::FP32 &&
+                  decoded.mode == CollectiveDataV1PrimMode::REDUCE &&
+                  decoded.length_bytes == 28 && decoded.input_count == 2,
+              "FP32 LOCAL_REDUCE primitive wire code 4 round trips");
+    }
+
     void TestWrappingAndN1(TaskCoreContext &context) {
         std::vector<uint8_t> source;
         Append(&source, Le64(std::numeric_limits<uint64_t>::max()));
@@ -332,6 +381,7 @@ struct CollectiveDataV1PrimBench final : sc_module {
         TestLocalCopy(context);
         TestNegativeMax(context);
         TestLocalFp16(context);
+        TestLocalFp32(context);
         TestWrappingAndN1(context);
         TestFailureAtomicity(context);
         Check(access.outstanding() == 0,

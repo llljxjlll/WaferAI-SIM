@@ -50,6 +50,7 @@ enum class FragmentKindDto {
     STATE_IO,
     STATE_TRANSFER,
     MOE_TRANSFER,
+    S2_LITE_ROOTED_AR,
 };
 
 enum class RuntimeSymbolKindDto {
@@ -80,6 +81,7 @@ enum class RuntimeOperandFieldDto {
 
 enum class ManifestInputKindDto {
     S3_LITE_MOE,
+    S2_LITE_ROOTED_AR,
     TRAIN_LOWERED_PROGRAM,
     IR1,
     FUSION_PLAN,

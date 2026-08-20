@@ -208,9 +208,10 @@ LoweredPrimList LowerLocalReduce(const ExternalRecord &record,
     prim->source_address_bytes = operands.source.absolute_address_bytes;
     prim->destination_address_bytes =
         operands.destination.absolute_address_bytes;
-    prim->length_bytes = operands.element_count * 2;
+    const bool fp32 = operands.input_dtype == LocalReduceDataType::FP32;
+    prim->length_bytes = operands.element_count * (fp32 ? 4 : 2);
     prim->input_count = static_cast<uint16_t>(operands.input_count);
-    prim->dtype = CollDType::FP16;
+    prim->dtype = fp32 ? CollDType::FP32 : CollDType::FP16;
     prim->reduce_op = CollReduceOp::SUM;
     try {
         prim->Validate();

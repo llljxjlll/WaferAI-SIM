@@ -412,16 +412,24 @@ class DenseIR0Validator:
         if len(graph.instances) != 1:
             _fail("S2-Lite requires exactly one logical instance", f"{path}.instances")
         instance = graph.instances[0]
+        expected_dp = (
+            2
+            if graph.producer_pass == "s2_lite_dp2_rooted_ar_source"
+            else 1
+        )
         if (
             instance.role is not LogicalRole.TRAIN
             or instance.replicas != 1
             or instance.parallel.tp != 1
-            or instance.parallel.dp != 1
+            or instance.parallel.dp != expected_dp
             or instance.parallel.pp != 1
             or instance.parallel.ep != 1
             or instance.parallel.sp
         ):
-            _fail("S2-Lite instance geometry must be DP=TP=PP=EP=1", f"{path}.instances[0]")
+            _fail(
+                f"S2-Lite instance geometry must be DP={expected_dp}, TP=PP=EP=1",
+                f"{path}.instances[0]",
+            )
         if graph.train is None or graph.train.micro_batch_count != 1:
             _fail("S2-Lite requires one microbatch", f"{path}.train")
         if (
