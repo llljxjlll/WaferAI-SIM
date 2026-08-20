@@ -1,0 +1,1 @@
+[NAIVE N7 E2] PASS: artifact=179280B records=1452 relocs=2260 initializations=432 probes=4 ACK=8 DONE=4 drains=0 dma_in=60 dma_out=16 LSU_LOAD=60 LSU_STORE=16 fragments=180 makespan_cycles=12952 sha256=fe6ed061db11e54c182e64ca97c5a1741a5006df2d16e66e9d542ae13661edfe

@@ -5,6 +5,7 @@
 #include "defs/spec.h"
 #include "die/d2d_link.h"
 #include "die/port.h"
+#include "frontend/program_io.h"
 #include "isa/isa_v1_selftest.h"
 #include "isa/p5_memory_probe.h"
 #include "isa/p5_memory_probe_selftest.h"
@@ -87,6 +88,14 @@ Define_bool_opt("--p5-memory-probe-selftest",
                 g_flag_p5_memory_probe_selftest, false,
                 "run P5 memory probe foundation self-test and exit");
 
+Define_string_opt("--linked-manifest", g_flag_linked_manifest,
+                  std::string{},
+                  "linked Program manifest JSON required by --program-io");
+Define_string_opt("--program-io", g_flag_program_io, std::string{},
+                  "symbol-aware ProgramIo host SRAM sidecar");
+// Register the longer --program-io spelling before --program.  The legacy
+// simple_flags parser accepts '-' as an inline-value separator and otherwise
+// treats --program-io as --program=io.
 Define_string_opt("--program", g_flag_program, std::string{},
                   "Program Format v1 artifact file");
 Define_string_opt("--p5-memory-probe", g_flag_p5_memory_probe,
@@ -248,6 +257,46 @@ std::vector<uint8_t> ReadProgramFile(const std::string &path) {
     return bytes;
 }
 
+std::string ReadRegularTextFile(const std::string &description,
+                                const std::string &path) {
+    const std::filesystem::path input(path);
+    if (!std::filesystem::exists(input))
+        throw std::runtime_error(description + " does not exist: " + path);
+    if (!std::filesystem::is_regular_file(input))
+        throw std::runtime_error(description + " is not a regular file: " +
+                                 path);
+    const uintmax_t size = std::filesystem::file_size(input);
+    if (size > kMaxProgramFileBytes)
+        throw std::runtime_error(description + " exceeds 64 MiB: " + path);
+    std::ifstream stream(input, std::ios::binary);
+    if (!stream)
+        throw std::runtime_error("cannot open " + description + ": " + path);
+    std::string text(static_cast<std::size_t>(size), '\0');
+    if (!text.empty() && !stream.read(text.data(), text.size()))
+        throw std::runtime_error("cannot read " + description + ": " + path);
+    return text;
+}
+
+const char *ProgramIoModeName(frontend::program_io::Mode mode) {
+    switch (mode) {
+    case frontend::program_io::Mode::TIMING:
+        return "timing";
+    case frontend::program_io::Mode::FUNCTIONAL:
+        return "functional";
+    }
+    return "unknown";
+}
+
+void PrintProgramIoStatus(const std::string &phase, const std::string &mode,
+                          std::size_t initialization_count,
+                          std::size_t probe_count,
+                          const std::string &checksum, bool passed) {
+    std::cout << "[PROGRAM_IO] phase=" << phase << " mode=" << mode
+              << " initializations=" << initialization_count
+              << " probes=" << probe_count << " checksum=" << checksum
+              << " pass=" << (passed ? 1 : 0) << "\n";
+}
+
 void ValidateIsaV1StartupInvariants() {
     std::string error;
     if (!ValidateOpcodeManifest(&error))
@@ -293,13 +342,36 @@ int sc_main(int argc, char *argv[]) {
         return 0;
     }
 
+    const bool program_io_any =
+        !g_flag_linked_manifest.empty() || !g_flag_program_io.empty();
+    if (program_io_any &&
+        (g_flag_linked_manifest.empty() || g_flag_program_io.empty())) {
+        LOG_ERROR(CONFIG)
+            << "--linked-manifest and --program-io must be provided together";
+        PrintProgramIoStatus("preflight", "unresolved", 0, 0,
+                             "unavailable", false);
+        return 2;
+    }
+    const bool program_io_requested = program_io_any;
     const unsigned memory_probe_count =
         (!g_flag_p5_memory_probe.empty() ? 1U : 0U) +
         (!g_flag_p6_memory_probe.empty() ? 1U : 0U) +
-        (!g_flag_p8_double_buffer_probe.empty() ? 1U : 0U);
+        (!g_flag_p8_double_buffer_probe.empty() ? 1U : 0U) +
+        (program_io_requested ? 1U : 0U);
     if (memory_probe_count > 1) {
         LOG_ERROR(CONFIG)
-            << "P5, P6, and P8 memory probes are mutually exclusive";
+            << "ProgramIo and P5, P6, and P8 memory probes are mutually "
+               "exclusive";
+        if (program_io_requested)
+            PrintProgramIoStatus("preflight", "unresolved", 0, 0,
+                                 "unavailable", false);
+        return 2;
+    }
+
+    if (program_io_requested && g_flag_program.empty()) {
+        LOG_ERROR(CONFIG) << "--program-io requires --program";
+        PrintProgramIoStatus("preflight", "unresolved", 0, 0,
+                             "unavailable", false);
         return 2;
     }
 
@@ -585,6 +657,8 @@ int sc_main(int argc, char *argv[]) {
     std::optional<p6_probe::Spec> p6_memory_probe_spec;
     std::optional<p8_double_buffer_probe::Spec>
         p8_double_buffer_probe_spec;
+    std::optional<frontend::program_io::ResolvedContract>
+        program_io_resolved;
     try {
         if (program_mode) {
             ValidatePlatformConfigInputs(
@@ -592,6 +666,21 @@ int sc_main(int argc, char *argv[]) {
                 g_flag_mapping_config);
             program_bytes = ReadProgramFile(g_flag_program);
             (void)DecodeProgramArtifact(program_bytes);
+            if (program_io_requested) {
+                const std::string manifest = ReadRegularTextFile(
+                    "linked Program manifest", g_flag_linked_manifest);
+                const std::string sidecar = ReadRegularTextFile(
+                    "ProgramIo sidecar", g_flag_program_io);
+                program_io_resolved =
+                    frontend::program_io::ParseAndResolve(
+                        sidecar, manifest, program_bytes);
+                PrintProgramIoStatus(
+                    "resolved",
+                    ProgramIoModeName(program_io_resolved->mode),
+                    program_io_resolved->initializations.size(),
+                    program_io_resolved->output_probes.size(),
+                    program_io_resolved->program_artifact_sha256, true);
+            }
             if (p5_memory_probe_requested) {
                 const std::filesystem::path probe_path(
                     g_flag_p5_memory_probe);
@@ -624,6 +713,9 @@ int sc_main(int argc, char *argv[]) {
     } catch (const std::exception &error) {
         LOG_ERROR(CONFIG) << "Configuration preflight failed: "
                           << error.what();
+        if (program_io_requested)
+            PrintProgramIoStatus("resolve", "unresolved", 0, 0,
+                                 "unavailable", false);
         return 2;
     }
 
@@ -758,10 +850,79 @@ int sc_main(int argc, char *argv[]) {
         }
     }
 
+    std::optional<frontend::program_io::Applied> program_io_applied;
+    if (program_io_resolved.has_value()) {
+        try {
+            frontend::program_io::Bindings bindings;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || !worker->sram_access)
+                    throw std::runtime_error(
+                        "ProgramIo found a missing core SRAM AccessUnit");
+                bindings.sram_by_runtime_core.emplace(
+                    static_cast<uint32_t>(core),
+                    worker->sram_access.get());
+            }
+            bindings.hbm_runtime = monitor->hbmRuntime;
+            program_io_applied =
+                frontend::program_io::ApplyBeforeSimulation(
+                    *program_io_resolved, bindings);
+            PrintProgramIoStatus(
+                "applied", ProgramIoModeName(program_io_resolved->mode),
+                program_io_resolved->initializations.size(),
+                program_io_resolved->output_probes.size(),
+                program_io_resolved->program_artifact_sha256, true);
+        } catch (const std::exception &error) {
+            PrintProgramIoStatus(
+                "apply", ProgramIoModeName(program_io_resolved->mode),
+                program_io_resolved->initializations.size(),
+                program_io_resolved->output_probes.size(), "unavailable",
+                false);
+            LOG_ERROR(CONFIG)
+                << "ProgramIo pre-simulation apply failed: " << error.what();
+            return 2;
+        }
+    }
+
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
     sc_clock clk("clk", CYCLE, SC_NS);
 
     sc_start();
+
+    const uint64_t makespan_cycles =
+        sc_time_stamp().value() / sc_time(CYCLE, SC_NS).value();
+    std::cout << "[SIM_RESULT] makespan_cycles=" << makespan_cycles << "\n";
+    if (program_mode) {
+        if (!program_helper)
+            throw std::logic_error(
+                "Program runtime lacks its decoded artifact");
+        for (const auto &program_core :
+             program_helper->artifact().cores) {
+            if (program_core.core_id >=
+                static_cast<uint64_t>(TOTAL_CORES))
+                throw std::logic_error(
+                    "Program runtime core is outside the platform");
+            const int core = static_cast<int>(program_core.core_id);
+            WorkerCore *worker = monitor->workerCores[core];
+            if (worker == nullptr || !worker->lsu_memory ||
+                !worker->dte_memory_bridge)
+                throw std::logic_error(
+                    "Program runtime core lacks memory engines");
+            const sram::LsuStats &lsu = worker->lsu_memory->stats();
+            std::cout
+                << "[PROGRAM_MEMORY] core=" << core
+                << " lsu_issued=" << lsu.issued
+                << " lsu_completed=" << lsu.completed
+                << " lsu_hbm_read_bytes=" << lsu.hbm_read_bytes
+                << " lsu_hbm_write_bytes=" << lsu.hbm_write_bytes
+                << " lsu_sram_read_bytes=" << lsu.sram_read_bytes
+                << " lsu_sram_write_bytes=" << lsu.sram_write_bytes
+                << " lsu_residual="
+                << worker->lsu_memory->OutstandingCount()
+                << " dte_residual="
+                << worker->dte_memory_bridge->OutstandingCount() << "\n";
+        }
+    }
 
     bool p5_memory_probe_failed = false;
     if (p5_memory_probe_applied.has_value()) {
@@ -826,32 +987,36 @@ int sc_main(int argc, char *argv[]) {
             const auto image = program_helper
                 ? program_helper->collective_program_image()
                 : nullptr;
-            if (!image)
-                throw std::logic_error(
-                    "P6 memory probe requires a collective program image");
             uint64_t action_count = 0;
-            for (const auto &core : image->Cores()) {
-                if (action_count > UINT64_MAX - core.actions.size())
-                    throw std::overflow_error(
-                        "P6 collective action statistic overflows u64");
-                action_count += core.actions.size();
-            }
+            uint64_t child_count = 0;
             uint64_t wave_count = 0;
-            for (const auto &plan : image->Lowering().plans) {
-                if (wave_count > UINT64_MAX - plan.waves.size())
-                    throw std::overflow_error(
-                        "P6 collective wave statistic overflows u64");
-                wave_count += plan.waves.size();
+            if (image) {
+                for (const auto &core : image->Cores()) {
+                    if (action_count > UINT64_MAX - core.actions.size())
+                        throw std::overflow_error(
+                            "P6 collective action statistic overflows u64");
+                    action_count += core.actions.size();
+                }
+                child_count = image->Lowering().children.size();
+                for (const auto &plan : image->Lowering().plans) {
+                    if (wave_count > UINT64_MAX - plan.waves.size())
+                        throw std::overflow_error(
+                            "P6 collective wave statistic overflows u64");
+                    wave_count += plan.waves.size();
+                }
             }
             std::cout
                 << "[P6 COLLECTIVE STATS] scenario=" << result.scenario
-                << " child_count=" << image->Lowering().children.size()
+                << " child_count=" << child_count
                 << " action_count=" << action_count
                 << " wave_count=" << wave_count << "\n";
 
             uint64_t aggregate_residual = 0;
             uint64_t endpoint_residual = 0;
-            for (const auto &core : image->Cores()) {
+            if (!program_helper)
+                throw std::logic_error(
+                    "P6 memory probe requires a Program helper");
+            for (const auto &core : program_helper->artifact().cores) {
                 const WorkerCoreExecutor *executor =
                     monitor->workerCores[core.core_id]->executor;
                 aggregate_residual +=
@@ -948,6 +1113,65 @@ int sc_main(int argc, char *argv[]) {
             p8_double_buffer_probe_failed = true;
             LOG_ERROR(SYSTEM)
                 << "P8 double-buffer probe post-simulation verify failed: "
+                << error.what();
+        }
+    }
+
+    bool program_io_failed = false;
+    if (program_io_applied.has_value()) {
+        try {
+            const frontend::program_io::Result result =
+                frontend::program_io::VerifyAfterSimulation(
+                    *program_io_applied);
+            if (result.probes.size() !=
+                program_io_applied->contract.output_probes.size())
+                throw std::logic_error(
+                    "ProgramIo probe/result count changed");
+            std::string aggregate;
+            std::size_t probe_index = 0;
+            for (const frontend::program_io::ProbeResult &probe :
+                 result.probes) {
+                const frontend::program_io::ResolvedOutputProbe &resolved_probe =
+                    program_io_applied->contract.output_probes[probe_index++];
+                const bool hbm = resolved_probe.hbm_range.has_value();
+                aggregate += probe.probe_id;
+                aggregate += probe.actual_sha256;
+                const bool passed =
+                    probe.exact_match && probe.all_bytes_valid;
+                if (hbm)
+                    std::cout
+                        << "[PROGRAM_IO_PROBE] id=" << probe.probe_id
+                        << " die=" << resolved_probe.hbm_range->die_id;
+                else
+                    std::cout
+                        << "[PROGRAM_IO_PROBE] id=" << probe.probe_id
+                        << " core=" << probe.runtime_core_id;
+                std::cout
+                    << " address=" << probe.absolute_address_bytes
+                    << " bytes=" << probe.length_bytes
+                    << " expected_checksum=" << probe.expected_sha256
+                    << " checksum=" << probe.actual_sha256
+                    << " valid=" << (probe.all_bytes_valid ? 1 : 0)
+                    << " exact=" << (probe.exact_match ? 1 : 0)
+                    << " pass=" << (passed ? 1 : 0) << "\n";
+            }
+            const std::string aggregate_checksum =
+                frontend::program_io::Sha256Hex(aggregate);
+            program_io_failed = !result.Passed();
+            PrintProgramIoStatus(
+                "verify", ProgramIoModeName(program_io_applied->contract.mode),
+                program_io_applied->contract.initializations.size(),
+                result.probes.size(), aggregate_checksum,
+                !program_io_failed);
+        } catch (const std::exception &error) {
+            program_io_failed = true;
+            PrintProgramIoStatus(
+                "verify", ProgramIoModeName(program_io_applied->contract.mode),
+                program_io_applied->contract.initializations.size(),
+                program_io_applied->contract.output_probes.size(),
+                "unavailable", false);
+            LOG_ERROR(SYSTEM)
+                << "ProgramIo post-simulation verify failed: "
                 << error.what();
         }
     }
@@ -1409,5 +1633,7 @@ int sc_main(int argc, char *argv[]) {
         return 5;
     if (p8_double_buffer_probe_failed)
         return 6;
+    if (program_io_failed)
+        return 7;
     return 0;
 }

@@ -14,7 +14,7 @@ inline constexpr std::size_t kProgramWholeFileCrcOffset = 56;
 inline constexpr uint16_t kProgramFormatMajor = 1;
 inline constexpr uint16_t kProgramFormatMinor = 0;
 inline constexpr uint16_t kProgramIsaMajor = 1;
-inline constexpr uint16_t kProgramIsaMinor = 0;
+inline constexpr uint16_t kProgramIsaMinor = 4;
 inline constexpr uint8_t kProgramLittleEndian = 1;
 inline constexpr uint32_t kProgramSectionRequired = 1u << 0;
 
@@ -69,6 +69,7 @@ enum class SemanticOperandId : uint16_t {
     LABEL_SYMBOL = 9,
     OLD_SYMBOL = 10,
     NEW_SYMBOL = 11,
+    COMPUTE_AUX_ADDRESS = 12,
     SRAM_BIND_INPUT_0 = 0x100,
     SRAM_BIND_INPUT_15 = 0x10f,
     SRAM_BIND_OUTPUT = 0x110,

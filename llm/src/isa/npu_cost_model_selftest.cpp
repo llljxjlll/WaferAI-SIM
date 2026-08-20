@@ -1,11 +1,19 @@
 #include "isa/npu_cost_model_selftest.h"
 
+#include "common/config.h"
+#include "defs/global.h"
 #include "isa/npu_cost_model.h"
+#include "isa/published_npu_ops.h"
 #include "isa/published_npu_ops_selftest.h"
+#include "memory/sram/sram_region.h"
 #include "prims/comp_prims.h"
+#include "prims/exact_stage2_prims.h"
+#include "prims/norm_prims.h"
 
 #include <functional>
+#include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -44,6 +52,87 @@ NpuCostHardware Hardware() {
     return hardware;
 }
 
+template <typename Primitive>
+class ImplicitMemoryProbe : public Primitive {
+public:
+    bool LegacyAccessesEnabled(const TaskCoreContext &context) const {
+        return this->usesLegacyImplicitMemory(context);
+    }
+};
+
+class ScopedCostHardware {
+public:
+    ScopedCostHardware() : previous_(g_core_hw_config) {
+        hardware_ = new CoreHWConfig(
+            0, new ExuConfig(MAC_Array, 4, 1),
+            new SfuConfig(Linear, 4), new VectorConfig(4, 1), "", 0, 128);
+        g_core_hw_config = {{0, hardware_}};
+    }
+
+    ~ScopedCostHardware() {
+        g_core_hw_config.clear();
+        delete hardware_;
+        g_core_hw_config = std::move(previous_);
+    }
+
+    ScopedCostHardware(const ScopedCostHardware &) = delete;
+    ScopedCostHardware &operator=(const ScopedCostHardware &) = delete;
+
+private:
+    std::vector<std::pair<int, CoreHWConfig *>> previous_;
+    CoreHWConfig *hardware_ = nullptr;
+};
+
+NpuCostHardware CostHardware(PublishedNpuHardwareView hardware) {
+    NpuCostHardware result;
+    result.exu_x_dims = hardware.exu_x_dims;
+    result.exu_count = hardware.exu_count;
+    result.sfu_x_dims = hardware.sfu_x_dims;
+    result.vec_x_dims = hardware.vec_x_dims;
+    result.vec_count = hardware.vec_count;
+    result.compute_utilization = hardware.compute_utilization;
+    result.cycle_ns = hardware.cycle_ns;
+    return result;
+}
+
+bool SameSnapshot(const NpuCostSnapshot &lhs, const NpuCostSnapshot &rhs) {
+    return lhs.ops.exu == rhs.ops.exu && lhs.ops.sfu == rhs.ops.sfu &&
+           lhs.ops.vec == rhs.ops.vec &&
+           lhs.exu_cycle_ns == rhs.exu_cycle_ns &&
+           lhs.sfu_cycle_ns == rhs.sfu_cycle_ns &&
+           lhs.vec_cycle_ns == rhs.vec_cycle_ns &&
+           lhs.compute_cycle_ns == rhs.compute_cycle_ns &&
+           lhs.dram_time_ns == rhs.dram_time_ns &&
+           lhs.overlap_delay_ns == rhs.overlap_delay_ns;
+}
+
+class SkipOutputCostProbe final : public NpuBase {
+public:
+    uint64_t forced_dram_time = 0;
+    size_t calls = 0;
+
+    SkipOutputCostProbe() {
+        name = "SkipOutputCostProbe";
+        skip_input = true;
+        skip_output = true;
+    }
+
+    void initialize() override {
+        data_size_input = {1};
+        data_chunk = {{"output", 1}};
+    }
+
+    void taskCore(TaskCoreContext &, std::string, uint64_t &dram_time,
+                  uint64_t &exu_ops, uint64_t &sfu_ops,
+                  uint64_t &vec_ops) override {
+        ++calls;
+        dram_time = forced_dram_time;
+        exu_ops = 1U << 20;
+        sfu_ops = 1U << 19;
+        vec_ops = 1U << 18;
+    }
+};
+
 NpuOps EvaluateProductionOps(
     NpuBase &prim, TaskCoreContext &context,
     std::unordered_map<std::string, int> parameters) {
@@ -75,6 +164,44 @@ IsaV1SelfTestResult CheckNpuCostModelSelfTest() {
     TaskCoreContext context(nullptr, nullptr, nullptr, nullptr, nullptr,
                             &sram_address, nullptr, nullptr, nullptr, 0, 0, 16);
 #endif
+    {
+        Cross_entropy_forward_prim prim;
+        prim.operands.logits.kind = SramAddressKind::ABSOLUTE;
+        prim.operands.logits.absolute_address_bytes = 0x1000;
+        prim.operands.labels.kind = SramAddressKind::ABSOLUTE;
+        prim.operands.labels.absolute_address_bytes = 0x2000;
+        prim.operands.loss.kind = SramAddressKind::ABSOLUTE;
+        prim.operands.loss.absolute_address_bytes = 0x3000;
+        prim.operands.logical_rows = 8;
+        prim.operands.rank_rows = 4;
+        prim.operands.tp_degree = 2;
+        prim.operands.vocab_size = 32;
+        const int previous_cid = context.cid;
+        context.cid = 17;
+        uint64_t dram_time = 0;
+        NpuOps ops;
+        std::ostringstream marker;
+        std::streambuf *const previous = std::cout.rdbuf(marker.rdbuf());
+        try {
+            prim.taskCore(context, "ce_marker", dram_time,
+                          ops.exu, ops.sfu, ops.vec);
+        } catch (...) {
+            std::cout.rdbuf(previous);
+            context.cid = previous_cid;
+            throw;
+        }
+        std::cout.rdbuf(previous);
+        context.cid = previous_cid;
+        Check(result,
+              marker.str() ==
+                  "[TRAIN_CE] core=17 invocations=1 rank_rows=4 "
+                  "label_read_bytes=16 loss_write_bytes=16\n",
+              "CE runtime marker is exact and derived from taskCore work");
+        Check(result,
+              dram_time == 0 && ops.exu == 0 && ops.sfu == 132 &&
+                  ops.vec == 260,
+              "CE marker path preserves the exact published compute work");
+    }
     auto check_ops = [&](const std::string &label, NpuBase &prim,
                          std::unordered_map<std::string, int> parameters,
                          NpuOps expected) {
@@ -85,6 +212,42 @@ IsaV1SelfTestResult CheckNpuCostModelSelfTest() {
                           actual.vec == expected.vec,
               label + " production ops match the frozen oracle");
     };
+
+    sram::Config manual_config;
+    manual_config.capacity_bytes = 64;
+    manual_config.manual_memory_schedule = true;
+    sram::RegionTable manual_regions(manual_config);
+    auto check_implicit_memory_policy = [&](const std::string &label,
+                                            const auto &prim) {
+        context.sram_regions = nullptr;
+        Check(result, prim.LegacyAccessesEnabled(context),
+              label + " preserves legacy implicit memory accesses");
+        context.sram_regions = &manual_regions;
+        Check(result, !prim.LegacyAccessesEnabled(context),
+              label + " disables implicit memory under a manual schedule");
+    };
+    check_implicit_memory_policy("MATMUL", ImplicitMemoryProbe<Matmul_f>{});
+    check_implicit_memory_policy("ATTENTION",
+                                 ImplicitMemoryProbe<Attention_f>{});
+    check_implicit_memory_policy("RMSNORM",
+                                 ImplicitMemoryProbe<rmsnorm_forward>{});
+
+    // These direct production calls would enter the legacy address-zero/static
+    // paths without the manual-memory gate. In manual mode they publish only
+    // their compute cost and leave dram_time at zero.
+    context.sram_regions = &manual_regions;
+    {
+        Attention_f prim;
+        check_ops("ATTENTION manual memory", prim,
+                  {{"B", 1}, {"T", 2}, {"C", 4}, {"NH", 2}, {"R", 3}},
+                  {64, 8, 16});
+    }
+    {
+        rmsnorm_forward prim;
+        check_ops("RMSNORM manual memory", prim,
+                  {{"B", 1}, {"T", 2}, {"C", 4}}, {0, 0, 34});
+    }
+    context.sram_regions = nullptr;
     {
         gate_forward prim;
         check_ops("GATE", prim,
@@ -110,7 +273,134 @@ IsaV1SelfTestResult CheckNpuCostModelSelfTest() {
     {
         swiglu_forward prim;
         check_ops("SWIGLU", prim, {{"N", 7}}, {0, 7, 28});
+        Check(result,
+              prim.data_size_input == std::vector<int>{14} &&
+                  prim.data_chunk ==
+                      std::vector<std::pair<std::string, int>>{{"output", 7}},
+              "SWIGLU uses one concat input of 2N and one output of N");
     }
+
+    ScopedCostHardware scoped_cost_hardware;
+    const PublishedNpuHardwareView runtime_hardware =
+        PublishedNpuHardwareForCore(0);
+    const NpuCostHardware runtime_cost_hardware =
+        CostHardware(runtime_hardware);
+    auto manual_core = std::make_shared<PrimCoreContext>();
+    manual_core->cid = 0;
+    manual_core->loop_cnt = 0;
+    manual_core->auto_pd_ = 0;
+    context.sram_regions = &manual_regions;
+
+    auto check_manual_default =
+        [&](const std::string &label, Opcode opcode, NpuBase &prim,
+            PublishedNpuParameters parameters) {
+            prim.param_value = parameters;
+            prim.datatype = FP16;
+            prim.initialize();
+            static_cast<CompBase &>(prim).initializeDefault();
+            prim.prim_context = manual_core;
+
+            Sram_bind_oneshot bind;
+            bind.input_count =
+                static_cast<uint32_t>(prim.data_size_input.size());
+            for (uint32_t index = 0; index < bind.input_count; ++index)
+                bind.datapass_label.indata[index] =
+                    label + "_input_" + std::to_string(index);
+            bind.datapass_label.outdata = label + "_output";
+            bind.prim_context = manual_core;
+            Check(result, bind.taskCoreDefault(context) == 0,
+                  label + " installs a one-shot SRAM binding");
+
+            const NpuOps ops =
+                EvaluatePublishedNpuOps(opcode, parameters, runtime_hardware);
+            const NpuCostSnapshot expected =
+                CalculateNpuCost(ops, runtime_cost_hardware, 0);
+            const size_t allocations_before =
+                manual_regions.AllocationCount();
+            const int sram_address_before = sram_address;
+            const int actual_delay = prim.taskCoreDefault(context);
+
+            Check(result, expected.overlap_delay_ns > 0 &&
+                              actual_delay ==
+                                  static_cast<int>(expected.overlap_delay_ns),
+                  label + " manual taskCoreDefault returns compute delay once");
+            Check(result,
+                  SameSnapshot(prim.lastCostSnapshot(), expected),
+                  label + " publishes the exact compute-only cost snapshot");
+            Check(result,
+                  manual_regions.AllocationCount() == allocations_before &&
+                      sram_address == sram_address_before,
+                  label + " performs no implicit SRAM allocation or write");
+            Check(result, !manual_core->sram_bind_pending_,
+                  label + " consumes its one-shot binding exactly once");
+        };
+
+    {
+        Matmul_f prim;
+        check_manual_default(
+            "MATMUL", Opcode::MATMUL, prim,
+            {{"B", 1}, {"T", 128}, {"C", 128}, {"OC", 128}});
+    }
+    {
+        rmsnorm_forward prim;
+        check_manual_default(
+            "RMSNORM", Opcode::RMSNORM, prim,
+            {{"B", 1}, {"T", 128}, {"C", 128}});
+    }
+
+    // Legacy skip_output still suppresses only the implicit write. It must not
+    // skip the compute charge.
+    context.sram_regions = nullptr;
+    auto legacy_core = std::make_shared<PrimCoreContext>();
+    legacy_core->cid = 0;
+    legacy_core->loop_cnt = 0;
+    legacy_core->auto_pd_ = 0;
+    legacy_core->datapass_label_->indata[0] = "_legacy_cost_input";
+    legacy_core->datapass_label_->outdata = "legacy_cost_output";
+    SkipOutputCostProbe legacy_probe;
+    legacy_probe.datatype = FP16;
+    legacy_probe.prim_context = legacy_core;
+    legacy_probe.initialize();
+    static_cast<CompBase &>(legacy_probe).initializeDefault();
+    const NpuOps probe_ops{1U << 20, 1U << 19, 1U << 18};
+    const NpuCostSnapshot probe_expected =
+        CalculateNpuCost(probe_ops, runtime_cost_hardware, 0);
+    const int legacy_sram_address_before = sram_address;
+    const int legacy_delay = legacy_probe.taskCoreDefault(context);
+    Check(result, probe_expected.overlap_delay_ns > 0 &&
+                      legacy_delay ==
+                          static_cast<int>(probe_expected.overlap_delay_ns) &&
+                      legacy_probe.calls == 1,
+          "legacy skip_output charges the compute cost exactly once");
+    Check(result, SameSnapshot(legacy_probe.lastCostSnapshot(), probe_expected),
+          "legacy skip_output publishes the exact compute snapshot");
+    Check(result, sram_address == legacy_sram_address_before,
+          "legacy skip_output performs no implicit output write");
+
+    // A manual primitive that reports any implicit memory time is rejected
+    // before compute accounting can be published.
+    context.sram_regions = &manual_regions;
+    SkipOutputCostProbe bad_manual_probe;
+    bad_manual_probe.forced_dram_time = 1;
+    bad_manual_probe.datatype = FP16;
+    bad_manual_probe.prim_context = manual_core;
+    bad_manual_probe.initialize();
+    static_cast<CompBase &>(bad_manual_probe).initializeDefault();
+    Sram_bind_oneshot bad_bind;
+    bad_bind.input_count = 1;
+    bad_bind.datapass_label.indata[0] = "bad_manual_input";
+    bad_bind.datapass_label.outdata = "bad_manual_output";
+    bad_bind.prim_context = manual_core;
+    bad_bind.taskCoreDefault(context);
+    Reject(result, "manual compute rejects non-zero implicit DRAM time", [&] {
+        (void)bad_manual_probe.taskCoreDefault(context);
+    });
+    Check(result, bad_manual_probe.calls == 1 &&
+                      !manual_core->sram_bind_pending_ &&
+                      SameSnapshot(bad_manual_probe.lastCostSnapshot(), {}),
+          "rejected manual compute consumes its binding without charging");
+    context.sram_regions = nullptr;
+
     {
         Relu_f prim;
         check_ops("RELU", prim, {{"N", 7}}, {7, 0, 0});

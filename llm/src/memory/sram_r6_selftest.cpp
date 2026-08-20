@@ -82,9 +82,9 @@ struct R6Bench : sc_module {
     int fails = 0;
 
     explicit R6Bench(sc_module_name name)
-        : sc_module(name), storage(256),
+        : sc_module(name), storage(384),
           regions(sram::ParseConfig(
-              {{"sram_size", 256},
+              {{"sram_size", 384},
                {"sram", {{"real_data_path", true},
                           {"manual_memory_schedule", true},
                           {"regions",
@@ -111,6 +111,12 @@ struct R6Bench : sc_module {
                              {"size_bytes", 64},
                              {"allocator", "fixed"},
                              {"spillable", false},
+                             {"access", {"compute", "dte", "lsu"}}},
+                            {{"name", "alloc_at"},
+                             {"base_bytes", 256},
+                             {"size_bytes", 128},
+                             {"allocator", "block"},
+                             {"spillable", true},
                              {"access", {"compute", "dte", "lsu"}}}}}}}})),
           access("access", regions, storage),
           lsu("lsu", regions, access, hbm, 4), timeline(access) {
@@ -487,6 +493,35 @@ struct R6Bench : sc_module {
               "FREE removes metadata only and leaves all SRAM bytes intact");
         Check(Rejects([&] { RunLifecycle(lifecycle_free); }),
               "double FREE and missing labels reject deterministically");
+
+        Sram_lifecycle alloc_at = lifecycle_alloc;
+        alloc_at.op = SramLifecycleOp::ALLOC_AT;
+        alloc_at.region_name = "alloc_at";
+        alloc_at.label = "p4_alloc_at";
+        alloc_at.region_offset_bytes = 64;
+        alloc_at.size_bytes = 16;
+        alloc_at.alignment_bytes = 16;
+        Check(RunLifecycle(alloc_at) == 0 &&
+                  lifecycle_labels.count("p4_alloc_at") == 1 &&
+                  regions.FindAllocation(
+                      lifecycle_labels.at("p4_alloc_at")
+                          .region_allocation_id)
+                          .range.address == 320,
+              "ALLOC_AT commits the exact requested region-relative offset");
+        const std::size_t allocations_before_bad_alloc_at =
+            regions.AllocationCount();
+        Check(Rejects([&] {
+                  regions.AllocateAt(
+                      "alloc_at", 65, 16, "p4_alloc_at_bad",
+                      sram::AllocationLifetime::kTask, 16);
+              }) &&
+                  regions.AllocationCount() ==
+                      allocations_before_bad_alloc_at,
+              "RegionTable::AllocateAt rejects a misaligned fixed offset atomically");
+        Sram_lifecycle free_alloc_at;
+        free_alloc_at.op = SramLifecycleOp::FREE;
+        free_alloc_at.label = alloc_at.label;
+        RunLifecycle(free_alloc_at);
 
         Sram_lifecycle targeted_alloc = lifecycle_alloc;
         targeted_alloc.label = "p4_targeted";

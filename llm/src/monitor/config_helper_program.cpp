@@ -153,6 +153,91 @@ void ApplyRelocation(ExternalRecord &record,
             Fail("invalid compute relocation operand_id");
         return;
     }
+    if (auto *value = std::get_if<RopeQkExactOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "ROPE_QK_EXACT address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->input, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->output, relocation, symbol);
+        else
+            Fail("invalid ROPE_QK_EXACT relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<AttentionExactOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "ATTENTION_EXACT address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->input, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->output, relocation, symbol);
+        else
+            Fail("invalid ATTENTION_EXACT relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<EmbeddingLookupOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "EMBEDDING_LOOKUP address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->indices, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->table, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->output, relocation, symbol);
+        else
+            Fail("invalid EMBEDDING_LOOKUP relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<GreedySampleOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "GREEDY_SAMPLE address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->logits, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->output, relocation, symbol);
+        else
+            Fail("invalid GREEDY_SAMPLE relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<CrossEntropyForwardOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "CROSS_ENTROPY_FORWARD address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->logits, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->labels, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->loss, relocation, symbol);
+        else
+            Fail("invalid CROSS_ENTROPY_FORWARD relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<CrossEntropyBackwardOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "CROSS_ENTROPY_BACKWARD address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->logits, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->labels, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_AUX_ADDRESS)
+            SetAddress(value->upstream, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->logits_grad, relocation, symbol);
+        else
+            Fail("invalid CROSS_ENTROPY_BACKWARD relocation operand_id");
+        return;
+    }
+    if (auto *value = std::get_if<SgdUpdateOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "SGD_UPDATE address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->weight, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->gradient, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->updated_weight, relocation, symbol);
+        else
+            Fail("invalid SGD_UPDATE relocation operand_id");
+        return;
+    }
     if (auto *value = std::get_if<DteSendOperands>(&record.operands)) {
         if (value->source_space == EndpointSourceSpace::HBM) {
             if (operand != SemanticOperandId::HBM_ADDRESS)
@@ -185,6 +270,16 @@ void ApplyRelocation(ExternalRecord &record,
             SetAddress(value->destination, relocation, symbol);
         else
             Fail("invalid REDUCE_COMPUTE relocation operand_id");
+        return;
+    }
+    if (auto *value = std::get_if<LocalReduceOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "LOCAL_REDUCE address");
+        if (operand == SemanticOperandId::SOURCE_ADDRESS)
+            SetAddress(value->source, relocation, symbol);
+        else if (operand == SemanticOperandId::DESTINATION_ADDRESS)
+            SetAddress(value->destination, relocation, symbol);
+        else
+            Fail("invalid LOCAL_REDUCE relocation operand_id");
         return;
     }
     if (auto *value = std::get_if<LsuOperands>(&record.operands)) {
@@ -263,6 +358,23 @@ void ApplyRelocation(ExternalRecord &record,
                 SymbolIndex(relocation, "LABEL_SYMBOL");
         } else {
             Fail("invalid SRAM_ALLOC relocation operand_id");
+        }
+        return;
+    }
+    if (auto *value = std::get_if<SramAllocAtOperands>(&record.operands)) {
+        if (operand == SemanticOperandId::REGION_NAME) {
+            if (relocation.kind != SemanticRelocationKind::SRAM_REGION)
+                Fail("REGION_NAME relocation requires an SRAM_REGION symbol");
+            if (relocation.addend != 0)
+                Fail("REGION_NAME symbolic relocation requires addend zero");
+            value->region_name_string_index = symbol.name_string_index;
+        } else if (operand == SemanticOperandId::LABEL_SYMBOL) {
+            if (relocation.kind != SemanticRelocationKind::SRAM_LABEL)
+                Fail("LABEL_SYMBOL relocation requires an SRAM_LABEL symbol");
+            value->label_symbol_index =
+                SymbolIndex(relocation, "LABEL_SYMBOL");
+        } else {
+            Fail("invalid SRAM_ALLOC_AT relocation operand_id");
         }
         return;
     }
@@ -743,6 +855,18 @@ void config_helper_program::LoadProgram(
                 case Opcode::SRAM_ALLOC: {
                     const auto &operands =
                         std::get<SramAllocOperands>(record.operands);
+                    const auto inserted = lifecycle_labels.emplace(
+                        lifecycle->label,
+                        LifecycleState{operands.lifetime,
+                                       operands.spillable});
+                    if (!inserted.second)
+                        Fail(location + "duplicate ALLOC label " +
+                             lifecycle->label);
+                    break;
+                }
+                case Opcode::SRAM_ALLOC_AT: {
+                    const auto &operands =
+                        std::get<SramAllocAtOperands>(record.operands);
                     const auto inserted = lifecycle_labels.emplace(
                         lifecycle->label,
                         LifecycleState{operands.lifetime,

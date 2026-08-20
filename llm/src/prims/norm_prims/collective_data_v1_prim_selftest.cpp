@@ -31,6 +31,16 @@ std::vector<uint8_t> Le64(uint64_t value) {
     return bytes;
 }
 
+std::vector<uint8_t> Fp16(std::initializer_list<uint16_t> values) {
+    std::vector<uint8_t> bytes;
+    bytes.reserve(values.size() * 2);
+    for (uint16_t value : values) {
+        bytes.push_back(static_cast<uint8_t>(value));
+        bytes.push_back(static_cast<uint8_t>(value >> 8));
+    }
+    return bytes;
+}
+
 void Append(std::vector<uint8_t> *target,
             const std::vector<uint8_t> &bytes) {
     target->insert(target->end(), bytes.begin(), bytes.end());
@@ -218,6 +228,38 @@ struct CollectiveDataV1PrimBench final : sc_module {
               "REDUCE accounts one N*L read and one L write");
     }
 
+    void TestLocalFp16(TaskCoreContext &context) {
+        std::vector<uint8_t> source;
+        Append(&source, Fp16({0x3c00, 0x7bff, 0x7d55}));
+        Append(&source, Fp16({0x4000, 0x7bff, 0x3c00}));
+        Seed(0x40, source);
+
+        Collective_data_v1_prim prim;
+        prim.mode = CollectiveDataV1PrimMode::REDUCE;
+        prim.key = {};
+        prim.phase_id = 0;
+        prim.source_address_bytes = 0x40;
+        prim.destination_address_bytes = 0xc0;
+        prim.length_bytes = 6;
+        prim.input_count = 2;
+        prim.dtype = CollDType::FP16;
+        prim.reduce_op = CollReduceOp::SUM;
+        Check(prim.taskCoreDefault(context) == 2 * CYCLE &&
+                  storage.Read(0xc0, 6) ==
+                      Fp16({0x4200, 0x7c00, 0x7e00}),
+              "key-zero FP16 local REDUCE executes strict SRAM bytes");
+
+        Seed(0x50, Fp16({0x7d55, 0x8000}));
+        Collective_data_v1_prim n1 = prim;
+        n1.source_address_bytes = 0x50;
+        n1.destination_address_bytes = 0xd0;
+        n1.length_bytes = 4;
+        n1.input_count = 1;
+        Check(n1.taskCoreDefault(context) == 0 &&
+                  storage.Read(0xd0, 4) == Fp16({0x7e00, 0x8000}),
+              "key-zero FP16 N=1 canonicalizes instead of memcpy");
+    }
+
     void TestWrappingAndN1(TaskCoreContext &context) {
         std::vector<uint8_t> source;
         Append(&source, Le64(std::numeric_limits<uint64_t>::max()));
@@ -289,6 +331,7 @@ struct CollectiveDataV1PrimBench final : sc_module {
         TaskCoreContext context = Context();
         TestLocalCopy(context);
         TestNegativeMax(context);
+        TestLocalFp16(context);
         TestWrappingAndN1(context);
         TestFailureAtomicity(context);
         Check(access.outstanding() == 0,

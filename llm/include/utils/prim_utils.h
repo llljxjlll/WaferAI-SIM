@@ -404,7 +404,11 @@ LegacyTransportSegments(const std::vector<sc_bv<128>> &wire,
         id == PrimIdValue(PrimId::DTE_RECV_ENDPOINT) ||
         id == PrimIdValue(PrimId::COLLECTIVE_DATA_V1) ||
         id == PrimIdValue(PrimId::COLLECTIVE_PHASE_BARRIER_V1) ||
-        id == PrimIdValue(PrimId::COLLECTIVE_LAUNCH_V1))
+        id == PrimIdValue(PrimId::COLLECTIVE_LAUNCH_V1) ||
+        id == PrimIdValue(PrimId::ROPE_QK_EXACT) ||
+        id == PrimIdValue(PrimId::ATTENTION_EXACT) ||
+        id == PrimIdValue(PrimId::EMBEDDING_LOOKUP) ||
+        id == PrimIdValue(PrimId::GREEDY_SAMPLE))
         throw std::invalid_argument(
             name + " is strict-only and cannot use legacy transport");
     if (IsLegacyWrappedPrimId(id))

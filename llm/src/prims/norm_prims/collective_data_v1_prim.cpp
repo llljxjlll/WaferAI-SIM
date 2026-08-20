@@ -62,12 +62,36 @@ uint64_t DTypeBytes(CollDType dtype) {
     case CollDType::UINT8: return 1;
     case CollDType::INT32: return 4;
     case CollDType::INT64: return 8;
+    case CollDType::FP16: return 2;
     case CollDType::FP32:
-    case CollDType::FP16:
     case CollDType::FP8: break;
     }
     throw std::invalid_argument(
-        "Collective_data_v1_prim supports UINT8, INT32, and INT64 only");
+        "Collective_data_v1_prim rejects FP32 and FP8");
+}
+
+uint8_t EncodeWireDType(CollDType dtype) {
+    switch (dtype) {
+    case CollDType::UINT8: return 0;
+    case CollDType::INT32: return 1;
+    case CollDType::INT64: return 2;
+    case CollDType::FP16: return 3;
+    case CollDType::FP32:
+    case CollDType::FP8: break;
+    }
+    throw std::invalid_argument(
+        "Collective_data_v1_prim rejects FP32 and FP8");
+}
+
+CollDType DecodeWireDType(uint8_t code) {
+    switch (code) {
+    case 0: return CollDType::UINT8;
+    case 1: return CollDType::INT32;
+    case 2: return CollDType::INT64;
+    case 3: return CollDType::FP16;
+    }
+    throw std::invalid_argument(
+        "Collective_data_v1_prim wire dtype code is invalid");
 }
 
 uint64_t SourceBytes(const Collective_data_v1_prim &prim) {
@@ -123,19 +147,29 @@ void ValidateHeaders(const Wire &wire) {
 
 void Collective_data_v1_prim::Validate() const {
     const auto raw_mode = static_cast<uint8_t>(mode);
-    const auto raw_dtype = static_cast<uint8_t>(dtype);
     const auto raw_reduce = static_cast<uint8_t>(reduce_op);
     Require(raw_mode <=
                 static_cast<uint8_t>(CollectiveDataV1PrimMode::REDUCE),
             "Collective_data_v1_prim mode enum is invalid");
-    Require(raw_dtype <= static_cast<uint8_t>(CollDType::FP8),
-            "Collective_data_v1_prim dtype enum is invalid");
+    Require(dtype == CollDType::UINT8 || dtype == CollDType::INT32 ||
+                dtype == CollDType::INT64 || dtype == CollDType::FP16,
+            "Collective_data_v1_prim rejects FP32 and FP8");
     Require(raw_reduce <= static_cast<uint8_t>(CollReduceOp::MAX),
             "Collective_data_v1_prim reduce_op enum is invalid");
-    Require(key.group_id != 0,
-            "Collective_data_v1_prim group_id must be non-zero");
-    Require(key.collective_id != kReservedCollectiveId,
-            "Collective_data_v1_prim collective ID is reserved");
+    const bool local = key.group_id == 0;
+    if (local) {
+        Require(mode == CollectiveDataV1PrimMode::REDUCE && phase_id == 0 &&
+                    key.collective_id == 0 && key.epoch == 0,
+                "Collective_data_v1_prim key zero is reserved for phase-0 local REDUCE");
+        Require(dtype == CollDType::FP16 &&
+                    reduce_op == CollReduceOp::SUM,
+                "Collective_data_v1_prim local REDUCE requires FP16 SUM");
+    } else {
+        Require(key.collective_id != kReservedCollectiveId,
+                "Collective_data_v1_prim collective ID is reserved");
+        Require(dtype != CollDType::FP16,
+                "Collective_data_v1_prim FP16 is reserved for local REDUCE");
+    }
     Require(length_bytes != 0,
             "Collective_data_v1_prim L must be positive");
     Require(input_count != 0,
@@ -177,7 +211,7 @@ Wire Collective_data_v1_prim::serialize() {
     wire[0].range(23, 16) = sc_bv<8>(kCollectiveDataV1PrimWireVersion);
     wire[0].range(31, 24) = sc_bv<8>(kCollectiveDataV1PrimWireSegments);
     wire[0].range(32, 32) = sc_bv<1>(static_cast<uint8_t>(mode));
-    wire[0].range(34, 33) = sc_bv<2>(static_cast<uint8_t>(dtype));
+    wire[0].range(34, 33) = sc_bv<2>(EncodeWireDType(dtype));
     wire[0].range(36, 35) = sc_bv<2>(static_cast<uint8_t>(reduce_op));
 
     wire[1].range(47, 16) = sc_bv<32>(key.group_id);
@@ -211,8 +245,8 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     Collective_data_v1_prim decoded;
     decoded.mode = static_cast<CollectiveDataV1PrimMode>(
         wire[0].range(32, 32).to_uint64());
-    decoded.dtype = static_cast<CollDType>(
-        wire[0].range(34, 33).to_uint64());
+    decoded.dtype = DecodeWireDType(static_cast<uint8_t>(
+        wire[0].range(34, 33).to_uint64()));
     decoded.reduce_op = static_cast<CollReduceOp>(
         wire[0].range(36, 35).to_uint64());
     decoded.key.group_id = static_cast<uint32_t>(
@@ -262,7 +296,7 @@ int Collective_data_v1_prim::taskCoreDefault(TaskCoreContext &context) {
             "Collective_data_v1_prim SRAM read returned the wrong byte count");
 
     std::vector<uint8_t> result;
-    if (mode == CollectiveDataV1PrimMode::LOCAL_COPY || input_count == 1) {
+    if (mode == CollectiveDataV1PrimMode::LOCAL_COPY) {
         result.assign(source.begin(), source.begin() +
                                         static_cast<size_t>(length_bytes));
     } else {

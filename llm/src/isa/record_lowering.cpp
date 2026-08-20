@@ -2,7 +2,9 @@
 
 #include "dte/dte_async_types.h"
 #include "isa/opcode.h"
+#include "prims/collective_data_v1_prim.h"
 #include "prims/dte_endpoint_prims.h"
+#include "prims/exact_stage2_prims.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -120,6 +122,105 @@ LoweredPrimList LowerCompute(const ExternalRecord &record,
 
     LoweredPrimList result;
     result.push_back(std::move(base));
+    return result;
+}
+
+LoweredPrimList LowerExactStage2(const ExternalRecord &record,
+                                 const OpcodeManifestEntry &entry) {
+    std::unique_ptr<PrimBase> base = CreateUntracked(entry.lowering.target);
+    switch (record.opcode) {
+    case Opcode::ROPE_QK_EXACT: {
+        auto *prim = dynamic_cast<Rope_qk_exact_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "target Prim is not Rope_qk_exact_prim");
+        prim->operands = std::get<RopeQkExactOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    case Opcode::ATTENTION_EXACT: {
+        auto *prim = dynamic_cast<Attention_exact_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "target Prim is not Attention_exact_prim");
+        prim->operands = std::get<AttentionExactOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    case Opcode::EMBEDDING_LOOKUP: {
+        auto *prim = dynamic_cast<Embedding_lookup_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "target Prim is not Embedding_lookup_prim");
+        prim->operands = std::get<EmbeddingLookupOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    case Opcode::GREEDY_SAMPLE: {
+        auto *prim = dynamic_cast<Greedy_sample_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "target Prim is not Greedy_sample_prim");
+        prim->operands = std::get<GreedySampleOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    case Opcode::CROSS_ENTROPY_FORWARD: {
+        auto *prim = dynamic_cast<Cross_entropy_forward_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(
+                entry, "target Prim is not Cross_entropy_forward_prim");
+        prim->operands =
+            std::get<CrossEntropyForwardOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    case Opcode::CROSS_ENTROPY_BACKWARD: {
+        auto *prim = dynamic_cast<Cross_entropy_backward_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(
+                entry, "target Prim is not Cross_entropy_backward_prim");
+        prim->operands =
+            std::get<CrossEntropyBackwardOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    case Opcode::SGD_UPDATE: {
+        auto *prim = dynamic_cast<Sgd_update_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "target Prim is not Sgd_update_prim");
+        prim->operands = std::get<SgdUpdateOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
+    default:
+        LoweringFailure(entry, "unexpected exact Stage2 opcode");
+    }
+    LoweredPrimList result;
+    result.push_back(std::move(base));
+    return result;
+}
+
+LoweredPrimList LowerLocalReduce(const ExternalRecord &record,
+                                 const OpcodeManifestEntry &entry) {
+    const auto &operands =
+        std::get<LocalReduceOperands>(record.operands);
+    auto prim = std::make_unique<Collective_data_v1_prim>();
+    prim->mode = CollectiveDataV1PrimMode::REDUCE;
+    prim->key = {};
+    prim->phase_id = 0;
+    prim->source_address_bytes = operands.source.absolute_address_bytes;
+    prim->destination_address_bytes =
+        operands.destination.absolute_address_bytes;
+    prim->length_bytes = operands.element_count * 2;
+    prim->input_count = static_cast<uint16_t>(operands.input_count);
+    prim->dtype = CollDType::FP16;
+    prim->reduce_op = CollReduceOp::SUM;
+    try {
+        prim->Validate();
+    } catch (const std::exception &error) {
+        LoweringFailure(entry,
+                        std::string("strict local reduction Prim validation: ") +
+                            error.what());
+    }
+    LoweredPrimList result;
+    result.push_back(std::move(prim));
     return result;
 }
 
@@ -282,6 +383,21 @@ LoweredPrimList LowerSramLifecycle(
             entry, context, operands.region_name_string_index);
         prim->label = ResolveLifecycleLabel(
             entry, context, operands.label_symbol_index);
+        prim->size_bytes = operands.size_bytes;
+        prim->alignment_bytes = operands.alignment_bytes;
+        prim->lifetime = LowerLifetime(entry, operands.lifetime);
+        prim->spillable = operands.spillable;
+        break;
+    }
+    case Opcode::SRAM_ALLOC_AT: {
+        const auto &operands =
+            std::get<SramAllocAtOperands>(record.operands);
+        prim->op = SramLifecycleOp::ALLOC_AT;
+        prim->region_name = ResolveString(
+            entry, context, operands.region_name_string_index);
+        prim->label = ResolveLifecycleLabel(
+            entry, context, operands.label_symbol_index);
+        prim->region_offset_bytes = operands.region_offset_bytes;
         prim->size_bytes = operands.size_bytes;
         prim->alignment_bytes = operands.alignment_bytes;
         prim->lifetime = LowerLifetime(entry, operands.lifetime);
@@ -1045,12 +1161,21 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     if (IsProductionCompute(record.opcode))
         return LowerCompute(record, *entry);
     switch (record.opcode) {
+    case Opcode::ROPE_QK_EXACT:
+    case Opcode::ATTENTION_EXACT:
+    case Opcode::EMBEDDING_LOOKUP:
+    case Opcode::GREEDY_SAMPLE:
+    case Opcode::CROSS_ENTROPY_FORWARD:
+    case Opcode::CROSS_ENTROPY_BACKWARD:
+    case Opcode::SGD_UPDATE:
+        return LowerExactStage2(record, *entry);
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:
         return LowerLsu(record, *entry, context);
     case Opcode::SRAM_BIND:
         return LowerSramBind(record, *entry, context);
     case Opcode::SRAM_ALLOC:
+    case Opcode::SRAM_ALLOC_AT:
     case Opcode::SRAM_FREE:
     case Opcode::SRAM_RESIZE:
     case Opcode::SRAM_RENAME:
@@ -1063,6 +1188,8 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     case Opcode::REDUCE_COMPUTE:
         Unavailable(*entry,
                     "requires whole-artifact P6 lowering and the future strict byte-executing reduction runtime; legacy timing-only Reduce_compute_prim is forbidden");
+    case Opcode::LOCAL_REDUCE:
+        return LowerLocalReduce(record, *entry);
     case Opcode::DTE_ISSUE:
         return LowerDteIssue(record, *entry, context);
     case Opcode::DTE_WAIT:

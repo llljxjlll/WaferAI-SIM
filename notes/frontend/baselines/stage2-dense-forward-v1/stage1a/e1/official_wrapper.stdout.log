@@ -1,0 +1,1 @@
+[NAIVE N7 E1] PASS: report=naive_run_report_ec4b7a1564f8a4cd artifact=36392B records=278 relocs=464 initializations=94 probes=2 ACK=4 DONE=2 drains=0 dma_in=18 dma_out=4 LSU_LOAD=18 LSU_STORE=4 fragments=52 makespan_cycles=8958 sha256=95bb582bc852b35bc701ed41562664173fda95268e736363990ee0061bff6ef5

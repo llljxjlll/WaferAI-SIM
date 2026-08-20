@@ -14,6 +14,7 @@
 #pragma pop_macro("DUMMY")
 #undef NPUSIM_RESTORE_DUMMY_MACRO
 #endif
+#include "isa/record_codec.h"
 
 #include <cstdint>
 #include <string>
@@ -32,8 +33,34 @@ struct PublishedNpuHardwareView {
     bool use_performance_gemm = false;
 };
 
+struct PublishedNpuWork {
+    NpuOps ops;
+    uint64_t memory_read_bytes = 0;
+    uint64_t memory_write_bytes = 0;
+    uint64_t comparisons = 0;
+};
+
 PublishedNpuHardwareView PublishedNpuHardwareForCore(int core_id);
 
+PublishedNpuWork EvaluatePublishedNpuWork(
+    Opcode opcode, const PublishedNpuParameters &parameters,
+    const PublishedNpuHardwareView &hardware = {});
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const RopeQkExactOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const AttentionExactOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const EmbeddingLookupOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const GreedySampleOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const CrossEntropyForwardOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const CrossEntropyBackwardOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const SgdUpdateOperands &operands);
+
+// Compatibility wrapper for the published v1 operation-count API.
 NpuOps EvaluatePublishedNpuOps(
     Opcode opcode, const PublishedNpuParameters &parameters,
     const PublishedNpuHardwareView &hardware = {});

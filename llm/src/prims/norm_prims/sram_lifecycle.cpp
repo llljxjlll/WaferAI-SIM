@@ -14,7 +14,8 @@
 REGISTER_PRIM(Sram_lifecycle, PrimId::SRAM_LIFECYCLE);
 
 namespace {
-constexpr size_t kWireSegments = 4;
+constexpr size_t kLegacyWireSegments = 4;
+constexpr size_t kAllocAtWireSegments = 5;
 constexpr size_t kRegionNameMaxBytes = 64;
 constexpr size_t kLabelMaxBytes = 255;
 
@@ -53,6 +54,7 @@ void RequireMetadataOnly(const Sram_lifecycle &prim,
                          bool allow_new_label = false) {
     if (!prim.region_name.empty() ||
         (!allow_new_label && !prim.new_label.empty()) ||
+        prim.region_offset_bytes != 0 ||
         prim.alignment_bytes != 0 ||
         prim.lifetime != sram::AllocationLifetime::kTask || prim.spillable)
         throw std::invalid_argument(
@@ -62,7 +64,7 @@ void RequireMetadataOnly(const Sram_lifecycle &prim,
 void ValidatePrim(const Sram_lifecycle &prim) {
     const auto raw_op = static_cast<uint8_t>(prim.op);
     if (raw_op > static_cast<uint8_t>(
-                     SramLifecycleOp::CLEAR_TARGETED))
+                     SramLifecycleOp::ALLOC_AT))
         throw std::invalid_argument("Sram_lifecycle operation is invalid");
     if (static_cast<uint8_t>(prim.lifetime) >
         static_cast<uint8_t>(sram::AllocationLifetime::kPersistent))
@@ -75,10 +77,18 @@ void ValidatePrim(const Sram_lifecycle &prim) {
     switch (prim.op) {
     case SramLifecycleOp::ALLOC:
         if (IsUnset(prim.region_name) || IsUnset(prim.label) ||
-            !prim.new_label.empty() || prim.size_bytes == 0 ||
+            !prim.new_label.empty() || prim.region_offset_bytes != 0 ||
+            prim.size_bytes == 0 ||
             !IsPowerOfTwo(prim.alignment_bytes))
             throw std::invalid_argument(
                 "Sram_lifecycle ALLOC fields are invalid");
+        return;
+    case SramLifecycleOp::ALLOC_AT:
+        if (IsUnset(prim.region_name) || IsUnset(prim.label) ||
+            !prim.new_label.empty() || prim.size_bytes == 0 ||
+            !IsPowerOfTwo(prim.alignment_bytes))
+            throw std::invalid_argument(
+                "Sram_lifecycle ALLOC_AT fields are invalid");
         return;
     case SramLifecycleOp::FREE:
         RequireMetadataOnly(prim);
@@ -127,7 +137,8 @@ std::string ReadOptionalLabel(uint64_t raw) {
 }
 
 void ValidateWireIdentity(const vector<sc_bv<128>> &segments) {
-    if (segments.size() != kWireSegments)
+    if (segments.size() != kLegacyWireSegments &&
+        segments.size() != kAllocAtWireSegments)
         throw std::invalid_argument(
             "Sram_lifecycle Prim wire segment count mismatch");
     const uint8_t id = ExpectedId();
@@ -218,7 +229,10 @@ vector<sc_bv<128>> Sram_lifecycle::serialize() {
     RequireStrictTransport();
     ValidatePrim(*this);
 
-    vector<sc_bv<128>> segments(kWireSegments);
+    const size_t segment_count = op == SramLifecycleOp::ALLOC_AT
+                                     ? kAllocAtWireSegments
+                                     : kLegacyWireSegments;
+    vector<sc_bv<128>> segments(segment_count);
     const uint8_t id = ExpectedId();
     for (auto &segment : segments) {
         segment = 0;
@@ -235,12 +249,23 @@ vector<sc_bv<128>> Sram_lifecycle::serialize() {
     segments[1].range(103, 72) = sc_bv<32>(AddLabel(new_label));
     segments[2].range(71, 8) = sc_bv<64>(size_bytes);
     segments[3].range(71, 8) = sc_bv<64>(alignment_bytes);
+    if (op == SramLifecycleOp::ALLOC_AT)
+        segments[4].range(71, 8) = sc_bv<64>(region_offset_bytes);
     return segments;
 }
 
 void Sram_lifecycle::deserialize(vector<sc_bv<128>> segments) {
     RequireStrictTransport();
     ValidateWireIdentity(segments);
+    const auto decoded_op = static_cast<SramLifecycleOp>(
+        segments[0].range(10, 8).to_uint64());
+    const size_t expected_segments =
+        decoded_op == SramLifecycleOp::ALLOC_AT
+            ? kAllocAtWireSegments
+            : kLegacyWireSegments;
+    if (segments.size() != expected_segments)
+        throw std::invalid_argument(
+            "Sram_lifecycle Prim wire segment count mismatches operation");
     if (segments[0].range(127, 14).or_reduce())
         throw std::invalid_argument(
             "Sram_lifecycle Prim wire metadata padding is non-zero");
@@ -248,13 +273,14 @@ void Sram_lifecycle::deserialize(vector<sc_bv<128>> segments) {
         throw std::invalid_argument(
             "Sram_lifecycle Prim wire label padding is non-zero");
     if (segments[2].range(127, 72).or_reduce() ||
-        segments[3].range(127, 72).or_reduce())
+        segments[3].range(127, 72).or_reduce() ||
+        (segments.size() == kAllocAtWireSegments &&
+         segments[4].range(127, 72).or_reduce()))
         throw std::invalid_argument(
             "Sram_lifecycle Prim wire numeric padding is non-zero");
 
     Sram_lifecycle decoded;
-    decoded.op = static_cast<SramLifecycleOp>(
-        segments[0].range(10, 8).to_uint64());
+    decoded.op = decoded_op;
     decoded.lifetime = static_cast<sram::AllocationLifetime>(
         segments[0].range(12, 11).to_uint64());
     decoded.spillable = segments[0].range(13, 13).to_uint64() != 0;
@@ -266,12 +292,16 @@ void Sram_lifecycle::deserialize(vector<sc_bv<128>> segments) {
         segments[1].range(103, 72).to_uint64());
     decoded.size_bytes = segments[2].range(71, 8).to_uint64();
     decoded.alignment_bytes = segments[3].range(71, 8).to_uint64();
+    if (decoded.op == SramLifecycleOp::ALLOC_AT)
+        decoded.region_offset_bytes =
+            segments[4].range(71, 8).to_uint64();
     ValidatePrim(decoded);
 
     op = decoded.op;
     region_name = std::move(decoded.region_name);
     label = std::move(decoded.label);
     new_label = std::move(decoded.new_label);
+    region_offset_bytes = decoded.region_offset_bytes;
     size_bytes = decoded.size_bytes;
     alignment_bytes = decoded.alignment_bytes;
     lifetime = decoded.lifetime;
@@ -294,7 +324,8 @@ int Sram_lifecycle::taskCoreDefault(TaskCoreContext &context) {
     locator.BindRegionTable(&regions);
 
     switch (op) {
-    case SramLifecycleOp::ALLOC: {
+    case SramLifecycleOp::ALLOC:
+    case SramLifecycleOp::ALLOC_AT: {
         if (locator.data_map.find(label) != locator.data_map.end())
             throw std::invalid_argument("duplicate SRAM label: " + label);
         const auto &region = regions.Region(region_name);
@@ -310,8 +341,13 @@ int Sram_lifecycle::taskCoreDefault(TaskCoreContext &context) {
         key.spillable = spillable;
         key.allocation_lifetime = lifetime;
         key.preferred_region = region_name;
-        const sram::Allocation allocation = regions.Allocate(
-            region_name, size_bytes, label, lifetime, runtime_alignment);
+        const sram::Allocation allocation =
+            op == SramLifecycleOp::ALLOC_AT
+                ? regions.AllocateAt(region_name, region_offset_bytes,
+                                     size_bytes, label, lifetime,
+                                     runtime_alignment)
+                : regions.Allocate(region_name, size_bytes, label, lifetime,
+                                   runtime_alignment);
         try {
             if (allocation.range.address % word_bytes != 0 ||
                 allocation.range.address / word_bytes >

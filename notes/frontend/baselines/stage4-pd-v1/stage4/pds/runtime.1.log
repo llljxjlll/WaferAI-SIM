@@ -1,0 +1,825 @@
+
+        SystemC 2.3.3-Accellera --- Jan  6 2026 03:02:18
+        Copyright (c) 1996-2018 by all Contributors,
+        ALL RIGHTS RESERVED
+[PROGRAM_IO] phase=resolved mode=timing initializations=120 probes=2 checksum=ba631e82e635e256f9dd93630fa117f5c5a35c528e96ac9a6bd23d67890c9aae pass=1
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+Loaded Program Format 1.0, ISA 1.2, capabilities=0x0
+[INFO][0m[92m[SYSTEM][0m             Address mapping with n=8 saved to ../DRAMSys/configs/addressmapping/am_ddr4_8x4Gbx8_df.json.                   | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Address mapping with n=8 saved to ../DRAMSys/configs/addressmapping/am_hbm2_gpu.json.                          | [36m0 s[0m
+===========================================================================
+Memory Configuration:
+
+ Memory type:           DDR4
+ Memory size in bytes:  4294967296
+ Channels:              1
+ Ranks per channel:     1
+ Bank groups per rank:  4
+ Banks per rank:        16
+ Rows per bank:         32768
+ Columns per row:       1024
+ Device width in bits:  8
+ Device size in bits:   4294967296
+ Device size in bytes:  536870912
+ Devices per rank:      8
+
+===========================================================================
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+[INFO][0m[92m[GLOBAL_MEMORY][0m      Global link not initialized.                                                                                   | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Instantiated cores=32 routers=32 workers=32 dies=2 (CORES_PER_DIE=16, GRID=4x4, expect 32).                    | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D] link_sites=2 link_units=2.                                                                               | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Components initialize complete, prepare to start..                                                             | [36m0 s[0m
+[PROGRAM_IO] phase=applied mode=timing initializations=120 probes=2 checksum=ba631e82e635e256f9dd93630fa117f5c5a35c528e96ac9a6bd23d67890c9aae pass=1
+
+Info: (I702) default timescale unit used for tracing: 1 ps (Cchip_1.vcd)
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 31 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 30 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 29 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 28 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 27 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 26 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 25 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 24 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 23 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 22 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 21 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 20 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 19 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 18 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 17 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 15 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 14 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 13 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 12 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 11 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 10 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 9 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 8 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 7 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 6 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 5 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 4 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 3 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 2 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_CONF.                                                                           | [36m1626 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_WEIGHT.                                                                    | [36m1632 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m1648 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End config distribution.                                                                                       | [36m1648 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end recv primitive RECV_CONF.                                                                          | [36m1658 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m1664 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_WEIGHT.                                                                   | [36m1664 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m1666 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End data distribution.                                                                                         | [36m1666 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_WEIGHT.                                                                         | [36m1674 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end recv primitive RECV_WEIGHT.                                                                        | [36m1674 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m1680 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_START.                                                                    | [36m1680 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_START.                                                                     | [36m1680 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m1682 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end recv primitive RECV_START.                                                                         | [36m1688 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_START.                                                                          | [36m1688 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End start data distribution: enqueued=2 injected=2 accepted=2 delivered=2 consumed=2 completed=2.              | [36m1688 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m1694 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m1694 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m1694 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m1694 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m1700 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m1700 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m2253 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m2253 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2259 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2259 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2259 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2259 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2265 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2265 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2265 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2265 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m2271 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m2271 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m2271 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m2271 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Embedding_lookup_prim.                                                         | [36m2277 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Embedding_lookup_prim.                                                          | [36m2277 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Embedding_lookup_prim.                                                            | [36m2277 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Embedding_lookup_prim.                                                           | [36m2277 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2283 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2283 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2283 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2283 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2289 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2289 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2289 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2289 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2295 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2295 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2295 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2295 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m2301 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m2301 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m2384 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m2384 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2390 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2390 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2390 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2390 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m2396 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m2396 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m2396 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m2396 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive rmsnorm_forward.                                                                | [36m2402 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive rmsnorm_forward.                                                               | [36m2402 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive rmsnorm_forward.                                                                 | [36m2402 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2408 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2408 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive rmsnorm_forward.                                                                  | [36m2410 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m2414 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m2414 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2416 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2416 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m2420 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m2422 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m2422 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m2428 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m3213 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3219 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3219 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m3221 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m3225 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m3225 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3227 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3227 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m3231 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m3233 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m3233 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m3239 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m3255 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3261 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3261 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3267 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3267 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3273 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3273 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m3279 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m3279 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Rope_qk_exact_prim.                                                            | [36m3285 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Rope_qk_exact_prim.                                                              | [36m3285 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3291 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3291 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3297 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3297 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m3431 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3437 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3437 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3443 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3443 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3449 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3449 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m3455 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m3455 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Rope_qk_exact_prim.                                                             | [36m3461 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Rope_qk_exact_prim.                                                               | [36m3473 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3479 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3479 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3485 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3485 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m3491 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m3491 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Attention_exact_prim.                                                           | [36m3497 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Attention_exact_prim.                                                             | [36m3501 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3507 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3507 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3513 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3513 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m3690 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m3690 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3790 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3790 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m3868 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3968 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3968 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m3974 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m3974 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Attention_exact_prim.                                                          | [36m3980 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Attention_exact_prim.                                                            | [36m3980 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m3986 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m3986 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m3992 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m4021 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4027 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4027 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m4033 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m4069 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4075 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4075 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m4081 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m4158 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4164 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4164 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4170 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4170 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m4176 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m4184 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4190 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4190 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4196 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4196 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m4202 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m4485 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4491 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4491 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m4497 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m4497 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m4503 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m4511 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m4511 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4517 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4517 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4517 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4517 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m4523 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4523 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4523 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m4523 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m4529 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4529 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4529 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m4535 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m4535 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Residual_f.                                                                    | [36m4541 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Residual_f.                                                                      | [36m4541 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4547 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4547 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4553 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4553 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4559 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4559 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m4565 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m4593 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4599 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4599 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4605 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4605 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4611 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4611 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m4617 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m4617 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Residual_f.                                                                     | [36m4623 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Residual_f.                                                                       | [36m4625 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4631 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4631 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4637 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4637 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4643 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4643 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m4648 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m4649 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4654 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4654 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m4660 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m4660 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive rmsnorm_forward.                                                               | [36m4666 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive rmsnorm_forward.                                                                 | [36m4666 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4672 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4672 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m4678 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m4678 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m4684 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m4732 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4738 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4738 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m4744 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m4744 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive rmsnorm_forward.                                                                | [36m4750 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive rmsnorm_forward.                                                                  | [36m4758 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4764 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4764 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m4770 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m4770 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m4776 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m5721 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m5727 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m5727 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m5733 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m5733 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m5739 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m5771 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m5777 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m5777 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m5783 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m5783 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m5789 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m5789 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m5795 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m5795 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive swiglu_forward.                                                                | [36m5801 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive swiglu_forward.                                                                  | [36m5803 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m5809 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m5809 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m5813 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m5815 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m5815 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m5819 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m5819 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m5821 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m5825 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m5825 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m5831 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m6087 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6093 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6093 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6099 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6099 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6105 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6105 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m6111 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m6111 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive swiglu_forward.                                                                 | [36m6117 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive swiglu_forward.                                                                   | [36m6133 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6139 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6139 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6145 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6145 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m6151 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m6374 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6380 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6380 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m6386 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m6386 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m6392 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m6408 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6414 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6414 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6420 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6420 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6426 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6426 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m6432 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m6432 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Residual_f.                                                                    | [36m6438 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Residual_f.                                                                      | [36m6438 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6444 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6444 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6450 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6450 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6456 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6456 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m6462 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m6545 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6551 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6551 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m6557 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m6557 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive rmsnorm_forward.                                                               | [36m6563 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive rmsnorm_forward.                                                                 | [36m6563 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6569 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6569 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m6575 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m6575 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m6581 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m6704 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6710 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6710 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m6716 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m6716 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m6722 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m6850 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6856 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6856 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6862 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6862 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6868 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6868 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m6874 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m6874 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Residual_f.                                                                     | [36m6880 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Residual_f.                                                                       | [36m6882 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6888 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6888 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6894 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6894 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6900 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6900 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m6906 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m6989 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m6995 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m6995 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m7001 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m7001 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive rmsnorm_forward.                                                                | [36m7007 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive rmsnorm_forward.                                                                  | [36m7015 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m7021 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m7021 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m7027 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m7027 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m7033 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m7374 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m7380 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m7380 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m7386 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m7386 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m7392 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m7416 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m7422 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m7422 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m7428 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m7428 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m7434 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m7434 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m7440 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m7440 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Rope_qk_exact_prim.                                                            | [36m7446 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Rope_qk_exact_prim.                                                              | [36m7446 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m7452 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m7452 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m7458 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m7458 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m7826 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m7832 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m7832 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m7838 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m7838 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m7844 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m8036 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8042 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8042 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8048 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8048 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8054 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8054 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m8060 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m8060 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Rope_qk_exact_prim.                                                             | [36m8066 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Rope_qk_exact_prim.                                                               | [36m8078 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8084 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8084 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8090 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8090 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m8096 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m8096 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Attention_exact_prim.                                                           | [36m8102 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Attention_exact_prim.                                                             | [36m8106 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8112 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8112 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8118 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8118 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8296 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8296 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m8396 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m8396 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m8474 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m8574 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m8574 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m8580 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m8580 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Attention_exact_prim.                                                          | [36m8586 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Attention_exact_prim.                                                            | [36m8586 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m8592 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m8592 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m8598 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m8627 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8633 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8633 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m8639 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m8675 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m8681 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m8681 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m8687 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m8764 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m8770 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m8770 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m8776 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m8776 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m8782 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m8790 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8796 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8796 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m8802 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m8802 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m8808 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m9091 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9097 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9097 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m9103 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m9103 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m9109 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m9117 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m9117 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9123 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9123 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9123 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9123 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m9129 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9129 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9129 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m9129 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m9135 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9135 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9135 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m9141 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m9141 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Residual_f.                                                                    | [36m9147 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Residual_f.                                                                      | [36m9147 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9153 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9153 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9159 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9159 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9165 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9165 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m9171 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m9199 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9205 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9205 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9211 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9211 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9217 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9217 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m9223 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m9223 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Residual_f.                                                                     | [36m9229 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Residual_f.                                                                       | [36m9231 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9237 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9237 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9243 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9243 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9249 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9249 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m9254 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m9255 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9260 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9260 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m9266 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m9266 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive rmsnorm_forward.                                                               | [36m9272 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive rmsnorm_forward.                                                                 | [36m9272 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9278 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9278 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m9284 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m9284 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m9290 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m9338 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9344 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9344 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m9350 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m9350 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive rmsnorm_forward.                                                                | [36m9356 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive rmsnorm_forward.                                                                  | [36m9364 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9370 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9370 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m9376 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m9376 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m9382 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m10327 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10333 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10333 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m10339 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m10339 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m10345 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m10377 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10383 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10383 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10389 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10389 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10395 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10395 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m10401 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m10401 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive swiglu_forward.                                                                | [36m10407 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive swiglu_forward.                                                                  | [36m10409 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10415 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10415 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m10419 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10421 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10421 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m10425 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m10425 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m10427 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m10431 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m10431 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m10437 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m10693 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m10699 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m10699 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m10705 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m10705 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m10711 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m10711 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m10717 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m10717 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive swiglu_forward.                                                                 | [36m10723 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive swiglu_forward.                                                                   | [36m10739 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m10745 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m10745 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m10751 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m10751 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m10757 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m10980 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m10986 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m10986 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m10992 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m10992 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m10998 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m11014 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11020 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11020 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11026 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11026 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11032 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11032 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m11038 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m11038 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Residual_f.                                                                    | [36m11044 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Residual_f.                                                                      | [36m11044 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11050 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11050 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11056 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11056 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11062 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11062 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m11068 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m11151 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11157 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11157 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m11163 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m11163 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive rmsnorm_forward.                                                               | [36m11169 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive rmsnorm_forward.                                                                 | [36m11169 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11175 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11175 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11181 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11181 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11187 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11187 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m11193 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m11310 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11316 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11316 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m11322 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m11322 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m11328 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m11456 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11462 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11462 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11468 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11468 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11474 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11474 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m11480 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m11480 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Residual_f.                                                                     | [36m11486 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Residual_f.                                                                       | [36m11488 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11494 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11494 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11500 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11500 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11506 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11506 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m11512 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m11595 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11601 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11601 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m11607 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m11607 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive rmsnorm_forward.                                                                | [36m11613 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive rmsnorm_forward.                                                                  | [36m11621 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11627 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11627 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11633 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11633 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m11639 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m11639 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m11645 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m11746 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11752 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11752 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m11758 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m11758 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Matmul_f.                                                                      | [36m11764 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Matmul_f.                                                                        | [36m11780 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11786 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11786 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11792 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11792 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m11798 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m11798 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start send primitive SEND_DONE.                                                                        | [36m11804 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end send primitive SEND_DONE.                                                                          | [36m11808 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End DONE reception.                                                                                            | [36m11810 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_START.                                                                    | [36m11814 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m12198 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m12204 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m12204 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m12210 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m12210 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Matmul_f.                                                                       | [36m12216 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Matmul_f.                                                                         | [36m12344 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m12350 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m12350 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m12356 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m12356 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m12362 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m12362 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start send primitive SEND_DONE.                                                                         | [36m12368 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end send primitive SEND_DONE.                                                                           | [36m12372 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End DONE reception.                                                                                            | [36m12374 ns[0m
+
+Info: /OSCI/SystemC: Simulation stopped by user.
+[SIM_RESULT] makespan_cycles=6187
+[PROGRAM_MEMORY] core=0 lsu_issued=19 lsu_completed=19 lsu_hbm_read_bytes=12448 lsu_hbm_write_bytes=1024 lsu_sram_read_bytes=1024 lsu_sram_write_bytes=12448 lsu_residual=0 dte_residual=0
+[PROGRAM_MEMORY] core=16 lsu_issued=19 lsu_completed=19 lsu_hbm_read_bytes=12448 lsu_hbm_write_bytes=128 lsu_sram_read_bytes=128 lsu_sram_write_bytes=12448 lsu_residual=0 dte_residual=0
+[PROGRAM_IO_PROBE] id=program_output_probe_3139123bb11f175b core=0 address=22912 bytes=512 expected_checksum=076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560 checksum=076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560 valid=1 exact=1 pass=1
+[PROGRAM_IO_PROBE] id=program_output_probe_cb25c5eefc1d7876 core=16 address=14592 bytes=64 expected_checksum=f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b checksum=f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b valid=1 exact=1 pass=1
+[PROGRAM_IO] phase=verify mode=timing initializations=120 probes=2 checksum=a805574780734a63ac087fece61ee93d145dab5915ba8e9ba3263074d0f7c049 pass=1
+[INFO][0m[92m[SYSTEM][0m             [D2D] in_pkts=76 out_pkts=76 busy_cycles=0 stall_cycles=0.                                                     | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_TYPE] request_in=4 request_out=4 ack_in=8 ack_out=8 data_in=64 data_out=64.                               | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_DATA] in_pkts=64 out_pkts=64 in_seqhash=14127607474036311299 out_seqhash=14127607474036311299 in_csum=1464328461442026371 out_csum=1464328461442026371 out_inorder=0 out_minseq=1 out_maxseq=16 out_endseq=16 out_end_count=4 out_end_length=128 in_first_cycle=1825 in_last_cycle=4253 out_first_cycle=1828 out_last_cycle=4256. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [V5_SUBFLOW] idx=0 source=0 tag=1 subflow=0 in=16 out=16 in_seqhash=15844294779458371555 out_seqhash=15844294779458371555 in_csum=13070456232204633330 out_csum=13070456232204633330 inorder=1 minseq=1 maxseq=16 endseq=16 ends=1 end_length=128. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [V5_SUBFLOW] idx=0 source=0 tag=2 subflow=0 in=16 out=16 in_seqhash=15844294779458371555 out_seqhash=15844294779458371555 in_csum=16796410867667764466 out_csum=16796410867667764466 inorder=1 minseq=1 maxseq=16 endseq=16 ends=1 end_length=128. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [V5_SUBFLOW] idx=0 source=0 tag=3 subflow=0 in=16 out=16 in_seqhash=15844294779458371555 out_seqhash=15844294779458371555 in_csum=13526304956987540722 out_csum=13526304956987540722 inorder=1 minseq=1 maxseq=16 endseq=16 ends=1 end_length=128. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [V5_SUBFLOW] idx=0 source=0 tag=4 subflow=0 in=16 out=16 in_seqhash=15844294779458371555 out_seqhash=15844294779458371555 in_csum=4495391435458675954 out_csum=4495391435458675954 inorder=1 minseq=1 maxseq=16 endseq=16 ends=1 end_length=128. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_REPIN] total=76 changed=76 same=0.                                                                        | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_LINK] idx=0 die0->die1 dir=E req_in=4 req_out=4 ack_in=0 ack_out=0 data_in=64 data_out=64.                | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_LINK] idx=1 die1->die0 dir=W req_in=0 req_out=0 ack_in=8 ack_out=8 data_in=0 data_out=0.                  | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [SAF] reserved_packets=0 group_reserved_packets=0.                                                             | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DIE_ACT] router_pkts=4511,4027 mesh_pkts=4432,3948.                                                           | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [NOC_ACT] sends=700,252 stalls=0,0 d2d_source_stalls=0.                                                        | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [FLOW_DONE] .                                                                                                  | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [SAF_ADMIT] success=0 reject=0.                                                                                | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P STATS] core=0 source_read_bytes=1024 sram_source_read_bytes=1024 hbm_source_read_bytes=0 wire_bytes=1024 wire_fragments=64 noc_rx_write_bytes=0 tx_local_completions=4 rx_local_completions=0 admission_requests_sent=4 admission_requests_received=0 admission_acks_sent=0 admission_acks_received=4 duplicate_requests_suppressed=0 request_conflicts_rejected=0 request_aborts=0 completion_acks_sent=0 completion_acks_received=4 source_checksum=3094524304 wire_checksum=3094524304 destination_checksum=0. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P DRAIN] core=0 residual=0.                                                                              | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P STATS] core=16 source_read_bytes=0 sram_source_read_bytes=0 hbm_source_read_bytes=0 wire_bytes=0 wire_fragments=0 noc_rx_write_bytes=1024 tx_local_completions=0 rx_local_completions=4 admission_requests_sent=0 admission_requests_received=4 admission_acks_sent=4 admission_acks_received=0 duplicate_requests_suppressed=0 request_conflicts_rejected=0 request_aborts=0 completion_acks_sent=4 completion_acks_received=0 source_checksum=0 wire_checksum=0 destination_checksum=3094524304. | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P DRAIN] core=16 residual=0.                                                                             | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P TIMING DRAIN] residual=0.                                                                              | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [COLL_DRAIN] tree_entries=0 reduce_nodes=0 barriers=0 gather=0 reduce_rx=0 endpoints=0 dte_tokens=0 event=0.   | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DRAIN] router_residual=0.                                                                                     | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [CREDIT] data_balanced=1 ctrl_balanced=1.                                                                      | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DRAIN] d2d_link_residual=0.                                                                                   | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [START_DATA] enqueued=2 injected=2 accepted=2 delivered=2 consumed=2 completed=2.                              | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [LOCK] max_output_ref=1.                                                                                       | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [HOSTLANE] done_total=2 ack_total=4 mismatch=0 per_lane_done=1,0,0,0,1,0,0,0.                                  | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [HOSTSIG] done=0:1,16:1, ack=0:0:2,16:0:1,16:16:1,.                                                            | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Total Real-time Cost: 3.31671s.                                                                                | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Cleanup monitor components.                                                                                    | [36m12374 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Cleanup memory interface components.                                                                           | [36m12374 ns[0m

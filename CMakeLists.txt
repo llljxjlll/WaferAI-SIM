@@ -59,6 +59,7 @@ list(FILTER SRC_FILES EXCLUDE REGEX ".*/unittest/.*")
 # Remove 'test_dramsys.cpp' from the list of sources
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/test_dramsys\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/main\\.cpp")
+list(FILTER SRC_FILES EXCLUDE REGEX ".*/program_finalizer_main\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/build/.*")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/test/.*")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/config_generation/.*")
@@ -73,6 +74,8 @@ message(STATUS "Source files: ${SRC_FILES}")
 option(BUILD_DEBUG_TARGETS "Build debug versions of executables" OFF)
 option(BUILD_SANITIZER_TESTS
     "Build the focused Program Format ASan/UBSan/LSan gate" OFF)
+option(BUILD_N7_NIGHTLY_TESTS
+    "Register the multi-minute N7 TP4/L2 production timing gate" OFF)
 if(BUILD_RUNTIME_SANITIZER_TESTS AND NOT BUILD_SANITIZER_TESTS)
     message(FATAL_ERROR
         "BUILD_RUNTIME_SANITIZER_TESTS requires BUILD_SANITIZER_TESTS=ON")
@@ -157,6 +160,27 @@ function(add_test_executable target_name test_main_file)
 endfunction()
 
 add_test_executable(npusim       "./llm/unittest/npusim.cpp")
+add_executable(npusim_program_io_selftest
+    ./llm/unittest/program_io_selftest_main.cpp
+    ./llm/src/frontend/program_io.cpp
+    ./llm/src/frontend/program_finalizer.cpp
+    ./llm/src/isa/opcode.cpp
+    ./llm/src/isa/record_codec.cpp
+    ./llm/src/isa/program_format.cpp
+    ./llm/src/memory/hbm_address_map.cpp
+    ./llm/src/memory/hbm_runtime.cpp
+    ./llm/src/memory/sram_access_unit.cpp
+    ./llm/src/memory/sram_region.cpp
+    ./llm/src/memory/sram_storage.cpp)
+target_link_libraries(npusim_program_io_selftest PRIVATE
+    systemc nlohmann_json::nlohmann_json m pthread
+    DRAMSys::libdramsys
+    DRAMSys::util
+    DRAMSys::config)
+target_compile_options(npusim_program_io_selftest PRIVATE
+    -Wall -Wextra -Werror -ffunction-sections -fdata-sections)
+target_link_options(npusim_program_io_selftest PRIVATE
+    -Wl,--gc-sections)
 
 if(BUILD_RUNTIME_SANITIZER_TESTS)
     # Rebuild the production simulator sources with instrumentation.  The
@@ -181,6 +205,31 @@ add_executable(npusim_program_fixture
 target_compile_options(npusim_program_fixture PRIVATE
     -Wall -Wextra -Werror)
 
+# Strict Python-manifest to ProgramArtifact finalization gate.  This remains a
+# lightweight compiler-backend target: JSON + public ISA codecs only, with no
+# SystemC initialization or simulator-global state.
+add_executable(npusim_program_finalizer_selftest
+    ./llm/unittest/program_finalizer_selftest_main.cpp
+    ./llm/src/frontend/program_finalizer.cpp
+    ./llm/src/isa/opcode.cpp
+    ./llm/src/isa/record_codec.cpp
+    ./llm/src/isa/program_format.cpp)
+target_link_libraries(npusim_program_finalizer_selftest PRIVATE
+    nlohmann_json::nlohmann_json)
+target_compile_options(npusim_program_finalizer_selftest PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(npusim_program_finalizer
+    ./llm/src/frontend/program_finalizer_main.cpp
+    ./llm/src/frontend/program_finalizer.cpp
+    ./llm/src/isa/opcode.cpp
+    ./llm/src/isa/record_codec.cpp
+    ./llm/src/isa/program_format.cpp)
+target_link_libraries(npusim_program_finalizer PRIVATE
+    nlohmann_json::nlohmann_json)
+target_compile_options(npusim_program_finalizer PRIVATE
+    -Wall -Wextra -Werror)
+
 if(BUILD_SANITIZER_TESTS)
     add_executable(npusim_program_format_sanitizer_selftest
         ./llm/unittest/program_format_selftest_main.cpp
@@ -196,6 +245,28 @@ if(BUILD_SANITIZER_TESTS)
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME program_io_v1_selftest
+        COMMAND npusim_program_io_selftest)
+    set_tests_properties(program_io_v1_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;negative")
+
+    add_test(NAME program_io_cli_preflight
+        COMMAND ${CMAKE_COMMAND}
+            -DNPUSIM=$<TARGET_FILE:npusim>
+            -P ${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/check_program_io_cli_preflight.cmake)
+    set_tests_properties(program_io_cli_preflight PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;cli;negative")
+
+    add_test(NAME program_finalizer_v1_selftest
+        COMMAND npusim_program_finalizer_selftest)
+    set_tests_properties(program_finalizer_v1_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "frontend;isa;program;n6;negative")
+
     if(TARGET npusim_program_format_sanitizer_selftest)
         add_test(NAME program_format_v1_sanitizer_selftest
             COMMAND npusim_program_format_sanitizer_selftest)
@@ -488,6 +559,296 @@ if(BUILD_TESTING)
         FAIL_REGULAR_EXPRESSION "Loaded Program Format")
 
     find_package(PythonInterp 3 REQUIRED)
+
+    set(program_io_e1_t_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_program_io_e1_t.py")
+    add_test(NAME program_io_e1_t_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}:${CMAKE_SOURCE_DIR}/llm/test/frontend/unit
+            ${PYTHON_EXECUTABLE} -B ${program_io_e1_t_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --hardware ${CMAKE_SOURCE_DIR}/llm/test/sram/hardware_numa.json
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${program_runtime_dir})
+    set_tests_properties(program_io_e1_t_runtime PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;e1;runtime;interop"
+        PASS_REGULAR_EXPRESSION "\\[PROGRAM_IO E1-T\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(stage1a_state_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage1a_state_cases.py")
+    foreach(stage1a_case IN ITEMS p1 k1 pd1)
+        string(TOUPPER "${stage1a_case}" stage1a_case_upper)
+        add_test(NAME stage1a_${stage1a_case}_runtime
+            COMMAND ${CMAKE_COMMAND} -E env
+                PYTHONPATH=${CMAKE_SOURCE_DIR}
+                ${PYTHON_EXECUTABLE} -B ${stage1a_state_runtime_runner}
+                --case ${stage1a_case}
+                --npusim $<TARGET_FILE:npusim>
+                --finalizer $<TARGET_FILE:npusim_program_finalizer>
+                --resolver $<TARGET_FILE:npusim_program_io_selftest>
+                --hardware ${CMAKE_SOURCE_DIR}/llm/test/sram/hardware_numa.json
+                --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --runtime-root ${program_runtime_dir}
+                --report-root ${program_runtime_dir}/stage1a-reports)
+        set_tests_properties(stage1a_${stage1a_case}_runtime PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            TIMEOUT 300
+            RUN_SERIAL TRUE
+            LABELS "frontend;program;stage1a;state;runtime;${stage1a_case}"
+            PASS_REGULAR_EXPRESSION "\\[STAGE1A ${stage1a_case_upper}\\] PASS"
+            FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+    endforeach()
+
+    set(stage2_dense_forward_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage2_dense_forward.py")
+    foreach(stage2_tp IN ITEMS 1 2 4)
+        if(stage2_tp EQUAL 1)
+            set(stage2_timeout 300)
+        elseif(stage2_tp EQUAL 2)
+            set(stage2_timeout 600)
+        else()
+            set(stage2_timeout 1200)
+        endif()
+        add_test(NAME stage2_dense_forward_tp${stage2_tp}_runtime
+            COMMAND ${CMAKE_COMMAND} -E env
+                PYTHONPATH=${CMAKE_SOURCE_DIR}
+                ${PYTHON_EXECUTABLE} -B ${stage2_dense_forward_runner}
+                --tp-degree ${stage2_tp}
+                --npusim $<TARGET_FILE:npusim>
+                --finalizer $<TARGET_FILE:npusim_program_finalizer>
+                --resolver $<TARGET_FILE:npusim_program_io_selftest>
+                --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --runtime-root ${program_runtime_dir}
+                --timeout ${stage2_timeout})
+        set_tests_properties(stage2_dense_forward_tp${stage2_tp}_runtime PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            TIMEOUT ${stage2_timeout}
+            RUN_SERIAL TRUE
+            LABELS "frontend;program;n6;program-io;stage2;runtime;tp${stage2_tp}"
+            PASS_REGULAR_EXPRESSION "\\[STAGE2 TP${stage2_tp}\\] PASS"
+            FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+    endforeach()
+
+    set(stage4_pd_pre_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage4_pd_pre_runtime.py")
+    add_test(NAME stage4_pds_tp1_pre_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${stage4_pd_pre_runtime_runner}
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --runtime-root ${program_runtime_dir})
+    set_tests_properties(stage4_pds_tp1_pre_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 180
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;stage4;pds;pre-runtime"
+        PASS_REGULAR_EXPRESSION "\\[STAGE4 PDS TP1 PRE-RUNTIME\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(stage4_pd_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage4_pd_runtime.py")
+    foreach(stage4_case IN ITEMS fused pds)
+        string(TOUPPER "${stage4_case}" stage4_case_upper)
+        add_test(NAME stage4_${stage4_case}_tp1_runtime
+            COMMAND ${CMAKE_COMMAND} -E env
+                PYTHONPATH=${CMAKE_SOURCE_DIR}
+                ${PYTHON_EXECUTABLE} -B ${stage4_pd_runtime_runner}
+                --case ${stage4_case}
+                --npusim $<TARGET_FILE:npusim>
+                --finalizer $<TARGET_FILE:npusim_program_finalizer>
+                --resolver $<TARGET_FILE:npusim_program_io_selftest>
+                --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --runtime-root ${program_runtime_dir}
+                --report ${program_runtime_dir}/stage4-${stage4_case}-tp1-report.json
+                --timeout 300)
+        set_tests_properties(stage4_${stage4_case}_tp1_runtime PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            TIMEOUT 300
+            RUN_SERIAL TRUE
+            LABELS "frontend;program;n6;program-io;stage4;${stage4_case};runtime"
+            PASS_REGULAR_EXPRESSION "\\[STAGE4 ${stage4_case_upper} TP1\\] PASS"
+            FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+    endforeach()
+
+    add_test(NAME stage4_pdr_tp2_to_tp1_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${stage4_pd_runtime_runner}
+            --case pdr
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --runtime-root ${program_runtime_dir}
+            --report ${program_runtime_dir}/stage4-pdr-tp2-to-tp1-report.json
+            --timeout 600)
+    set_tests_properties(stage4_pdr_tp2_to_tp1_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 600
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;stage4;pdr;runtime"
+        PASS_REGULAR_EXPRESSION "\\[STAGE4 PDR TP2_TO_TP1\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(train_forward_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_train_forward_runtime.py")
+    add_test(NAME train_forward_dp2_tp2_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${train_forward_runtime_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --runtime-root ${program_runtime_dir}
+            --report ${program_runtime_dir}/train-forward-dp2-tp2-report.json
+            --timeout 600)
+    set_tests_properties(train_forward_dp2_tp2_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 600
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;train;runtime;dp2;tp2"
+        PASS_REGULAR_EXPRESSION "\\[TRAIN FORWARD DP2 TP2\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    set(stage3_static_profiles_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage3_static_profiles.py")
+    foreach(stage3_case IN ITEMS prefill mixed decode)
+        string(TOUPPER "${stage3_case}" stage3_case_upper)
+        add_test(NAME stage3_static_${stage3_case}_runtime
+            COMMAND ${CMAKE_COMMAND} -E env
+                PYTHONPATH=${CMAKE_SOURCE_DIR}
+                ${PYTHON_EXECUTABLE} -B ${stage3_static_profiles_runner}
+                --case ${stage3_case}
+                --npusim $<TARGET_FILE:npusim>
+                --finalizer $<TARGET_FILE:npusim_program_finalizer>
+                --resolver $<TARGET_FILE:npusim_program_io_selftest>
+                --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --runtime-root ${program_runtime_dir}
+                --timeout 300)
+        set_tests_properties(stage3_static_${stage3_case}_runtime PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            TIMEOUT 300
+            RUN_SERIAL TRUE
+            LABELS "frontend;program;n6;program-io;stage3;runtime;${stage3_case}"
+            PASS_REGULAR_EXPRESSION "\\[STAGE3 ${stage3_case_upper}\\] PASS"
+            FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+    endforeach()
+
+    set(stage3_static_profile_negative_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage3_static_profile_negative_evidence.py")
+    add_test(NAME stage3_static_profile_negative_evidence
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${stage3_static_profile_negative_runner})
+    set_tests_properties(stage3_static_profile_negative_evidence PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 60
+        RUN_SERIAL TRUE
+        LABELS "frontend;stage3;negative"
+        PASS_REGULAR_EXPRESSION "\\[STAGE3 NEGATIVE\\] PASS: witnesses=9 deterministic=1")
+
+    set(stage2_dense_forward_negative_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage2_dense_forward_negative_evidence.py")
+    add_test(NAME stage2_dense_forward_negative_evidence
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${stage2_dense_forward_negative_runner}
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --runtime-root ${program_runtime_dir})
+    set_tests_properties(stage2_dense_forward_negative_evidence PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 180
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;program-io;stage2;negative"
+        PASS_REGULAR_EXPRESSION "\\[STAGE2 NEGATIVE\\] PASS: witnesses=9 deterministic=1")
+
+
+    set(naive_n7_e1_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_naive_e1.py")
+    add_test(NAME naive_n7_e1_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B ${naive_n7_e1_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --spec ${CMAKE_SOURCE_DIR}/notes/frontend/examples/naive_dense_tp2.yaml
+            --hardware ${CMAKE_SOURCE_DIR}/notes/frontend/examples/hardware_2x1.json
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${program_runtime_dir})
+    set_tests_properties(naive_n7_e1_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n7;e1;runtime;production"
+        PASS_REGULAR_EXPRESSION "\\[NAIVE N7 E1\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
+    if(BUILD_N7_NIGHTLY_TESTS)
+        set(naive_n7_e2_runner
+            "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_naive_e2.py")
+        add_test(NAME naive_n7_e2_runtime
+            COMMAND ${CMAKE_COMMAND} -E env
+                PYTHONPATH=${CMAKE_SOURCE_DIR}
+                ${PYTHON_EXECUTABLE} -B ${naive_n7_e2_runner}
+                --npusim $<TARGET_FILE:npusim>
+                --finalizer $<TARGET_FILE:npusim_program_finalizer>
+                --spec ${CMAKE_SOURCE_DIR}/notes/frontend/examples/naive_dense_tp4.yaml
+                --hardware ${CMAKE_SOURCE_DIR}/notes/frontend/examples/hardware_2x2.json
+                --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+                --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+                --runtime-root ${program_runtime_dir})
+        set_tests_properties(naive_n7_e2_runtime PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            TIMEOUT 900
+            RUN_SERIAL TRUE
+            LABELS "frontend;program;n7;e2;runtime;nightly"
+            PASS_REGULAR_EXPRESSION "\\[NAIVE N7 E2\\] PASS"
+            FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+    endif()
+
+    add_test(NAME frontend_python_unit
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}
+            ${PYTHON_EXECUTABLE} -B -m unittest discover
+            -s ${CMAKE_SOURCE_DIR}/llm/test/frontend/unit
+            -p test_*.py
+            -v)
+    set_tests_properties(frontend_python_unit PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 180
+        LABELS "frontend;n1;unit;contracts")
+
+    set(frontend_n0_backend_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_n0_backend_gate.py")
+    add_test(NAME frontend_n0_backend_gate
+        COMMAND ${PYTHON_EXECUTABLE} ${frontend_n0_backend_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --program-fixture $<TARGET_FILE:npusim_program_fixture>
+            --hardware ${CMAKE_SOURCE_DIR}/llm/test/sram/hardware_numa.json
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${CMAKE_BINARY_DIR})
+    set_tests_properties(frontend_n0_backend_gate PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+        LABELS "frontend;n0;backend;program;p2p;runtime;numerical"
+        PASS_REGULAR_EXPRESSION
+            "\\[FRONTEND N0 BACKEND\\] PASS: 2-die TP2 dual-owner RS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
     function(add_p5_endpoint_fixture fixture_name fixture_option)
         set(fixture_path
             "${program_runtime_dir}/p5_${fixture_name}.npup")

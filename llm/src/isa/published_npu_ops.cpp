@@ -213,9 +213,9 @@ PublishedNpuHardwareView PublishedNpuHardwareForCore(int core_id) {
     return result;
 }
 
-NpuOps EvaluatePublishedNpuOps(Opcode opcode,
-                               const PublishedNpuParameters &parameters,
-                               const PublishedNpuHardwareView &hardware) {
+NpuOps EvaluateLegacyPublishedNpuOps(
+    Opcode opcode, const PublishedNpuParameters &parameters,
+    const PublishedNpuHardwareView &hardware) {
     switch (opcode) {
     case Opcode::MATMUL:
         return EvaluateMatmul(parameters, hardware);
@@ -322,4 +322,176 @@ NpuOps EvaluatePublishedNpuOps(Opcode opcode,
     default:
         Invalid("opcode is not a published v1 NPU cost operation");
     }
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    Opcode opcode, const PublishedNpuParameters &parameters,
+    const PublishedNpuHardwareView &hardware) {
+    PublishedNpuWork result;
+    result.ops = EvaluateLegacyPublishedNpuOps(opcode, parameters, hardware);
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const RopeQkExactOperands &operands) {
+    ValidateExternalRecord(
+        ExternalRecord{Opcode::ROPE_QK_EXACT, operands});
+    const uint64_t rotated_heads = CheckedAdd(
+        operands.rank_num_heads, operands.rank_num_kv_heads,
+        "ROPE rotated heads");
+    const uint64_t rotations = Product(
+        {operands.logical_tokens, rotated_heads, operands.rotary_dim},
+        "ROPE rotations");
+    const uint64_t activation_heads = CheckedAdd(
+        operands.rank_num_heads,
+        CheckedMultiply(operands.rank_num_kv_heads, 2,
+                        "ROPE activation heads"),
+        "ROPE activation heads");
+    PublishedNpuWork result;
+    result.ops.vec = CheckedMultiply(rotations, 3, "ROPE vector ops");
+    result.memory_read_bytes = Product(
+        {2, operands.logical_tokens, activation_heads, operands.head_dim},
+        "ROPE memory read bytes");
+    result.memory_write_bytes = result.memory_read_bytes;
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const AttentionExactOperands &operands) {
+    ValidateExternalRecord(
+        ExternalRecord{Opcode::ATTENTION_EXACT, operands});
+    const uint64_t attention_elements = Product(
+        {operands.query_key_pairs, operands.rank_num_heads},
+        "ATTENTION elements");
+    const uint64_t activation_heads = CheckedAdd(
+        operands.rank_num_heads,
+        CheckedMultiply(operands.rank_num_kv_heads, 2,
+                        "ATTENTION activation heads"),
+        "ATTENTION activation heads");
+    PublishedNpuWork result;
+    result.ops.exu = Product(
+        {4, attention_elements, operands.head_dim},
+        "ATTENTION EXU ops");
+    result.ops.sfu = attention_elements;
+    result.ops.vec = CheckedMultiply(
+        attention_elements, 2, "ATTENTION vector ops");
+    result.memory_read_bytes = Product(
+        {2, operands.query_tokens, activation_heads, operands.head_dim},
+        "ATTENTION activation read bytes");
+    result.memory_write_bytes = Product(
+        {2, operands.query_tokens, operands.rank_num_heads,
+         operands.head_dim},
+        "ATTENTION activation write bytes");
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const EmbeddingLookupOperands &operands) {
+    ValidateExternalRecord(
+        ExternalRecord{Opcode::EMBEDDING_LOOKUP, operands});
+    PublishedNpuWork result;
+    result.memory_read_bytes = Product(
+        {operands.rank_rows,
+         CheckedAdd(4, CheckedMultiply(2, operands.hidden_size,
+                                       "EMBEDDING row bytes"),
+                    "EMBEDDING row bytes")},
+        "EMBEDDING memory read bytes");
+    result.memory_write_bytes = Product(
+        {2, operands.rank_rows, operands.hidden_size},
+        "EMBEDDING memory write bytes");
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const GreedySampleOperands &operands) {
+    ValidateExternalRecord(
+        ExternalRecord{Opcode::GREEDY_SAMPLE, operands});
+    PublishedNpuWork result;
+    result.memory_read_bytes = Product(
+        {2, operands.sample_count, operands.vocab_size},
+        "GREEDY memory read bytes");
+    result.memory_write_bytes = CheckedMultiply(
+        4, operands.sample_count, "GREEDY memory write bytes");
+    result.comparisons = operands.comparisons;
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const CrossEntropyForwardOperands &operands) {
+    ValidateExternalRecord(
+        ExternalRecord{Opcode::CROSS_ENTROPY_FORWARD, operands});
+    PublishedNpuWork result;
+    result.ops.sfu = Product(
+        {operands.rank_rows,
+         CheckedAdd(operands.vocab_size, 1, "CE SFU per row")},
+        "CE SFU ops");
+    result.ops.vec = Product(
+        {operands.rank_rows,
+         CheckedAdd(CheckedMultiply(2, operands.vocab_size,
+                                    "CE vector per row"),
+                    1, "CE vector per row")},
+        "CE vector ops");
+    result.memory_read_bytes = Product(
+        {operands.rank_rows,
+         CheckedAdd(CheckedMultiply(2, operands.vocab_size,
+                                    "CE read per row"),
+                    4, "CE read per row")},
+        "CE memory read bytes");
+    result.memory_write_bytes =
+        CheckedMultiply(4, operands.rank_rows, "CE memory write bytes");
+    result.comparisons = CheckedMultiply(
+        operands.rank_rows, operands.vocab_size - 1, "CE comparisons");
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const CrossEntropyBackwardOperands &operands) {
+    ValidateExternalRecord(
+        ExternalRecord{Opcode::CROSS_ENTROPY_BACKWARD, operands});
+    PublishedNpuWork result;
+    result.ops.sfu = Product(
+        {operands.rank_rows,
+         CheckedAdd(operands.vocab_size, 1, "CE backward SFU per row")},
+        "CE backward SFU ops");
+    result.ops.vec = Product(
+        {operands.rank_rows,
+         CheckedAdd(CheckedMultiply(4, operands.vocab_size,
+                                    "CE backward vector per row"),
+                    1, "CE backward vector per row")},
+        "CE backward vector ops");
+    result.memory_read_bytes = CheckedAdd(
+        CheckedAdd(Product({2, operands.rank_rows, operands.vocab_size},
+                           "CE backward logits read bytes"),
+                   CheckedMultiply(4, operands.rank_rows,
+                                   "CE backward label read bytes"),
+                   "CE backward memory read bytes"),
+        CheckedMultiply(4, operands.upstream_elements,
+                        "CE backward upstream read bytes"),
+        "CE backward memory read bytes");
+    result.memory_write_bytes = Product(
+        {2, operands.rank_rows, operands.vocab_size},
+        "CE backward memory write bytes");
+    result.comparisons = CheckedMultiply(
+        operands.rank_rows, operands.vocab_size - 1,
+        "CE backward comparisons");
+    return result;
+}
+
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const SgdUpdateOperands &operands) {
+    ValidateExternalRecord(ExternalRecord{Opcode::SGD_UPDATE, operands});
+    PublishedNpuWork result;
+    result.ops.vec = CheckedMultiply(
+        2, operands.element_count, "SGD vector ops");
+    result.memory_read_bytes = CheckedMultiply(
+        6, operands.element_count, "SGD memory read bytes");
+    result.memory_write_bytes = CheckedMultiply(
+        2, operands.element_count, "SGD memory write bytes");
+    return result;
+}
+
+NpuOps EvaluatePublishedNpuOps(
+    Opcode opcode, const PublishedNpuParameters &parameters,
+    const PublishedNpuHardwareView &hardware) {
+    return EvaluatePublishedNpuWork(opcode, parameters, hardware).ops;
 }

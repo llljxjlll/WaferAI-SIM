@@ -1,0 +1,222 @@
+{
+  "artifact_bytes": 27676,
+  "artifact_sha256": "fdd1f19839881c285e6f5a7a4deb4db8f4be663be92c39ef32a175658be7a7be",
+  "core_count": 2,
+  "linked_manifest_digest": "7d6458a6961d1c1f2df69fbab852d4aa6a6028388c92a29bf3c66e9cb12c6cc3",
+  "linked_manifest_id": "linked_program_manifest_60debdfc8fe0e442",
+  "record_count": 220,
+  "relocation_count": 354,
+  "runtime_assignments": [
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_030af5c785cd2399",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_7f8d1f3cda9a3f7f",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_daff9ef1ec229db5",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_e360ee40f463bf80",
+      "value": 0
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_365ab8e9e3f245ef",
+      "value": 0
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_44570ee82db5c592",
+      "value": 1
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_5b9d00cd504ac83b",
+      "value": 2
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_d7f726351f026719",
+      "value": 3
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_00c05216c340dcc2",
+      "value": 0
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_020eb2437b5fec89",
+      "value": 1
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_0d95bd831f6a8388",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_0f8651bc76144c60",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_1d47f47a4ef73e73",
+      "value": 1
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_2181c0d85cfcab2a",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_26938e3f9cfa4ef7",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_4007a2930735b3b4",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_44dba6ed9748c41a",
+      "value": 2
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_4786a5a84f14b302",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_4d7954de0329db68",
+      "value": 0
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_681c6ff0f66f8cd7",
+      "value": 2
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_68676d954dc852ad",
+      "value": 3
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_770f6315341cf7f8",
+      "value": 3
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_7e484894e55cb400",
+      "value": 4
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_867fbbc30a7e9414",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_874bf45af00d080f",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_87fb21ca72b94f3e",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_8a8232ce898fb2ac",
+      "value": 5
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_9018c63dd8360c45",
+      "value": 4
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_a704efe032668580",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_b3413bd9c4193866",
+      "value": 0
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_b5e370548cb02605",
+      "value": 5
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_c7e415336a23d876",
+      "value": 6
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_ca17e8881d46a62f",
+      "value": 6
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_d70309d1f8e70940",
+      "value": 7
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_de8ebe1384da9321",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_e609b6995de4a155",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_f48caf47eca55a87",
+      "value": 7
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_f5f97692ad997a93",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_f637ea0c2283f8d5",
+      "value": 8
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_fd157943ad58b59d",
+      "value": 8
+    },
+    {
+      "kind": "start_tag",
+      "symbol_id": "start_tag_2f7d42eade0007da",
+      "value": 0
+    },
+    {
+      "kind": "start_tag",
+      "symbol_id": "start_tag_bf30d4a81f0b2684",
+      "value": 1
+    }
+  ],
+  "schema_version": "npusim.program_finalization_report/v1alpha1"
+}

@@ -38,7 +38,9 @@ public:
 
     // Endpoint REDUCE over all rank-major operands.  Requires Complete().
     // Integer encoding is little-endian.  SUM wraps modulo the dtype width;
-    // INT32/INT64 MAX uses signed two's-complement ordering.
+    // INT32/INT64 MAX uses signed two's-complement ordering. FP16 SUM decodes
+    // each rank-major operand exactly, performs each combine in FP32, then
+    // emits canonical NaN or IEEE RNE FP16.
     std::vector<uint8_t> TakeReduced(CollDType dtype,
                                      CollReduceOp reduce_op);
 

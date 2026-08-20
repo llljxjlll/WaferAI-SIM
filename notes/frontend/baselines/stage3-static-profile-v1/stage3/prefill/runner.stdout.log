@@ -1,0 +1,1 @@
+[STAGE3 PREFILL] PASS: timing_execution=1 compute_functional=0 model_functional=0 artifact_bytes=22258 sha256=4b1204fa698553e202d97a77dc3fdb4f60f38051b1a82a4dca84ec4981d76777 records=159 relocations=297 makespan_cycles=5805 marker_digest=f8fa4a291d691110f634368275564ad99e8f62e606b9e59bfbe8993e4f7ed106 report_id=stage3_static_profile_runtime_report_b114b9f7a4b0df3d

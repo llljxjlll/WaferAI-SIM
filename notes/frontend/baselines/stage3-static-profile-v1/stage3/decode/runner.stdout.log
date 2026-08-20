@@ -1,0 +1,1 @@
+[STAGE3 DECODE] PASS: timing_execution=1 compute_functional=0 model_functional=0 artifact_bytes=37818 sha256=b4dac762c09ee1dfa717ebd77096b40c1a8c99f34a88c400427510a8099adb36 records=275 relocations=501 makespan_cycles=13081 marker_digest=00d6dde839fcc3a3fd1a4b24b42808ec8b325fba97f743746519f38a2eef2678 report_id=stage3_static_profile_runtime_report_e6c0b513972abec0

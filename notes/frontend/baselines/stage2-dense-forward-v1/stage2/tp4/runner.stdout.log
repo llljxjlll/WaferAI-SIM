@@ -1,0 +1,1 @@
+[STAGE2 TP4] PASS: timing_execution=1 compute_functional=0 model_functional=0 artifact=179316B records=1452 relocations=2260 LSU_LOAD=60 LSU_STORE=16 HBM_READ=19072 HBM_WRITE=1024 D2D_LOGICAL_BYTES=6144 D2D_BYTE_HOPS=8192 ACK=8 DONE=4 repeat=2 makespan_cycles=7503 sha256=343ba30a2c10af3bead6d08f855527ec2d0f305737e13a1987ccef566114cead

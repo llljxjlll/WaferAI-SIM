@@ -30,32 +30,37 @@ void Matmul_f::taskCore(TaskCoreContext &context, string prim_name,
     LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
                     << " read weight";
 
-    auto label_weight = ETERNAL_PREFIX + prim_name + "_w";
-    if (SPEC_LOAD_STATIC == "layer") {
-        // 直接加载一整层的权重。这里模拟为读取单个完整tensor。spill时优先排出最旧访问权重。
-        checkStaticData(context, dram_time, data_chunk_addr["weight"],
-                        GetFromPairedVector(data_chunk, "weight"), label_weight,
-                        false);
-    } else if (SPEC_LOAD_STATIC == "single") {
-        // 加载单个完整权重。这里模拟为读取单个完整tensor。spill时优先排出最新访问权重。
-        checkStaticData(context, dram_time, data_chunk_addr["weight"],
-                        GetFromPairedVector(data_chunk, "weight"), label_weight,
-                        false);
-    } else if (SPEC_LOAD_STATIC == "partial") {
-        // 加载部分权重。这里模拟为分批读取权重的一部分。spill时优先排出最新访问权重。
-        int mac_size = 64 * 1024;
-        LOG_DEBUG(MEMORY) << "mac_size " << mac_size;
-
-        checkStaticDataTile(context, dram_time, data_chunk_addr["weight"],
+    if (usesLegacyImplicitMemory(context)) {
+        auto label_weight = ETERNAL_PREFIX + prim_name + "_w";
+        if (SPEC_LOAD_STATIC == "layer") {
+            // 直接加载一整层的权重。这里模拟为读取单个完整tensor。spill时优先排出最旧访问权重。
+            checkStaticData(context, dram_time, data_chunk_addr["weight"],
                             GetFromPairedVector(data_chunk, "weight"),
-                            label_weight, false, mac_size);
+                            label_weight, false);
+        } else if (SPEC_LOAD_STATIC == "single") {
+            // 加载单个完整权重。这里模拟为读取单个完整tensor。spill时优先排出最新访问权重。
+            checkStaticData(context, dram_time, data_chunk_addr["weight"],
+                            GetFromPairedVector(data_chunk, "weight"),
+                            label_weight, false);
+        } else if (SPEC_LOAD_STATIC == "partial") {
+            // 加载部分权重。这里模拟为分批读取权重的一部分。spill时优先排出最新访问权重。
+            int mac_size = 64 * 1024;
+            LOG_DEBUG(MEMORY) << "mac_size " << mac_size;
+
+            checkStaticDataTile(context, dram_time,
+                                data_chunk_addr["weight"],
+                                GetFromPairedVector(data_chunk, "weight"),
+                                label_weight, false, mac_size);
+        }
+
+        LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
+                        << " read bias";
+
+        auto label_bias = ETERNAL_PREFIX + prim_name + "_b";
+        checkStaticData(context, dram_time, data_chunk_addr["bias"],
+                        GetFromPairedVector(data_chunk, "bias"), label_bias,
+                        false);
     }
-
-    LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid << " read bias";
-
-    auto label_bias = ETERNAL_PREFIX + prim_name + "_b";
-    checkStaticData(context, dram_time, data_chunk_addr["bias"],
-                    GetFromPairedVector(data_chunk, "bias"), label_bias, false);
 
     auto &p = param_value;
 

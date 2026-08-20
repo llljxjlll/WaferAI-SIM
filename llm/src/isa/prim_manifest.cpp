@@ -136,6 +136,20 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
      V::INTERNAL, L::STABLE, S::AVAILABLE},
     {PrimId::COLLECTIVE_LAUNCH_V1, "Collective_launch_v1_prim",
      C::COMMUNICATION, V::INTERNAL, L::STABLE, S::AVAILABLE},
+    {PrimId::ROPE_QK_EXACT, "Rope_qk_exact_prim", C::COMPUTE, V::PUBLIC,
+     L::STABLE, S::AVAILABLE},
+    {PrimId::ATTENTION_EXACT, "Attention_exact_prim", C::COMPUTE, V::PUBLIC,
+     L::STABLE, S::AVAILABLE},
+    {PrimId::EMBEDDING_LOOKUP, "Embedding_lookup_prim", C::COMPUTE,
+     V::PUBLIC, L::STABLE, S::AVAILABLE},
+    {PrimId::GREEDY_SAMPLE, "Greedy_sample_prim", C::COMPUTE, V::PUBLIC,
+     L::STABLE, S::AVAILABLE},
+    {PrimId::CROSS_ENTROPY_FORWARD, "Cross_entropy_forward_prim",
+     C::COMPUTE, V::PUBLIC, L::STABLE, S::AVAILABLE},
+    {PrimId::CROSS_ENTROPY_BACKWARD, "Cross_entropy_backward_prim",
+     C::COMPUTE, V::PUBLIC, L::STABLE, S::AVAILABLE},
+    {PrimId::SGD_UPDATE, "Sgd_update_prim", C::COMPUTE, V::PUBLIC,
+     L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

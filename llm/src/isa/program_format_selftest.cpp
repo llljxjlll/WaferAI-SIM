@@ -125,6 +125,17 @@ ExternalRecord RenameRecord(uint64_t old_symbol, uint64_t new_symbol) {
     r.operands = SramRenameOperands{old_symbol, new_symbol};
     return r;
 }
+ExternalRecord AllocAtRecord(uint64_t region_name, uint64_t label_symbol) {
+    SramAllocAtOperands operands;
+    operands.region_name_string_index = region_name;
+    operands.label_symbol_index = label_symbol;
+    operands.region_offset_bytes = 32;
+    operands.size_bytes = 64;
+    operands.alignment_bytes = 16;
+    operands.lifetime = SramLifetime::TASK;
+    operands.spillable = true;
+    return ExternalRecord{Opcode::SRAM_ALLOC_AT, operands};
+}
 ExternalRecord BindRecord(uint64_t first = 0, uint64_t second = 1,
                           uint64_t output = 2) {
     ExternalRecord r;
@@ -157,6 +168,30 @@ ExternalRecord DteSendRecord(EndpointSourceSpace source_space) {
     o.source.absolute_address_bytes = 0x1000;
     r.operands = o;
     return r;
+}
+ExternalRecord LocalReduceRecord(uint64_t source = 0x100,
+                                 uint64_t destination = 0x118) {
+    ExternalRecord r;
+    r.opcode = Opcode::LOCAL_REDUCE;
+    LocalReduceOperands o;
+    o.input_count = 3;
+    o.element_count = 4;
+    o.input_stride_bytes = 8;
+    o.source = {SramAddressKind::ABSOLUTE, source, 0, 0};
+    o.destination = {SramAddressKind::ABSOLUTE, destination, 0, 0};
+    r.operands = o;
+    return r;
+}
+ProgramArtifact LocalReduceArtifact(uint64_t source = 0x100) {
+    ProgramArtifact a;
+    a.strings = {"local-reduce-sram"};
+    a.symbols = {{0, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 32}};
+    a.cores = {{0, {LocalReduceRecord(source)}}};
+    a.envelope.active_cores = {0};
+    a.envelope.terminal_cores = {0};
+    a.envelope.expected_ack_cores = {0};
+    a.envelope.expected_done_cores = {0};
+    return a;
 }
 ProgramArtifact DteSendRelocationArtifact(EndpointSourceSpace source_space,
                                           SemanticOperandId operand) {
@@ -400,7 +435,7 @@ void CheckPositive(Checks &c) {
     c.Check(ReadLe(single, 40, 8) == 64, "section table offset");
     const std::string header = Hex(single, kProgramHeaderSize);
     static constexpr const char *golden =
-        "4e5055505247310001000000010000004000010000000000000000000000000007000000000000004000000000000000bc010000000000004e94274600000000";
+        "4e5055505247310001000000010004004000010000000000000000000000000007000000000000004000000000000000bc01000000000000fc75fde300000000";
     c.Check(header == golden, "golden header expected=" +
                 std::string(golden) + " actual=" + header);
 }
@@ -465,7 +500,7 @@ void CheckHeaders(Checks &c) {
     const std::vector<M> mutations{
         {0, 1, 0, "magic"}, {8, 2, 2, "format major"},
         {10, 2, 1, "format minor"}, {12, 2, 2, "ISA major"},
-        {14, 2, 1, "ISA minor"}, {16, 2, 63, "header size"},
+        {14, 2, 2, "old ISA 1.2"}, {16, 2, 63, "header size"},
         {18, 1, 2, "endianness"}, {19, 1, 1, "reserved"},
         {24, 8, uint64_t{1} << 63, "unknown capability"},
         {32, 4, 6, "missing descriptor"},
@@ -621,6 +656,27 @@ void CheckSymbolsAndRelocations(Checks &c) {
              [&] { EncodeProgramArtifact(a); });
 
     a = MultiArtifact();
+    a.cores[0].records = {AllocAtRecord(1, 0)};
+    a.relocations = {
+        {0, 0, static_cast<uint16_t>(SemanticOperandId::REGION_NAME),
+         SemanticRelocationKind::SRAM_REGION, 1, 0},
+        {0, 0, static_cast<uint16_t>(SemanticOperandId::LABEL_SYMBOL),
+         SemanticRelocationKind::SRAM_LABEL, 0, 0}};
+    c.Accept("SRAM_ALLOC_AT accepts exact region and label relocations",
+             [&] { EncodeProgramArtifact(a); });
+    a.relocations[0].kind = SemanticRelocationKind::SRAM_LABEL;
+    a.relocations[0].symbol_index = 0;
+    c.Reject("SRAM_ALLOC_AT region relocation rejects label symbol",
+             [&] { EncodeProgramArtifact(a); });
+    a = MultiArtifact();
+    a.cores[0].records = {AllocAtRecord(1, 0)};
+    a.relocations = {{
+        0, 0, static_cast<uint16_t>(SemanticOperandId::LABEL_SYMBOL),
+        SemanticRelocationKind::SRAM_REGION, 1, 0}};
+    c.Reject("SRAM_ALLOC_AT label relocation rejects region symbol",
+             [&] { EncodeProgramArtifact(a); });
+
+    a = MultiArtifact();
     a.cores[0].records = {ClearRecord(1)};
     a.relocations.clear();
     c.Reject("SRAM_CLEAR requires SRAM_LABEL",
@@ -653,6 +709,41 @@ void CheckSymbolsAndRelocations(Checks &c) {
     a = MultiArtifact();
     a.symbols[1].size_bytes = 95;
     c.Reject("LSU named region rejects one-byte-short span",
+             [&] { EncodeProgramArtifact(a); });
+    c.Accept("LOCAL_REDUCE absolute spans fit declared SRAM region",
+             [&] { EncodeProgramArtifact(LocalReduceArtifact()); });
+    a = LocalReduceArtifact();
+    a.symbols.clear();
+    c.Reject("LOCAL_REDUCE requires a declared SRAM region witness",
+             [&] { EncodeProgramArtifact(a); });
+    a = LocalReduceArtifact();
+    a.symbols[0].value = 0x200;
+    c.Reject("LOCAL_REDUCE rejects an unrelated SRAM region witness",
+             [&] { EncodeProgramArtifact(a); });
+    a = LocalReduceArtifact();
+    a.strings.push_back("local-reduce-destination");
+    a.symbols = {
+        {0, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 23},
+        {1, ProgramSymbolKind::SRAM_REGION, 0, 0x118, 8},
+    };
+    c.Reject("LOCAL_REDUCE source rejects a one-byte-short region",
+             [&] { EncodeProgramArtifact(a); });
+    a = LocalReduceArtifact();
+    a.strings.push_back("local-reduce-destination");
+    a.symbols = {
+        {0, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 24},
+        {1, ProgramSymbolKind::SRAM_REGION, 0, 0x118, 7},
+    };
+    c.Reject("LOCAL_REDUCE destination rejects a one-byte-short region",
+             [&] { EncodeProgramArtifact(a); });
+    a = LocalReduceArtifact(0x110);
+    c.Reject("LOCAL_REDUCE source span exceeds declared SRAM region",
+             [&] { EncodeProgramArtifact(a); });
+    a = LocalReduceArtifact();
+    a.relocations = {{
+        0, 0, static_cast<uint16_t>(SemanticOperandId::SOURCE_ADDRESS),
+        SemanticRelocationKind::SRAM_REGION, 0, 0}};
+    c.Reject("LOCAL_REDUCE relocation kind must be ABSOLUTE_ADDRESS",
              [&] { EncodeProgramArtifact(a); });
 
     a = MultiArtifact();

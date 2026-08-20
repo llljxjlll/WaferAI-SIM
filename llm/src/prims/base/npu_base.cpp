@@ -318,8 +318,7 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
     }
 
     const bool manual_memory_schedule =
-        context.sram_regions != nullptr &&
-        context.sram_regions->config().manual_memory_schedule;
+        !usesLegacyImplicitMemory(context);
 
     // 所用时间
     u_int64_t dram_time = 0;
@@ -367,12 +366,30 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
     }
 #endif
 
-    // 计算overlap并写回output数据
+    if (manual_memory_schedule && dram_time != 0)
+        throw std::logic_error(
+            name + " manual memory schedule performed an implicit memory access");
+
+    // Compute is charged exactly once and independently of implicit output
+    // handling. In particular, skip_output suppresses only the legacy memory
+    // write; it never suppresses execution cost.
+    overlap_time = chargeComputeCost(context, exu_flops, sfu_flops,
+                                    vec_flops, dram_time);
+
+    // Legacy configurations preserve their historical implicit output write.
+    // Program-mode schedules own all SRAM/HBM transfers and stop above after
+    // the side-effect-free compute charge.
     if (!manual_memory_schedule && !skip_output)
-        writeOutputData(context, exu_flops, sfu_flops, vec_flops, dram_time,
-                        overlap_time, out_size, data_chunk_addr["output"]);
+        writeOutputData(context, dram_time, overlap_time, out_size,
+                        data_chunk_addr["output"]);
 
     return overlap_time;
+}
+
+bool NpuBase::usesLegacyImplicitMemory(
+    const TaskCoreContext &context) const noexcept {
+    return context.sram_regions == nullptr ||
+           !context.sram_regions->config().manual_memory_schedule;
 }
 
 void NpuBase::checkInputData(TaskCoreContext &context, uint64_t &dram_time,
@@ -761,10 +778,11 @@ void NpuBase::checkStaticDataTile(TaskCoreContext &context, uint64_t &dram_time,
 }
 
 
-void NpuBase::writeOutputData(TaskCoreContext &context, uint64_t exu_flops,
-                              uint64_t sfu_flops, u_int64_t vec_flops,
-                              uint64_t dram_time, uint64_t &overlap_time,
-                              int data_size_out, uint64_t out_global_addr) {
+uint64_t NpuBase::chargeComputeCost(TaskCoreContext &context,
+                                    uint64_t exu_flops,
+                                    uint64_t sfu_flops,
+                                    uint64_t vec_flops,
+                                    uint64_t dram_time) {
     int cid = context.cid;
     CoreHWConfig *hardware_config = GetCoreHWConfig(cid);
     ExuConfig *exu = hardware_config->exu;
@@ -793,7 +811,12 @@ void NpuBase::writeOutputData(TaskCoreContext &context, uint64_t exu_flops,
     if (last_cost_snapshot_.overlap_delay_ns >
         static_cast<uint64_t>(std::numeric_limits<int>::max()))
         throw std::overflow_error("NPU overlap delay exceeds runtime int");
-    overlap_time = last_cost_snapshot_.overlap_delay_ns;
+    return last_cost_snapshot_.overlap_delay_ns;
+}
+
+void NpuBase::writeOutputData(TaskCoreContext &context, uint64_t dram_time,
+                              uint64_t &overlap_time, int data_size_out,
+                              uint64_t out_global_addr) {
 
 #if USE_SRAM == 1
     if (dram_time > last_cost_snapshot_.compute_cycle_ns) {

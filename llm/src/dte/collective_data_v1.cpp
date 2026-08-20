@@ -23,13 +23,13 @@ uint64_t DTypeBytes(CollDType dtype) {
     case CollDType::UINT8: return 1;
     case CollDType::INT32: return 4;
     case CollDType::INT64: return 8;
+    case CollDType::FP16: return 2;
     case CollDType::FP32:
-    case CollDType::FP16:
     case CollDType::FP8:
         break;
     }
     throw std::invalid_argument(
-        "ISA-v1 endpoint reduce supports UINT8, INT32, and INT64 only");
+        "ISA-v1 endpoint reduce supports UINT8, INT32, INT64, and FP16 only");
 }
 
 uint64_t DecodeLittleEndian(const uint8_t *bytes, uint64_t width) {
@@ -52,6 +52,167 @@ uint64_t WidthMask(uint64_t width) {
 bool SignedLess(uint64_t lhs, uint64_t rhs, uint64_t width) {
     const uint64_t sign = UINT64_C(1) << (8 * width - 1);
     return (lhs ^ sign) < (rhs ^ sign);
+}
+
+uint32_t DecodeFp16Bits(uint16_t half) {
+    const uint32_t sign = static_cast<uint32_t>(half & 0x8000u) << 16;
+    uint32_t exponent = (half >> 10) & 0x1fu;
+    uint32_t fraction = half & 0x03ffu;
+    uint32_t bits = 0;
+    if (exponent == 0) {
+        if (fraction == 0) {
+            bits = sign;
+        } else {
+            int unbiased = -14;
+            while ((fraction & 0x0400u) == 0) {
+                fraction <<= 1;
+                --unbiased;
+            }
+            fraction &= 0x03ffu;
+            bits = sign |
+                   (static_cast<uint32_t>(unbiased + 127) << 23) |
+                   (fraction << 13);
+        }
+    } else if (exponent == 0x1fu) {
+        // Every half NaN enters FP32 arithmetic in one canonical form.
+        bits = fraction == 0 ? sign | 0x7f800000u : 0x7fc00000u;
+    } else {
+        bits = sign | ((exponent - 15 + 127) << 23) |
+               (fraction << 13);
+    }
+    return bits;
+}
+
+uint64_t ShiftRightJam(uint64_t value, unsigned distance) {
+    if (distance == 0)
+        return value;
+    if (distance >= 64)
+        return value != 0;
+    const uint64_t discarded = value &
+        ((uint64_t{1} << distance) - 1);
+    return (value >> distance) | (discarded != 0);
+}
+
+// Deterministic IEEE-754 binary32 add, round-to-nearest ties-to-even.  The
+// inputs reachable from FP16 are zero, infinity, NaN, or normal binary32
+// values; every finite non-zero result is a multiple of 2^-24 and therefore
+// also normal binary32.  Three explicit GRS bits make host -Ofast irrelevant.
+uint32_t AddBinary32Rne(uint32_t left, uint32_t right) {
+    const uint32_t left_abs = left & 0x7fffffffu;
+    const uint32_t right_abs = right & 0x7fffffffu;
+    const uint32_t left_exp = left_abs >> 23;
+    const uint32_t right_exp = right_abs >> 23;
+    const bool left_nan = left_exp == 0xffu &&
+                          (left_abs & 0x7fffffu) != 0;
+    const bool right_nan = right_exp == 0xffu &&
+                           (right_abs & 0x7fffffu) != 0;
+    if (left_nan || right_nan)
+        return 0x7fc00000u;
+    if (left_exp == 0xffu || right_exp == 0xffu) {
+        if (left_exp == 0xffu && right_exp == 0xffu &&
+            ((left ^ right) & 0x80000000u) != 0)
+            return 0x7fc00000u;
+        return left_exp == 0xffu ? left : right;
+    }
+    if (left_abs == 0 && right_abs == 0)
+        return (left & right) & 0x80000000u;
+    if (left_abs == 0)
+        return right;
+    if (right_abs == 0)
+        return left;
+
+    uint32_t a = left;
+    uint32_t b = right;
+    if ((a & 0x7fffffffu) < (b & 0x7fffffffu))
+        std::swap(a, b);
+    int exponent = static_cast<int>((a >> 23) & 0xffu);
+    const int b_exponent = static_cast<int>((b >> 23) & 0xffu);
+    uint64_t a_sig = (uint64_t{0x800000u} | (a & 0x7fffffu)) << 3;
+    uint64_t b_sig = (uint64_t{0x800000u} | (b & 0x7fffffu)) << 3;
+    b_sig = ShiftRightJam(
+        b_sig, static_cast<unsigned>(exponent - b_exponent));
+
+    const uint32_t sign = a & 0x80000000u;
+    uint64_t result_sig = 0;
+    if (((a ^ b) & 0x80000000u) == 0) {
+        result_sig = a_sig + b_sig;
+        if ((result_sig & (uint64_t{1} << 27)) != 0) {
+            result_sig = ShiftRightJam(result_sig, 1);
+            ++exponent;
+        }
+    } else {
+        result_sig = a_sig - b_sig;
+        if (result_sig == 0)
+            return 0;
+        while ((result_sig & (uint64_t{1} << 26)) == 0) {
+            result_sig <<= 1;
+            --exponent;
+        }
+    }
+
+    uint32_t significand = static_cast<uint32_t>(result_sig >> 3);
+    const uint32_t round_bits = static_cast<uint32_t>(result_sig & 7u);
+    if (round_bits > 4 ||
+        (round_bits == 4 && (significand & 1u) != 0)) {
+        ++significand;
+        if (significand == 0x1000000u) {
+            significand >>= 1;
+            ++exponent;
+        }
+    }
+    if (exponent >= 0xff)
+        return sign | 0x7f800000u;
+    if (exponent <= 0)
+        throw std::logic_error(
+            "FP16 rank-major sum produced an unreachable binary32 subnormal");
+    return sign | (static_cast<uint32_t>(exponent) << 23) |
+           (significand & 0x7fffffu);
+}
+
+uint16_t EncodeFp16Rne(uint32_t bits) {
+    const uint16_t sign = static_cast<uint16_t>((bits >> 16) & 0x8000u);
+    const uint32_t exponent = (bits >> 23) & 0xffu;
+    const uint32_t fraction = bits & 0x7fffffu;
+    if (exponent == 0xffu)
+        return fraction == 0 ? static_cast<uint16_t>(sign | 0x7c00u)
+                             : uint16_t{0x7e00u};
+    if (exponent == 0)
+        return sign;
+
+    const int unbiased = static_cast<int>(exponent) - 127;
+    if (unbiased > 15)
+        return static_cast<uint16_t>(sign | 0x7c00u);
+    if (unbiased >= -14) {
+        uint32_t half_exponent = static_cast<uint32_t>(unbiased + 15);
+        uint32_t half_fraction = fraction >> 13;
+        const uint32_t remainder = fraction & 0x1fffu;
+        if (remainder > 0x1000u ||
+            (remainder == 0x1000u && (half_fraction & 1u) != 0)) {
+            ++half_fraction;
+            if (half_fraction == 0x0400u) {
+                half_fraction = 0;
+                ++half_exponent;
+                if (half_exponent == 0x1fu)
+                    return static_cast<uint16_t>(sign | 0x7c00u);
+            }
+        }
+        return static_cast<uint16_t>(sign | (half_exponent << 10) |
+                                     half_fraction);
+    }
+    if (unbiased < -25)
+        return sign;
+
+    const uint32_t significand = 0x800000u | fraction;
+    const unsigned shift = static_cast<unsigned>(13 + (-14 - unbiased));
+    uint32_t half_fraction = significand >> shift;
+    const uint32_t remainder_mask = (uint32_t{1} << shift) - 1;
+    const uint32_t remainder = significand & remainder_mask;
+    const uint32_t halfway = uint32_t{1} << (shift - 1);
+    if (remainder > halfway ||
+        (remainder == halfway && (half_fraction & 1u) != 0))
+        ++half_fraction;
+    // A rounded subnormal may become the minimum normal (0x0400).
+    return static_cast<uint16_t>(sign | half_fraction);
 }
 
 } // namespace
@@ -138,6 +299,9 @@ std::vector<uint8_t> IsaV1CollectiveDataBuffer::TakeReduced(
         throw std::invalid_argument(
             "ISA-v1 endpoint reduce requires SUM or MAX");
     const uint64_t width = DTypeBytes(dtype);
+    if (dtype == CollDType::FP16 && reduce_op != CollReduceOp::SUM)
+        throw std::invalid_argument(
+            "ISA-v1 FP16 reduce supports SUM only");
     if (bytes_per_rank_ % width != 0)
         throw std::invalid_argument(
             "ISA-v1 endpoint reduce bytes are not dtype aligned");
@@ -147,6 +311,29 @@ std::vector<uint8_t> IsaV1CollectiveDataBuffer::TakeReduced(
                     "ISA-v1 reduce result exceeds host size_t"));
     const uint64_t mask = WidthMask(width);
     for (uint64_t offset = 0; offset < bytes_per_rank_; offset += width) {
+        if (dtype == CollDType::FP16) {
+            uint32_t accumulator = DecodeFp16Bits(static_cast<uint16_t>(
+                DecodeLittleEndian(
+                    &staging_[CheckedSize(
+                        offset, "ISA-v1 FP16 reduce offset overflow")],
+                    width)));
+            for (uint16_t rank = 1; rank < rank_count_; ++rank) {
+                const uint64_t index = CheckedMultiply(
+                    rank, bytes_per_rank_,
+                    "ISA-v1 FP16 reduce rank offset overflows") + offset;
+                const uint32_t operand = DecodeFp16Bits(static_cast<uint16_t>(
+                    DecodeLittleEndian(
+                        &staging_[CheckedSize(
+                            index, "ISA-v1 FP16 reduce index overflow")],
+                        width)));
+                accumulator = AddBinary32Rne(accumulator, operand);
+            }
+            EncodeLittleEndian(
+                EncodeFp16Rne(accumulator), width,
+                &result[CheckedSize(
+                    offset, "ISA-v1 FP16 reduce output overflow")]);
+            continue;
+        }
         uint64_t accumulator = DecodeLittleEndian(
             &staging_[CheckedSize(offset, "ISA-v1 reduce offset overflow")],
             width);

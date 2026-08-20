@@ -123,15 +123,29 @@ public:
 
     NpuBase() { prim_type |= NPU_PRIM; }
 
+protected:
+    // Manual program memory schedules own every SRAM allocation and transfer.
+    // Legacy configurations retain the historical implicit primitive accesses.
+    bool usesLegacyImplicitMemory(
+        const TaskCoreContext &context) const noexcept;
+
 private:
     NpuCostSnapshot last_cost_snapshot_;
+
+    // Account for compute without performing any implicit memory operation.
+    // Program-mode manual memory schedules use this path directly; legacy
+    // output handling consumes the same already-computed overlap delay.
+    uint64_t chargeComputeCost(TaskCoreContext &context,
+                               uint64_t exu_flops,
+                               uint64_t sfu_flops,
+                               uint64_t vec_flops,
+                               uint64_t dram_time);
 
     // taskCore中的内存操作
     void checkInputData(TaskCoreContext &context, uint64_t &dram_time,
                         uint64_t inp_global_addr, vector<int> data_size_input);
-    void writeOutputData(TaskCoreContext &context, uint64_t exu_flops,
-                         uint64_t sfu_flops, u_int64_t vec_flops,
-                         uint64_t dram_time, uint64_t &overlap_time,
+    void writeOutputData(TaskCoreContext &context, uint64_t dram_time,
+                         uint64_t &overlap_time,
                          int data_size_out, uint64_t out_global_addr);
 
     void parseAddress(json j);   // dram 地址

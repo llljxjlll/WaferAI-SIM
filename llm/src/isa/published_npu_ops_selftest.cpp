@@ -2,6 +2,7 @@
 
 #include "isa/published_npu_ops.h"
 
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <stdexcept>
@@ -50,6 +51,158 @@ void CheckOps(IsaV1SelfTestResult &result, const std::string &label,
                       actual.sfu == expected.sfu &&
                       actual.vec == expected.vec,
           label + " exact published operation counts");
+}
+
+SramAddressOperand ExactAddress(uint64_t value) {
+    SramAddressOperand result;
+    result.kind = SramAddressKind::ABSOLUTE;
+    result.absolute_address_bytes = value;
+    return result;
+}
+
+void CheckExactWork(IsaV1SelfTestResult &result) {
+    RopeQkExactOperands rope;
+    rope.input = ExactAddress(0);
+    rope.output = ExactAddress(64);
+    rope.logical_tokens = 8;
+    rope.tp_degree = 2;
+    rope.num_heads = 4;
+    rope.num_kv_heads = 4;
+    rope.rank_num_heads = 2;
+    rope.rank_num_kv_heads = 2;
+    rope.head_dim = 4;
+    rope.rotary_dim = 4;
+    rope.max_position_embeddings = 128;
+    rope.context_max = 8;
+    const double theta = 10000.0;
+    std::memcpy(&rope.rope_theta_f64_bits, &theta, sizeof(theta));
+    const PublishedNpuWork rope_work = EvaluatePublishedNpuWork(rope);
+    Check(result, rope_work.ops.exu == 0 && rope_work.ops.sfu == 0 &&
+                      rope_work.ops.vec == 384 &&
+                      rope_work.memory_read_bytes == 384 &&
+                      rope_work.memory_write_bytes == 384 &&
+                      rope_work.comparisons == 0,
+          "ROPE exact published work");
+
+    AttentionExactOperands attention;
+    attention.input = ExactAddress(0);
+    attention.output = ExactAddress(64);
+    attention.query_tokens = 8;
+    attention.tp_degree = 2;
+    attention.num_heads = 4;
+    attention.num_kv_heads = 4;
+    attention.rank_num_heads = 2;
+    attention.rank_num_kv_heads = 2;
+    attention.head_dim = 4;
+    attention.context_sum = 8;
+    attention.context_max = 8;
+    attention.query_key_pairs = 36;
+    attention.rank_kv_read_bytes = 0;
+    attention.rank_kv_write_bytes = 256;
+    const PublishedNpuWork attention_work =
+        EvaluatePublishedNpuWork(attention);
+    Check(result, attention_work.ops.exu == 1152 &&
+                      attention_work.ops.sfu == 72 &&
+                      attention_work.ops.vec == 144 &&
+                      attention_work.memory_read_bytes == 384 &&
+                      attention_work.memory_write_bytes == 128 &&
+                      attention_work.comparisons == 0,
+          "ATTENTION exact published work excludes KV transport bytes");
+
+    EmbeddingLookupOperands embedding;
+    embedding.indices = ExactAddress(0);
+    embedding.table = ExactAddress(64);
+    embedding.output = ExactAddress(128);
+    embedding.logical_rows = 8;
+    embedding.rank_rows = 4;
+    embedding.tp_degree = 2;
+    embedding.vocab_size = 32;
+    embedding.hidden_size = 16;
+    const PublishedNpuWork embedding_work =
+        EvaluatePublishedNpuWork(embedding);
+    Check(result, embedding_work.ops.exu == 0 &&
+                      embedding_work.ops.sfu == 0 &&
+                      embedding_work.ops.vec == 0 &&
+                      embedding_work.memory_read_bytes == 144 &&
+                      embedding_work.memory_write_bytes == 128 &&
+                      embedding_work.comparisons == 0,
+          "EMBEDDING exact published work");
+
+    GreedySampleOperands greedy;
+    greedy.logits = ExactAddress(0);
+    greedy.output = ExactAddress(64);
+    greedy.tp_degree = 1;
+    greedy.token_rows = 8;
+    greedy.vocab_size = 32;
+    greedy.sample_count = 1;
+    greedy.comparisons = 31;
+    const PublishedNpuWork greedy_work = EvaluatePublishedNpuWork(greedy);
+    Check(result, greedy_work.ops.exu == 0 &&
+                      greedy_work.ops.sfu == 0 &&
+                      greedy_work.ops.vec == 0 &&
+                      greedy_work.memory_read_bytes == 64 &&
+                      greedy_work.memory_write_bytes == 4 &&
+                      greedy_work.comparisons == 31,
+          "GREEDY exact published work");
+
+    CrossEntropyForwardOperands ce;
+    ce.logits = ExactAddress(0);
+    ce.labels = ExactAddress(64);
+    ce.loss = ExactAddress(128);
+    ce.logical_rows = 8;
+    ce.rank_rows = 4;
+    ce.tp_degree = 2;
+    ce.vocab_size = 32;
+    const PublishedNpuWork ce_work = EvaluatePublishedNpuWork(ce);
+    Check(result, ce_work.ops.exu == 0 && ce_work.ops.sfu == 132 &&
+                      ce_work.ops.vec == 260 &&
+                      ce_work.memory_read_bytes == 272 &&
+                      ce_work.memory_write_bytes == 16 &&
+                      ce_work.comparisons == 124,
+          "CROSS_ENTROPY_FORWARD exact published work");
+
+    CrossEntropyBackwardOperands ce_backward;
+    ce_backward.logits = ExactAddress(0);
+    ce_backward.labels = ExactAddress(64);
+    ce_backward.upstream = ExactAddress(128);
+    ce_backward.logits_grad = ExactAddress(192);
+    ce_backward.logical_rows = 8;
+    ce_backward.rank_rows = 4;
+    ce_backward.tp_degree = 2;
+    ce_backward.vocab_size = 32;
+    ce_backward.upstream_elements = 4;
+    const PublishedNpuWork ce_backward_work =
+        EvaluatePublishedNpuWork(ce_backward);
+    Check(result, ce_backward_work.ops.exu == 0 &&
+                      ce_backward_work.ops.sfu == 132 &&
+                      ce_backward_work.ops.vec == 516 &&
+                      ce_backward_work.memory_read_bytes == 288 &&
+                      ce_backward_work.memory_write_bytes == 256 &&
+                      ce_backward_work.comparisons == 124,
+          "CROSS_ENTROPY_BACKWARD exact published work");
+
+    SgdUpdateOperands sgd;
+    sgd.weight = ExactAddress(0);
+    sgd.gradient = ExactAddress(64);
+    sgd.updated_weight = sgd.weight;
+    sgd.element_count = 8;
+    const double learning_rate = 0.01;
+    std::memcpy(&sgd.learning_rate_f64_bits, &learning_rate,
+                sizeof(learning_rate));
+    const PublishedNpuWork sgd_work = EvaluatePublishedNpuWork(sgd);
+    Check(result, sgd_work.ops.exu == 0 && sgd_work.ops.sfu == 0 &&
+                      sgd_work.ops.vec == 16 &&
+                      sgd_work.memory_read_bytes == 48 &&
+                      sgd_work.memory_write_bytes == 16 &&
+                      sgd_work.comparisons == 0,
+          "SGD_UPDATE exact published work");
+
+    const PublishedNpuWork legacy = EvaluatePublishedNpuWork(
+        Opcode::GELU, {{"N", 7}});
+    Check(result, legacy.ops.vec == 28 && legacy.memory_read_bytes == 0 &&
+                      legacy.memory_write_bytes == 0 &&
+                      legacy.comparisons == 0,
+          "legacy published work wrapper preserves ops and zero extensions");
 }
 
 } // namespace
@@ -168,6 +321,7 @@ IsaV1SelfTestResult CheckPublishedNpuOpsSelfTest() {
              {10, 0, 0});
     CheckOps(result, "DUMMY typical", static_cast<Opcode>(0x15), {},
              {10, 0, 0});
+    CheckExactWork(result);
 
     Reject(result, "missing published parameter is rejected", [&] {
         (void)EvaluatePublishedNpuOps(Opcode::GELU, {});

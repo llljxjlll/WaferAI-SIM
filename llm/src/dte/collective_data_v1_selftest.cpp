@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -42,6 +43,16 @@ std::vector<uint8_t> Le32(uint32_t value) {
             static_cast<uint8_t>(value >> 8),
             static_cast<uint8_t>(value >> 16),
             static_cast<uint8_t>(value >> 24)};
+}
+
+std::vector<uint8_t> Fp16(std::initializer_list<uint16_t> values) {
+    std::vector<uint8_t> result;
+    result.reserve(values.size() * 2);
+    for (uint16_t value : values) {
+        result.push_back(static_cast<uint8_t>(value));
+        result.push_back(static_cast<uint8_t>(value >> 8));
+    }
+    return result;
 }
 
 std::vector<uint8_t> Le64(uint64_t value) {
@@ -165,6 +176,74 @@ void TestSignedIntegers(TestState &state) {
                 "INT64 SUM wraps modulo 2^64");
 }
 
+std::vector<uint8_t> ReduceFp16(
+    const std::vector<std::vector<uint8_t>> &operands) {
+    const uint64_t bytes_per_rank = operands.front().size();
+    IsaV1CollectiveDataBuffer buffer(
+        static_cast<uint16_t>(operands.size()), bytes_per_rank,
+        bytes_per_rank * operands.size());
+    Fill(buffer, operands);
+    return buffer.TakeReduced(CollDType::FP16, CollReduceOp::SUM);
+}
+
+void TestFp16Sum(TestState &state) {
+    state.Check(
+        ReduceFp16({Fp16({0x3e00}), Fp16({0x4080})}) ==
+            Fp16({0x4380}),
+        "FP16 normal SUM uses FP32 accumulation");
+
+    state.Check(
+        ReduceFp16({Fp16({0x3c00, 0x3c01}),
+                    Fp16({0x1000, 0x1000})}) ==
+            Fp16({0x3c00, 0x3c02}),
+        "FP16 output rounds midpoint ties to even");
+    state.Check(
+        ReduceFp16({Fp16({0x3c00}), Fp16({0x1000}),
+                    Fp16({0x1000})}) ==
+            Fp16({0x3c01}),
+        "FP16 inputs accumulate in FP32 without per-rank FP16 rounding");
+
+    state.Check(
+        ReduceFp16({Fp16({0x0001}), Fp16({0x0001})}) ==
+            Fp16({0x0002}),
+        "FP16 subnormal operands remain exact");
+    state.Check(
+        ReduceFp16({Fp16({0x7bff}), Fp16({0x7bff})}) ==
+            Fp16({0x7c00}),
+        "FP16 finite overflow rounds to infinity");
+
+    state.Check(
+        ReduceFp16({Fp16({0x7c00, 0xfc00, 0x7c00}),
+                    Fp16({0x3c00, 0xbc00, 0xfc00})}) ==
+            Fp16({0x7c00, 0xfc00, 0x7e00}),
+        "FP16 infinities follow IEEE and opposite infinities canonicalize NaN");
+    state.Check(
+        ReduceFp16({Fp16({0x7d55}), Fp16({0x3c00})}) ==
+            Fp16({0x7e00}),
+        "FP16 NaN payload and sign canonicalize");
+
+    state.Check(
+        ReduceFp16({Fp16({0x8000, 0x0000, 0x0001}),
+                    Fp16({0x8000, 0x8000, 0x8001})}) ==
+            Fp16({0x8000, 0x0000, 0x0000}),
+        "FP16 signed-zero and exact cancellation follow IEEE");
+    state.Check(
+        ReduceFp16({Fp16({0x7d55, 0x8000})}) ==
+            Fp16({0x7e00, 0x8000}),
+        "FP16 N=1 still canonicalizes NaN and preserves negative zero");
+
+    state.Check(
+        ReduceFp16({Fp16({0x7bff}), Fp16({0xfbff}),
+                    Fp16({0x0001})}) ==
+            Fp16({0x0001}),
+        "FP16 SUM combines in fixed rank-major order");
+    state.Check(
+        ReduceFp16({Fp16({0x7bff}), Fp16({0x0001}),
+                    Fp16({0xfbff})}) ==
+            Fp16({0x0000}),
+        "FP16 rank-major SUM exposes the paired order-sensitive result");
+}
+
 void TestReduceValidation(TestState &state) {
     IsaV1CollectiveDataBuffer unaligned(2, 3, 6);
     Fill(unaligned, {{1, 2, 3}, {4, 5, 6}});
@@ -185,6 +264,8 @@ void TestReduceValidation(TestState &state) {
                 "N=1 reduce has zero combines");
     state.Check(IsaV1ReduceOperationCount(4, 32, CollDType::INT32) == 24,
                 "reduce operation count is elements*(N-1)");
+    state.Check(IsaV1ReduceOperationCount(3, 8, CollDType::FP16) == 8,
+                "FP16 operation count is elements*(N-1)");
     state.Throws<std::invalid_argument>("operation count zero ranks", [] {
         (void)IsaV1ReduceOperationCount(0, 4, CollDType::INT32);
     });
@@ -201,6 +282,7 @@ int RunCollectiveDataV1SelfTest() {
     TestTransactionalErrors(state);
     TestUint8(state);
     TestSignedIntegers(state);
+    TestFp16Sum(state);
     TestReduceValidation(state);
     if (state.failures == 0) {
         std::cout << "[COLLECTIVE DATA V1] PASS (" << state.checks

@@ -1,6 +1,8 @@
 #include "isa/prim_wire_selftest.h"
 
+#include "common/config.h"
 #include "common/memory.h"
+#include "defs/global.h"
 #include "dte/coll_codec.h"
 #include "prims/collective_data_v1_prim.h"
 #include "prims/collective_launch_v1_prim_selftest.h"
@@ -78,6 +80,30 @@ public:
 
 private:
     bool previous_;
+};
+
+class PrimWireCostHardwareGuard {
+public:
+    PrimWireCostHardwareGuard() : previous_(g_core_hw_config) {
+        hardware_ = new CoreHWConfig(
+            0, new ExuConfig(MAC_Array, 4, 1),
+            new SfuConfig(Linear, 4), new VectorConfig(4, 1), "", 0, 128);
+        g_core_hw_config = {{0, hardware_}};
+    }
+
+    ~PrimWireCostHardwareGuard() {
+        g_core_hw_config.clear();
+        delete hardware_;
+        g_core_hw_config = std::move(previous_);
+    }
+
+    PrimWireCostHardwareGuard(const PrimWireCostHardwareGuard &) = delete;
+    PrimWireCostHardwareGuard &
+    operator=(const PrimWireCostHardwareGuard &) = delete;
+
+private:
+    std::vector<std::pair<int, CoreHWConfig *>> previous_;
+    CoreHWConfig *hardware_ = nullptr;
 };
 
 template <typename Prim>
@@ -588,11 +614,44 @@ void TestCollectiveDataV1Wire(TestState &state) {
         Collective_data_v1_prim decoded;
         decoded.deserialize(std::move(bad));
     });
-    state.Throws("Collective_data_v1_prim invalid dtype", [&] {
-        Wire bad = wire;
-        bad[0].range(34, 33) = 3;
-        Collective_data_v1_prim decoded;
-        decoded.deserialize(std::move(bad));
+    Collective_data_v1_prim local;
+    local.mode = CollectiveDataV1PrimMode::REDUCE;
+    local.key = {};
+    local.phase_id = 0;
+    local.source_address_bytes = 0x100;
+    local.destination_address_bytes = 0x200;
+    local.length_bytes = 32;
+    local.input_count = 4;
+    local.dtype = CollDType::FP16;
+    local.reduce_op = CollReduceOp::SUM;
+    CheckRoundTrip(state, "Collective_data_v1_prim local FP16", local);
+    const Wire local_wire = local.serialize();
+    Collective_data_v1_prim local_decoded;
+    local_decoded.deserialize(local_wire);
+    state.Check(local_wire[0].range(34, 33).to_uint() == 3 &&
+                    local_decoded.dtype == CollDType::FP16 &&
+                    local_decoded.key == CollectiveKey{} &&
+                    local_decoded.phase_id == 0,
+                "Collective_data_v1_prim wire dtype code 3 explicitly maps FP16");
+    state.Throws("Collective_data_v1_prim FP32 rejected", [&] {
+        Collective_data_v1_prim bad = local;
+        bad.dtype = CollDType::FP32;
+        (void)bad.serialize();
+    });
+    state.Throws("Collective_data_v1_prim FP8 rejected", [&] {
+        Collective_data_v1_prim bad = local;
+        bad.dtype = CollDType::FP8;
+        (void)bad.serialize();
+    });
+    state.Throws("Collective_data_v1_prim key-zero phase rejected", [&] {
+        Collective_data_v1_prim bad = local;
+        bad.phase_id = 1;
+        (void)bad.serialize();
+    });
+    state.Throws("Collective_data_v1_prim key-zero non-FP16 rejected", [&] {
+        Collective_data_v1_prim bad = local;
+        bad.dtype = CollDType::INT32;
+        (void)bad.serialize();
     });
     state.Throws("Collective_data_v1_prim zero length", [&] {
         Collective_data_v1_prim bad = prim;
@@ -1288,6 +1347,19 @@ void TestSramLifecycle(TestState &state) {
                         source.alignment_bytes,
                 "Sram_lifecycle ALLOC wire golden fields");
 
+    Sram_lifecycle alloc_at = source;
+    alloc_at.op = SramLifecycleOp::ALLOC_AT;
+    alloc_at.region_offset_bytes = 0x23456;
+    CheckRoundTrip(state, "Sram_lifecycle ALLOC_AT", alloc_at);
+    const Wire alloc_at_wire = alloc_at.serialize();
+    state.Check(alloc_at_wire.size() == 5 &&
+                    alloc_at_wire[0].range(10, 8).to_uint() ==
+                        static_cast<uint8_t>(SramLifecycleOp::ALLOC_AT) &&
+                    alloc_at_wire[4].range(71, 8).to_uint64() ==
+                        alloc_at.region_offset_bytes &&
+                    !alloc_at_wire[4].range(127, 72).or_reduce(),
+                "Sram_lifecycle ALLOC_AT has a strict fifth offset segment");
+
     Sram_lifecycle free_prim;
     free_prim.op = SramLifecycleOp::FREE;
     free_prim.label = source.label;
@@ -1313,6 +1385,10 @@ void TestSramLifecycle(TestState &state) {
     invalid.new_label = "inactive";
     state.Throws("Sram_lifecycle ALLOC noncanonical new label",
                  [&] { invalid.serialize(); });
+    invalid = source;
+    invalid.region_offset_bytes = 64;
+    state.Throws("Sram_lifecycle ALLOC preserves zero offset ABI",
+                 [&] { invalid.serialize(); });
     invalid = free_prim;
     invalid.region_name = "inactive";
     state.Throws("Sram_lifecycle FREE noncanonical region",
@@ -1337,6 +1413,18 @@ void TestSramLifecycle(TestState &state) {
     state.Throws("Sram_lifecycle extra wire segment", [&] {
         Wire bad = wire;
         bad.push_back(wire.back());
+        Sram_lifecycle decoded;
+        decoded.deserialize(std::move(bad));
+    });
+    state.Throws("Sram_lifecycle ALLOC_AT truncated offset segment", [&] {
+        Wire bad = alloc_at_wire;
+        bad.pop_back();
+        Sram_lifecycle decoded;
+        decoded.deserialize(std::move(bad));
+    });
+    state.Throws("Sram_lifecycle ALLOC_AT offset padding", [&] {
+        Wire bad = alloc_at_wire;
+        bad[4].range(72, 72) = sc_bv<1>(1);
         Sram_lifecycle decoded;
         decoded.deserialize(std::move(bad));
     });
@@ -1552,6 +1640,7 @@ void TestSramBindOneShotLifecycle(TestState &state) {
 #endif
     task_context.cid = 0;
 
+    PrimWireCostHardwareGuard cost_hardware;
     auto core = std::make_shared<PrimCoreContext>();
     core->cid = 0;
     core->loop_cnt = 0;

@@ -19,7 +19,8 @@ RUN sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/source
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ make unzip wget git libcairo2-dev libsfml-dev xorg \
-    software-properties-common gnupg ca-certificates
+    software-properties-common gnupg ca-certificates \
+    python3 python3-yaml
 RUN wget https://gh-proxy.com/github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3-linux-x86_64.sh -O /tmp/cmake.sh && \
     chmod +x /tmp/cmake.sh && \
     mkdir /opt/cmake && \

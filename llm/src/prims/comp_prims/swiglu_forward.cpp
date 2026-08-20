@@ -9,7 +9,7 @@ REGISTER_PRIM(swiglu_forward, PrimId::SWIGLU_FORWARD);
 
 void swiglu_forward::initialize() {
     auto &p = param_value;
-    data_size_input = {p["N"], p["N"]};
+    data_size_input = {2 * p["N"]};
     data_chunk = {{"output", p["N"]}};
 }
 

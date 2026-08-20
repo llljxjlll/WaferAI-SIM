@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <initializer_list>
 #include <limits>
@@ -13,13 +15,22 @@ namespace {
 
 constexpr uint32_t kComputePrefixSize = 8;
 constexpr uint32_t kAddressSize = 24;
+constexpr uint32_t kRopeQkExactPayloadSize = 100;
+constexpr uint32_t kAttentionExactPayloadSize = 116;
+constexpr uint32_t kEmbeddingLookupPayloadSize = 96;
+constexpr uint32_t kGreedySamplePayloadSize = 76;
+constexpr uint32_t kCrossEntropyForwardPayloadSize = 92;
+constexpr uint32_t kCrossEntropyBackwardPayloadSize = 122;
+constexpr uint32_t kSgdUpdatePayloadSize = 96;
 constexpr uint32_t kEndpointPayloadSize = 72;
 constexpr uint32_t kReducePayloadSize = 80;
+constexpr uint32_t kLocalReducePayloadSize = 72;
 constexpr uint32_t kLsuPayloadSize = 40;
 constexpr uint32_t kDteIssuePayloadSize = 80;
 constexpr uint32_t kSymbolPayloadSize = 4;
 constexpr uint32_t kSramBindPayloadSize = 72;
 constexpr uint32_t kSramAllocPayloadSize = 32;
+constexpr uint32_t kSramAllocAtPayloadSize = 40;
 constexpr uint32_t kSramResizePayloadSize = 16;
 constexpr uint32_t kSramRenamePayloadSize = 8;
 constexpr uint32_t kTokenPayloadSize = 4;
@@ -324,6 +335,54 @@ void ValidateReduceCompute(const ReduceComputeOperands &operands) {
                     "REDUCE_COMPUTE destination");
 }
 
+void ValidateLocalReduce(const LocalReduceOperands &operands) {
+    Require(operands.input_dtype == LocalReduceDataType::FP16,
+            "LOCAL_REDUCE input_dtype must be FP16");
+    Require(operands.accumulator_dtype == LocalReduceDataType::FP32,
+            "LOCAL_REDUCE accumulator_dtype must be FP32");
+    Require(operands.output_dtype == LocalReduceDataType::FP16,
+            "LOCAL_REDUCE output_dtype must be FP16");
+    Require(operands.reduce_op == ReduceOperator::SUM,
+            "LOCAL_REDUCE reduce_op must be SUM");
+    Require(operands.rounding == LocalReduceRoundingMode::RNE,
+            "LOCAL_REDUCE rounding must be RNE");
+    Require(operands.order == LocalReduceOrder::RANK_MAJOR,
+            "LOCAL_REDUCE order must be RANK_MAJOR");
+    RequireU16(operands.input_count, "LOCAL_REDUCE input_count");
+    Require(operands.input_count != 0,
+            "LOCAL_REDUCE input_count must be non-zero");
+    Require(operands.element_count != 0,
+            "LOCAL_REDUCE element_count must be non-zero");
+    Require(operands.element_count <=
+                std::numeric_limits<uint64_t>::max() / 2,
+            "LOCAL_REDUCE element_count*2 overflows u64");
+    const uint64_t length_bytes = operands.element_count * 2;
+    Require(operands.input_stride_bytes == length_bytes,
+            "LOCAL_REDUCE input_stride_bytes must equal element_count*2");
+    Require(length_bytes <=
+                std::numeric_limits<uint64_t>::max() /
+                    operands.input_count,
+            "LOCAL_REDUCE input_count*input_stride_bytes overflows u64");
+    const uint64_t source_bytes = length_bytes * operands.input_count;
+    ValidateAddress(operands.source, false, "LOCAL_REDUCE source");
+    ValidateAddress(operands.destination, false,
+                    "LOCAL_REDUCE destination");
+    Require(operands.source.kind == SramAddressKind::ABSOLUTE &&
+                operands.destination.kind == SramAddressKind::ABSOLUTE,
+            "LOCAL_REDUCE V1 addresses must be ABSOLUTE");
+    Require((operands.source.absolute_address_bytes & 1) == 0 &&
+                (operands.destination.absolute_address_bytes & 1) == 0,
+            "LOCAL_REDUCE addresses must be FP16 aligned");
+    Require(operands.source.absolute_address_bytes <=
+                std::numeric_limits<uint64_t>::max() -
+                    (source_bytes - 1),
+            "LOCAL_REDUCE source span overflows u64");
+    Require(operands.destination.absolute_address_bytes <=
+                std::numeric_limits<uint64_t>::max() -
+                    (length_bytes - 1),
+            "LOCAL_REDUCE destination span overflows u64");
+}
+
 void ValidateLsu(const LsuOperands &operands) {
     Require(operands.size_bytes != 0, "LSU size_bytes must be non-zero");
     ValidateAddress(operands.sram, false, "LSU SRAM address");
@@ -393,6 +452,385 @@ uint64_t Product(std::initializer_list<uint64_t> factors,
     for (uint64_t factor : factors)
         value = CheckedMul(value, factor, field);
     return value;
+}
+
+void RequirePositiveU32(uint64_t value, std::string_view field) {
+    RequireU32(value, field);
+    Require(value != 0, std::string(field) + " must be non-zero");
+}
+
+void RequireExactDataType(ExternalDataType actual,
+                          ExternalDataType expected,
+                          std::string_view field) {
+    Require(actual == expected,
+            std::string(field) + " has the wrong fixed datatype");
+}
+
+void ValidateHeadSharding(uint64_t tp_degree, uint64_t num_heads,
+                          uint64_t num_kv_heads,
+                          uint64_t rank_num_heads,
+                          uint64_t rank_num_kv_heads,
+                          std::string_view field) {
+    RequirePositiveU32(tp_degree, std::string(field) + ".tp_degree");
+    RequirePositiveU32(num_heads, std::string(field) + ".num_heads");
+    RequirePositiveU32(num_kv_heads,
+                       std::string(field) + ".num_kv_heads");
+    RequirePositiveU32(rank_num_heads,
+                       std::string(field) + ".rank_num_heads");
+    RequirePositiveU32(rank_num_kv_heads,
+                       std::string(field) + ".rank_num_kv_heads");
+    Require(num_heads % tp_degree == 0 &&
+                num_kv_heads % tp_degree == 0 &&
+                rank_num_heads == num_heads / tp_degree &&
+                rank_num_kv_heads == num_kv_heads / tp_degree,
+            std::string(field) +
+                " head counts must be exact TP quotients");
+}
+
+void ValidateRopeQkExact(const RopeQkExactOperands &o) {
+    RequireExactDataType(o.datatype, ExternalDataType::FP16,
+                         "ROPE_QK_EXACT datatype");
+    Require(o.packed_layout == RopePackedLayout::Q_K_V,
+            "ROPE_QK_EXACT packed_layout must be Q_K_V");
+    ValidateAddress(o.input, false, "ROPE_QK_EXACT input");
+    ValidateAddress(o.output, false, "ROPE_QK_EXACT output");
+    RequirePositiveU32(o.logical_tokens,
+                       "ROPE_QK_EXACT logical_tokens");
+    ValidateHeadSharding(o.tp_degree, o.num_heads, o.num_kv_heads,
+                         o.rank_num_heads, o.rank_num_kv_heads,
+                         "ROPE_QK_EXACT");
+    RequirePositiveU32(o.head_dim, "ROPE_QK_EXACT head_dim");
+    RequirePositiveU32(o.rotary_dim, "ROPE_QK_EXACT rotary_dim");
+    Require(o.rotary_dim == o.head_dim && (o.rotary_dim & 1) == 0,
+            "ROPE_QK_EXACT rotary_dim must equal even head_dim");
+    RequirePositiveU32(o.max_position_embeddings,
+                       "ROPE_QK_EXACT max_position_embeddings");
+    RequirePositiveU32(o.context_max, "ROPE_QK_EXACT context_max");
+    Require(o.context_max <= o.max_position_embeddings,
+            "ROPE_QK_EXACT context must fit max positions");
+    double theta = 0.0;
+    static_assert(sizeof(theta) == sizeof(o.rope_theta_f64_bits),
+                  "ROPE theta requires IEEE-754 binary64 storage");
+    std::memcpy(&theta, &o.rope_theta_f64_bits, sizeof(theta));
+    Require(std::isfinite(theta) && theta > 0.0,
+            "ROPE_QK_EXACT rope_theta must be finite and positive");
+
+    const uint64_t rotated_heads =
+        CheckedAdd(o.rank_num_heads, o.rank_num_kv_heads,
+                   "ROPE_QK_EXACT rotated heads");
+    const uint64_t packed_heads =
+        CheckedAdd(o.rank_num_heads,
+                   CheckedMul(2, o.rank_num_kv_heads,
+                              "ROPE_QK_EXACT packed KV heads"),
+                   "ROPE_QK_EXACT packed heads");
+    const uint64_t rotations =
+        Product({o.logical_tokens, rotated_heads, o.rotary_dim},
+                "ROPE_QK_EXACT rotations");
+    (void)CheckedMul(3, rotations, "ROPE_QK_EXACT vector ops");
+    (void)Product({2, o.logical_tokens, packed_heads, o.head_dim},
+                  "ROPE_QK_EXACT memory bytes");
+}
+
+void ValidateAttentionExact(const AttentionExactOperands &o) {
+    RequireExactDataType(o.datatype, ExternalDataType::FP16,
+                         "ATTENTION_EXACT datatype");
+    Require(EnumByte(o.mode) <= EnumByte(ExactAttentionMode::TRAIN_FORWARD),
+            "ATTENTION_EXACT mode enum is invalid");
+    Require(o.packed_layout == AttentionPackedLayout::Q_K_V,
+            "ATTENTION_EXACT packed_layout must be Q_K_V");
+    Require(o.causal, "ATTENTION_EXACT causal must be true");
+    ValidateAddress(o.input, false, "ATTENTION_EXACT input");
+    ValidateAddress(o.output, false, "ATTENTION_EXACT output");
+    RequirePositiveU32(o.query_tokens, "ATTENTION_EXACT query_tokens");
+    ValidateHeadSharding(o.tp_degree, o.num_heads, o.num_kv_heads,
+                         o.rank_num_heads, o.rank_num_kv_heads,
+                         "ATTENTION_EXACT");
+    RequirePositiveU32(o.head_dim, "ATTENTION_EXACT head_dim");
+    Require(o.context_sum != 0,
+            "ATTENTION_EXACT context_sum must be non-zero");
+    RequirePositiveU32(o.context_max, "ATTENTION_EXACT context_max");
+    if (o.mode != ExactAttentionMode::EXACT_PROFILE) {
+        Require(o.query_tokens <= o.context_max,
+                "ATTENTION_EXACT context_max must cover query tokens");
+    }
+
+    uint64_t expected_pairs = 0;
+    uint64_t expected_read = 0;
+    if (o.mode == ExactAttentionMode::PREFILL) {
+        expected_pairs = Product(
+            {o.query_tokens,
+             CheckedAdd(o.query_tokens, 1,
+                        "ATTENTION_EXACT prefill pairs")},
+            "ATTENTION_EXACT prefill pairs") /
+            2;
+    } else if (o.mode == ExactAttentionMode::DECODE) {
+        expected_pairs = o.context_sum;
+        expected_read =
+            Product({4, o.context_sum, o.rank_num_kv_heads, o.head_dim},
+                    "ATTENTION_EXACT decode KV read bytes");
+    } else if (o.mode == ExactAttentionMode::EXACT_PROFILE) {
+        const uint64_t bytes_per_token =
+            Product({4, o.rank_num_kv_heads, o.head_dim},
+                    "ATTENTION_EXACT static-profile KV bytes per token");
+        Require(o.context_sum >= o.query_tokens,
+                "ATTENTION_EXACT static-profile context_sum is too small");
+        Require(o.query_key_pairs >= o.query_tokens,
+                "ATTENTION_EXACT static-profile pairs are too small");
+        Require(o.query_key_pairs <=
+                    Product({o.query_tokens, o.context_max},
+                            "ATTENTION_EXACT static-profile pair bound"),
+                "ATTENTION_EXACT static-profile pairs exceed the context bound");
+        Require(o.rank_kv_read_bytes % bytes_per_token == 0,
+                "ATTENTION_EXACT static-profile KV read is not token aligned");
+        Require(o.rank_kv_read_bytes <=
+                    Product({o.context_sum, bytes_per_token},
+                            "ATTENTION_EXACT static-profile KV read bound"),
+                "ATTENTION_EXACT static-profile KV read exceeds context_sum");
+        expected_pairs = o.query_key_pairs;
+        expected_read = o.rank_kv_read_bytes;
+    } else {
+        expected_pairs = Product(
+            {o.query_tokens,
+             CheckedAdd(o.query_tokens, 1,
+                        "ATTENTION_EXACT train-forward pairs")},
+            "ATTENTION_EXACT train-forward pairs") /
+            2;
+    }
+    const uint64_t expected_write =
+        o.mode == ExactAttentionMode::TRAIN_FORWARD
+            ? 0
+            : Product({4, o.query_tokens, o.rank_num_kv_heads, o.head_dim},
+                      "ATTENTION_EXACT KV write bytes");
+    Require(o.query_key_pairs == expected_pairs,
+            "ATTENTION_EXACT query_key_pairs is not exact");
+    Require(o.rank_kv_read_bytes == expected_read,
+            "ATTENTION_EXACT rank_kv_read_bytes is not exact");
+    Require(o.rank_kv_write_bytes == expected_write,
+            "ATTENTION_EXACT rank_kv_write_bytes is not exact");
+
+    const uint64_t attention_pairs =
+        CheckedMul(o.query_key_pairs, o.rank_num_heads,
+                   "ATTENTION_EXACT attention pairs");
+    (void)Product({4, attention_pairs, o.head_dim},
+                  "ATTENTION_EXACT EXU ops");
+    (void)CheckedMul(2, attention_pairs,
+                     "ATTENTION_EXACT vector ops");
+    const uint64_t packed_heads =
+        CheckedAdd(o.rank_num_heads,
+                   CheckedMul(2, o.rank_num_kv_heads,
+                              "ATTENTION_EXACT packed KV heads"),
+                   "ATTENTION_EXACT packed heads");
+    (void)Product({2, o.query_tokens, packed_heads, o.head_dim},
+                  "ATTENTION_EXACT activation read bytes");
+    (void)Product({2, o.query_tokens, o.rank_num_heads, o.head_dim},
+                  "ATTENTION_EXACT activation write bytes");
+}
+
+void ValidateEmbeddingLookup(const EmbeddingLookupOperands &o) {
+    RequireExactDataType(o.index_datatype, ExternalDataType::INT32,
+                         "EMBEDDING_LOOKUP index_datatype");
+    RequireExactDataType(o.table_datatype, ExternalDataType::FP16,
+                         "EMBEDDING_LOOKUP table_datatype");
+    RequireExactDataType(o.output_datatype, ExternalDataType::FP16,
+                         "EMBEDDING_LOOKUP output_datatype");
+    Require(o.placement == EmbeddingPlacement::REPLICATED,
+            "EMBEDDING_LOOKUP placement must be REPLICATED");
+    ValidateAddress(o.indices, false, "EMBEDDING_LOOKUP indices");
+    ValidateAddress(o.table, false, "EMBEDDING_LOOKUP table");
+    ValidateAddress(o.output, false, "EMBEDDING_LOOKUP output");
+    RequirePositiveU32(o.logical_rows, "EMBEDDING_LOOKUP logical_rows");
+    RequirePositiveU32(o.rank_rows, "EMBEDDING_LOOKUP rank_rows");
+    RequirePositiveU32(o.tp_degree, "EMBEDDING_LOOKUP tp_degree");
+    RequirePositiveU32(o.vocab_size, "EMBEDDING_LOOKUP vocab_size");
+    RequirePositiveU32(o.hidden_size, "EMBEDDING_LOOKUP hidden_size");
+    Require(o.logical_rows ==
+                CheckedMul(o.rank_rows, o.tp_degree,
+                           "EMBEDDING_LOOKUP logical rows"),
+            "EMBEDDING_LOOKUP logical_rows must equal rank_rows*tp_degree");
+    const uint64_t row_bytes =
+        CheckedAdd(4, CheckedMul(2, o.hidden_size,
+                                "EMBEDDING_LOOKUP row bytes"),
+                   "EMBEDDING_LOOKUP row bytes");
+    (void)CheckedMul(o.rank_rows, row_bytes,
+                     "EMBEDDING_LOOKUP memory read bytes");
+    (void)Product({2, o.rank_rows, o.hidden_size},
+                  "EMBEDDING_LOOKUP memory write bytes");
+}
+
+void ValidateGreedySample(const GreedySampleOperands &o) {
+    RequireExactDataType(o.logits_datatype, ExternalDataType::FP16,
+                         "GREEDY_SAMPLE logits_datatype");
+    RequireExactDataType(o.output_datatype, ExternalDataType::INT32,
+                         "GREEDY_SAMPLE output_datatype");
+    Require(o.mode == GreedySampleMode::GREEDY,
+            "GREEDY_SAMPLE mode must be GREEDY");
+    Require(o.row_selection == GreedyRowSelection::LAST_PER_SEQUENCE,
+            "GREEDY_SAMPLE row_selection must be LAST_PER_SEQUENCE");
+    ValidateAddress(o.logits, false, "GREEDY_SAMPLE logits");
+    ValidateAddress(o.output, false, "GREEDY_SAMPLE output");
+    RequireU32(o.tp_degree, "GREEDY_SAMPLE tp_degree");
+    Require(o.tp_degree == 1, "GREEDY_SAMPLE tp_degree must be one");
+    RequirePositiveU32(o.token_rows, "GREEDY_SAMPLE token_rows");
+    RequirePositiveU32(o.vocab_size, "GREEDY_SAMPLE vocab_size");
+    Require(o.vocab_size > 1, "GREEDY_SAMPLE vocab_size must exceed one");
+    RequirePositiveU32(o.sample_count, "GREEDY_SAMPLE sample_count");
+    Require(o.sample_count <= o.token_rows,
+            "GREEDY_SAMPLE sample_count must not exceed token_rows");
+    const uint64_t expected =
+        CheckedMul(o.sample_count, o.vocab_size - 1,
+                   "GREEDY_SAMPLE comparisons");
+    Require(o.comparisons == expected,
+            "GREEDY_SAMPLE comparisons is not exact");
+    (void)Product({2, o.sample_count, o.vocab_size},
+                  "GREEDY_SAMPLE memory read bytes");
+    (void)CheckedMul(4, o.sample_count,
+                     "GREEDY_SAMPLE memory write bytes");
+}
+
+void ValidateCrossEntropyForward(const CrossEntropyForwardOperands &o) {
+    RequireExactDataType(o.logits_datatype, ExternalDataType::FP16,
+                         "CROSS_ENTROPY_FORWARD logits_datatype");
+    RequireExactDataType(o.label_datatype, ExternalDataType::INT32,
+                         "CROSS_ENTROPY_FORWARD label_datatype");
+    RequireExactDataType(o.loss_datatype, ExternalDataType::FP32,
+                         "CROSS_ENTROPY_FORWARD loss_datatype");
+    Require(o.reduction == CrossEntropyReduction::NONE,
+            "CROSS_ENTROPY_FORWARD reduction must be NONE");
+    ValidateAddress(o.logits, false, "CROSS_ENTROPY_FORWARD logits");
+    ValidateAddress(o.labels, false, "CROSS_ENTROPY_FORWARD labels");
+    ValidateAddress(o.loss, false, "CROSS_ENTROPY_FORWARD loss");
+    RequirePositiveU32(o.logical_rows,
+                       "CROSS_ENTROPY_FORWARD logical_rows");
+    RequirePositiveU32(o.rank_rows,
+                       "CROSS_ENTROPY_FORWARD rank_rows");
+    RequirePositiveU32(o.tp_degree,
+                       "CROSS_ENTROPY_FORWARD tp_degree");
+    RequirePositiveU32(o.vocab_size,
+                       "CROSS_ENTROPY_FORWARD vocab_size");
+    Require(o.vocab_size > 1,
+            "CROSS_ENTROPY_FORWARD vocab_size must exceed one");
+    Require(o.logical_rows ==
+                CheckedMul(o.rank_rows, o.tp_degree,
+                           "CROSS_ENTROPY_FORWARD logical rows"),
+            "CROSS_ENTROPY_FORWARD logical_rows must equal rank_rows*tp_degree");
+    (void)CheckedMul(o.rank_rows, o.vocab_size - 1,
+                     "CROSS_ENTROPY_FORWARD comparisons");
+    (void)Product({o.rank_rows, CheckedAdd(o.vocab_size, 1,
+                                           "CROSS_ENTROPY_FORWARD SFU per row")},
+                  "CROSS_ENTROPY_FORWARD SFU ops");
+    (void)Product({o.rank_rows,
+                   CheckedAdd(CheckedMul(2, o.vocab_size,
+                                         "CROSS_ENTROPY_FORWARD vector per row"),
+                              1, "CROSS_ENTROPY_FORWARD vector per row")},
+                  "CROSS_ENTROPY_FORWARD vector ops");
+    (void)Product({o.rank_rows,
+                   CheckedAdd(CheckedMul(2, o.vocab_size,
+                                         "CROSS_ENTROPY_FORWARD read per row"),
+                              4, "CROSS_ENTROPY_FORWARD read per row")},
+                  "CROSS_ENTROPY_FORWARD memory read bytes");
+    (void)CheckedMul(4, o.rank_rows,
+                     "CROSS_ENTROPY_FORWARD memory write bytes");
+}
+
+void ValidateCrossEntropyBackward(const CrossEntropyBackwardOperands &o) {
+    RequireExactDataType(o.logits_datatype, ExternalDataType::FP16,
+                         "CROSS_ENTROPY_BACKWARD logits_datatype");
+    RequireExactDataType(o.label_datatype, ExternalDataType::INT32,
+                         "CROSS_ENTROPY_BACKWARD label_datatype");
+    RequireExactDataType(o.upstream_datatype, ExternalDataType::FP32,
+                         "CROSS_ENTROPY_BACKWARD upstream_datatype");
+    RequireExactDataType(o.output_datatype, ExternalDataType::FP16,
+                         "CROSS_ENTROPY_BACKWARD output_datatype");
+    Require(o.reduction == CrossEntropyReduction::NONE,
+            "CROSS_ENTROPY_BACKWARD reduction must be NONE");
+    Require(o.upstream_mode == CrossEntropyUpstreamMode::SCALAR ||
+                o.upstream_mode == CrossEntropyUpstreamMode::PER_ROW,
+            "CROSS_ENTROPY_BACKWARD upstream mode is invalid");
+    ValidateAddress(o.logits, false, "CROSS_ENTROPY_BACKWARD logits");
+    ValidateAddress(o.labels, false, "CROSS_ENTROPY_BACKWARD labels");
+    ValidateAddress(o.upstream, false, "CROSS_ENTROPY_BACKWARD upstream");
+    ValidateAddress(o.logits_grad, false,
+                    "CROSS_ENTROPY_BACKWARD logits_grad");
+    RequirePositiveU32(o.logical_rows,
+                       "CROSS_ENTROPY_BACKWARD logical_rows");
+    RequirePositiveU32(o.rank_rows,
+                       "CROSS_ENTROPY_BACKWARD rank_rows");
+    RequirePositiveU32(o.tp_degree,
+                       "CROSS_ENTROPY_BACKWARD tp_degree");
+    RequirePositiveU32(o.vocab_size,
+                       "CROSS_ENTROPY_BACKWARD vocab_size");
+    Require(o.vocab_size > 1,
+            "CROSS_ENTROPY_BACKWARD vocab_size must exceed one");
+    Require(o.logical_rows ==
+                CheckedMul(o.rank_rows, o.tp_degree,
+                           "CROSS_ENTROPY_BACKWARD logical rows"),
+            "CROSS_ENTROPY_BACKWARD logical_rows must equal rank_rows*tp_degree");
+    const uint64_t expected_upstream =
+        o.upstream_mode == CrossEntropyUpstreamMode::SCALAR ? 1 : o.rank_rows;
+    Require(o.upstream_elements == expected_upstream,
+            "CROSS_ENTROPY_BACKWARD upstream_elements is not exact");
+    (void)CheckedMul(o.rank_rows, o.vocab_size - 1,
+                     "CROSS_ENTROPY_BACKWARD comparisons");
+    (void)Product({o.rank_rows,
+                   CheckedAdd(o.vocab_size, 1,
+                              "CROSS_ENTROPY_BACKWARD SFU per row")},
+                  "CROSS_ENTROPY_BACKWARD SFU ops");
+    (void)Product({o.rank_rows,
+                   CheckedAdd(CheckedMul(4, o.vocab_size,
+                                         "CROSS_ENTROPY_BACKWARD vector per row"),
+                              1, "CROSS_ENTROPY_BACKWARD vector per row")},
+                  "CROSS_ENTROPY_BACKWARD vector ops");
+    (void)CheckedAdd(
+        CheckedAdd(Product({2, o.rank_rows, o.vocab_size},
+                           "CROSS_ENTROPY_BACKWARD logits read bytes"),
+                   CheckedMul(4, o.rank_rows,
+                              "CROSS_ENTROPY_BACKWARD label read bytes"),
+                   "CROSS_ENTROPY_BACKWARD memory read bytes"),
+        CheckedMul(4, o.upstream_elements,
+                   "CROSS_ENTROPY_BACKWARD upstream read bytes"),
+        "CROSS_ENTROPY_BACKWARD memory read bytes");
+    (void)Product({2, o.rank_rows, o.vocab_size},
+                  "CROSS_ENTROPY_BACKWARD memory write bytes");
+}
+
+bool SameAddress(const SramAddressOperand &left,
+                 const SramAddressOperand &right) noexcept {
+    return left.kind == right.kind &&
+           left.absolute_address_bytes == right.absolute_address_bytes &&
+           left.region_symbol_index == right.region_symbol_index &&
+           left.region_offset_bytes == right.region_offset_bytes;
+}
+
+void ValidateSgdUpdate(const SgdUpdateOperands &o) {
+    RequireExactDataType(o.weight_datatype, ExternalDataType::FP16,
+                         "SGD_UPDATE weight_datatype");
+    RequireExactDataType(o.gradient_datatype, ExternalDataType::FP32,
+                         "SGD_UPDATE gradient_datatype");
+    RequireExactDataType(o.output_datatype, ExternalDataType::FP16,
+                         "SGD_UPDATE output_datatype");
+    Require(o.rounding == OptimizerRoundingMode::RNE,
+            "SGD_UPDATE rounding must be RNE");
+    ValidateAddress(o.weight, false, "SGD_UPDATE weight");
+    ValidateAddress(o.gradient, false, "SGD_UPDATE gradient");
+    ValidateAddress(o.updated_weight, false, "SGD_UPDATE updated_weight");
+    Require(SameAddress(o.weight, o.updated_weight),
+            "SGD_UPDATE weight and updated_weight must alias exactly");
+    RequirePositiveU32(o.element_count, "SGD_UPDATE element_count");
+    const uint64_t learning_rate_magnitude =
+        o.learning_rate_f64_bits & UINT64_C(0x7fffffffffffffff);
+    const uint64_t learning_rate_exponent =
+        (o.learning_rate_f64_bits >> 52) & UINT64_C(0x7ff);
+    Require((o.learning_rate_f64_bits >> 63) == 0 &&
+                learning_rate_magnitude != 0 &&
+                learning_rate_exponent != UINT64_C(0x7ff),
+            "SGD_UPDATE learning rate must be finite and positive");
+    Require(o.momentum_f64_bits == 0,
+            "SGD_UPDATE momentum must be exactly zero");
+    (void)CheckedMul(2, o.element_count, "SGD_UPDATE vector ops");
+    (void)CheckedMul(6, o.element_count,
+                     "SGD_UPDATE memory read bytes");
+    (void)CheckedMul(2, o.element_count,
+                     "SGD_UPDATE memory write bytes");
 }
 
 uint64_t ComputeParameter(const ComputeOperands &operands,
@@ -586,14 +1024,18 @@ void ValidatePublishedComputeSemantics(const ComputeOperands &operands,
         (void)CheckedMul(n, scale, "unary compute ops");
         return;
     }
-    case Opcode::SWIGLU:
+    case Opcode::SWIGLU: {
+        const uint64_t n = p("N");
+        ValidateNpuLayout(
+            operands, {CheckedMul(2, n, "SWIGLU concat input")}, {n},
+            "SWIGLU");
+        (void)CheckedMul(n, 4, "SWIGLU ops");
+        return;
+    }
     case Opcode::RESIDUAL: {
         const uint64_t n = p("N");
-        ValidateNpuLayout(operands, {n, n}, {n},
-                          schema.opcode == Opcode::SWIGLU ? "SWIGLU"
-                                                         : "RESIDUAL");
-        (void)CheckedMul(n, schema.opcode == Opcode::SWIGLU ? 4 : 1,
-                         "binary compute ops");
+        ValidateNpuLayout(operands, {n, n}, {n}, "RESIDUAL");
+        (void)CheckedMul(n, 1, "binary compute ops");
         return;
     }
     case Opcode::LAYERNORM:
@@ -710,6 +1152,21 @@ void ValidateSramAlloc(const SramAllocOperands &operands) {
         Fail("SRAM_ALLOC lifetime enum is invalid");
 }
 
+void ValidateSramAllocAt(const SramAllocAtOperands &operands) {
+    RequireU32(operands.region_name_string_index,
+               "SRAM_ALLOC_AT region_name_string_index");
+    RequireU32(operands.label_symbol_index,
+               "SRAM_ALLOC_AT label_symbol_index");
+    Require(operands.size_bytes != 0,
+            "SRAM_ALLOC_AT size_bytes must be non-zero");
+    Require(operands.alignment_bytes != 0 &&
+                (operands.alignment_bytes &
+                 (operands.alignment_bytes - 1)) == 0,
+            "SRAM_ALLOC_AT alignment_bytes must be a non-zero power of two");
+    if (EnumByte(operands.lifetime) > EnumByte(SramLifetime::PERSISTENT))
+        Fail("SRAM_ALLOC_AT lifetime enum is invalid");
+}
+
 void ValidateSramResize(const SramResizeOperands &operands) {
     RequireU32(operands.symbol_index, "SRAM_RESIZE symbol_index");
     Require(operands.new_size_bytes != 0,
@@ -806,12 +1263,34 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
     ComputeSchema(Opcode::SPLIT_CONV, kSplitConv),
     ComputeSchema(Opcode::MERGE_CONV, kMergeConv),
     ComputeSchema(Opcode::GEMM_REDUCE_SCATTER, kGemmReduceScatter),
+    FixedSchema(Opcode::ROPE_QK_EXACT,
+                RecordOperandKind::ROPE_QK_EXACT,
+                kRopeQkExactPayloadSize),
+    FixedSchema(Opcode::ATTENTION_EXACT,
+                RecordOperandKind::ATTENTION_EXACT,
+                kAttentionExactPayloadSize),
+    FixedSchema(Opcode::EMBEDDING_LOOKUP,
+                RecordOperandKind::EMBEDDING_LOOKUP,
+                kEmbeddingLookupPayloadSize),
+    FixedSchema(Opcode::GREEDY_SAMPLE,
+                RecordOperandKind::GREEDY_SAMPLE,
+                kGreedySamplePayloadSize),
+    FixedSchema(Opcode::CROSS_ENTROPY_FORWARD,
+                RecordOperandKind::CROSS_ENTROPY_FORWARD,
+                kCrossEntropyForwardPayloadSize),
+    FixedSchema(Opcode::CROSS_ENTROPY_BACKWARD,
+                RecordOperandKind::CROSS_ENTROPY_BACKWARD,
+                kCrossEntropyBackwardPayloadSize),
+    FixedSchema(Opcode::SGD_UPDATE, RecordOperandKind::SGD_UPDATE,
+                kSgdUpdatePayloadSize),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::REDUCE_COMPUTE, RecordOperandKind::REDUCE_COMPUTE,
                 kReducePayloadSize),
+    FixedSchema(Opcode::LOCAL_REDUCE, RecordOperandKind::LOCAL_REDUCE,
+                kLocalReducePayloadSize),
     FixedSchema(Opcode::LSU_LOAD, RecordOperandKind::LSU, kLsuPayloadSize),
     FixedSchema(Opcode::LSU_STORE, RecordOperandKind::LSU, kLsuPayloadSize),
     FixedSchema(Opcode::DTE_ISSUE, RecordOperandKind::DTE_ISSUE,
@@ -828,6 +1307,8 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
                 kSramResizePayloadSize),
     FixedSchema(Opcode::SRAM_RENAME, RecordOperandKind::SRAM_RENAME,
                 kSramRenamePayloadSize),
+    FixedSchema(Opcode::SRAM_ALLOC_AT, RecordOperandKind::SRAM_ALLOC_AT,
+                kSramAllocAtPayloadSize),
     FixedSchema(Opcode::DTE_WAIT, RecordOperandKind::TOKEN,
                 kTokenPayloadSize),
     FixedSchema(Opcode::DTE_FENCE, RecordOperandKind::NONE, 0),
@@ -872,6 +1353,36 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
         ValidateCompute(RequireOperands<ComputeOperands>(record, "compute"),
                         schema);
         return;
+    case RecordOperandKind::ROPE_QK_EXACT:
+        ValidateRopeQkExact(RequireOperands<RopeQkExactOperands>(
+            record, "ROPE_QK_EXACT"));
+        return;
+    case RecordOperandKind::ATTENTION_EXACT:
+        ValidateAttentionExact(RequireOperands<AttentionExactOperands>(
+            record, "ATTENTION_EXACT"));
+        return;
+    case RecordOperandKind::EMBEDDING_LOOKUP:
+        ValidateEmbeddingLookup(RequireOperands<EmbeddingLookupOperands>(
+            record, "EMBEDDING_LOOKUP"));
+        return;
+    case RecordOperandKind::GREEDY_SAMPLE:
+        ValidateGreedySample(RequireOperands<GreedySampleOperands>(
+            record, "GREEDY_SAMPLE"));
+        return;
+    case RecordOperandKind::CROSS_ENTROPY_FORWARD:
+        ValidateCrossEntropyForward(
+            RequireOperands<CrossEntropyForwardOperands>(
+                record, "CROSS_ENTROPY_FORWARD"));
+        return;
+    case RecordOperandKind::CROSS_ENTROPY_BACKWARD:
+        ValidateCrossEntropyBackward(
+            RequireOperands<CrossEntropyBackwardOperands>(
+                record, "CROSS_ENTROPY_BACKWARD"));
+        return;
+    case RecordOperandKind::SGD_UPDATE:
+        ValidateSgdUpdate(
+            RequireOperands<SgdUpdateOperands>(record, "SGD_UPDATE"));
+        return;
     case RecordOperandKind::DTE_SEND:
         ValidateDteSend(RequireOperands<DteSendOperands>(record, "DTE_SEND"));
         return;
@@ -881,6 +1392,10 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::REDUCE_COMPUTE:
         ValidateReduceCompute(RequireOperands<ReduceComputeOperands>(
             record, "REDUCE_COMPUTE"));
+        return;
+    case RecordOperandKind::LOCAL_REDUCE:
+        ValidateLocalReduce(RequireOperands<LocalReduceOperands>(
+            record, "LOCAL_REDUCE"));
         return;
     case RecordOperandKind::LSU:
         ValidateLsu(RequireOperands<LsuOperands>(record, "LSU"));
@@ -899,6 +1414,10 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::SRAM_ALLOC:
         ValidateSramAlloc(
             RequireOperands<SramAllocOperands>(record, "SRAM_ALLOC"));
+        return;
+    case RecordOperandKind::SRAM_ALLOC_AT:
+        ValidateSramAllocAt(
+            RequireOperands<SramAllocAtOperands>(record, "SRAM_ALLOC_AT"));
         return;
     case RecordOperandKind::SRAM_RESIZE:
         ValidateSramResize(
@@ -944,6 +1463,130 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         AppendLittleEndian(payload, o.output_offset_bytes, 2);
         for (uint64_t parameter : o.parameters)
             AppendLittleEndian(payload, parameter, 4);
+        break;
+    }
+    case RecordOperandKind::ROPE_QK_EXACT: {
+        const auto &o = std::get<RopeQkExactOperands>(record.operands);
+        payload.push_back(EnumByte(o.datatype));
+        payload.push_back(EnumByte(o.packed_layout));
+        AppendLittleEndian(payload, 0, 2);
+        EncodeAddress(payload, o.input);
+        EncodeAddress(payload, o.output);
+        AppendLittleEndian(payload, o.logical_tokens, 4);
+        AppendLittleEndian(payload, o.tp_degree, 4);
+        AppendLittleEndian(payload, o.num_heads, 4);
+        AppendLittleEndian(payload, o.num_kv_heads, 4);
+        AppendLittleEndian(payload, o.rank_num_heads, 4);
+        AppendLittleEndian(payload, o.rank_num_kv_heads, 4);
+        AppendLittleEndian(payload, o.head_dim, 4);
+        AppendLittleEndian(payload, o.rotary_dim, 4);
+        AppendLittleEndian(payload, o.max_position_embeddings, 4);
+        AppendLittleEndian(payload, o.context_max, 4);
+        AppendLittleEndian(payload, o.rope_theta_f64_bits, 8);
+        break;
+    }
+    case RecordOperandKind::ATTENTION_EXACT: {
+        const auto &o = std::get<AttentionExactOperands>(record.operands);
+        payload.push_back(EnumByte(o.datatype));
+        payload.push_back(EnumByte(o.mode));
+        payload.push_back(EnumByte(o.packed_layout));
+        payload.push_back(o.causal ? 1 : 0);
+        EncodeAddress(payload, o.input);
+        EncodeAddress(payload, o.output);
+        AppendLittleEndian(payload, o.query_tokens, 4);
+        AppendLittleEndian(payload, o.tp_degree, 4);
+        AppendLittleEndian(payload, o.num_heads, 4);
+        AppendLittleEndian(payload, o.num_kv_heads, 4);
+        AppendLittleEndian(payload, o.rank_num_heads, 4);
+        AppendLittleEndian(payload, o.rank_num_kv_heads, 4);
+        AppendLittleEndian(payload, o.head_dim, 4);
+        AppendLittleEndian(payload, o.context_sum, 8);
+        AppendLittleEndian(payload, o.context_max, 4);
+        AppendLittleEndian(payload, o.query_key_pairs, 8);
+        AppendLittleEndian(payload, o.rank_kv_read_bytes, 8);
+        AppendLittleEndian(payload, o.rank_kv_write_bytes, 8);
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_LOOKUP: {
+        const auto &o =
+            std::get<EmbeddingLookupOperands>(record.operands);
+        payload.push_back(EnumByte(o.index_datatype));
+        payload.push_back(EnumByte(o.table_datatype));
+        payload.push_back(EnumByte(o.output_datatype));
+        payload.push_back(EnumByte(o.placement));
+        EncodeAddress(payload, o.indices);
+        EncodeAddress(payload, o.table);
+        EncodeAddress(payload, o.output);
+        AppendLittleEndian(payload, o.logical_rows, 4);
+        AppendLittleEndian(payload, o.rank_rows, 4);
+        AppendLittleEndian(payload, o.tp_degree, 4);
+        AppendLittleEndian(payload, o.vocab_size, 4);
+        AppendLittleEndian(payload, o.hidden_size, 4);
+        break;
+    }
+    case RecordOperandKind::GREEDY_SAMPLE: {
+        const auto &o = std::get<GreedySampleOperands>(record.operands);
+        payload.push_back(EnumByte(o.logits_datatype));
+        payload.push_back(EnumByte(o.output_datatype));
+        payload.push_back(EnumByte(o.mode));
+        payload.push_back(EnumByte(o.row_selection));
+        EncodeAddress(payload, o.logits);
+        EncodeAddress(payload, o.output);
+        AppendLittleEndian(payload, o.tp_degree, 4);
+        AppendLittleEndian(payload, o.token_rows, 4);
+        AppendLittleEndian(payload, o.vocab_size, 4);
+        AppendLittleEndian(payload, o.sample_count, 4);
+        AppendLittleEndian(payload, o.comparisons, 8);
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_FORWARD: {
+        const auto &o =
+            std::get<CrossEntropyForwardOperands>(record.operands);
+        payload.push_back(EnumByte(o.logits_datatype));
+        payload.push_back(EnumByte(o.label_datatype));
+        payload.push_back(EnumByte(o.loss_datatype));
+        payload.push_back(EnumByte(o.reduction));
+        EncodeAddress(payload, o.logits);
+        EncodeAddress(payload, o.labels);
+        EncodeAddress(payload, o.loss);
+        AppendLittleEndian(payload, o.logical_rows, 4);
+        AppendLittleEndian(payload, o.rank_rows, 4);
+        AppendLittleEndian(payload, o.tp_degree, 4);
+        AppendLittleEndian(payload, o.vocab_size, 4);
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_BACKWARD: {
+        const auto &o =
+            std::get<CrossEntropyBackwardOperands>(record.operands);
+        payload.push_back(EnumByte(o.logits_datatype));
+        payload.push_back(EnumByte(o.label_datatype));
+        payload.push_back(EnumByte(o.upstream_datatype));
+        payload.push_back(EnumByte(o.output_datatype));
+        payload.push_back(EnumByte(o.reduction));
+        payload.push_back(EnumByte(o.upstream_mode));
+        EncodeAddress(payload, o.logits);
+        EncodeAddress(payload, o.labels);
+        EncodeAddress(payload, o.upstream);
+        EncodeAddress(payload, o.logits_grad);
+        AppendLittleEndian(payload, o.logical_rows, 4);
+        AppendLittleEndian(payload, o.rank_rows, 4);
+        AppendLittleEndian(payload, o.tp_degree, 4);
+        AppendLittleEndian(payload, o.vocab_size, 4);
+        AppendLittleEndian(payload, o.upstream_elements, 4);
+        break;
+    }
+    case RecordOperandKind::SGD_UPDATE: {
+        const auto &o = std::get<SgdUpdateOperands>(record.operands);
+        payload.push_back(EnumByte(o.weight_datatype));
+        payload.push_back(EnumByte(o.gradient_datatype));
+        payload.push_back(EnumByte(o.output_datatype));
+        payload.push_back(EnumByte(o.rounding));
+        EncodeAddress(payload, o.weight);
+        EncodeAddress(payload, o.gradient);
+        EncodeAddress(payload, o.updated_weight);
+        AppendLittleEndian(payload, o.element_count, 4);
+        AppendLittleEndian(payload, o.learning_rate_f64_bits, 8);
+        AppendLittleEndian(payload, o.momentum_f64_bits, 8);
         break;
     }
     case RecordOperandKind::DTE_SEND: {
@@ -1005,6 +1648,21 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         EncodeAddress(payload, o.destination);
         break;
     }
+    case RecordOperandKind::LOCAL_REDUCE: {
+        const auto &o = std::get<LocalReduceOperands>(record.operands);
+        payload.push_back(EnumByte(o.input_dtype));
+        payload.push_back(EnumByte(o.accumulator_dtype));
+        payload.push_back(EnumByte(o.output_dtype));
+        payload.push_back(EnumByte(o.reduce_op));
+        payload.push_back(EnumByte(o.rounding));
+        payload.push_back(EnumByte(o.order));
+        AppendLittleEndian(payload, o.input_count, 2);
+        AppendLittleEndian(payload, o.element_count, 8);
+        AppendLittleEndian(payload, o.input_stride_bytes, 8);
+        EncodeAddress(payload, o.source);
+        EncodeAddress(payload, o.destination);
+        break;
+    }
     case RecordOperandKind::LSU: {
         const auto &o = std::get<LsuOperands>(record.operands);
         AppendLittleEndian(payload, o.hbm_address_bytes, 8);
@@ -1042,6 +1700,18 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         const auto &o = std::get<SramAllocOperands>(record.operands);
         AppendLittleEndian(payload, o.region_name_string_index, 4);
         AppendLittleEndian(payload, o.label_symbol_index, 4);
+        AppendLittleEndian(payload, o.size_bytes, 8);
+        AppendLittleEndian(payload, o.alignment_bytes, 8);
+        payload.push_back(EnumByte(o.lifetime));
+        payload.push_back(o.spillable ? 1 : 0);
+        AppendLittleEndian(payload, 0, 6);
+        break;
+    }
+    case RecordOperandKind::SRAM_ALLOC_AT: {
+        const auto &o = std::get<SramAllocAtOperands>(record.operands);
+        AppendLittleEndian(payload, o.region_name_string_index, 4);
+        AppendLittleEndian(payload, o.label_symbol_index, 4);
+        AppendLittleEndian(payload, o.region_offset_bytes, 8);
         AppendLittleEndian(payload, o.size_bytes, 8);
         AppendLittleEndian(payload, o.alignment_bytes, 8);
         payload.push_back(EnumByte(o.lifetime));
@@ -1119,6 +1789,206 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         record.operands = std::move(o);
         break;
     }
+    case RecordOperandKind::ROPE_QK_EXACT: {
+        RopeQkExactOperands o;
+        o.datatype =
+            DecodeEnum<ExternalDataType>(payload, 0, "datatype");
+        o.packed_layout =
+            DecodeEnum<RopePackedLayout>(payload, 1, "packed_layout");
+        RequireZero(payload, 2, 2, "ROPE_QK_EXACT header");
+        o.input = DecodeAddress(payload, 4, "ROPE_QK_EXACT input");
+        o.output = DecodeAddress(payload, 28, "ROPE_QK_EXACT output");
+        o.logical_tokens =
+            ReadLittleEndian(payload, 52, 4, "logical_tokens");
+        o.tp_degree = ReadLittleEndian(payload, 56, 4, "tp_degree");
+        o.num_heads = ReadLittleEndian(payload, 60, 4, "num_heads");
+        o.num_kv_heads =
+            ReadLittleEndian(payload, 64, 4, "num_kv_heads");
+        o.rank_num_heads =
+            ReadLittleEndian(payload, 68, 4, "rank_num_heads");
+        o.rank_num_kv_heads =
+            ReadLittleEndian(payload, 72, 4, "rank_num_kv_heads");
+        o.head_dim = ReadLittleEndian(payload, 76, 4, "head_dim");
+        o.rotary_dim = ReadLittleEndian(payload, 80, 4, "rotary_dim");
+        o.max_position_embeddings =
+            ReadLittleEndian(payload, 84, 4,
+                             "max_position_embeddings");
+        o.context_max = ReadLittleEndian(payload, 88, 4, "context_max");
+        o.rope_theta_f64_bits =
+            ReadLittleEndian(payload, 92, 8, "rope_theta_f64_bits");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::ATTENTION_EXACT: {
+        AttentionExactOperands o;
+        o.datatype =
+            DecodeEnum<ExternalDataType>(payload, 0, "datatype");
+        o.mode =
+            DecodeEnum<ExactAttentionMode>(payload, 1, "mode");
+        o.packed_layout =
+            DecodeEnum<AttentionPackedLayout>(payload, 2,
+                                              "packed_layout");
+        const uint64_t raw_causal =
+            ReadLittleEndian(payload, 3, 1, "causal");
+        Require(raw_causal <= 1,
+                "ATTENTION_EXACT causal must be 0 or 1");
+        o.causal = raw_causal != 0;
+        o.input = DecodeAddress(payload, 4, "ATTENTION_EXACT input");
+        o.output =
+            DecodeAddress(payload, 28, "ATTENTION_EXACT output");
+        o.query_tokens =
+            ReadLittleEndian(payload, 52, 4, "query_tokens");
+        o.tp_degree = ReadLittleEndian(payload, 56, 4, "tp_degree");
+        o.num_heads = ReadLittleEndian(payload, 60, 4, "num_heads");
+        o.num_kv_heads =
+            ReadLittleEndian(payload, 64, 4, "num_kv_heads");
+        o.rank_num_heads =
+            ReadLittleEndian(payload, 68, 4, "rank_num_heads");
+        o.rank_num_kv_heads =
+            ReadLittleEndian(payload, 72, 4, "rank_num_kv_heads");
+        o.head_dim = ReadLittleEndian(payload, 76, 4, "head_dim");
+        o.context_sum =
+            ReadLittleEndian(payload, 80, 8, "context_sum");
+        o.context_max =
+            ReadLittleEndian(payload, 88, 4, "context_max");
+        o.query_key_pairs =
+            ReadLittleEndian(payload, 92, 8, "query_key_pairs");
+        o.rank_kv_read_bytes =
+            ReadLittleEndian(payload, 100, 8, "rank_kv_read_bytes");
+        o.rank_kv_write_bytes =
+            ReadLittleEndian(payload, 108, 8, "rank_kv_write_bytes");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_LOOKUP: {
+        EmbeddingLookupOperands o;
+        o.index_datatype =
+            DecodeEnum<ExternalDataType>(payload, 0, "index_datatype");
+        o.table_datatype =
+            DecodeEnum<ExternalDataType>(payload, 1, "table_datatype");
+        o.output_datatype =
+            DecodeEnum<ExternalDataType>(payload, 2, "output_datatype");
+        o.placement =
+            DecodeEnum<EmbeddingPlacement>(payload, 3, "placement");
+        o.indices =
+            DecodeAddress(payload, 4, "EMBEDDING_LOOKUP indices");
+        o.table =
+            DecodeAddress(payload, 28, "EMBEDDING_LOOKUP table");
+        o.output =
+            DecodeAddress(payload, 52, "EMBEDDING_LOOKUP output");
+        o.logical_rows =
+            ReadLittleEndian(payload, 76, 4, "logical_rows");
+        o.rank_rows = ReadLittleEndian(payload, 80, 4, "rank_rows");
+        o.tp_degree = ReadLittleEndian(payload, 84, 4, "tp_degree");
+        o.vocab_size =
+            ReadLittleEndian(payload, 88, 4, "vocab_size");
+        o.hidden_size =
+            ReadLittleEndian(payload, 92, 4, "hidden_size");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::GREEDY_SAMPLE: {
+        GreedySampleOperands o;
+        o.logits_datatype =
+            DecodeEnum<ExternalDataType>(payload, 0, "logits_datatype");
+        o.output_datatype =
+            DecodeEnum<ExternalDataType>(payload, 1, "output_datatype");
+        o.mode =
+            DecodeEnum<GreedySampleMode>(payload, 2, "mode");
+        o.row_selection =
+            DecodeEnum<GreedyRowSelection>(payload, 3,
+                                           "row_selection");
+        o.logits =
+            DecodeAddress(payload, 4, "GREEDY_SAMPLE logits");
+        o.output =
+            DecodeAddress(payload, 28, "GREEDY_SAMPLE output");
+        o.tp_degree = ReadLittleEndian(payload, 52, 4, "tp_degree");
+        o.token_rows = ReadLittleEndian(payload, 56, 4, "token_rows");
+        o.vocab_size = ReadLittleEndian(payload, 60, 4, "vocab_size");
+        o.sample_count =
+            ReadLittleEndian(payload, 64, 4, "sample_count");
+        o.comparisons =
+            ReadLittleEndian(payload, 68, 8, "comparisons");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_FORWARD: {
+        CrossEntropyForwardOperands o;
+        o.logits_datatype = DecodeEnum<ExternalDataType>(
+            payload, 0, "logits_datatype");
+        o.label_datatype = DecodeEnum<ExternalDataType>(
+            payload, 1, "label_datatype");
+        o.loss_datatype = DecodeEnum<ExternalDataType>(
+            payload, 2, "loss_datatype");
+        o.reduction = DecodeEnum<CrossEntropyReduction>(
+            payload, 3, "reduction");
+        o.logits = DecodeAddress(
+            payload, 4, "CROSS_ENTROPY_FORWARD logits");
+        o.labels = DecodeAddress(
+            payload, 28, "CROSS_ENTROPY_FORWARD labels");
+        o.loss = DecodeAddress(
+            payload, 52, "CROSS_ENTROPY_FORWARD loss");
+        o.logical_rows =
+            ReadLittleEndian(payload, 76, 4, "logical_rows");
+        o.rank_rows = ReadLittleEndian(payload, 80, 4, "rank_rows");
+        o.tp_degree = ReadLittleEndian(payload, 84, 4, "tp_degree");
+        o.vocab_size = ReadLittleEndian(payload, 88, 4, "vocab_size");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_BACKWARD: {
+        CrossEntropyBackwardOperands o;
+        o.logits_datatype = DecodeEnum<ExternalDataType>(
+            payload, 0, "logits_datatype");
+        o.label_datatype = DecodeEnum<ExternalDataType>(
+            payload, 1, "label_datatype");
+        o.upstream_datatype = DecodeEnum<ExternalDataType>(
+            payload, 2, "upstream_datatype");
+        o.output_datatype = DecodeEnum<ExternalDataType>(
+            payload, 3, "output_datatype");
+        o.reduction = DecodeEnum<CrossEntropyReduction>(
+            payload, 4, "reduction");
+        o.upstream_mode = DecodeEnum<CrossEntropyUpstreamMode>(
+            payload, 5, "upstream_mode");
+        o.logits = DecodeAddress(
+            payload, 6, "CROSS_ENTROPY_BACKWARD logits");
+        o.labels = DecodeAddress(
+            payload, 30, "CROSS_ENTROPY_BACKWARD labels");
+        o.upstream = DecodeAddress(
+            payload, 54, "CROSS_ENTROPY_BACKWARD upstream");
+        o.logits_grad = DecodeAddress(
+            payload, 78, "CROSS_ENTROPY_BACKWARD logits_grad");
+        o.logical_rows = ReadLittleEndian(payload, 102, 4, "logical_rows");
+        o.rank_rows = ReadLittleEndian(payload, 106, 4, "rank_rows");
+        o.tp_degree = ReadLittleEndian(payload, 110, 4, "tp_degree");
+        o.vocab_size = ReadLittleEndian(payload, 114, 4, "vocab_size");
+        o.upstream_elements =
+            ReadLittleEndian(payload, 118, 4, "upstream_elements");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::SGD_UPDATE: {
+        SgdUpdateOperands o;
+        o.weight_datatype = DecodeEnum<ExternalDataType>(
+            payload, 0, "weight_datatype");
+        o.gradient_datatype = DecodeEnum<ExternalDataType>(
+            payload, 1, "gradient_datatype");
+        o.output_datatype = DecodeEnum<ExternalDataType>(
+            payload, 2, "output_datatype");
+        o.rounding = DecodeEnum<OptimizerRoundingMode>(
+            payload, 3, "rounding");
+        o.weight = DecodeAddress(payload, 4, "SGD_UPDATE weight");
+        o.gradient = DecodeAddress(payload, 28, "SGD_UPDATE gradient");
+        o.updated_weight =
+            DecodeAddress(payload, 52, "SGD_UPDATE updated_weight");
+        o.element_count = ReadLittleEndian(payload, 76, 4, "element_count");
+        o.learning_rate_f64_bits =
+            ReadLittleEndian(payload, 80, 8, "learning_rate_f64_bits");
+        o.momentum_f64_bits =
+            ReadLittleEndian(payload, 88, 8, "momentum_f64_bits");
+        record.operands = std::move(o);
+        break;
+    }
     case RecordOperandKind::DTE_SEND: {
         DteSendOperands o;
         o.mode = DecodeEnum<DteSendMode>(payload, 0, "DTE_SEND mode");
@@ -1183,6 +2053,31 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         record.operands = std::move(o);
         break;
     }
+    case RecordOperandKind::LOCAL_REDUCE: {
+        LocalReduceOperands o;
+        o.input_dtype =
+            DecodeEnum<LocalReduceDataType>(payload, 0, "input_dtype");
+        o.accumulator_dtype = DecodeEnum<LocalReduceDataType>(
+            payload, 1, "accumulator_dtype");
+        o.output_dtype =
+            DecodeEnum<LocalReduceDataType>(payload, 2, "output_dtype");
+        o.reduce_op =
+            DecodeEnum<ReduceOperator>(payload, 3, "reduce_op");
+        o.rounding = DecodeEnum<LocalReduceRoundingMode>(
+            payload, 4, "rounding");
+        o.order =
+            DecodeEnum<LocalReduceOrder>(payload, 5, "order");
+        o.input_count = ReadLittleEndian(payload, 6, 2, "input_count");
+        o.element_count =
+            ReadLittleEndian(payload, 8, 8, "element_count");
+        o.input_stride_bytes =
+            ReadLittleEndian(payload, 16, 8, "input_stride_bytes");
+        o.source = DecodeAddress(payload, 24, "LOCAL_REDUCE source");
+        o.destination =
+            DecodeAddress(payload, 48, "LOCAL_REDUCE destination");
+        record.operands = std::move(o);
+        break;
+    }
     case RecordOperandKind::LSU: {
         LsuOperands o;
         o.hbm_address_bytes = ReadLittleEndian(payload, 0, 8, "hbm_address");
@@ -1236,6 +2131,27 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         Require(raw_spillable <= 1, "SRAM_ALLOC spillable must be 0 or 1");
         o.spillable = raw_spillable != 0;
         RequireZero(payload, 26, 6, "SRAM_ALLOC tail");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::SRAM_ALLOC_AT: {
+        SramAllocAtOperands o;
+        o.region_name_string_index = ReadLittleEndian(
+            payload, 0, 4, "region_name_string_index");
+        o.label_symbol_index =
+            ReadLittleEndian(payload, 4, 4, "label_symbol_index");
+        o.region_offset_bytes =
+            ReadLittleEndian(payload, 8, 8, "region_offset_bytes");
+        o.size_bytes = ReadLittleEndian(payload, 16, 8, "size_bytes");
+        o.alignment_bytes =
+            ReadLittleEndian(payload, 24, 8, "alignment_bytes");
+        o.lifetime = DecodeEnum<SramLifetime>(payload, 32, "lifetime");
+        const uint64_t raw_spillable =
+            ReadLittleEndian(payload, 33, 1, "spillable");
+        Require(raw_spillable <= 1,
+                "SRAM_ALLOC_AT spillable must be 0 or 1");
+        o.spillable = raw_spillable != 0;
+        RequireZero(payload, 34, 6, "SRAM_ALLOC_AT tail");
         record.operands = std::move(o);
         break;
     }

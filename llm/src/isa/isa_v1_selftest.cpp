@@ -30,6 +30,7 @@
 #include "prims/collective_launch_v1_prim.h"
 #include "prims/collective_phase_barrier_v1_prim.h"
 #include "prims/dte_endpoint_prims.h"
+#include "prims/exact_stage2_prims.h"
 #include "utils/prim_utils.h"
 #include "monitor/config_helper_program_selftest.h"
 #include "router/endpoint_output_flow_lock_selftest.h"
@@ -133,12 +134,12 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
               "external manifest contains only public entries");
     }
 
-    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 25,
-          "compute range contains 25 assigned opcodes");
-    Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 3,
-          "communication range contains 3 assigned opcodes");
-    Check(result, CountCategory(OpcodeCategory::MEMORY) == 9,
-          "memory range contains 9 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 32,
+          "compute range contains 32 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 4,
+          "communication range contains 4 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::MEMORY) == 10,
+          "memory range contains 10 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::SYNCHRONIZATION) == 7,
           "synchronization range contains 7 assigned opcodes");
     CheckContiguousRange(result, kComputeOpcodeFirst, kComputeOpcodeLast,
@@ -209,7 +210,7 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
     }
 
     constexpr std::array<uint8_t, 7> kReservedEncoding{{
-        0x00, 0x1a, 0x43, 0x89, 0xc7, 0xf0, 0xff,
+        0x00, 0x21, 0x44, 0x8a, 0xc7, 0xf0, 0xff,
     }};
     for (uint8_t value : kReservedEncoding) {
         Check(result, LookupOpcode(value) == nullptr,
@@ -262,6 +263,28 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
               alloc->lowering.variant == OpcodeLoweringVariant::NONE,
           "new SRAM control primitive has an explicit thin-primitive marker");
 
+    const OpcodeManifestEntry *alloc_at =
+        LookupOpcode(Opcode::SRAM_ALLOC_AT);
+    Check(result,
+          alloc_at != nullptr &&
+              alloc_at->lowering.kind ==
+                  OpcodeLoweringKind::NEW_THIN_PRIM &&
+              alloc_at->lowering.target == PrimId::INVALID &&
+              alloc_at->lowering.variant == OpcodeLoweringVariant::NONE,
+          "fixed-offset SRAM control primitive has an explicit thin-primitive marker");
+
+    const OpcodeManifestEntry *local_reduce =
+        LookupOpcode(Opcode::LOCAL_REDUCE);
+    Check(result,
+          local_reduce != nullptr &&
+              local_reduce->lowering.kind ==
+                  OpcodeLoweringKind::DIRECT_PRIM &&
+              local_reduce->lowering.target ==
+                  PrimId::COLLECTIVE_DATA_V1 &&
+              local_reduce->lowering.variant ==
+                  OpcodeLoweringVariant::NONE,
+          "LOCAL_REDUCE directly targets strict collective byte execution");
+
     return result;
 }
 
@@ -271,7 +294,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
     const bool valid = ValidatePrimManifest(&error);
     Check(result, valid, "Prim manifest invariants: " + error);
     Check(result, PrimManifest().size() == kPrimManifestSize,
-          "Prim manifest has frozen 60-entry count");
+          "Prim manifest has frozen 64-entry count");
     Check(result, kMaxAssignedPrimId <= UINT8_MAX,
           "all internal PrimIds fit the 8-bit wire");
 
@@ -320,10 +343,10 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
             deprecated_ids.insert(PrimIdValue(entry.id));
         }
     }
-    Check(result, compute == 32 && communication == 8 && memory == 14 &&
+    Check(result, compute == 39 && communication == 8 && memory == 14 &&
                       synchronization == 4 && dynamic == 2,
           "Prim primary-category counts match frozen inventory");
-    Check(result, public_count == 25,
+    Check(result, public_count == 32,
           "Prim visibility counts match frozen inventory");
     Check(result, unsupported == 5 && experimental == 6 && deprecated == 2,
           "Prim lifecycle/support counts match frozen inventory");
@@ -331,6 +354,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
     const std::set<uint8_t> expected_public{
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
         17, 18, 19, 20, 22, 23, 24, 25, 35, 49, 50, 51,
+        61, 62, 63, 64, 65, 66, 67,
     };
     const std::set<uint8_t> expected_unsupported{2, 12, 16, 21, 23};
     const std::set<uint8_t> expected_experimental{7, 10, 47, 49, 50, 51};
@@ -391,7 +415,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
           "duplicate factory name has stable manifest error");
 
     Check(result, LookupPrim(uint16_t{0}) == nullptr &&
-                      LookupPrim(uint16_t{61}) == nullptr &&
+                      LookupPrim(uint16_t{68}) == nullptr &&
                       LookupPrim(uint16_t{256}) == nullptr,
           "invalid/out-of-range/unknown PrimIds do not resolve");
     Check(result, LookupPrim("__isa_v1_unknown_prim__") == nullptr,
@@ -403,7 +427,7 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
     IsaV1SelfTestResult result;
     PrimFactory &factory = PrimFactory::getInstance();
     Check(result, factory.registeredCount() == kPrimManifestSize,
-          "PrimFactory runtime count matches 60-entry manifest");
+          "PrimFactory runtime count matches 67-entry manifest");
     if (factory.registeredCount() != kPrimManifestSize)
         return result;
 
@@ -495,6 +519,37 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
                   dynamic_cast<Collective_launch_v1_prim *>(prim) != nullptr,
                   "COLLECTIVE_LAUNCH_V1 manifest target has expected runtime type");
         }
+        if (entry.id == PrimId::ROPE_QK_EXACT) {
+            Check(result, dynamic_cast<Rope_qk_exact_prim *>(prim) != nullptr,
+                  "ROPE_QK_EXACT manifest target has expected runtime type");
+        }
+        if (entry.id == PrimId::ATTENTION_EXACT) {
+            Check(result, dynamic_cast<Attention_exact_prim *>(prim) != nullptr,
+                  "ATTENTION_EXACT manifest target has expected runtime type");
+        }
+        if (entry.id == PrimId::EMBEDDING_LOOKUP) {
+            Check(result,
+                  dynamic_cast<Embedding_lookup_prim *>(prim) != nullptr,
+                  "EMBEDDING_LOOKUP manifest target has expected runtime type");
+        }
+        if (entry.id == PrimId::GREEDY_SAMPLE) {
+            Check(result, dynamic_cast<Greedy_sample_prim *>(prim) != nullptr,
+                  "GREEDY_SAMPLE manifest target has expected runtime type");
+        }
+        if (entry.id == PrimId::CROSS_ENTROPY_FORWARD) {
+            Check(result,
+                  dynamic_cast<Cross_entropy_forward_prim *>(prim) != nullptr,
+                  "CROSS_ENTROPY_FORWARD manifest target has expected runtime type");
+        }
+        if (entry.id == PrimId::CROSS_ENTROPY_BACKWARD) {
+            Check(result,
+                  dynamic_cast<Cross_entropy_backward_prim *>(prim) != nullptr,
+                  "CROSS_ENTROPY_BACKWARD manifest target has expected runtime type");
+        }
+        if (entry.id == PrimId::SGD_UPDATE) {
+            Check(result, dynamic_cast<Sgd_update_prim *>(prim) != nullptr,
+                  "SGD_UPDATE manifest target has expected runtime type");
+        }
         delete prim;
     }
 
@@ -520,10 +575,10 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
     Check(result,
           ThrowsExactly<std::invalid_argument>(
               [&] {
-                  factory.registerPrim("__isa_v1_id_61__",
-                                       static_cast<PrimId>(61), unused_creator);
+                  factory.registerPrim("__isa_v1_id_68__",
+                                       static_cast<PrimId>(68), unused_creator);
               },
-              "unassigned PrimId cannot be registered: 61"),
+              "unassigned PrimId cannot be registered: 68"),
           "PrimFactory rejects first unassigned PrimId");
     Check(result,
           ThrowsExactly<std::invalid_argument>(

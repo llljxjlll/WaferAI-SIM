@@ -1,0 +1,237 @@
+
+        SystemC 2.3.3-Accellera --- Jan  6 2026 03:02:18
+        Copyright (c) 1996-2018 by all Contributors,
+        ALL RIGHTS RESERVED
+[PROGRAM_IO] phase=resolved mode=timing initializations=10 probes=4 checksum=a1adac8f41d5f10d7db5f0660ecff88f97b75029e6437b3d0de52fa0a2dd58e2 pass=1
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+Loaded Program Format 1.0, ISA 1.1, capabilities=0x0
+[INFO][0m[92m[SYSTEM][0m             Address mapping with n=8 saved to ../DRAMSys/configs/addressmapping/am_ddr4_8x4Gbx8_df.json.                   | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Address mapping with n=8 saved to ../DRAMSys/configs/addressmapping/am_hbm2_gpu.json.                          | [36m0 s[0m
+===========================================================================
+Memory Configuration:
+
+ Memory type:           DDR4
+ Memory size in bytes:  4294967296
+ Channels:              1
+ Ranks per channel:     1
+ Bank groups per rank:  4
+ Banks per rank:        16
+ Rows per bank:         32768
+ Columns per row:       1024
+ Device width in bits:  8
+ Device size in bits:   4294967296
+ Device size in bytes:  536870912
+ Devices per rank:      8
+
+===========================================================================
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+===========================================================================
+Memory Configuration:
+
+ Memory type:                    HBM2
+ Memory size in bytes:           1073741824
+ Channels:                       1
+ Pseudo channels per channel:    2
+ Bank groups per pseudo channel: 4
+ Banks per pseudo channel:       16
+ Rows per bank:                  32768
+ Columns per row:                128
+ Pseudo channel width in bits:   64
+ Pseudo channel size in bits:    4294967296
+ Pseudo channel size in bytes:   536870912
+
+[INFO][0m[92m[GLOBAL_MEMORY][0m      Global link not initialized.                                                                                   | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Instantiated cores=32 routers=32 workers=32 dies=2 (CORES_PER_DIE=16, GRID=4x4, expect 32).                    | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D] link_sites=2 link_units=2.                                                                               | [36m0 s[0m
+[INFO][0m[92m[SYSTEM][0m             Components initialize complete, prepare to start..                                                             | [36m0 s[0m
+[PROGRAM_IO] phase=applied mode=timing initializations=10 probes=4 checksum=a1adac8f41d5f10d7db5f0660ecff88f97b75029e6437b3d0de52fa0a2dd58e2 pass=1
+
+Info: (I702) default timescale unit used for tracing: 1 ps (Cchip_1.vcd)
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 31 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 30 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 29 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 28 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 27 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 26 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 25 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 24 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 23 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 22 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 21 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 20 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 19 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 18 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 17 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 15 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 14 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 13 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 12 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 11 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 10 start receive primitive RECV_CONF.                                                                     | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 9 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 8 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 7 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 6 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 5 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 4 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 3 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 2 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 1 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_CONF.                                                                      | [36m2 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_CONF.                                                                           | [36m166 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m172 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_WEIGHT.                                                                    | [36m172 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End config distribution.                                                                                       | [36m172 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end recv primitive RECV_CONF.                                                                          | [36m182 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m188 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_WEIGHT.                                                                   | [36m188 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m190 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End data distribution.                                                                                         | [36m190 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_WEIGHT.                                                                         | [36m198 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end recv primitive RECV_WEIGHT.                                                                        | [36m198 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           Start write operation.                                                                                         | [36m204 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start receive primitive RECV_START.                                                                    | [36m204 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_START.                                                                     | [36m204 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End write operation.                                                                                           | [36m206 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end recv primitive RECV_START.                                                                         | [36m212 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end recv primitive RECV_START.                                                                          | [36m212 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End start data distribution: enqueued=2 injected=2 accepted=2 delivered=2 consumed=2 completed=2.              | [36m212 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m218 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m218 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m218 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m218 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m224 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m307 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m313 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m313 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Lsu_mem.                                                                        | [36m319 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Lsu_mem.                                                                          | [36m402 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m408 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m408 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m414 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m414 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_bind_oneshot.                                                              | [36m420 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_bind_oneshot.                                                                | [36m420 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Attention_exact_prim.                                                           | [36m426 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Attention_exact_prim.                                                             | [36m426 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m432 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m432 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m438 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m438 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m546 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m546 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m618 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m618 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start compute primitive Sram_lifecycle.                                                                 | [36m654 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end compute primitive Sram_lifecycle.                                                                   | [36m654 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m726 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m726 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m732 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m732 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_bind_oneshot.                                                             | [36m738 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_bind_oneshot.                                                               | [36m738 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Attention_exact_prim.                                                          | [36m744 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Attention_exact_prim.                                                            | [36m744 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m750 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m750 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m756 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m756 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m762 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start send primitive SEND_DONE.                                                                         | [36m766 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 end send primitive SEND_DONE.                                                                           | [36m770 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End DONE reception.                                                                                            | [36m772 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 0 start receive primitive RECV_START.                                                                     | [36m776 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m839 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m845 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m845 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Lsu_mem.                                                                       | [36m851 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Lsu_mem.                                                                         | [36m928 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start compute primitive Sram_lifecycle.                                                                | [36m934 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end compute primitive Sram_lifecycle.                                                                  | [36m934 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 start send primitive SEND_DONE.                                                                        | [36m940 ns[0m
+[INFO][0m[92m[PRIM][0m               Core 16 end send primitive SEND_DONE.                                                                          | [36m944 ns[0m
+[INFO][0m[92m[MEM_INTF][0m           End DONE reception.                                                                                            | [36m946 ns[0m
+
+Info: /OSCI/SystemC: Simulation stopped by user.
+[SIM_RESULT] makespan_cycles=473
+[PROGRAM_MEMORY] core=0 lsu_issued=2 lsu_completed=2 lsu_hbm_read_bytes=64 lsu_hbm_write_bytes=0 lsu_sram_read_bytes=0 lsu_sram_write_bytes=64 lsu_residual=0 dte_residual=0
+[PROGRAM_MEMORY] core=16 lsu_issued=2 lsu_completed=2 lsu_hbm_read_bytes=0 lsu_hbm_write_bytes=64 lsu_sram_read_bytes=64 lsu_sram_write_bytes=0 lsu_residual=0 dte_residual=0
+[PROGRAM_IO_PROBE] id=program_output_probe_c3b0ef597f6db2c0 core=0 address=64 bytes=16 expected_checksum=374708fff7719dd5979ec875d56cd2286f6d3cf7ec317a3b25632aab28ec37bb checksum=374708fff7719dd5979ec875d56cd2286f6d3cf7ec317a3b25632aab28ec37bb valid=1 exact=1 pass=1
+[PROGRAM_IO_PROBE] id=program_output_probe_c8aa9aaaaade2d15 core=16 address=64 bytes=16 expected_checksum=374708fff7719dd5979ec875d56cd2286f6d3cf7ec317a3b25632aab28ec37bb checksum=374708fff7719dd5979ec875d56cd2286f6d3cf7ec317a3b25632aab28ec37bb valid=1 exact=1 pass=1
+[PROGRAM_IO_PROBE] id=program_output_probe_9778ceb3e0a73103 die=1 address=1050432 bytes=32 expected_checksum=60bf07c488aad18fda339df07e4fbc47b4f00be71711936f18d04d352ad01890 checksum=60bf07c488aad18fda339df07e4fbc47b4f00be71711936f18d04d352ad01890 valid=1 exact=1 pass=1
+[PROGRAM_IO_PROBE] id=program_output_probe_e57eaf5de690283c die=1 address=1050496 bytes=32 expected_checksum=fc8b64001c5fdd0f2f40fb67dae4a865a2c5bd17836676d6d5b58b7917e33717 checksum=fc8b64001c5fdd0f2f40fb67dae4a865a2c5bd17836676d6d5b58b7917e33717 valid=1 exact=1 pass=1
+[PROGRAM_IO] phase=verify mode=timing initializations=10 probes=4 checksum=c3c5e75948f460fdf4f20dcc1af15c2fac956bfece6ef6f6fb84ecfb24044ae1 pass=1
+[INFO][0m[92m[SYSTEM][0m             [D2D] in_pkts=10 out_pkts=10 busy_cycles=0 stall_cycles=0.                                                     | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_TYPE] request_in=2 request_out=2 ack_in=4 ack_out=4 data_in=4 data_out=4.                                 | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_DATA] in_pkts=4 out_pkts=4 in_seqhash=15522017373141106863 out_seqhash=15522017373141106863 in_csum=8812992683524264067 out_csum=8812992683524264067 out_inorder=0 out_minseq=1 out_maxseq=2 out_endseq=2 out_end_count=2 out_end_length=128 in_first_cycle=281 in_last_cycle=343 out_first_cycle=284 out_last_cycle=346. | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [V5_SUBFLOW] idx=0 source=0 tag=1 subflow=0 in=2 out=2 in_seqhash=11124528799658732944 out_seqhash=11124528799658732944 in_csum=5433223062151032478 out_csum=5433223062151032478 inorder=1 minseq=1 maxseq=2 endseq=2 ends=1 end_length=128. | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [V5_SUBFLOW] idx=0 source=0 tag=2 subflow=0 in=2 out=2 in_seqhash=11124528799658732944 out_seqhash=11124528799658732944 in_csum=12741033419691247326 out_csum=12741033419691247326 inorder=1 minseq=1 maxseq=2 endseq=2 ends=1 end_length=128. | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_REPIN] total=10 changed=10 same=0.                                                                        | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_LINK] idx=0 die0->die1 dir=E req_in=2 req_out=2 ack_in=0 ack_out=0 data_in=4 data_out=4.                  | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [D2D_LINK] idx=1 die1->die0 dir=W req_in=0 req_out=0 ack_in=4 ack_out=4 data_in=0 data_out=0.                  | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [SAF] reserved_packets=0 group_reserved_packets=0.                                                             | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DIE_ACT] router_pkts=103,73 mesh_pkts=90,60.                                                                  | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [NOC_ACT] sends=28,40 stalls=0,0 d2d_source_stalls=0.                                                          | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [FLOW_DONE] .                                                                                                  | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [SAF_ADMIT] success=0 reject=0.                                                                                | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P STATS] core=0 source_read_bytes=64 sram_source_read_bytes=64 hbm_source_read_bytes=0 wire_bytes=64 wire_fragments=4 noc_rx_write_bytes=0 tx_local_completions=2 rx_local_completions=0 admission_requests_sent=2 admission_requests_received=0 admission_acks_sent=0 admission_acks_received=2 duplicate_requests_suppressed=0 request_conflicts_rejected=0 request_aborts=0 completion_acks_sent=0 completion_acks_received=2 source_checksum=2619200343 wire_checksum=2619200343 destination_checksum=0. | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P DRAIN] core=0 residual=0.                                                                              | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P STATS] core=16 source_read_bytes=0 sram_source_read_bytes=0 hbm_source_read_bytes=0 wire_bytes=0 wire_fragments=0 noc_rx_write_bytes=64 tx_local_completions=0 rx_local_completions=2 admission_requests_sent=0 admission_requests_received=2 admission_acks_sent=2 admission_acks_received=0 duplicate_requests_suppressed=0 request_conflicts_rejected=0 request_aborts=0 completion_acks_sent=2 completion_acks_received=0 source_checksum=0 wire_checksum=0 destination_checksum=2619200343. | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P DRAIN] core=16 residual=0.                                                                             | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [P5 P2P TIMING DRAIN] residual=0.                                                                              | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [COLL_DRAIN] tree_entries=0 reduce_nodes=0 barriers=0 gather=0 reduce_rx=0 endpoints=0 dte_tokens=0 event=0.   | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DRAIN] router_residual=0.                                                                                     | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [CREDIT] data_balanced=1 ctrl_balanced=1.                                                                      | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [DRAIN] d2d_link_residual=0.                                                                                   | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [START_DATA] enqueued=2 injected=2 accepted=2 delivered=2 consumed=2 completed=2.                              | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [LOCK] max_output_ref=1.                                                                                       | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [HOSTLANE] done_total=2 ack_total=4 mismatch=0 per_lane_done=1,0,0,0,1,0,0,0.                                  | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             [HOSTSIG] done=0:1,16:1, ack=0:0:2,16:0:1,16:16:1,.                                                            | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Total Real-time Cost: 0.097493s.                                                                               | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Cleanup monitor components.                                                                                    | [36m946 ns[0m
+[INFO][0m[92m[SYSTEM][0m             Cleanup memory interface components.                                                                           | [36m946 ns[0m

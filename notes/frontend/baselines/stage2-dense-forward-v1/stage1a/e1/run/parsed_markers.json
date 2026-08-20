@@ -1,0 +1,1 @@
+[{"ack_by_core":[[0,2],[16,2]],"ack_total":4,"d2d_link_packets":[[0,32],[1,32]],"done_by_core":[[0,1],[16,1]],"done_total":2,"makespan_cycles":8958,"observed_transfer_bytes":1024,"repeat":0},{"ack_by_core":[[0,2],[16,2]],"ack_total":4,"d2d_link_packets":[[0,32],[1,32]],"done_by_core":[[0,1],[16,1]],"done_total":2,"makespan_cycles":8958,"observed_transfer_bytes":1024,"repeat":1}]

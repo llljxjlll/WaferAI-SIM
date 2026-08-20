@@ -27,6 +27,7 @@ enum class FixtureMode {
     P4_SYNC_BAD_ENDPOINT,
     P8_DOUBLE_BUFFER,
     P8_PROGRAM_B,
+    FRONTEND_N0_TP2_RS,
 };
 
 ExternalRecord DummyRecord() {
@@ -1821,6 +1822,244 @@ void PrintP8ProgramBManifest() {
               << " region_bytes=" << kP8BRegionBytes << "\n";
 }
 
+constexpr std::array<uint64_t, 2> kFrontendN0Cores = {0, 16};
+constexpr uint64_t kFrontendN0DoubleABase = 0;
+constexpr uint64_t kFrontendN0DoubleBBase = 2048;
+constexpr uint64_t kFrontendN0InputBase = 4096;
+constexpr uint64_t kFrontendN0IntermediateBase = 8192;
+constexpr uint64_t kFrontendN0CommBase = 12288;
+constexpr uint64_t kFrontendN0DoubleBufferBytes = 2048;
+constexpr uint64_t kFrontendN0RegionBytes = 4096;
+constexpr uint64_t kFrontendN0PayloadOffset = 64;
+constexpr uint64_t kFrontendN0ChunkElements = 16;
+constexpr uint64_t kFrontendN0ChunkBytes =
+    kFrontendN0ChunkElements * 2;
+constexpr uint64_t kFrontendN0Sentinel = 0xa5;
+constexpr uint64_t kFrontendN0Fsm0To16 = 0x4e100001;
+constexpr uint64_t kFrontendN0Fsm16To0 = 0x4e100002;
+constexpr uint64_t kFrontendN0Core0RecvToken = 0x4e200001;
+constexpr uint64_t kFrontendN0Core0SendToken = 0x4e200002;
+constexpr uint64_t kFrontendN0Core16RecvToken = 0x4e200003;
+constexpr uint64_t kFrontendN0Core16SendToken = 0x4e200004;
+
+enum FrontendN0Symbol : uint64_t {
+    N0_DOUBLE_A = 0,
+    N0_DOUBLE_B = 1,
+    N0_INPUT = 2,
+    N0_INTERMEDIATE = 3,
+    N0_COMM = 4,
+    N0_GEMM_INPUT = 5,
+    N0_GEMM_OUTPUT = 6,
+    N0_GEMM_WEIGHT = 7,
+    N0_GEMM_BIAS = 8,
+};
+
+SramAddressOperand FrontendN0RegionAddress(uint64_t symbol,
+                                           uint64_t offset) {
+    SramAddressOperand address;
+    address.kind = SramAddressKind::REGION;
+    address.region_symbol_index = symbol;
+    address.region_offset_bytes = offset;
+    return address;
+}
+
+SramAddressOperand FrontendN0AbsoluteAddress(uint64_t address_bytes) {
+    SramAddressOperand address;
+    address.kind = SramAddressKind::ABSOLUTE;
+    address.absolute_address_bytes = address_bytes;
+    return address;
+}
+
+ExternalRecord FrontendN0AllocRecord(uint64_t region_string,
+                                     uint64_t label_symbol) {
+    SramAllocOperands operands;
+    operands.region_name_string_index = region_string;
+    operands.label_symbol_index = label_symbol;
+    operands.size_bytes = 256;
+    operands.alignment_bytes = 64;
+    operands.lifetime = SramLifetime::TASK;
+    operands.spillable = true;
+    return {Opcode::SRAM_ALLOC, std::move(operands)};
+}
+
+ExternalRecord FrontendN0PersistentAllocRecord(uint64_t label_symbol,
+                                               uint64_t size_bytes) {
+    SramAllocOperands operands;
+    operands.region_name_string_index = N0_INPUT;
+    operands.label_symbol_index = label_symbol;
+    operands.size_bytes = size_bytes;
+    operands.alignment_bytes = 64;
+    operands.lifetime = SramLifetime::PERSISTENT;
+    operands.spillable = true;
+    return {Opcode::SRAM_ALLOC, std::move(operands)};
+}
+
+ExternalRecord FrontendN0BindRecord() {
+    SramBindOperands operands;
+    operands.input_count = 1;
+    operands.input_symbol_indices[0] = N0_GEMM_INPUT;
+    operands.output_symbol_index = N0_GEMM_OUTPUT;
+    return {Opcode::SRAM_BIND, std::move(operands)};
+}
+
+ExternalRecord FrontendN0MatmulRecord() {
+    ComputeOperands operands;
+    operands.datatype = ExternalDataType::FP16;
+    operands.input_offset_bytes =
+        kFrontendN0InputBase + kFrontendN0PayloadOffset;
+    operands.data_offset_bytes =
+        kFrontendN0InputBase + kFrontendN0PayloadOffset + 64;
+    operands.output_offset_bytes =
+        kFrontendN0IntermediateBase + kFrontendN0PayloadOffset;
+    operands.parameters = {1, 1, 8, 8};
+    return {Opcode::MATMUL, std::move(operands)};
+}
+
+ExternalRecord FrontendN0ReceiveRecord(uint64_t core) {
+    const bool core0 = core == kFrontendN0Cores[0];
+    DteRecvOperands operands;
+    operands.mode = DteRecvMode::P2P;
+    operands.completion = EndpointCompletion::ASYNC;
+    operands.datatype = EndpointDataType::UINT8;
+    operands.reduce_op = ReduceOperator::NONE;
+    operands.fsm_id = core0 ? kFrontendN0Fsm16To0
+                            : kFrontendN0Fsm0To16;
+    operands.token = core0 ? kFrontendN0Core0RecvToken
+                           : kFrontendN0Core16RecvToken;
+    operands.length_bytes = kFrontendN0ChunkBytes;
+    operands.destination = FrontendN0RegionAddress(
+        N0_COMM, kFrontendN0PayloadOffset +
+                     (core0 ? kFrontendN0ChunkBytes : 0));
+    operands.peer_core = core0 ? kFrontendN0Cores[1]
+                               : kFrontendN0Cores[0];
+    return {Opcode::DTE_RECV, std::move(operands)};
+}
+
+ExternalRecord FrontendN0SendRecord(uint64_t core) {
+    const bool core0 = core == kFrontendN0Cores[0];
+    DteSendOperands operands;
+    operands.mode = DteSendMode::P2P;
+    operands.source_space = EndpointSourceSpace::SRAM;
+    operands.completion = EndpointCompletion::ASYNC;
+    operands.datatype = EndpointDataType::UINT8;
+    operands.reduce_op = ReduceOperator::NONE;
+    operands.fsm_id = core0 ? kFrontendN0Fsm0To16
+                            : kFrontendN0Fsm16To0;
+    operands.token = core0 ? kFrontendN0Core0SendToken
+                           : kFrontendN0Core16SendToken;
+    operands.length_bytes = kFrontendN0ChunkBytes;
+    operands.source = FrontendN0RegionAddress(
+        N0_DOUBLE_B, kFrontendN0PayloadOffset +
+                         (core0 ? kFrontendN0ChunkBytes : 0));
+    operands.peer_core = core0 ? kFrontendN0Cores[1]
+                               : kFrontendN0Cores[0];
+    return {Opcode::DTE_SEND, std::move(operands)};
+}
+
+ExternalRecord FrontendN0LocalReduceRecord(uint64_t core) {
+    const bool core0 = core == kFrontendN0Cores[0];
+    LocalReduceOperands operands;
+    operands.input_count = 2;
+    operands.element_count = kFrontendN0ChunkElements;
+    operands.input_stride_bytes = kFrontendN0ChunkBytes;
+    operands.source = FrontendN0AbsoluteAddress(
+        kFrontendN0CommBase + kFrontendN0PayloadOffset);
+    operands.destination = FrontendN0AbsoluteAddress(
+        kFrontendN0DoubleABase + kFrontendN0PayloadOffset +
+        (core0 ? 0 : kFrontendN0ChunkBytes));
+    return {Opcode::LOCAL_REDUCE, std::move(operands)};
+}
+
+std::vector<ExternalRecord> FrontendN0CoreRecords(uint64_t core) {
+    const bool core0 = core == kFrontendN0Cores[0];
+    const uint64_t receive_token = core0 ? kFrontendN0Core0RecvToken
+                                         : kFrontendN0Core16RecvToken;
+    const uint64_t send_token = core0 ? kFrontendN0Core0SendToken
+                                      : kFrontendN0Core16SendToken;
+    return {
+        // Matmul_f otherwise performs its legacy static-data first write at
+        // address zero before assigning a preferred region. Pre-register the
+        // exact eternal labels so timing-only compute cannot clobber the
+        // functional double_a oracle.
+        FrontendN0PersistentAllocRecord(N0_GEMM_WEIGHT, 128),
+        FrontendN0PersistentAllocRecord(N0_GEMM_BIAS, 16),
+        FrontendN0AllocRecord(N0_INPUT, N0_GEMM_INPUT),
+        FrontendN0AllocRecord(N0_INTERMEDIATE, N0_GEMM_OUTPUT),
+        FrontendN0BindRecord(),
+        FrontendN0MatmulRecord(),
+        {Opcode::SRAM_FREE, SymbolOperands{N0_GEMM_OUTPUT}},
+        {Opcode::SRAM_FREE, SymbolOperands{N0_GEMM_INPUT}},
+        FrontendN0ReceiveRecord(core),
+        FrontendN0SendRecord(core),
+        {Opcode::DTE_WAIT, TokenOperands{receive_token}},
+        {Opcode::DTE_WAIT, TokenOperands{send_token}},
+        FrontendN0LocalReduceRecord(core),
+    };
+}
+
+ProgramArtifact FrontendN0Tp2RsArtifact() {
+    ProgramArtifact artifact;
+    artifact.strings = {
+        "double_a", "double_b", "input", "intermediate", "comm",
+        "frontend_n0_gemm_input", "frontend_n0_gemm_output",
+        "eternal_frontend_n0_gemm_w", "eternal_frontend_n0_gemm_b"};
+    artifact.symbols = {
+        {0, ProgramSymbolKind::SRAM_REGION, 0,
+         kFrontendN0DoubleABase, kFrontendN0DoubleBufferBytes},
+        {1, ProgramSymbolKind::SRAM_REGION, 0,
+         kFrontendN0DoubleBBase, kFrontendN0DoubleBufferBytes},
+        {2, ProgramSymbolKind::SRAM_REGION, 0,
+         kFrontendN0InputBase, kFrontendN0RegionBytes},
+        {3, ProgramSymbolKind::SRAM_REGION, 0,
+         kFrontendN0IntermediateBase, kFrontendN0RegionBytes},
+        {4, ProgramSymbolKind::SRAM_REGION, 0,
+         kFrontendN0CommBase, kFrontendN0RegionBytes},
+        {5, ProgramSymbolKind::SRAM_LABEL, 0, 0, 256},
+        {6, ProgramSymbolKind::SRAM_LABEL, 0, 0, 256},
+        {7, ProgramSymbolKind::SRAM_LABEL, 0, 0, 128},
+        {8, ProgramSymbolKind::SRAM_LABEL, 0, 0, 16},
+    };
+    artifact.cores = {
+        {kFrontendN0Cores[0], FrontendN0CoreRecords(kFrontendN0Cores[0])},
+        {kFrontendN0Cores[1], FrontendN0CoreRecords(kFrontendN0Cores[1])},
+    };
+    artifact.envelope.active_cores.assign(
+        kFrontendN0Cores.begin(), kFrontendN0Cores.end());
+    artifact.envelope.start_events = {
+        {kFrontendN0Cores[0], 0x4e01, 1},
+        {kFrontendN0Cores[1], 0x4e02, 1},
+    };
+    artifact.envelope.terminal_cores = artifact.envelope.active_cores;
+    artifact.envelope.expected_ack_cores = artifact.envelope.active_cores;
+    artifact.envelope.expected_done_cores = artifact.envelope.active_cores;
+    artifact.envelope.empty_core_ack_policy =
+        EmptyCoreAckPolicy::INCLUDE_EMPTY;
+    return artifact;
+}
+
+void PrintFrontendN0Tp2RsManifest() {
+    std::cout
+        << "FRONTEND_N0_TP2_RS scenario=gemm_tp2_dual_owner_rs"
+        << " cores=0,16 region_bytes=" << kFrontendN0RegionBytes
+        << " double_buffer_bytes=" << kFrontendN0DoubleBufferBytes
+        << " payload_offset=" << kFrontendN0PayloadOffset
+        << " sentinel=" << kFrontendN0Sentinel
+        << " double_a_base=" << kFrontendN0DoubleABase
+        << " double_b_base=" << kFrontendN0DoubleBBase
+        << " input_base=" << kFrontendN0InputBase
+        << " intermediate_base=" << kFrontendN0IntermediateBase
+        << " comm_base=" << kFrontendN0CommBase
+        << " chunk_bytes=" << kFrontendN0ChunkBytes
+        << " chunk_count=2 rank_count=2"
+        << " MATMUL=2 P2P_SEND=2 P2P_RECV=2 WAIT=4 LOCAL_REDUCE=2"
+        << " core0_owner_chunk=0 core16_owner_chunk=1"
+        << " core0_staging=rank0,rank1"
+        << " core16_staging=rank0,rank1"
+        << " transport_dtype=UINT8 reduce_input=FP16"
+        << " accumulator=FP32 reduce_output=FP16"
+        << " rounding=RNE order=RANK_MAJOR\n";
+}
+
 ProgramArtifact FixtureArtifact(FixtureMode mode) {
     switch (mode) {
     case FixtureMode::BOUND_DUMMY:
@@ -1841,6 +2080,8 @@ ProgramArtifact FixtureArtifact(FixtureMode mode) {
         return P8DoubleBufferArtifact();
     case FixtureMode::P8_PROGRAM_B:
         return P8ProgramBArtifact();
+    case FixtureMode::FRONTEND_N0_TP2_RS:
+        return FrontendN0Tp2RsArtifact();
     }
     throw std::logic_error("unknown fixture mode");
 }
@@ -1890,6 +2131,8 @@ int main(int argc, char **argv) {
             mode = FixtureMode::P8_DOUBLE_BUFFER;
         else if (option == "--p8-program-b")
             mode = FixtureMode::P8_PROGRAM_B;
+        else if (option == "--frontend-n0-tp2-rs")
+            mode = FixtureMode::FRONTEND_N0_TP2_RS;
         else if (TryP5EndpointSpec(option, &p5_endpoint))
             is_p5_endpoint = true;
         else if (TryP6CollectiveSpec(option, &p6_collective))
@@ -1904,6 +2147,7 @@ int main(int argc, char **argv) {
                      " --p4-lifecycle-dangling|--p4-sync-event|\n"
                      " --p4-sync-bad-endpoint|\n"
                      " --p8-double-buffer|--p8-program-b|\n"
+                     " --frontend-n0-tp2-rs|\n"
                      " --p5-sram-sync-{1,15,16,17,127,128,129,255,256,257}|\n"
                      " --p5-sram-async-{17,4k,32k}|\n"
                      " --p5-cross-die-sram-sync-128|--p5-hbm-sync-129|\n"
@@ -1924,6 +2168,10 @@ int main(int argc, char **argv) {
                        ? P6CollectiveArtifact(p6_collective)
                        : FixtureArtifact(mode));
         std::vector<uint8_t> bytes = EncodeProgramArtifact(artifact);
+        if (mode == FixtureMode::FRONTEND_N0_TP2_RS &&
+            EncodeProgramArtifact(artifact) != bytes)
+            throw std::logic_error(
+                "FRONTEND_N0 repeated encode is not deterministic");
         if (corrupt_crc) {
             bytes.back() ^= 0x80;
         } else {
@@ -1946,6 +2194,8 @@ int main(int argc, char **argv) {
             PrintP8DoubleBufferManifest();
         if (mode == FixtureMode::P8_PROGRAM_B)
             PrintP8ProgramBManifest();
+        if (mode == FixtureMode::FRONTEND_N0_TP2_RS)
+            PrintFrontendN0Tp2RsManifest();
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "program fixture generation failed: " << error.what()

@@ -39,10 +39,18 @@ enum class Opcode : uint8_t {
     SPLIT_CONV = 0x17,
     MERGE_CONV = 0x18,
     GEMM_REDUCE_SCATTER = 0x19,
+    ROPE_QK_EXACT = 0x1a,
+    ATTENTION_EXACT = 0x1b,
+    EMBEDDING_LOOKUP = 0x1c,
+    GREEDY_SAMPLE = 0x1d,
+    CROSS_ENTROPY_FORWARD = 0x1e,
+    CROSS_ENTROPY_BACKWARD = 0x1f,
+    SGD_UPDATE = 0x20,
 
     DTE_SEND = 0x40,
     DTE_RECV = 0x41,
     REDUCE_COMPUTE = 0x42,
+    LOCAL_REDUCE = 0x43,
 
     LSU_LOAD = 0x80,
     LSU_STORE = 0x81,
@@ -53,6 +61,7 @@ enum class Opcode : uint8_t {
     SRAM_FREE = 0x86,
     SRAM_RESIZE = 0x87,
     SRAM_RENAME = 0x88,
+    SRAM_ALLOC_AT = 0x89,
 
     DTE_WAIT = 0xc0,
     DTE_FENCE = 0xc1,
@@ -190,12 +199,28 @@ constexpr OpcodeLowering OpcodeLoweringFor(Opcode opcode) noexcept {
     case Opcode::MERGE_CONV: return DirectPrim(PrimId::MERGE_CONV);
     case Opcode::GEMM_REDUCE_SCATTER:
         return DirectPrim(PrimId::GEMM_RS_SWIZZLE);
+    case Opcode::ROPE_QK_EXACT:
+        return DirectPrim(PrimId::ROPE_QK_EXACT);
+    case Opcode::ATTENTION_EXACT:
+        return DirectPrim(PrimId::ATTENTION_EXACT);
+    case Opcode::EMBEDDING_LOOKUP:
+        return DirectPrim(PrimId::EMBEDDING_LOOKUP);
+    case Opcode::GREEDY_SAMPLE:
+        return DirectPrim(PrimId::GREEDY_SAMPLE);
+    case Opcode::CROSS_ENTROPY_FORWARD:
+        return DirectPrim(PrimId::CROSS_ENTROPY_FORWARD);
+    case Opcode::CROSS_ENTROPY_BACKWARD:
+        return DirectPrim(PrimId::CROSS_ENTROPY_BACKWARD);
+    case Opcode::SGD_UPDATE:
+        return DirectPrim(PrimId::SGD_UPDATE);
     case Opcode::DTE_SEND:
         return ModeDispatch(OpcodeLoweringVariant::DTE_SEND_MODE);
     case Opcode::DTE_RECV:
         return ModeDispatch(OpcodeLoweringVariant::DTE_RECV_MODE);
     case Opcode::REDUCE_COMPUTE:
         return DirectPrim(PrimId::REDUCE_COMPUTE);
+    case Opcode::LOCAL_REDUCE:
+        return DirectPrim(PrimId::COLLECTIVE_DATA_V1);
     case Opcode::LSU_LOAD:
         return PrimVariant(PrimId::LSU_MEM,
                            OpcodeLoweringVariant::LSU_LOAD_BLOCKING);
@@ -208,6 +233,7 @@ constexpr OpcodeLowering OpcodeLoweringFor(Opcode opcode) noexcept {
     case Opcode::SRAM_CLEAR: return NewThinPrim();
     case Opcode::SRAM_BIND: return NewThinPrim();
     case Opcode::SRAM_ALLOC:
+    case Opcode::SRAM_ALLOC_AT:
     case Opcode::SRAM_FREE:
     case Opcode::SRAM_RESIZE:
     case Opcode::SRAM_RENAME:
@@ -276,16 +302,16 @@ constexpr uint8_t OpcodeValue(Opcode opcode) noexcept {
 }
 
 inline constexpr uint8_t kComputeOpcodeFirst = 0x01;
-inline constexpr uint8_t kComputeOpcodeLast = 0x19;
+inline constexpr uint8_t kComputeOpcodeLast = 0x20;
 inline constexpr uint8_t kCommunicationOpcodeFirst = 0x40;
-inline constexpr uint8_t kCommunicationOpcodeLast = 0x42;
+inline constexpr uint8_t kCommunicationOpcodeLast = 0x43;
 inline constexpr uint8_t kMemoryOpcodeFirst = 0x80;
-inline constexpr uint8_t kMemoryOpcodeLast = 0x88;
+inline constexpr uint8_t kMemoryOpcodeLast = 0x89;
 inline constexpr uint8_t kSynchronizationOpcodeFirst = 0xc0;
 inline constexpr uint8_t kSynchronizationOpcodeLast = 0xc6;
 inline constexpr uint8_t kReservedOpcodeFirst = 0xf0;
 inline constexpr uint8_t kReservedOpcodeLast = 0xff;
-inline constexpr std::size_t kOpcodeManifestSize = 44;
+inline constexpr std::size_t kOpcodeManifestSize = 53;
 
 // The returned array is sorted by numeric opcode and has static lifetime.
 const std::array<OpcodeManifestEntry, kOpcodeManifestSize> &

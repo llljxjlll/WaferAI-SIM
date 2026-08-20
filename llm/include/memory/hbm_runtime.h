@@ -25,6 +25,10 @@ namespace p5_probe {
 struct HBMRuntimeSelfTestPeer;
 }
 
+namespace frontend::program_io {
+struct HBMRuntimeSelfTestPeer;
+}
+
 struct HBMRuntimeInstance {
     int stack_id = -1;
     int channel_id = -1;
@@ -54,6 +58,7 @@ public:
 
 private:
     friend struct p5_probe::HBMRuntimeSelfTestPeer;
+    friend struct frontend::program_io::HBMRuntimeSelfTestPeer;
     friend std::unique_ptr<HBMRuntime> BuildHBMBackends();
     std::vector<HBMRuntimeInstance> instances_;
 };

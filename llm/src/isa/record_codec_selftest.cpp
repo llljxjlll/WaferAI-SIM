@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -69,6 +70,14 @@ SramAddressOperand Address(Boundary boundary) {
                 ? std::numeric_limits<uint64_t>::max()
                 : 0,
             0, 0};
+}
+
+uint64_t DoubleBits(double value) {
+    uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value),
+                  "binary64 fixture storage must be eight bytes");
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
 }
 
 bool HasPublishedComputeSemantics(Opcode opcode) {
@@ -146,6 +155,104 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         for (std::size_t i = 0; i < schema.parameter_count; ++i)
             operands.parameters.push_back(ComputeFixtureParameter(
                 schema.opcode, schema.parameter_names[i], boundary));
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::ROPE_QK_EXACT: {
+        RopeQkExactOperands operands;
+        operands.input = Address(boundary);
+        operands.output = Address(boundary);
+        operands.logical_tokens = 8;
+        operands.tp_degree = 2;
+        operands.num_heads = 4;
+        operands.num_kv_heads = 4;
+        operands.rank_num_heads = 2;
+        operands.rank_num_kv_heads = 2;
+        operands.head_dim = 4;
+        operands.rotary_dim = 4;
+        operands.max_position_embeddings = 128;
+        operands.context_max = 8;
+        operands.rope_theta_f64_bits = DoubleBits(10000.0);
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::ATTENTION_EXACT: {
+        AttentionExactOperands operands;
+        operands.input = Address(boundary);
+        operands.output = Address(boundary);
+        operands.query_tokens = 8;
+        operands.tp_degree = 2;
+        operands.num_heads = 4;
+        operands.num_kv_heads = 4;
+        operands.rank_num_heads = 2;
+        operands.rank_num_kv_heads = 2;
+        operands.head_dim = 4;
+        operands.context_sum = 8;
+        operands.context_max = 8;
+        operands.query_key_pairs = 36;
+        operands.rank_kv_read_bytes = 0;
+        operands.rank_kv_write_bytes = 256;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_LOOKUP: {
+        EmbeddingLookupOperands operands;
+        operands.indices = Address(boundary);
+        operands.table = Address(boundary);
+        operands.output = Address(boundary);
+        operands.logical_rows = 8;
+        operands.rank_rows = 4;
+        operands.tp_degree = 2;
+        operands.vocab_size = 32;
+        operands.hidden_size = 16;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::GREEDY_SAMPLE: {
+        GreedySampleOperands operands;
+        operands.logits = Address(boundary);
+        operands.output = Address(boundary);
+        operands.tp_degree = 1;
+        operands.token_rows = 8;
+        operands.vocab_size = 32;
+        operands.sample_count = 1;
+        operands.comparisons = 31;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_FORWARD: {
+        CrossEntropyForwardOperands operands;
+        operands.logits = Address(boundary);
+        operands.labels = Address(boundary);
+        operands.loss = Address(boundary);
+        operands.logical_rows = 8;
+        operands.rank_rows = 4;
+        operands.tp_degree = 2;
+        operands.vocab_size = 32;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_BACKWARD: {
+        CrossEntropyBackwardOperands operands;
+        operands.logits = Address(boundary);
+        operands.labels = Address(boundary);
+        operands.upstream = Address(boundary);
+        operands.logits_grad = Address(boundary);
+        operands.logical_rows = 8;
+        operands.rank_rows = 4;
+        operands.tp_degree = 2;
+        operands.vocab_size = 32;
+        operands.upstream_elements = 4;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::SGD_UPDATE: {
+        SgdUpdateOperands operands;
+        operands.weight = Address(boundary);
+        operands.gradient = Address(boundary);
+        operands.updated_weight = operands.weight;
+        operands.element_count = 8;
+        operands.learning_rate_f64_bits = DoubleBits(0.01);
         record.operands = std::move(operands);
         break;
     }
@@ -228,6 +335,27 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::LOCAL_REDUCE: {
+        LocalReduceOperands operands;
+        operands.input_count =
+            Select(boundary, 1, 3, UINT16_MAX);
+        operands.element_count =
+            boundary == Boundary::MAXIMUM
+                ? std::numeric_limits<uint64_t>::max() /
+                      (2 * uint64_t{UINT16_MAX})
+                : Select(boundary, 1, 17, 17);
+        operands.input_stride_bytes = operands.element_count * 2;
+        operands.source = {
+            SramAddressKind::ABSOLUTE,
+            boundary == Boundary::TYPICAL ? uint64_t{0x100} : uint64_t{0},
+            0, 0};
+        operands.destination = {
+            SramAddressKind::ABSOLUTE,
+            boundary == Boundary::TYPICAL ? uint64_t{0x200} : uint64_t{0},
+            0, 0};
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::LSU: {
         LsuOperands operands;
         operands.hbm_address_bytes =
@@ -282,6 +410,25 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         operands.size_bytes = Select(
             boundary, 1, 257, std::numeric_limits<uint64_t>::max());
         operands.alignment_bytes = Select(boundary, 1, 16, uint64_t{1} << 63);
+        operands.lifetime = boundary == Boundary::MINIMUM
+                                ? SramLifetime::TASK
+                                : boundary == Boundary::TYPICAL
+                                      ? SramLifetime::LAYER
+                                      : SramLifetime::PERSISTENT;
+        operands.spillable = boundary != Boundary::MAXIMUM;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::SRAM_ALLOC_AT: {
+        SramAllocAtOperands operands;
+        operands.region_name_string_index = u32;
+        operands.label_symbol_index = u32;
+        operands.region_offset_bytes = Select(
+            boundary, 0, 257, std::numeric_limits<uint64_t>::max());
+        operands.size_bytes = Select(
+            boundary, 1, 257, std::numeric_limits<uint64_t>::max());
+        operands.alignment_bytes = Select(
+            boundary, 1, 16, uint64_t{1} << 63);
         operands.lifetime = boundary == Boundary::MINIMUM
                                 ? SramLifetime::TASK
                                 : boundary == Boundary::TYPICAL
@@ -366,7 +513,7 @@ void CheckManifest(Checks &checks) {
                          "SRAM_BIND fixed payload size");
     }
     checks.Check(LookupRecordSchema(0) == nullptr, "INVALID has no schema");
-    checks.Check(LookupRecordSchema(0x43) == nullptr,
+    checks.Check(LookupRecordSchema(0x44) == nullptr,
                  "unassigned opcode has no schema");
 }
 
@@ -427,7 +574,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 39, "executable opcode count");
+    checks.Check(executable_count == 48, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -447,16 +594,28 @@ void CheckGoldenHex(Checks &checks) {
     };
     // Full-record fixtures cover every operand shape.  The all-opcode loop
     // above separately fixes each opcode byte and payload length.
-    static constexpr std::array<Golden, 17> golden{{
+    static constexpr std::array<Golden, 24> golden{{
         {Opcode::MATMUL,
          "0101000018000000010011001100110011000000110000001100000011000000"},
         {Opcode::DUMMY, "15010000080000000100110011001100"},
+        {Opcode::ROPE_QK_EXACT,
+         "1a010000640000000100000002000000110000000000000000000000130000000000000002000000110000000000000000000000130000000000000008000000020000000400000004000000020000000200000004000000040000008000000008000000000000000088c340"},
+        {Opcode::ATTENTION_EXACT,
+         "1b010000740000000100000102000000110000000000000000000000130000000000000002000000110000000000000000000000130000000000000008000000020000000400000004000000020000000200000004000000080000000000000008000000240000000000000000000000000000000001000000000000"},
+        {Opcode::EMBEDDING_LOOKUP,
+         "1c01000060000000020101000200000011000000000000000000000013000000000000000200000011000000000000000000000013000000000000000200000011000000000000000000000013000000000000000800000004000000020000002000000010000000"},
+        {Opcode::GREEDY_SAMPLE,
+         "1d0100004c00000001020000020000001100000000000000000000001300000000000000020000001100000000000000000000001300000000000000010000000800000020000000010000001f00000000000000"},
+        {Opcode::CROSS_ENTROPY_FORWARD,
+         "1e0100005c0000000102030002000000110000000000000000000000130000000000000002000000110000000000000000000000130000000000000002000000110000000000000000000000130000000000000008000000040000000200000020000000"},
         {Opcode::DTE_SEND,
          "40010000480000000101000011000000000000000000000001010000000000000200000011000000000000000000000013000000000000000000000000000000070000000b0000000d00000000000000"},
         {Opcode::DTE_RECV,
          "41010000480000000101000011000000000000000000000001010000000000000200000011000000000000000000000013000000000000000000030000000000070000000b0000000d00000000000000"},
         {Opcode::REDUCE_COMPUTE,
          "420100005000000000010000070000000b0000001100000011001100000000000101000000000000020000001100000000000000000000001300000000000000020000001100000000000000000000001300000000000000"},
+        {Opcode::LOCAL_REDUCE,
+         "4301000048000000000100010000030011000000000000002200000000000000010000000000000000010000000000000000000000000000010000000000000000020000000000000000000000000000"},
         {Opcode::LSU_LOAD,
          "800100002800000017000000000000000101000000000000020000001100000000000000000000001300000000000000"},
         {Opcode::DTE_ISSUE,
@@ -469,6 +628,8 @@ void CheckGoldenHex(Checks &checks) {
         {Opcode::SRAM_RESIZE,
          "870100001000000011000000000000000101000000000000"},
         {Opcode::SRAM_RENAME, "88010000080000001100000012000000"},
+        {Opcode::SRAM_ALLOC_AT,
+         "890100002800000011000000110000000101000000000000010100000000000010000000000000000101000000000000"},
         {Opcode::DTE_WAIT, "c00100000400000011000000"},
         {Opcode::DTE_FENCE, "c101000000000000"},
         {Opcode::EVENT_SET, "c3010000080000001100120011000000"},
@@ -678,7 +839,7 @@ void CheckMalformedRecords(Checks &checks) {
     checks.Reject("trailing byte", [&] { DecodeExternalRecordExact(bad); });
     checks.Check(DecodeExternalRecord(bad).next_offset == good.size(),
                  "one record stream boundary");
-    for (uint8_t opcode : {uint8_t{0}, uint8_t{0x43}, uint8_t{0xf0}}) {
+    for (uint8_t opcode : {uint8_t{0}, uint8_t{0x44}, uint8_t{0xf0}}) {
         bad.assign(8, 0);
         bad[0] = opcode;
         bad[1] = 1;
@@ -738,6 +899,17 @@ void CheckMalformedRecords(Checks &checks) {
     alloc.back() = 1;
     checks.Reject("SRAM_ALLOC reserved tail",
                   [&] { DecodeExternalRecordExact(alloc); });
+
+    auto alloc_at = EncodeExternalRecord(MakeRecord(
+        *LookupRecordSchema(Opcode::SRAM_ALLOC_AT), Boundary::TYPICAL));
+    alloc_at[8 + 33] = 2;
+    checks.Reject("SRAM_ALLOC_AT unknown spillable value",
+                  [&] { DecodeExternalRecordExact(alloc_at); });
+    alloc_at = EncodeExternalRecord(MakeRecord(
+        *LookupRecordSchema(Opcode::SRAM_ALLOC_AT), Boundary::TYPICAL));
+    alloc_at.back() = 1;
+    checks.Reject("SRAM_ALLOC_AT reserved tail",
+                  [&] { DecodeExternalRecordExact(alloc_at); });
 }
 
 void CheckPublishedComputeSemantics(Checks &checks) {
@@ -872,6 +1044,21 @@ void CheckPublishedComputeSemantics(Checks &checks) {
     SetComputeParameter(record, "N", kExternalNpuParameterMax);
     checks.Accept("RELU 30-bit parameter maximum",
                   [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::SWIGLU),
+                        Boundary::MINIMUM);
+    std::get<ComputeOperands>(record.operands).datatype =
+        ExternalDataType::FP16;
+    SetComputeParameter(
+        record, "N",
+        static_cast<uint64_t>(std::numeric_limits<int>::max()) / 4);
+    checks.Accept("SWIGLU concat input FP16 byte boundary",
+                  [&] { EncodeExternalRecord(record); });
+    SetComputeParameter(
+        record, "N",
+        static_cast<uint64_t>(std::numeric_limits<int>::max()) / 4 + 1);
+    checks.Reject("SWIGLU concat input FP16 byte overflow",
+                  [&] { EncodeExternalRecord(record); });
     // External parameters are unsigned. A producer-side negative value has
     // high bits set and is rejected by the existing 30-bit range check.
 }
@@ -891,13 +1078,84 @@ void CheckTypedRejections(Checks &checks) {
     record = MakeRecord(*LookupRecordSchema(Opcode::MATMUL),
                         Boundary::TYPICAL);
     std::get<ComputeOperands>(record.operands).datatype =
-        static_cast<ExternalDataType>(2);
-    checks.Reject("typed enum unknown",
+        ExternalDataType::INT32;
+    checks.Reject("generic ComputeOperands rejects INT32",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::MATMUL),
+                        Boundary::TYPICAL);
+    std::get<ComputeOperands>(record.operands).datatype =
+        ExternalDataType::FP32;
+    checks.Reject("generic ComputeOperands rejects CE-only FP32",
                   [&] { EncodeExternalRecord(record); });
     record = MakeRecord(*LookupRecordSchema(Opcode::MATMUL),
                         Boundary::TYPICAL);
     record.operands = TokenOperands{1};
     checks.Reject("operand variant mismatch",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).input_dtype =
+        LocalReduceDataType::FP32;
+    checks.Reject("LOCAL_REDUCE input must be FP16",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).accumulator_dtype =
+        LocalReduceDataType::FP16;
+    checks.Reject("LOCAL_REDUCE accumulator must be FP32",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).output_dtype =
+        LocalReduceDataType::FP32;
+    checks.Reject("LOCAL_REDUCE output must be FP16",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).reduce_op =
+        ReduceOperator::MAX;
+    checks.Reject("LOCAL_REDUCE op must be SUM",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).rounding =
+        static_cast<LocalReduceRoundingMode>(1);
+    checks.Reject("LOCAL_REDUCE rounding must be RNE",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).order =
+        static_cast<LocalReduceOrder>(1);
+    checks.Reject("LOCAL_REDUCE order must be rank-major",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).input_count = 0;
+    checks.Reject("LOCAL_REDUCE zero inputs",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).element_count = 0;
+    checks.Reject("LOCAL_REDUCE zero elements",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands).input_stride_bytes = 32;
+    checks.Reject("LOCAL_REDUCE non-tight stride",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    auto &local_source =
+        std::get<LocalReduceOperands>(record.operands).source;
+    local_source = {SramAddressKind::REGION, 0, 1, 0};
+    checks.Reject("LOCAL_REDUCE named source rejected in V1",
+                  [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                        Boundary::TYPICAL);
+    std::get<LocalReduceOperands>(record.operands)
+        .destination.absolute_address_bytes = 1;
+    checks.Reject("LOCAL_REDUCE misaligned destination",
                   [&] { EncodeExternalRecord(record); });
 
     record = MakeRecord(*LookupRecordSchema(Opcode::SRAM_CLEAR),
@@ -969,6 +1227,252 @@ void CheckTypedRejections(Checks &checks) {
     });
 }
 
+void CheckExactStage2Rejections(Checks &checks) {
+    ExternalRecord record = MakeRecord(
+        *LookupRecordSchema(Opcode::ROPE_QK_EXACT), Boundary::TYPICAL);
+    auto encoded = EncodeExternalRecord(record);
+    encoded[10] = 1;
+    checks.Reject("ROPE reserved wire bytes must be zero",
+                  [&] { DecodeExternalRecord(encoded); });
+
+    auto &rope = std::get<RopeQkExactOperands>(record.operands);
+    rope.packed_layout = static_cast<RopePackedLayout>(1);
+    checks.Reject("ROPE packed layout enum",
+                  [&] { EncodeExternalRecord(record); });
+    rope.packed_layout = RopePackedLayout::Q_K_V;
+    rope.rope_theta_f64_bits = UINT64_C(0x7ff8000000000000);
+    checks.Reject("ROPE theta NaN", [&] { EncodeExternalRecord(record); });
+    rope.rope_theta_f64_bits = DoubleBits(10000.0);
+    rope.rotary_dim = 3;
+    checks.Reject("ROPE rotary dimension must be even",
+                  [&] { EncodeExternalRecord(record); });
+    rope.rotary_dim = 4;
+    rope.rank_num_heads = 1;
+    checks.Reject("ROPE head quotient",
+                  [&] { EncodeExternalRecord(record); });
+    rope.rank_num_heads = 2;
+    rope.context_max = 129;
+    checks.Reject("ROPE context coverage",
+                  [&] { EncodeExternalRecord(record); });
+    rope.context_max = 8;
+    rope.logical_tokens = 16;
+    checks.Accept("ROPE aggregate tokens may exceed per-request context",
+                  [&] { EncodeExternalRecord(record); });
+    rope.logical_tokens = uint64_t{UINT32_MAX} + 1;
+    checks.Reject("ROPE logical token u32 overflow",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::ATTENTION_EXACT),
+                        Boundary::TYPICAL);
+    auto &attention = std::get<AttentionExactOperands>(record.operands);
+    attention.query_key_pairs = 35;
+    checks.Reject("ATTENTION prefill pair formula",
+                  [&] { EncodeExternalRecord(record); });
+    attention.query_key_pairs = 36;
+    attention.rank_kv_read_bytes = 1;
+    checks.Reject("ATTENTION prefill KV read formula",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_read_bytes = 0;
+    attention.rank_kv_write_bytes = 255;
+    checks.Reject("ATTENTION KV write formula",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_write_bytes = 256;
+    attention.causal = false;
+    checks.Reject("ATTENTION causal exact",
+                  [&] { EncodeExternalRecord(record); });
+    attention.causal = true;
+    attention.mode = ExactAttentionMode::DECODE;
+    attention.query_tokens = 1;
+    attention.context_sum = 8;
+    attention.context_max = 8;
+    attention.query_key_pairs = 8;
+    attention.rank_kv_read_bytes = 256;
+    attention.rank_kv_write_bytes = 32;
+    checks.Accept("ATTENTION decode exact",
+                  [&] { EncodeExternalRecord(record); });
+    attention.query_key_pairs = 7;
+    checks.Reject("ATTENTION decode pair formula",
+                  [&] { EncodeExternalRecord(record); });
+    attention.mode = ExactAttentionMode::EXACT_PROFILE;
+    attention.query_tokens = 8;
+    attention.context_sum = 44;
+    attention.context_max = 16;
+    attention.query_key_pairs = 47;
+    attention.rank_kv_read_bytes = 1280;
+    attention.rank_kv_write_bytes = 255;
+    checks.Reject("ATTENTION static-profile write formula",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_write_bytes = 256;
+    checks.Accept("ATTENTION static-profile mixed exact",
+                  [&] { EncodeExternalRecord(record); });
+    attention.query_key_pairs = 7;
+    checks.Reject("ATTENTION static-profile pair lower bound",
+                  [&] { EncodeExternalRecord(record); });
+    attention.query_key_pairs = 129;
+    checks.Reject("ATTENTION static-profile pair upper bound",
+                  [&] { EncodeExternalRecord(record); });
+    attention.query_key_pairs = 47;
+    attention.rank_kv_read_bytes = 1;
+    checks.Reject("ATTENTION static-profile read alignment",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_read_bytes = 2880;
+    checks.Reject("ATTENTION static-profile read upper bound",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_read_bytes = 1280;
+    attention.mode = ExactAttentionMode::TRAIN_FORWARD;
+    attention.query_tokens = 8;
+    attention.context_sum = 8;
+    attention.context_max = 8;
+    attention.query_key_pairs = 36;
+    attention.rank_kv_read_bytes = 0;
+    attention.rank_kv_write_bytes = 0;
+    checks.Accept("ATTENTION train-forward exact",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_write_bytes = 256;
+    checks.Reject("ATTENTION train-forward rejects KV write",
+                  [&] { EncodeExternalRecord(record); });
+    attention.rank_kv_write_bytes = 0;
+    attention.mode = static_cast<ExactAttentionMode>(4);
+    checks.Reject("ATTENTION mode enum",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::EMBEDDING_LOOKUP),
+                        Boundary::TYPICAL);
+    auto &embedding = std::get<EmbeddingLookupOperands>(record.operands);
+    embedding.index_datatype = ExternalDataType::FP16;
+    checks.Reject("EMBEDDING index datatype",
+                  [&] { EncodeExternalRecord(record); });
+    embedding.index_datatype = ExternalDataType::INT32;
+    embedding.placement = static_cast<EmbeddingPlacement>(1);
+    checks.Reject("EMBEDDING placement enum",
+                  [&] { EncodeExternalRecord(record); });
+    embedding.placement = EmbeddingPlacement::REPLICATED;
+    embedding.logical_rows = 7;
+    checks.Reject("EMBEDDING TP row quotient",
+                  [&] { EncodeExternalRecord(record); });
+    embedding.logical_rows = 8;
+    embedding.vocab_size = uint64_t{UINT32_MAX} + 1;
+    checks.Reject("EMBEDDING vocab u32 overflow",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::GREEDY_SAMPLE),
+                        Boundary::TYPICAL);
+    auto &greedy = std::get<GreedySampleOperands>(record.operands);
+    greedy.tp_degree = 2;
+    checks.Reject("GREEDY TP exact", [&] { EncodeExternalRecord(record); });
+    greedy.tp_degree = 1;
+    greedy.sample_count = 0;
+    checks.Reject("GREEDY nonzero sample count",
+                  [&] { EncodeExternalRecord(record); });
+    greedy.sample_count = 9;
+    checks.Reject("GREEDY sample count within rows",
+                  [&] { EncodeExternalRecord(record); });
+    greedy.sample_count = 1;
+    greedy.comparisons = 30;
+    checks.Reject("GREEDY comparison formula",
+                  [&] { EncodeExternalRecord(record); });
+    greedy.comparisons = 31;
+    greedy.output_datatype = ExternalDataType::FP16;
+    checks.Reject("GREEDY output datatype",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::CROSS_ENTROPY_FORWARD),
+        Boundary::TYPICAL);
+    auto &ce = std::get<CrossEntropyForwardOperands>(record.operands);
+    checks.Accept("CROSS_ENTROPY_FORWARD exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce.loss_datatype = ExternalDataType::INT8;
+    checks.Reject("CROSS_ENTROPY_FORWARD loss FP32 exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce.loss_datatype = ExternalDataType::FP16;
+    checks.Reject("CROSS_ENTROPY_FORWARD loss rejects FP16",
+                  [&] { EncodeExternalRecord(record); });
+    ce.loss_datatype = ExternalDataType::INT32;
+    checks.Reject("CROSS_ENTROPY_FORWARD loss rejects INT32",
+                  [&] { EncodeExternalRecord(record); });
+    ce.loss_datatype = ExternalDataType::FP32;
+    ce.reduction = static_cast<CrossEntropyReduction>(1);
+    checks.Reject("CROSS_ENTROPY_FORWARD reduction exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce.reduction = CrossEntropyReduction::NONE;
+    ce.logical_rows = 7;
+    checks.Reject("CROSS_ENTROPY_FORWARD TP row quotient",
+                  [&] { EncodeExternalRecord(record); });
+    ce.logical_rows = 8;
+    ce.vocab_size = 1;
+    checks.Reject("CROSS_ENTROPY_FORWARD vocab lower bound",
+                  [&] { EncodeExternalRecord(record); });
+    ce.vocab_size = uint64_t{UINT32_MAX} + 1;
+    checks.Reject("CROSS_ENTROPY_FORWARD vocab u32 overflow",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::CROSS_ENTROPY_BACKWARD),
+        Boundary::TYPICAL);
+    auto &ce_backward =
+        std::get<CrossEntropyBackwardOperands>(record.operands);
+    checks.Accept("CROSS_ENTROPY_BACKWARD exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.logits_datatype = ExternalDataType::FP32;
+    checks.Reject("CROSS_ENTROPY_BACKWARD logits FP16 exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.logits_datatype = ExternalDataType::FP16;
+    ce_backward.label_datatype = ExternalDataType::FP16;
+    checks.Reject("CROSS_ENTROPY_BACKWARD labels INT32 exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.label_datatype = ExternalDataType::INT32;
+    ce_backward.upstream_datatype = ExternalDataType::FP16;
+    checks.Reject("CROSS_ENTROPY_BACKWARD upstream FP32 exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.upstream_datatype = ExternalDataType::FP32;
+    ce_backward.output_datatype = ExternalDataType::FP32;
+    checks.Reject("CROSS_ENTROPY_BACKWARD output FP16 exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.output_datatype = ExternalDataType::FP16;
+    ce_backward.reduction = static_cast<CrossEntropyReduction>(1);
+    checks.Reject("CROSS_ENTROPY_BACKWARD reduction NONE exact",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.reduction = CrossEntropyReduction::NONE;
+    ce_backward.upstream_elements = 1;
+    checks.Reject("CROSS_ENTROPY_BACKWARD per-row upstream quotient",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.upstream_mode = CrossEntropyUpstreamMode::SCALAR;
+    checks.Accept("CROSS_ENTROPY_BACKWARD scalar ABI",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.upstream_elements = 4;
+    checks.Reject("CROSS_ENTROPY_BACKWARD scalar upstream quotient",
+                  [&] { EncodeExternalRecord(record); });
+    ce_backward.upstream_mode =
+        static_cast<CrossEntropyUpstreamMode>(2);
+    checks.Reject("CROSS_ENTROPY_BACKWARD upstream mode",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::SGD_UPDATE),
+                        Boundary::TYPICAL);
+    auto &sgd = std::get<SgdUpdateOperands>(record.operands);
+    checks.Accept("SGD_UPDATE exact", [&] { EncodeExternalRecord(record); });
+    sgd.gradient_datatype = ExternalDataType::FP16;
+    checks.Reject("SGD_UPDATE gradient FP32 exact",
+                  [&] { EncodeExternalRecord(record); });
+    sgd.gradient_datatype = ExternalDataType::FP32;
+    sgd.updated_weight.absolute_address_bytes++;
+    checks.Reject("SGD_UPDATE in-place exact",
+                  [&] { EncodeExternalRecord(record); });
+    sgd.updated_weight = sgd.weight;
+    sgd.momentum_f64_bits = DoubleBits(0.5);
+    checks.Reject("SGD_UPDATE momentum exact zero",
+                  [&] { EncodeExternalRecord(record); });
+    sgd.momentum_f64_bits = 0;
+    sgd.learning_rate_f64_bits = DoubleBits(0.0);
+    checks.Reject("SGD_UPDATE learning rate positive",
+                  [&] { EncodeExternalRecord(record); });
+    sgd.learning_rate_f64_bits = DoubleBits(
+        std::numeric_limits<double>::infinity());
+    checks.Reject("SGD_UPDATE learning rate finite",
+                  [&] { EncodeExternalRecord(record); });
+}
+
 } // namespace
 
 RecordCodecSelfTestResult CheckIsaV1RecordCodec() {
@@ -981,6 +1485,7 @@ RecordCodecSelfTestResult CheckIsaV1RecordCodec() {
     CheckMalformedRecords(checks);
     CheckPublishedComputeSemantics(checks);
     CheckTypedRejections(checks);
+    CheckExactStage2Rejections(checks);
     return std::move(checks.result);
 }
 

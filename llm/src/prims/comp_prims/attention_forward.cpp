@@ -22,39 +22,41 @@ void Attention_f::initialize() {
 void Attention_f::taskCore(TaskCoreContext &context, string prim_name,
                            u_int64_t &dram_time, u_int64_t &exu_ops,
                            u_int64_t &sfu_ops, u_int64_t &vec_ops) {
-    // 写入preatt中间结果
-    int temp_sram_addr = 0;
-    int temp_sram_addr_prior = 0;   
-    temp_sram_addr_prior = temp_sram_addr;
+    if (usesLegacyImplicitMemory(context)) {
+        // Legacy attention models its two scratch tensors at address zero.
+        int temp_sram_addr = 0;
+        int temp_sram_addr_prior = temp_sram_addr;
 
-    LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
-                    << " write back preatt";
+        LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
+                        << " write back preatt";
 
-    sram_write_back_temp(context,
-                         data_byte * GetFromPairedVector(data_chunk, "preatt"),
-                         temp_sram_addr, dram_time);
+        sram_write_back_temp(
+            context, data_byte * GetFromPairedVector(data_chunk, "preatt"),
+            temp_sram_addr, dram_time);
 
-    LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
-                    << " read preatt";
+        LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
+                        << " read preatt";
 
-    // 读出preatt，计算自然指数，写入att
-    sram_read_generic_temp(context, GetFromPairedVector(data_chunk, "preatt"),
-                           temp_sram_addr_prior, dram_time);
-    temp_sram_addr_prior = temp_sram_addr;
+        // 读出preatt，计算自然指数，写入att
+        sram_read_generic_temp(
+            context, GetFromPairedVector(data_chunk, "preatt"),
+            temp_sram_addr_prior, dram_time);
+        temp_sram_addr_prior = temp_sram_addr;
 
-    LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
-                    << " write back att";
+        LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
+                        << " write back att";
 
-    sram_write_back_temp(context,
-                         data_byte * GetFromPairedVector(data_chunk, "att"),
-                         temp_sram_addr, dram_time);
-    // 读出att
-    LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
-                    << " read att";
+        sram_write_back_temp(
+            context, data_byte * GetFromPairedVector(data_chunk, "att"),
+            temp_sram_addr, dram_time);
+        // 读出att
+        LOG_DEBUG(PRIM) << name << " of Core " << prim_context->cid
+                        << " read att";
 
-    sram_read_generic_temp(context,
-                           data_byte * GetFromPairedVector(data_chunk, "att"),
-                           temp_sram_addr_prior, dram_time);
+        sram_read_generic_temp(
+            context, data_byte * GetFromPairedVector(data_chunk, "att"),
+            temp_sram_addr_prior, dram_time);
+    }
 
     const NpuOps ops =
         EvaluatePublishedNpuOps(Opcode::ATTENTION, param_value);

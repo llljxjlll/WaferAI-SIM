@@ -106,6 +106,84 @@ ExternalRecord MatmulRecord(uint64_t base = 1) {
     return record;
 }
 
+SramAddressOperand AbsoluteAddress(uint64_t value) {
+    return {SramAddressKind::ABSOLUTE, value, 0, 0};
+}
+
+ExternalRecord RopeQkExactRecord() {
+    RopeQkExactOperands operands;
+    operands.input = AbsoluteAddress(1);
+    operands.output = AbsoluteAddress(2);
+    operands.logical_tokens = 1;
+    operands.tp_degree = 1;
+    operands.num_heads = 2;
+    operands.num_kv_heads = 1;
+    operands.rank_num_heads = 2;
+    operands.rank_num_kv_heads = 1;
+    operands.head_dim = 2;
+    operands.rotary_dim = 2;
+    operands.max_position_embeddings = 8;
+    operands.context_max = 1;
+    operands.rope_theta_f64_bits = uint64_t{0x40c3880000000000};
+    return {Opcode::ROPE_QK_EXACT, operands};
+}
+
+ExternalRecord AttentionExactRecord() {
+    AttentionExactOperands operands;
+    operands.input = AbsoluteAddress(3);
+    operands.output = AbsoluteAddress(4);
+    operands.query_tokens = 1;
+    operands.tp_degree = 1;
+    operands.num_heads = 2;
+    operands.num_kv_heads = 1;
+    operands.rank_num_heads = 2;
+    operands.rank_num_kv_heads = 1;
+    operands.head_dim = 2;
+    operands.context_sum = 1;
+    operands.context_max = 1;
+    operands.query_key_pairs = 1;
+    operands.rank_kv_read_bytes = 0;
+    operands.rank_kv_write_bytes = 8;
+    return {Opcode::ATTENTION_EXACT, operands};
+}
+
+ExternalRecord EmbeddingLookupRecord() {
+    EmbeddingLookupOperands operands;
+    operands.indices = AbsoluteAddress(5);
+    operands.table = AbsoluteAddress(6);
+    operands.output = AbsoluteAddress(7);
+    operands.logical_rows = 1;
+    operands.rank_rows = 1;
+    operands.tp_degree = 1;
+    operands.vocab_size = 8;
+    operands.hidden_size = 8;
+    return {Opcode::EMBEDDING_LOOKUP, operands};
+}
+
+ExternalRecord GreedySampleRecord() {
+    GreedySampleOperands operands;
+    operands.logits = AbsoluteAddress(8);
+    operands.output = AbsoluteAddress(9);
+    operands.tp_degree = 1;
+    operands.token_rows = 1;
+    operands.vocab_size = 8;
+    operands.sample_count = 1;
+    operands.comparisons = 7;
+    return {Opcode::GREEDY_SAMPLE, operands};
+}
+
+ExternalRecord CrossEntropyForwardRecord() {
+    CrossEntropyForwardOperands operands;
+    operands.logits = AbsoluteAddress(10);
+    operands.labels = AbsoluteAddress(11);
+    operands.loss = AbsoluteAddress(12);
+    operands.logical_rows = 8;
+    operands.rank_rows = 4;
+    operands.tp_degree = 2;
+    operands.vocab_size = 32;
+    return {Opcode::CROSS_ENTROPY_FORWARD, operands};
+}
+
 ExternalRecord ResidualRecord(uint64_t n = 8) {
     ExternalRecord record;
     record.opcode = Opcode::RESIDUAL;
@@ -114,6 +192,16 @@ ExternalRecord ResidualRecord(uint64_t n = 8) {
     operands.parameters = {n};
     record.operands = operands;
     return record;
+}
+
+ExternalRecord LocalReduceRecord() {
+    LocalReduceOperands operands;
+    operands.input_count = 3;
+    operands.element_count = 16;
+    operands.input_stride_bytes = 32;
+    operands.source = {SramAddressKind::ABSOLUTE, 0x100, 0, 0};
+    operands.destination = {SramAddressKind::ABSOLUTE, 0x200, 0, 0};
+    return {Opcode::LOCAL_REDUCE, operands};
 }
 
 ExternalRecord BindRecord(uint64_t input_count = 1,
@@ -165,6 +253,19 @@ ExternalRecord AllocRecord(uint64_t label, SramLifetime lifetime,
     operands.lifetime = lifetime;
     operands.spillable = spillable;
     return ExternalRecord{Opcode::SRAM_ALLOC, operands};
+}
+
+ExternalRecord AllocAtRecord(uint64_t label, uint64_t offset_bytes,
+                             SramLifetime lifetime, bool spillable) {
+    SramAllocAtOperands operands;
+    operands.region_name_string_index = 0;
+    operands.label_symbol_index = label;
+    operands.region_offset_bytes = offset_bytes;
+    operands.size_bytes = 64;
+    operands.alignment_bytes = 16;
+    operands.lifetime = lifetime;
+    operands.spillable = spillable;
+    return ExternalRecord{Opcode::SRAM_ALLOC_AT, operands};
 }
 
 ExternalRecord ResizeRecord(uint64_t label, uint64_t size_bytes = 32) {
@@ -607,11 +708,18 @@ ProgramArtifact RelocationArtifact() {
     alloc.size_bytes = 8;
     alloc.alignment_bytes = 8;
     ExternalRecord alloc_record{Opcode::SRAM_ALLOC, alloc};
+    SramAllocAtOperands alloc_at;
+    alloc_at.region_name_string_index = 0;
+    alloc_at.label_symbol_index = 2;
+    alloc_at.region_offset_bytes = 24;
+    alloc_at.size_bytes = 8;
+    alloc_at.alignment_bytes = 8;
+    ExternalRecord alloc_at_record{Opcode::SRAM_ALLOC_AT, alloc_at};
     ExternalRecord rename_record{Opcode::SRAM_RENAME,
                                  SramRenameOperands{2, 3}};
     artifact.cores = {{0, {BindRecord(1, 2, 3), MatmulRecord(),
                            load_record, store_record, clear_record,
-                           alloc_record, rename_record}}};
+                           alloc_record, alloc_at_record, rename_record}}};
     auto relocation = [](uint64_t instruction, SemanticOperandId operand,
                          SemanticRelocationKind kind, uint64_t symbol,
                          int64_t addend) {
@@ -644,10 +752,51 @@ ProgramArtifact RelocationArtifact() {
                    SemanticRelocationKind::SRAM_REGION, 1, 0),
         relocation(5, SemanticOperandId::LABEL_SYMBOL,
                    SemanticRelocationKind::SRAM_LABEL, 3, 0),
-        relocation(6, SemanticOperandId::OLD_SYMBOL,
+        relocation(6, SemanticOperandId::REGION_NAME,
+                   SemanticRelocationKind::SRAM_REGION, 1, 0),
+        relocation(6, SemanticOperandId::LABEL_SYMBOL,
                    SemanticRelocationKind::SRAM_LABEL, 3, 0),
-        relocation(6, SemanticOperandId::NEW_SYMBOL,
+        relocation(7, SemanticOperandId::OLD_SYMBOL,
+                   SemanticRelocationKind::SRAM_LABEL, 3, 0),
+        relocation(7, SemanticOperandId::NEW_SYMBOL,
                    SemanticRelocationKind::SRAM_LABEL, 2, 0),
+    };
+    artifact.envelope.active_cores = {0};
+    artifact.envelope.expected_ack_cores = {0};
+    artifact.envelope.empty_core_ack_policy =
+        EmptyCoreAckPolicy::INCLUDE_EMPTY;
+    return artifact;
+}
+
+ProgramArtifact FixedRelocationArtifact() {
+    ProgramArtifact artifact;
+    artifact.strings = {"fixed_absolute", "fixed_label"};
+    artifact.symbols = {
+        {0, ProgramSymbolKind::ABSOLUTE_ADDRESS, 0, 0x1000, 0x1000},
+        {1, ProgramSymbolKind::SRAM_LABEL, 0, 0, 0},
+    };
+    artifact.cores = {{0, {RopeQkExactRecord(), AttentionExactRecord(),
+                           EmbeddingLookupRecord(), GreedySampleRecord(),
+                           CrossEntropyForwardRecord()}}};
+    auto relocation = [](uint64_t instruction, SemanticOperandId operand,
+                         int64_t addend) {
+        return SemanticRelocation{
+            0, instruction, static_cast<uint16_t>(operand),
+            SemanticRelocationKind::ABSOLUTE_ADDRESS, 0, addend};
+    };
+    artifact.relocations = {
+        relocation(0, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0x10),
+        relocation(0, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0x20),
+        relocation(1, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0x30),
+        relocation(1, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0x40),
+        relocation(2, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0x50),
+        relocation(2, SemanticOperandId::COMPUTE_DATA_ADDRESS, 0x60),
+        relocation(2, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0x70),
+        relocation(3, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0x80),
+        relocation(3, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0x90),
+        relocation(4, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0xa0),
+        relocation(4, SemanticOperandId::COMPUTE_DATA_ADDRESS, 0xb0),
+        relocation(4, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0xc0),
     };
     artifact.envelope.active_cores = {0};
     artifact.envelope.expected_ack_cores = {0};
@@ -692,11 +841,52 @@ void CheckRelocations(Checks &checks) {
     checks.Check(alloc.region_name_string_index == 1 &&
                      alloc.label_symbol_index == 3,
                  "operand IDs 8/9 relocate region name and label symbol");
-    const auto &rename = std::get<SramRenameOperands>(
+    const auto &alloc_at = std::get<SramAllocAtOperands>(
         artifact.cores[0].records[6].operands);
+    checks.Check(alloc_at.region_name_string_index == 1 &&
+                     alloc_at.label_symbol_index == 3 &&
+                     alloc_at.region_offset_bytes == 24,
+                 "SRAM_ALLOC_AT relocates names without changing its exact offset");
+    const auto &rename = std::get<SramRenameOperands>(
+        artifact.cores[0].records[7].operands);
     checks.Check(rename.old_symbol_index == 3 &&
                      rename.new_symbol_index == 2,
                  "operand IDs 10/11 relocate old/new symbols");
+
+    ProgramArtifact local_reduce = Artifact(
+        {{0, {LocalReduceRecord()}}},
+        EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {0});
+    local_reduce.strings = {"local_source", "local_destination",
+                            "local_source_region",
+                            "local_destination_region"};
+    local_reduce.symbols = {
+        {0, ProgramSymbolKind::ABSOLUTE_ADDRESS, 0, 0x100, 96},
+        {1, ProgramSymbolKind::ABSOLUTE_ADDRESS, 0, 0x200, 32},
+        {2, ProgramSymbolKind::SRAM_REGION, 0, 0x100, 96},
+        {3, ProgramSymbolKind::SRAM_REGION, 0, 0x200, 32}};
+    local_reduce.relocations = {
+        {0, 0, static_cast<uint16_t>(SemanticOperandId::SOURCE_ADDRESS),
+         SemanticRelocationKind::ABSOLUTE_ADDRESS, 0, 0},
+        {0, 0,
+         static_cast<uint16_t>(SemanticOperandId::DESTINATION_ADDRESS),
+         SemanticRelocationKind::ABSOLUTE_ADDRESS, 1, 0}};
+    ApplyProgramRelocations(local_reduce);
+    const auto &relocated_local = std::get<LocalReduceOperands>(
+        local_reduce.cores[0].records[0].operands);
+    checks.Check(
+        relocated_local.source.kind == SramAddressKind::ABSOLUTE &&
+            relocated_local.source.absolute_address_bytes == 0x100 &&
+            relocated_local.destination.kind == SramAddressKind::ABSOLUTE &&
+            relocated_local.destination.absolute_address_bytes == 0x200,
+        "LOCAL_REDUCE source/destination absolute relocations");
+    ProgramArtifact local_region = local_reduce;
+    local_region.relocations[0].kind =
+        SemanticRelocationKind::SRAM_REGION;
+    checks.Reject<ProgramFormatError>(
+        "LOCAL_REDUCE rejects region relocation in V1",
+        "requires ABSOLUTE_ADDRESS", [&] {
+            ApplyProgramRelocations(local_region);
+        });
 
     ProgramArtifact endpoint_hbm = Artifact(
         {{0, {DteSendRecord(1, 7, EndpointCompletion::SYNC, 0)}},
@@ -782,6 +972,112 @@ void CheckRelocations(Checks &checks) {
         "REGION_NAME addend rejected deterministically", "addend zero", [&] {
             ApplyProgramRelocations(invalid);
         });
+}
+
+void CheckFixedRelocations(Checks &checks) {
+    ProgramArtifact artifact = FixedRelocationArtifact();
+    const std::vector<uint8_t> encoded = EncodeProgramArtifact(artifact);
+    checks.Check(
+        EncodeProgramArtifact(DecodeProgramArtifact(encoded)) == encoded,
+        "fixed records encode/decode exactly before relocation");
+
+    artifact = DecodeProgramArtifact(encoded);
+    ApplyProgramRelocations(artifact);
+    const auto &rope = std::get<RopeQkExactOperands>(
+        artifact.cores[0].records[0].operands);
+    checks.Check(
+        rope.input.kind == SramAddressKind::ABSOLUTE &&
+            rope.input.absolute_address_bytes == 0x1010 &&
+            rope.input.region_symbol_index == 0 &&
+            rope.input.region_offset_bytes == 0 &&
+            rope.output.kind == SramAddressKind::ABSOLUTE &&
+            rope.output.absolute_address_bytes == 0x1020 &&
+            rope.output.region_symbol_index == 0 &&
+            rope.output.region_offset_bytes == 0,
+        "ROPE_QK_EXACT relocates input/output fixed fields exactly");
+    const auto &attention = std::get<AttentionExactOperands>(
+        artifact.cores[0].records[1].operands);
+    checks.Check(
+        attention.input.kind == SramAddressKind::ABSOLUTE &&
+            attention.input.absolute_address_bytes == 0x1030 &&
+            attention.output.kind == SramAddressKind::ABSOLUTE &&
+            attention.output.absolute_address_bytes == 0x1040,
+        "ATTENTION_EXACT relocates input/output fixed fields exactly");
+    const auto &embedding = std::get<EmbeddingLookupOperands>(
+        artifact.cores[0].records[2].operands);
+    checks.Check(
+        embedding.indices.kind == SramAddressKind::ABSOLUTE &&
+            embedding.indices.absolute_address_bytes == 0x1050 &&
+            embedding.table.kind == SramAddressKind::ABSOLUTE &&
+            embedding.table.absolute_address_bytes == 0x1060 &&
+            embedding.output.kind == SramAddressKind::ABSOLUTE &&
+            embedding.output.absolute_address_bytes == 0x1070,
+        "EMBEDDING_LOOKUP relocates indices/table/output fixed fields exactly");
+    const auto &greedy = std::get<GreedySampleOperands>(
+        artifact.cores[0].records[3].operands);
+    checks.Check(
+        greedy.logits.kind == SramAddressKind::ABSOLUTE &&
+            greedy.logits.absolute_address_bytes == 0x1080 &&
+            greedy.output.kind == SramAddressKind::ABSOLUTE &&
+            greedy.output.absolute_address_bytes == 0x1090,
+        "GREEDY_SAMPLE relocates logits/output fixed fields exactly");
+    const auto &ce = std::get<CrossEntropyForwardOperands>(
+        artifact.cores[0].records[4].operands);
+    checks.Check(
+        ce.logits.kind == SramAddressKind::ABSOLUTE &&
+            ce.logits.absolute_address_bytes == 0x10a0 &&
+            ce.labels.kind == SramAddressKind::ABSOLUTE &&
+            ce.labels.absolute_address_bytes == 0x10b0 &&
+            ce.loss.kind == SramAddressKind::ABSOLUTE &&
+            ce.loss.absolute_address_bytes == 0x10c0,
+        "CROSS_ENTROPY_FORWARD relocates logits/labels/loss fixed fields exactly");
+    const std::vector<uint8_t> relocated = EncodeProgramArtifact(artifact);
+    checks.Check(
+        EncodeProgramArtifact(DecodeProgramArtifact(relocated)) == relocated,
+        "fixed records encode/decode exactly after relocation");
+
+    ProgramArtifact wrong_operand = FixedRelocationArtifact();
+    wrong_operand.relocations[1].operand_id = static_cast<uint16_t>(
+        SemanticOperandId::COMPUTE_DATA_ADDRESS);
+    checks.Reject<ProgramFormatError>(
+        "ROPE_QK_EXACT rejects wrong relocation operand_id",
+        "operand_id is invalid for target opcode", [&] {
+            ApplyProgramRelocations(wrong_operand);
+        });
+
+    ProgramArtifact wrong_variant = FixedRelocationArtifact();
+    wrong_variant.cores[0].records[0].operands =
+        AttentionExactRecord().operands;
+    checks.Reject<ProgramFormatError>(
+        "fixed relocation rejects opcode/operand variant mismatch",
+        "operand variant does not match schema", [&] {
+            ApplyProgramRelocations(wrong_variant);
+        });
+
+    ProgramArtifact duplicate = FixedRelocationArtifact();
+    duplicate.relocations.insert(duplicate.relocations.begin() + 1,
+                                 duplicate.relocations.front());
+    checks.Reject<ProgramFormatError>(
+        "fixed relocation rejects duplicate target operand",
+        "ordered and target unique operands", [&] {
+            ApplyProgramRelocations(duplicate);
+        });
+
+    ProgramArtifact non_address = FixedRelocationArtifact();
+    non_address.relocations[0].kind = SemanticRelocationKind::SRAM_LABEL;
+    non_address.relocations[0].symbol_index = 1;
+    checks.Reject<ConfigHelperProgramError>(
+        "fixed relocation rejects non-address symbol kind",
+        "requires ABSOLUTE_ADDRESS relocation", [&] {
+            ApplyProgramRelocations(non_address);
+        });
+
+    ProgramArtifact overflow = FixedRelocationArtifact();
+    overflow.symbols[0].value = std::numeric_limits<uint64_t>::max();
+    overflow.relocations[0].addend = 1;
+    checks.Reject<ProgramFormatError>(
+        "fixed relocation rejects absolute address overflow",
+        "overflows u64", [&] { ApplyProgramRelocations(overflow); });
 }
 
 void CheckSramBindLifecycle(Checks &checks) {
@@ -879,7 +1175,7 @@ void CheckSramLifecyclePrograms(Checks &checks) {
     ProgramArtifact valid = MemoryArtifact({
         AllocRecord(0, SramLifetime::TASK, true), ResizeRecord(0),
         RenameRecord(0, 1), LabelRecord(Opcode::SRAM_CLEAR, 1),
-        AllocRecord(0, SramLifetime::TASK, true),
+        AllocAtRecord(0, 32, SramLifetime::TASK, true),
         LabelRecord(Opcode::SRAM_FREE, 0)});
     config_helper_program helper(valid);
     const auto committed_messages = helper.BuildConfigMessages();
@@ -888,8 +1184,8 @@ void CheckSramLifecyclePrograms(Checks &checks) {
         lifecycle_segments +=
             PrimIdOf(message) == PrimIdValue(PrimId::SRAM_LIFECYCLE);
     checks.Check(
-        lifecycle_segments == 24,
-        "all five lifecycle variants lower to six strict 4-segment Prims");
+        lifecycle_segments == 25,
+        "ALLOC_AT uses five segments while legacy lifecycle records stay four segments");
 
     ProgramArtifact persistent = MemoryArtifact(
         {AllocRecord(2, SramLifetime::PERSISTENT, true)});
@@ -913,7 +1209,7 @@ void CheckSramLifecyclePrograms(Checks &checks) {
 
     RejectReload("duplicate lifecycle ALLOC", "duplicate ALLOC",
                  {AllocRecord(0, SramLifetime::TASK, true),
-                  AllocRecord(0, SramLifetime::TASK, true)});
+                  AllocAtRecord(0, 32, SramLifetime::TASK, true)});
     RejectReload("lifecycle RESIZE missing label", "unknown label",
                  {ResizeRecord(0)});
     RejectReload("lifecycle FREE missing label", "unknown label",
@@ -927,7 +1223,7 @@ void CheckSramLifecyclePrograms(Checks &checks) {
                   AllocRecord(1, SramLifetime::TASK, true),
                   RenameRecord(0, 1)});
     RejectReload("dangling task allocation", "dangling non-persistent",
-                 {AllocRecord(0, SramLifetime::TASK, true)});
+                 {AllocAtRecord(0, 32, SramLifetime::TASK, true)});
     RejectReload("CLEAR non-spillable allocation", "spillable TASK",
                  {AllocRecord(0, SramLifetime::TASK, false),
                   LabelRecord(Opcode::SRAM_CLEAR, 0)});
@@ -1806,6 +2102,7 @@ ConfigHelperProgramSelfTestResult CheckConfigHelperProgram() {
     CheckSingleCoreFlow(checks);
     CheckEmptyCorePolicies(checks);
     CheckRelocations(checks);
+    CheckFixedRelocations(checks);
     CheckSramBindLifecycle(checks);
     CheckSramLifecyclePrograms(checks);
     CheckDteTokenPrograms(checks);

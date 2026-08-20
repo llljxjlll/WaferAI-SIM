@@ -168,6 +168,33 @@ bool ValidRelocationOperand(const ExternalRecord &record,
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
     }
+    if (std::holds_alternative<RopeQkExactOperands>(record.operands) ||
+        std::holds_alternative<AttentionExactOperands>(record.operands) ||
+        std::holds_alternative<GreedySampleOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
+    if (std::holds_alternative<EmbeddingLookupOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
+    if (std::holds_alternative<CrossEntropyForwardOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
+    if (std::holds_alternative<CrossEntropyBackwardOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_AUX_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
+    if (std::holds_alternative<SgdUpdateOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
     if (const auto *send = std::get_if<DteSendOperands>(&record.operands))
         return send->source_space == EndpointSourceSpace::HBM
                    ? id == SemanticOperandId::HBM_ADDRESS
@@ -175,6 +202,10 @@ bool ValidRelocationOperand(const ExternalRecord &record,
     if (std::holds_alternative<DteRecvOperands>(record.operands))
         return id == SemanticOperandId::DESTINATION_ADDRESS;
     if (std::holds_alternative<ReduceComputeOperands>(record.operands)) {
+        return id == SemanticOperandId::SOURCE_ADDRESS ||
+               id == SemanticOperandId::DESTINATION_ADDRESS;
+    }
+    if (std::holds_alternative<LocalReduceOperands>(record.operands)) {
         return id == SemanticOperandId::SOURCE_ADDRESS ||
                id == SemanticOperandId::DESTINATION_ADDRESS;
     }
@@ -202,7 +233,8 @@ bool ValidRelocationOperand(const ExternalRecord &record,
     if (std::holds_alternative<SymbolOperands>(record.operands) ||
         std::holds_alternative<SramResizeOperands>(record.operands))
         return id == SemanticOperandId::SYMBOL;
-    if (std::holds_alternative<SramAllocOperands>(record.operands))
+    if (std::holds_alternative<SramAllocOperands>(record.operands) ||
+        std::holds_alternative<SramAllocAtOperands>(record.operands))
         return id == SemanticOperandId::REGION_NAME ||
                id == SemanticOperandId::LABEL_SYMBOL;
     if (std::holds_alternative<SramRenameOperands>(record.operands)) {
@@ -248,6 +280,33 @@ void ValidateAddressReference(const SramAddressOperand &address,
             field + " span exceeds its region symbol size");
 }
 
+void ValidateAbsoluteSramRegionSpan(const SramAddressOperand &address,
+                                    const ProgramArtifact &artifact,
+                                    const std::string &field,
+                                    uint64_t span_bytes) {
+    Require(address.kind == SramAddressKind::ABSOLUTE,
+            field + " must use an absolute address in v1");
+    bool has_region = false;
+    bool contained = false;
+    for (const ProgramSymbol &symbol : artifact.symbols) {
+        if (symbol.kind != ProgramSymbolKind::SRAM_REGION)
+            continue;
+        has_region = true;
+        if (address.absolute_address_bytes < symbol.value)
+            continue;
+        const uint64_t offset = address.absolute_address_bytes - symbol.value;
+        if (offset <= symbol.size_bytes &&
+            span_bytes <= symbol.size_bytes - offset) {
+            contained = true;
+            break;
+        }
+    }
+    Require(has_region,
+            field + " requires a declared SRAM region symbol");
+    Require(contained,
+            field + " span exceeds the declared SRAM region symbols");
+}
+
 void ValidateRecordReferences(const ExternalRecord &record,
                               const ProgramArtifact &artifact,
                               const std::set<uint32_t> &group_ids,
@@ -272,6 +331,18 @@ void ValidateRecordReferences(const ExternalRecord &record,
                                  where + " destination", 1);
         Require(group_ids.count(static_cast<uint32_t>(o->group_id)) != 0,
                 where + " references an unknown core group");
+    } else if (const auto *o =
+                   std::get_if<LocalReduceOperands>(&record.operands)) {
+        const uint64_t length_bytes = o->element_count * 2;
+        const uint64_t source_bytes = o->input_count * length_bytes;
+        ValidateAddressReference(o->source, artifact, where + " source",
+                                 source_bytes);
+        ValidateAddressReference(o->destination, artifact,
+                                 where + " destination", length_bytes);
+        ValidateAbsoluteSramRegionSpan(o->source, artifact,
+                                       where + " source", source_bytes);
+        ValidateAbsoluteSramRegionSpan(o->destination, artifact,
+                                       where + " destination", length_bytes);
     } else if (const auto *o = std::get_if<LsuOperands>(&record.operands)) {
         ValidateAddressReference(o->sram, artifact, where + " SRAM",
                                  o->size_bytes);
@@ -299,6 +370,17 @@ void ValidateRecordReferences(const ExternalRecord &record,
                                    where + " lifecycle label");
     } else if (const auto *o =
                    std::get_if<SramAllocOperands>(&record.operands)) {
+        Require(o->region_name_string_index < artifact.strings.size(),
+                where + " references an unknown region-name string");
+        Require(artifact.strings[o->region_name_string_index].size() <= 64,
+                where + " SRAM region name exceeds 64 UTF-8 bytes");
+        Require(o->label_symbol_index < artifact.symbols.size(),
+                where + " references an unknown label symbol");
+        Require(artifact.symbols[o->label_symbol_index].kind ==
+                    ProgramSymbolKind::SRAM_LABEL,
+                where + " label symbol has the wrong kind");
+    } else if (const auto *o =
+                   std::get_if<SramAllocAtOperands>(&record.operands)) {
         Require(o->region_name_string_index < artifact.strings.size(),
                 where + " references an unknown region-name string");
         Require(artifact.strings[o->region_name_string_index].size() <= 64,
@@ -937,6 +1019,24 @@ void ValidateProgramArtifact(const ProgramArtifact &artifact) {
         if (std::holds_alternative<SramBindOperands>(target.operands))
             Require(relocation.kind == SemanticRelocationKind::SRAM_LABEL,
                     "SRAM_BIND relocation requires SRAM_LABEL kind");
+        if (std::holds_alternative<SramAllocAtOperands>(target.operands)) {
+            const auto operand =
+                static_cast<SemanticOperandId>(relocation.operand_id);
+            if (operand == SemanticOperandId::REGION_NAME)
+                Require(relocation.kind ==
+                            SemanticRelocationKind::SRAM_REGION,
+                        "SRAM_ALLOC_AT REGION_NAME relocation requires "
+                        "SRAM_REGION kind");
+            else
+                Require(relocation.kind ==
+                            SemanticRelocationKind::SRAM_LABEL,
+                        "SRAM_ALLOC_AT LABEL_SYMBOL relocation requires "
+                        "SRAM_LABEL kind");
+        }
+        if (std::holds_alternative<LocalReduceOperands>(target.operands))
+            Require(relocation.kind ==
+                        SemanticRelocationKind::ABSOLUTE_ADDRESS,
+                    "LOCAL_REDUCE relocation requires ABSOLUTE_ADDRESS kind");
 
         Require(relocation.symbol_index < artifact.symbols.size(),
                 "relocation references an unknown symbol");

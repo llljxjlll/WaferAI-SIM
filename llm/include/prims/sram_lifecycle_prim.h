@@ -12,6 +12,7 @@ enum class SramLifecycleOp : uint8_t {
     RESIZE = 2,
     RENAME = 3,
     CLEAR_TARGETED = 4,
+    ALLOC_AT = 5,
 };
 
 // Strict internal form shared by the public SRAM lifecycle instructions.
@@ -21,6 +22,7 @@ public:
     std::string region_name;
     std::string label;
     std::string new_label;
+    uint64_t region_offset_bytes = 0;
     uint64_t size_bytes = 0;
     uint64_t alignment_bytes = 0;
     sram::AllocationLifetime lifetime = sram::AllocationLifetime::kTask;

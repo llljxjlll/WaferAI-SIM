@@ -2,7 +2,9 @@
 
 #include "isa/record_lowering.h"
 #include "common/memory.h"
+#include "prims/collective_data_v1_prim.h"
 #include "prims/dte_endpoint_prims.h"
+#include "prims/exact_stage2_prims.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -112,6 +114,106 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::ROPE_QK_EXACT: {
+        RopeQkExactOperands operands;
+        operands.input = Absolute(0x1000);
+        operands.output = Absolute(0x2000);
+        operands.logical_tokens = 8;
+        operands.tp_degree = 2;
+        operands.num_heads = 4;
+        operands.num_kv_heads = 4;
+        operands.rank_num_heads = 2;
+        operands.rank_num_kv_heads = 2;
+        operands.head_dim = 4;
+        operands.rotary_dim = 4;
+        operands.max_position_embeddings = 128;
+        operands.context_max = 8;
+        operands.rope_theta_f64_bits = UINT64_C(0x40c3880000000000);
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::ATTENTION_EXACT: {
+        AttentionExactOperands operands;
+        operands.input = Absolute(0x1000);
+        operands.output = Absolute(0x2000);
+        operands.query_tokens = 8;
+        operands.tp_degree = 2;
+        operands.num_heads = 4;
+        operands.num_kv_heads = 4;
+        operands.rank_num_heads = 2;
+        operands.rank_num_kv_heads = 2;
+        operands.head_dim = 4;
+        operands.context_sum = 8;
+        operands.context_max = 8;
+        operands.query_key_pairs = 36;
+        operands.rank_kv_read_bytes = 0;
+        operands.rank_kv_write_bytes = 256;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_LOOKUP: {
+        EmbeddingLookupOperands operands;
+        operands.indices = Absolute(0x1000);
+        operands.table = Absolute(0x2000);
+        operands.output = Absolute(0x3000);
+        operands.logical_rows = 8;
+        operands.rank_rows = 4;
+        operands.tp_degree = 2;
+        operands.vocab_size = 32;
+        operands.hidden_size = 16;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::GREEDY_SAMPLE: {
+        GreedySampleOperands operands;
+        operands.logits = Absolute(0x1000);
+        operands.output = Absolute(0x2000);
+        operands.tp_degree = 1;
+        operands.token_rows = 8;
+        operands.vocab_size = 32;
+        operands.sample_count = 1;
+        operands.comparisons = 31;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_FORWARD: {
+        CrossEntropyForwardOperands operands;
+        operands.logits = Absolute(0x1000);
+        operands.labels = Absolute(0x2000);
+        operands.loss = Absolute(0x3000);
+        operands.logical_rows = 8;
+        operands.rank_rows = 4;
+        operands.tp_degree = 2;
+        operands.vocab_size = 32;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::CROSS_ENTROPY_BACKWARD: {
+        CrossEntropyBackwardOperands operands;
+        operands.logits = Absolute(0x1000);
+        operands.labels = Absolute(0x2000);
+        operands.upstream = Absolute(0x3000);
+        operands.logits_grad = Absolute(0x4000);
+        operands.logical_rows = 8;
+        operands.rank_rows = 4;
+        operands.tp_degree = 2;
+        operands.vocab_size = 32;
+        operands.upstream_elements = 4;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::SGD_UPDATE: {
+        SgdUpdateOperands operands;
+        operands.weight = Absolute(0x1000);
+        operands.gradient = Absolute(0x2000);
+        operands.updated_weight = operands.weight;
+        operands.element_count = 8;
+        const double learning_rate = 0.01;
+        std::memcpy(&operands.learning_rate_f64_bits, &learning_rate,
+                    sizeof(learning_rate));
+        record.operands = operands;
+        break;
+    }
     case RecordOperandKind::DTE_SEND: {
         DteSendOperands operands;
         operands.mode = DteSendMode::P2P;
@@ -152,6 +254,16 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         record.operands = operands;
         break;
     }
+    case RecordOperandKind::LOCAL_REDUCE: {
+        LocalReduceOperands operands;
+        operands.input_count = 3;
+        operands.element_count = 16;
+        operands.input_stride_bytes = 32;
+        operands.source = Absolute(0x3000);
+        operands.destination = Absolute(0x4000);
+        record.operands = operands;
+        break;
+    }
     case RecordOperandKind::LSU: {
         LsuOperands operands;
         operands.hbm_address_bytes = 0x123456789abcdef0ULL;
@@ -187,6 +299,16 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         SramAllocOperands operands;
         operands.region_name_string_index = 2;
         operands.label_symbol_index = 3;
+        operands.size_bytes = 64;
+        operands.alignment_bytes = 16;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::SRAM_ALLOC_AT: {
+        SramAllocAtOperands operands;
+        operands.region_name_string_index = 2;
+        operands.label_symbol_index = 3;
+        operands.region_offset_bytes = 192;
         operands.size_bytes = 64;
         operands.alignment_bytes = 16;
         record.operands = operands;
@@ -241,10 +363,12 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::LSU_STORE:
     case Opcode::DTE_SEND:
     case Opcode::DTE_RECV:
+    case Opcode::LOCAL_REDUCE:
     case Opcode::DTE_ISSUE:
     case Opcode::SRAM_BIND:
     case Opcode::SRAM_CLEAR:
     case Opcode::SRAM_ALLOC:
+    case Opcode::SRAM_ALLOC_AT:
     case Opcode::SRAM_FREE:
     case Opcode::SRAM_RESIZE:
     case Opcode::SRAM_RENAME:
@@ -254,6 +378,13 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::EVENT_SET:
     case Opcode::EVENT_WAIT:
     case Opcode::GROUP_SYNC:
+    case Opcode::ROPE_QK_EXACT:
+    case Opcode::ATTENTION_EXACT:
+    case Opcode::EMBEDDING_LOOKUP:
+    case Opcode::GREEDY_SAMPLE:
+    case Opcode::CROSS_ENTROPY_FORWARD:
+    case Opcode::CROSS_ENTROPY_BACKWARD:
+    case Opcode::SGD_UPDATE:
         return true;
     default:
         return false;
@@ -270,11 +401,13 @@ bool SameWire(const std::vector<sc_bv<128>> &left,
 
 int ExpectedCategory(Opcode opcode) {
     if (OpcodeValue(opcode) <= kComputeOpcodeLast) return COMP_PRIM;
-    if (opcode == Opcode::DTE_SEND || opcode == Opcode::DTE_RECV)
+    if (opcode == Opcode::DTE_SEND || opcode == Opcode::DTE_RECV ||
+        opcode == Opcode::LOCAL_REDUCE)
         return COMM_PRIM;
     if (opcode == Opcode::LSU_LOAD || opcode == Opcode::LSU_STORE ||
         opcode == Opcode::DTE_ISSUE || opcode == Opcode::SRAM_BIND ||
-        opcode == Opcode::SRAM_ALLOC || opcode == Opcode::SRAM_FREE ||
+        opcode == Opcode::SRAM_ALLOC || opcode == Opcode::SRAM_ALLOC_AT ||
+        opcode == Opcode::SRAM_FREE ||
         opcode == Opcode::SRAM_RESIZE || opcode == Opcode::SRAM_RENAME ||
         opcode == Opcode::SRAM_CLEAR)
         return MEM_PRIM;
@@ -283,6 +416,58 @@ int ExpectedCategory(Opcode opcode) {
 
 void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                           PrimBase &base) {
+    if (record.opcode == Opcode::ROPE_QK_EXACT ||
+        record.opcode == Opcode::ATTENTION_EXACT ||
+        record.opcode == Opcode::EMBEDDING_LOOKUP ||
+        record.opcode == Opcode::GREEDY_SAMPLE ||
+        record.opcode == Opcode::CROSS_ENTROPY_FORWARD ||
+        record.opcode == Opcode::CROSS_ENTROPY_BACKWARD ||
+        record.opcode == Opcode::SGD_UPDATE) {
+        auto *exact = dynamic_cast<Exact_stage2_prim_base *>(&base);
+        checks.Check(exact != nullptr && exact->exact_opcode() == record.opcode,
+                     "exact Stage2 target type and opcode");
+        if (exact == nullptr) return;
+        ExternalRecord lowered;
+        lowered.opcode = record.opcode;
+        if (auto *prim = dynamic_cast<Rope_qk_exact_prim *>(exact))
+            lowered.operands = prim->operands;
+        else if (auto *prim = dynamic_cast<Attention_exact_prim *>(exact))
+            lowered.operands = prim->operands;
+        else if (auto *prim = dynamic_cast<Embedding_lookup_prim *>(exact))
+            lowered.operands = prim->operands;
+        else if (auto *prim = dynamic_cast<Greedy_sample_prim *>(exact))
+            lowered.operands = prim->operands;
+        else if (auto *prim =
+                     dynamic_cast<Cross_entropy_forward_prim *>(exact))
+            lowered.operands = prim->operands;
+        else if (auto *prim =
+                     dynamic_cast<Cross_entropy_backward_prim *>(exact))
+            lowered.operands = prim->operands;
+        else if (auto *prim = dynamic_cast<Sgd_update_prim *>(exact))
+            lowered.operands = prim->operands;
+        else {
+            checks.Check(false, "exact Stage2 concrete target type");
+            return;
+        }
+        checks.Check(EncodeExternalRecord(lowered) ==
+                         EncodeExternalRecord(record),
+                     "exact Stage2 operands preserved byte-for-byte");
+        const std::vector<int> expected_inputs =
+            (record.opcode == Opcode::EMBEDDING_LOOKUP ||
+             record.opcode == Opcode::CROSS_ENTROPY_FORWARD)
+                ? std::vector<int>{1, 1}
+            : record.opcode == Opcode::CROSS_ENTROPY_BACKWARD
+                ? std::vector<int>{1, 1, 1}
+            : record.opcode == Opcode::SGD_UPDATE
+                ? std::vector<int>{1, 1}
+                : std::vector<int>{1};
+        checks.Check(exact->data_size_input == expected_inputs &&
+                         exact->data_chunk ==
+                             std::vector<std::pair<std::string, int>>{
+                                 {"output", 1}},
+                     "exact Stage2 input/output arity initialized");
+        return;
+    }
     if (OpcodeValue(record.opcode) <= kComputeOpcodeLast) {
         auto *prim = dynamic_cast<NpuBase *>(&base);
         const auto &operands = std::get<ComputeOperands>(record.operands);
@@ -307,6 +492,14 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
         }
         checks.Check(parameters_match,
                      "compute RecordSchema parameters preserved by name");
+        if (record.opcode == Opcode::SWIGLU) {
+            prim->initialize();
+            checks.Check(
+                prim->data_size_input == std::vector<int>{4} &&
+                    prim->data_chunk ==
+                        std::vector<std::pair<std::string, int>>{{"output", 2}},
+                "SWIGLU lowering initializes one concat input of 2N");
+        }
         return;
     }
     if (record.opcode == Opcode::DTE_SEND) {
@@ -367,6 +560,25 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                 prim->destination.region.empty() &&
                 prim->destination.region_offset_bytes == 0,
             "DTE_RECV P2P fields and canonical metadata preserved");
+        return;
+    }
+    if (record.opcode == Opcode::LOCAL_REDUCE) {
+        auto *prim = dynamic_cast<Collective_data_v1_prim *>(&base);
+        const auto &operands =
+            std::get<LocalReduceOperands>(record.operands);
+        checks.Check(
+            prim != nullptr &&
+                prim->mode == CollectiveDataV1PrimMode::REDUCE &&
+                prim->key == CollectiveKey{} && prim->phase_id == 0 &&
+                prim->source_address_bytes ==
+                    operands.source.absolute_address_bytes &&
+                prim->destination_address_bytes ==
+                    operands.destination.absolute_address_bytes &&
+                prim->length_bytes == operands.element_count * 2 &&
+                prim->input_count == operands.input_count &&
+                prim->dtype == CollDType::FP16 &&
+                prim->reduce_op == CollReduceOp::SUM,
+            "LOCAL_REDUCE maps explicit FP16/FP32/RNE/rank-major contract to key-zero strict Prim");
         return;
     }
     if (record.opcode == Opcode::LSU_LOAD ||
@@ -450,6 +662,7 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
     }
     if (record.opcode == Opcode::SRAM_CLEAR ||
         record.opcode == Opcode::SRAM_ALLOC ||
+        record.opcode == Opcode::SRAM_ALLOC_AT ||
         record.opcode == Opcode::SRAM_FREE ||
         record.opcode == Opcode::SRAM_RESIZE ||
         record.opcode == Opcode::SRAM_RENAME) {
@@ -458,6 +671,7 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
         if (prim == nullptr) return;
         bool fields = prim->region_name.empty() &&
                       prim->new_label.empty() &&
+                      prim->region_offset_bytes == 0 &&
                       prim->size_bytes == 0 &&
                       prim->alignment_bytes == 0 &&
                       prim->lifetime == sram::AllocationLifetime::kTask &&
@@ -470,6 +684,22 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                          operands.region_name_string_index) &&
                      prim->label == "region_" + std::to_string(
                          operands.label_symbol_index) &&
+                     prim->size_bytes == operands.size_bytes &&
+                     prim->alignment_bytes == operands.alignment_bytes &&
+                     prim->region_offset_bytes == 0 &&
+                     prim->lifetime == sram::AllocationLifetime::kTask &&
+                     prim->spillable == operands.spillable &&
+                     prim->new_label.empty();
+        } else if (record.opcode == Opcode::SRAM_ALLOC_AT) {
+            const auto &operands =
+                std::get<SramAllocAtOperands>(record.operands);
+            fields = prim->op == SramLifecycleOp::ALLOC_AT &&
+                     prim->region_name == "string_" + std::to_string(
+                         operands.region_name_string_index) &&
+                     prim->label == "region_" + std::to_string(
+                         operands.label_symbol_index) &&
+                     prim->region_offset_bytes ==
+                         operands.region_offset_bytes &&
                      prim->size_bytes == operands.size_bytes &&
                      prim->alignment_bytes == operands.alignment_bytes &&
                      prim->lifetime == sram::AllocationLifetime::kTask &&
@@ -621,7 +851,8 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 34, "P5-C2 supported opcode count");
+    checks.Check(supported == 43,
+                 "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");
     checks.Check(reserved == 1, "reserved opcode count");
@@ -778,6 +1009,47 @@ void CheckDteEndpointLowering(Checks &checks) {
         "DTE_RECV REDUCE waits for P6", "whole-artifact", [&] {
             LowerExternalRecord(ExternalRecord{Opcode::DTE_RECV, reduce},
                                 context);
+        });
+}
+
+void CheckExactStage2Wire(Checks &checks) {
+    const ExternalRecord record =
+        MakeRecord(*LookupRecordSchema(Opcode::ATTENTION_EXACT));
+    LoweredPrimList lowered = LowerExternalRecord(record, Context());
+    checks.Check(lowered.size() == 1,
+                 "exact Stage2 wire fixture lowers once");
+    if (lowered.size() != 1) return;
+    auto *source = dynamic_cast<Attention_exact_prim *>(lowered.front().get());
+    checks.Check(source != nullptr, "exact attention wire source type");
+    if (source == nullptr) return;
+    const std::vector<sc_bv<128>> wire = source->serialize();
+    checks.Check(wire.size() == 10,
+                 "exact attention wire has frozen segment count");
+    checks.Reject<std::invalid_argument>(
+        "exact attention rejects legacy transport", "strict-only", [&] {
+            (void)prim_wire::LegacyTransportSegments(wire, source->name);
+        });
+
+    std::vector<sc_bv<128>> bad = wire;
+    bad[0].range(23, 16) = sc_bv<8>(2);
+    checks.Reject<std::invalid_argument>(
+        "exact attention rejects internal wire version", "version", [&] {
+            Attention_exact_prim decoded;
+            decoded.deserialize(bad);
+        });
+    bad = wire;
+    bad[1].range(15, 8) = sc_bv<8>(0);
+    checks.Reject<std::invalid_argument>(
+        "exact attention rejects segment ordinal", "ordinal", [&] {
+            Attention_exact_prim decoded;
+            decoded.deserialize(bad);
+        });
+    bad = wire;
+    bad.back().range(127, 120) = sc_bv<8>(1);
+    checks.Reject<std::invalid_argument>(
+        "exact attention rejects nonzero wire padding", "unused", [&] {
+            Attention_exact_prim decoded;
+            decoded.deserialize(bad);
         });
 }
 
@@ -1272,6 +1544,7 @@ void CheckValidationAndOwnership(Checks &checks) {
 RecordLoweringSelfTestResult CheckIsaV1RecordLowering() {
     Checks checks;
     CheckManifestMatrix(checks);
+    CheckExactStage2Wire(checks);
     CheckDteEndpointLowering(checks);
     CheckWholeArtifactCollectiveLowering(checks);
     CheckDteDirectionsAndResolvers(checks);

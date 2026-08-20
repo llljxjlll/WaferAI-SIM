@@ -86,6 +86,15 @@ enum class PrimId : uint8_t {
 
     // Strict-only internal whole-artifact collective launch descriptor.
     COLLECTIVE_LAUNCH_V1 = 60,
+
+    // Strict Stage2 dense-forward timing primitives.
+    ROPE_QK_EXACT = 61,
+    ATTENTION_EXACT = 62,
+    EMBEDDING_LOOKUP = 63,
+    GREEDY_SAMPLE = 64,
+    CROSS_ENTROPY_FORWARD = 65,
+    CROSS_ENTROPY_BACKWARD = 66,
+    SGD_UPDATE = 67,
 };
 
 constexpr uint8_t PrimIdValue(PrimId id) {
@@ -93,4 +102,4 @@ constexpr uint8_t PrimIdValue(PrimId id) {
 }
 
 constexpr uint8_t kMaxAssignedPrimId =
-    PrimIdValue(PrimId::COLLECTIVE_LAUNCH_V1);
+    PrimIdValue(PrimId::SGD_UPDATE);

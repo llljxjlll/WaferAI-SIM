@@ -1,0 +1,1 @@
+[STAGE3 MIXED] PASS: timing_execution=1 compute_functional=0 model_functional=0 artifact_bytes=32714 sha256=4fcb5378544a83b9b61579de28405c7dff4f2f2004658deb2d9ce1cb4108b9cb records=235 relocations=429 makespan_cycles=8807 marker_digest=8ab5b8d1a1efb23a899278d309d27c3ec9caa63b16f9ba64f528a165dfad060f report_id=stage3_static_profile_runtime_report_bcf7c62766c60f22
