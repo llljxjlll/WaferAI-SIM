@@ -19,9 +19,21 @@ REGISTER_PRIM(Matmul_f, PrimId::MATMUL_F);
 void Matmul_f::initialize() {
     auto &p = param_value;
     data_size_input = {p["B"] * p["T"] * p["C"]};
+    if (program_two_input_mode_)
+        data_size_input.push_back(p["C"] * p["OC"]);
     data_chunk = {{"weight", p["C"] * p["OC"]},
                   {"bias", p["OC"]},
                   {"output", p["B"] * p["T"] * p["OC"]}};
+}
+
+void Matmul_f::prepareProgramSramBinding(PrimCoreContext &context) {
+    if (!context.program_mode_ || !context.sram_bind_pending_ ||
+        context.sram_bind_input_count_ != 2)
+        return;
+
+    enableProgramTwoInputMode();
+    initialize();
+    static_cast<CompBase &>(*this).initializeDefault();
 }
 
 void Matmul_f::taskCore(TaskCoreContext &context, string prim_name,

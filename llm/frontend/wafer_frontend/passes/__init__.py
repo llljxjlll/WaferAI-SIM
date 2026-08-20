@@ -46,6 +46,14 @@ from .lite_moe_execution import (
 from .lite_moe_n6 import build_lite_moe_n6_intent, validate_lite_moe_n6_intent
 from .lite_moe_lower_program import lower_lite_moe_n6
 from .lite_moe_link_program import link_lite_moe_n6
+from .lite_moe_backward import (
+    build_lite_moe_backward_contract,
+    build_lite_moe_backward_oracle,
+    build_lite_moe_backward_overlay,
+    validate_lite_moe_backward_overlay,
+)
+from .lite_moe_backward_lower_program import lower_lite_moe_backward_program
+from .lite_moe_backward_link_program import link_lite_moe_backward_program
 from .train_global_action import (
     build_s2_lite_train_global_action,
     build_train_global_action,
@@ -169,6 +177,12 @@ __all__ = [
     "validate_lite_moe_n6_intent",
     "lower_lite_moe_n6",
     "link_lite_moe_n6",
+    "build_lite_moe_backward_contract",
+    "build_lite_moe_backward_oracle",
+    "build_lite_moe_backward_overlay",
+    "validate_lite_moe_backward_overlay",
+    "lower_lite_moe_backward_program",
+    "link_lite_moe_backward_program",
     "build_train_global_action",
     "build_s2_lite_train_global_action",
     "lower_train",

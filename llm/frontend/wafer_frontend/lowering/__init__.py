@@ -12,6 +12,11 @@ from .lite_moe import (
     lower_lite_moe_state_load_unit,
     validate_lite_moe_fragment,
 )
+from .lite_moe_backward import (
+    lower_lite_moe_backward,
+    validate_lite_moe_backward_fragments,
+)
+from .lite_moe_backward_linker import link_lite_moe_backward_manifest
 from .standalone import NaiveStandaloneCollectiveLowering
 from .state import NaiveStateDmaLowering
 from .state_transfer import NaiveStateTransferLowering
@@ -38,6 +43,9 @@ __all__ = [
     "lower_lite_moe_n6_intent",
     "lower_lite_moe_state_load_unit",
     "validate_lite_moe_fragment",
+    "lower_lite_moe_backward",
+    "validate_lite_moe_backward_fragments",
+    "link_lite_moe_backward_manifest",
     "CoarseLowering",
     "IsaRegionLowering",
     "ManifestLinker",

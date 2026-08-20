@@ -6,6 +6,7 @@
 #include "monitor/host_envelope.h"
 #include "prims/dte_endpoint_prims.h"
 #include "prims/collective_launch_v1_prim.h"
+#include "prims/comp_prims.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "trace/Event_engine.h"
@@ -820,6 +821,13 @@ void config_helper_program::LoadProgram(
                 auto *compute = dynamic_cast<NpuBase *>(lowered.front().get());
                 if (compute == nullptr)
                     Fail("compute record lowered to a non-NpuBase Prim");
+                if (record.opcode == Opcode::MATMUL &&
+                    *pending_bind_count == 2) {
+                    auto *matmul = dynamic_cast<Matmul_f *>(compute);
+                    if (matmul == nullptr)
+                        Fail("MATMUL lowered to the wrong Prim type");
+                    matmul->enableProgramTwoInputMode();
+                }
                 compute->initialize();
                 const std::size_t actual_inputs =
                     compute->data_size_input.size();

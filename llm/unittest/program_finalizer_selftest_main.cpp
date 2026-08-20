@@ -3639,6 +3639,167 @@ void RunLiteRootedArProducedManifest() {
               << " overlay_records=" << overlay_records << '\n';
 }
 
+void RunLiteMoeBackwardProducedManifest() {
+    const std::string text((std::istreambuf_iterator<char>(std::cin)),
+                           std::istreambuf_iterator<char>());
+    const frontend::LinkedProgramManifestDto dto =
+        ProgramArtifactFinalizer::Parse(text);
+    const ProgramArtifactFinalizer finalizer;
+    const ProgramArtifact artifact = finalizer.Finalize(dto);
+    const std::vector<uint8_t> bytes = finalizer.FinalizeEncoded(text);
+    Require(bytes == finalizer.FinalizeEncoded(text) &&
+                bytes == EncodeProgramArtifact(artifact) &&
+                EncodeProgramArtifact(DecodeProgramArtifact(bytes)) == bytes,
+            "S3-Lite backward artifact is not byte deterministic");
+
+    auto leaf = [](const LinkedFragmentDto &linked)
+        -> const CommandFragmentDto & {
+        if (const auto *command = std::get_if<CommandFragmentDto>(&linked))
+            return *command;
+        return std::get<frontend::RegionManifestDto>(linked).fragment;
+    };
+    std::size_t top_inputs = 0;
+    std::size_t overlay_inputs = 0;
+    for (const frontend::ManifestInputDigestDto &digest : dto.input_digests) {
+        if (digest.kind == frontend::ManifestInputKindDto::S3_LITE_MOE) {
+            ++top_inputs;
+            Require(
+                digest.schema_version ==
+                    "wafer_frontend.s3_lite_moe_backward_lowered_program/v1alpha1",
+                "S3-Lite backward top trust version changed");
+        }
+        if (digest.kind ==
+                frontend::ManifestInputKindDto::GLOBAL_ACTION_DAG) {
+            ++overlay_inputs;
+            Require(
+                digest.schema_version ==
+                    "wafer_frontend.s3_lite_moe_backward_overlay/v1alpha1",
+                "S3-Lite backward overlay trust version changed");
+        }
+    }
+    std::map<FragmentKindDto, std::size_t> kinds;
+    std::map<Opcode, std::size_t> opcodes;
+    std::map<std::string, std::size_t> state_abis;
+    std::size_t records = 0;
+    std::size_t claims = 0;
+    for (const LinkedFragmentDto &linked : dto.fragments) {
+        const CommandFragmentDto &fragment = leaf(linked);
+        Require(std::holds_alternative<CommandFragmentDto>(linked) &&
+                    fragment.producer_pass ==
+                        "lite_moe_backward_lowering" &&
+                    fragment.source_global_dag_id ==
+                        dto.source_global_dag_id &&
+                    fragment.core_streams.size() == 1,
+                "S3-Lite backward leaf trust changed");
+        ++kinds[fragment.kind];
+        claims += fragment.claimed_action_ids.size();
+        for (const frontend::RelocatableRecordDto &record :
+             fragment.core_streams.front().records) {
+            ++records;
+            ++opcodes[record.opcode];
+        }
+        for (const frontend::StateAbiDto &state : fragment.state_abi)
+            ++state_abis[state.id];
+    }
+    Require(
+        top_inputs == 1 && overlay_inputs == 1 &&
+            dto.input_digests.size() == 33 && dto.fragments.size() == 28 &&
+            dto.core_streams.size() == 2 &&
+            dto.runtime_symbol_definitions.size() == 18 &&
+            dto.program_symbol_definitions.size() == 69 &&
+            dto.address_operand_bindings.size() == 180 &&
+            dto.state_operand_bindings.size() == 8 && records == 104 &&
+            claims == 32 &&
+            kinds == std::map<FragmentKindDto, std::size_t>{
+                         {FragmentKindDto::COARSE, 12},
+                         {FragmentKindDto::MOE_TRANSFER, 8},
+                         {FragmentKindDto::STATE_IO, 8}} &&
+            opcodes == std::map<Opcode, std::size_t>{
+                           {Opcode::SRAM_ALLOC_AT, 28},
+                           {Opcode::SRAM_FREE, 28},
+                           {Opcode::SRAM_BIND, 12},
+                           {Opcode::MATMUL, 8},
+                           {Opcode::DTE_SEND, 4},
+                           {Opcode::DTE_RECV, 4},
+                           {Opcode::DTE_WAIT, 4},
+                           {Opcode::LOCAL_REDUCE, 4},
+                           {Opcode::LSU_LOAD, 4},
+                           {Opcode::SGD_UPDATE, 4},
+                           {Opcode::LSU_STORE, 4}} &&
+            state_abis.size() == 4 &&
+            std::all_of(state_abis.begin(), state_abis.end(),
+                        [](const auto &entry) { return entry.second == 2; }),
+        "S3-Lite backward production manifest quotient changed");
+
+    Json old_top = Json::parse(text);
+    for (Json &digest : old_top["input_digests"])
+        if (digest["kind"] == "s3_lite_moe") {
+            digest["schema_version"] =
+                "wafer_frontend.s3_lite_moe_backward_lowered_program/v1alpha0";
+            break;
+        }
+    RefreshManifestIds(old_top);
+    ExpectFailure([&] { finalizer.FinalizeJson(old_top.dump()); },
+                  "restable S3-Lite backward old top schema");
+
+    Json bad_producer = Json::parse(text);
+    bad_producer["fragments"][0]["producer_pass"] = "lowering";
+    RefreshManifestIds(bad_producer);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_producer.dump()); },
+                  "restable S3-Lite backward producer");
+
+    Json bad_kind = Json::parse(text);
+    auto transfer = std::find_if(
+        bad_kind["fragments"].begin(), bad_kind["fragments"].end(),
+        [](const Json &fragment) {
+            return fragment["kind"] == "moe_transfer";
+        });
+    Require(transfer != bad_kind["fragments"].end(),
+            "S3-Lite backward fixture lacks MOE_TRANSFER");
+    (*transfer)["kind"] = "coarse";
+    RefreshManifestIds(bad_kind);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_kind.dump()); },
+                  "restable S3-Lite backward fragment kind");
+
+    auto find_record = [](Json &manifest, uint64_t opcode) -> Json & {
+        for (Json &fragment : manifest["fragments"])
+            for (Json &record : fragment["core_streams"][0]["records"])
+                if (record["opcode"] == opcode) return record;
+        throw std::runtime_error(
+            "S3-Lite backward fixture lacks requested opcode");
+    };
+    Json bad_matmul = Json::parse(text);
+    find_record(bad_matmul, 0x01)["operands"][4]["literal_value"][1] = 31;
+    RefreshManifestIds(bad_matmul);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_matmul.dump()); },
+                  "restable S3-Lite backward MATMUL shape");
+
+    Json bad_reduce = Json::parse(text);
+    find_record(bad_reduce, 0x43)["operands"][6]["literal_value"] = 3;
+    RefreshManifestIds(bad_reduce);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_reduce.dump()); },
+                  "restable S3-Lite backward reduce count");
+
+    Json bad_state = Json::parse(text);
+    bool changed_state = false;
+    for (Json &fragment : bad_state["fragments"])
+        if (!fragment["state_abi"].empty()) {
+            fragment["state_abi"][0]["access"] = "read_only";
+            changed_state = true;
+            break;
+        }
+    Require(changed_state, "S3-Lite backward fixture lacks StateABI");
+    RefreshManifestIds(bad_state);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_state.dump()); },
+                  "restable S3-Lite backward StateABI permission");
+
+    std::cout << "lite_moe_backward_bytes=" << bytes.size()
+              << " cores=" << artifact.cores.size()
+              << " records=" << records
+              << " relocations=" << artifact.relocations.size()
+              << " fragments=" << dto.fragments.size() << '\n';
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -3662,10 +3823,14 @@ int main(int argc, char **argv) {
         } else if (argc == 2 &&
                    std::string(argv[1]) == "--lite-rooted-ar-stdin") {
             RunLiteRootedArProducedManifest();
+        } else if (argc == 2 &&
+                   std::string(argv[1]) ==
+                       "--lite-moe-backward-stdin") {
+            RunLiteMoeBackwardProducedManifest();
         } else {
             throw std::runtime_error(
                 "usage: program_finalizer_selftest "
-                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin]");
+                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-moe-backward-stdin]");
         }
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

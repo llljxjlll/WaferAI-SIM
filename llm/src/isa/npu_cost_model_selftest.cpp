@@ -9,6 +9,7 @@
 #include "prims/comp_prims.h"
 #include "prims/exact_stage2_prims.h"
 #include "prims/norm_prims.h"
+#include "utils/prim_utils.h"
 
 #include <functional>
 #include <iostream>
@@ -81,6 +82,24 @@ public:
 private:
     std::vector<std::pair<int, CoreHWConfig *>> previous_;
     CoreHWConfig *hardware_ = nullptr;
+};
+
+class ScopedStrictPrimWire {
+public:
+    ScopedStrictPrimWire()
+        : previous_(prim_wire::LegacyCompatibilityEnabled()) {
+        prim_wire::SetLegacyCompatibility(false);
+    }
+
+    ~ScopedStrictPrimWire() {
+        prim_wire::SetLegacyCompatibility(previous_);
+    }
+
+    ScopedStrictPrimWire(const ScopedStrictPrimWire &) = delete;
+    ScopedStrictPrimWire &operator=(const ScopedStrictPrimWire &) = delete;
+
+private:
+    bool previous_;
 };
 
 NpuCostHardware CostHardware(PublishedNpuHardwareView hardware) {
@@ -340,6 +359,39 @@ IsaV1SelfTestResult CheckNpuCostModelSelfTest() {
         check_manual_default(
             "MATMUL", Opcode::MATMUL, prim,
             {{"B", 1}, {"T", 128}, {"C", 128}, {"OC", 128}});
+    }
+    {
+        ScopedStrictPrimWire strict_wire;
+        Matmul_f source;
+        source.param_value =
+            {{"B", 2}, {"T", 3}, {"C", 4}, {"OC", 5}};
+        source.datatype = FP16;
+        source.initialize();
+        static_cast<CompBase &>(source).initializeDefault();
+        const auto wire = source.serialize();
+
+        Matmul_f decoded;
+        decoded.deserialize(wire);
+        Check(result,
+              decoded.serialize() == wire &&
+                  decoded.data_size_input == std::vector<int>{24},
+              "MATMUL strict roundtrip retains the legacy one-input profile");
+        decoded.prim_context = manual_core;
+
+        Sram_bind_oneshot bind;
+        bind.input_count = 2;
+        bind.datapass_label.indata[0] = "matmul_wgrad_activation";
+        bind.datapass_label.indata[1] = "matmul_wgrad_gradient";
+        bind.datapass_label.outdata = "matmul_wgrad_output";
+        bind.prim_context = manual_core;
+        Check(result, bind.taskCoreDefault(context) == 0,
+              "MATMUL WGRAD installs an explicit two-input SRAM binding");
+
+        (void)decoded.taskCoreDefault(context);
+        Check(result,
+              decoded.data_size_input == std::vector<int>({24, 20}) &&
+                  !manual_core->sram_bind_pending_,
+              "MATMUL WGRAD derives exact dual-input sizes after strict roundtrip");
     }
     {
         rmsnorm_forward prim;

@@ -306,6 +306,7 @@ int NpuBase::taskCoreDefault(TaskCoreContext &context) {
     if (prim_context == nullptr)
         throw std::logic_error(name + " requires a PrimCoreContext");
     last_cost_snapshot_ = {};
+    prepareProgramSramBinding(*prim_context);
     ScopedOneShotSramBinding one_shot_binding(
         *prim_context, data_size_input.size(), name);
 

@@ -559,6 +559,27 @@ from .lite_moe_n6 import (
     LiteMoeN6Intent,
     LiteMoeStateLoadUnit,
 )
+from .lite_moe_backward import (
+    LITE_MOE_BACKWARD_CONTRACT_SCHEMA_VERSION,
+    LITE_MOE_BACKWARD_ORACLE_SCHEMA_VERSION,
+    LITE_MOE_BACKWARD_OVERLAY_SCHEMA_VERSION,
+    S3_LITE_MOE_BACKWARD_CASE_ID,
+    LiteMoeBackwardContract,
+    LiteMoeBackwardCoverage,
+    LiteMoeBackwardOracle,
+    LiteMoeBackwardOverlay,
+    LiteMoeExpertReduce,
+    LiteMoeExpertSgdStore,
+    LiteMoeRemoteGradDte,
+    LiteMoeTokenWgrad,
+    LiteMoeTrainableDownState,
+)
+from .lite_moe_backward_n6 import (
+    LITE_MOE_BACKWARD_LINKED_PROGRAM_SCHEMA_VERSION,
+    LITE_MOE_BACKWARD_LOWERED_PROGRAM_SCHEMA_VERSION,
+    LiteMoeBackwardLinkedProgram,
+    LiteMoeBackwardLoweredProgram,
+)
 from .train_forward_evidence import (
     TRAIN_FORWARD_MARKER_SCHEMA_VERSION,
     TRAIN_FORWARD_RUNTIME_REPORT_SCHEMA_VERSION,

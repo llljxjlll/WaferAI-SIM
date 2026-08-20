@@ -12,7 +12,9 @@ from ..schema.artifact_manifest import (
     CommandFragment,
     ProgramSymbolDefinition,
     ProgramSymbolKind,
+    RecordOpcode,
     RegionManifest,
+    SemanticOperandId,
     StateABI,
 )
 from ..schema.common import DType
@@ -36,6 +38,7 @@ from ..schema.lite_train_rooted_ar_n6 import (
 )
 from ..schema.lite_moe_execution import LiteMoeBufferAccess
 from ..schema.lite_moe_n6 import LiteMoeLinkedProgram
+from ..schema.lite_moe_backward_n6 import LiteMoeBackwardLinkedProgram
 from ..schema.persistent_state import PersistentStateAccess, StateKind
 from ..schema.program_io import (
     ProgramBlob,
@@ -138,6 +141,7 @@ LinkedProgramSource = (
     | S2LiteTrainLinkedProgram
     | S2LiteRootedArLinkedProgram
     | LiteMoeLinkedProgram
+    | LiteMoeBackwardLinkedProgram
 )
 
 
@@ -148,6 +152,7 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     S2LiteTrainLinkedProgram,
     S2LiteRootedArLinkedProgram,
     LiteMoeLinkedProgram,
+    LiteMoeBackwardLinkedProgram,
 )
 
 
@@ -166,6 +171,11 @@ def _lowering_contexts(
     if type(source) is LiteMoeLinkedProgram:
         raise SchemaError(
             "S3-Lite uses its dedicated execution carrier",
+            path="source",
+        )
+    if type(source) is LiteMoeBackwardLinkedProgram:
+        raise SchemaError(
+            "S3-Lite backward uses its dedicated execution carrier",
             path="source",
         )
     return ((0, source.lowering_context),)
@@ -264,6 +274,121 @@ def _semantic_uses(
                 raise SchemaError(
                     "S3-Lite BufferABI first-use ownership mismatch",
                     path="source.source.global_dag.actions",
+                )
+            result[abi_id] = ordered
+        return result  # type: ignore[return-value]
+    if type(source) is LiteMoeBackwardLinkedProgram:
+        fragments = {
+            _leaf(fragment).id: _leaf(fragment)
+            for fragment in source.manifest.fragments
+        }
+        record_order: dict[tuple[str, int, LogicalCoreRef], int] = {}
+        for stream in source.manifest.core_streams:
+            for order_index, record_ref in enumerate(stream.records):
+                record_order[
+                    (record_ref.fragment_id, record_ref.fragment_record_index, stream.logical_core)
+                ] = order_index
+        collected: dict[str, list[_LiteSemanticUse]] = {
+            abi_id: [] for abi_id in abis
+        }
+        semantic = {
+            (RecordOpcode.LSU_LOAD, SemanticOperandId.DESTINATION_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.DMA_DESTINATION, 0),
+            (RecordOpcode.DTE_SEND, SemanticOperandId.SOURCE_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.SEND_SOURCE, 0),
+            (RecordOpcode.DTE_RECV, SemanticOperandId.DESTINATION_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.RECV_DESTINATION, 0),
+            (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.REDUCE_INPUT, 0),
+            (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.DESTINATION_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.REDUCE_OUTPUT, 0),
+            (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.LSU_STORE, SemanticOperandId.SOURCE_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.DMA_SOURCE, 0),
+        }
+        sgd_ids = {item.id for item in source.source.overlay.sgd_stores}
+        use_index = 0
+        for binding in source.manifest.address_operand_bindings:
+            fragment = fragments[binding.fragment_id]
+            stream = next(
+                item for item in fragment.core_streams
+                if item.logical_core == binding.logical_core
+            )
+            record = stream.records[binding.fragment_record_index]
+            rule = semantic.get((record.opcode, binding.operand_id))
+            if (
+                rule is None
+                and record.opcode is RecordOpcode.SRAM_BIND
+                and record.source_global_action_id in sgd_ids
+                and binding.operand_id is SemanticOperandId.SRAM_BIND_OUTPUT
+            ):
+                rule = (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 0)
+            if rule is None:
+                continue
+            access, role, operand_index = rule
+            order_index = record_order.get(
+                (binding.fragment_id, binding.fragment_record_index, binding.logical_core)
+            )
+            if order_index is None:
+                raise SchemaError(
+                    "backward address binding lacks one linked-core position",
+                    path="source.manifest.address_operand_bindings",
+                )
+            for abi_id in binding.buffer_abi_ids:
+                if abi_id not in collected:
+                    raise SchemaError(
+                        "backward address binding references unknown BufferABI",
+                        path="source.manifest.address_operand_bindings",
+                    )
+                collected[abi_id].append(_LiteSemanticUse(
+                    use_index,
+                    0,
+                    record,
+                    access,
+                    role,
+                    operand_index,
+                    order_index,
+                ))
+                use_index += 1
+        by_storage: dict[str, list[BufferABI]] = {}
+        for abi in abis.values():
+            by_storage.setdefault(abi.storage_id, []).append(abi)
+        result: dict[str, tuple[_LiteSemanticUse, ...]] = {}
+        for abi_id, uses in collected.items():
+            abi = abis[abi_id]
+            if not uses and abi.ownership is BufferOwnership.OWNED:
+                uses = [
+                    use
+                    for sibling in by_storage[abi.storage_id]
+                    if sibling.ownership is BufferOwnership.ALIASED
+                    for use in collected[sibling.id]
+                ]
+            if not uses:
+                raise SchemaError(
+                    "S3-Lite backward BufferABI has no exact record semantic use",
+                    path="source.manifest.fragments",
+                )
+            ordered = tuple(sorted(uses, key=lambda item: item.order_key))
+            expected_first = (
+                BufferAccess.READ
+                if abi.ownership is BufferOwnership.BORROWED
+                else BufferAccess.WRITE
+            )
+            if ordered[0].access is not expected_first:
+                raise SchemaError(
+                    "S3-Lite backward BufferABI first-use ownership mismatch",
+                    path="source.manifest.fragments",
                 )
             result[abi_id] = ordered
         return result  # type: ignore[return-value]
@@ -822,6 +947,8 @@ def _lite_loss_gradient_seed_overrides(
 
 
 def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
+    if type(source) is LiteMoeBackwardLinkedProgram:
+        return set()
     if type(source) is LiteMoeLinkedProgram:
         resolved = _resolved_abis(source)
         terminals = {
@@ -1112,6 +1239,37 @@ def _resolved_state_abis(
                     path="source.source.intent.state_loads",
                 )
             uses[abi.id].append((action_order[unit.action_ref], StateUseAccess.READ))
+    elif type(source) is LiteMoeBackwardLinkedProgram:
+        fragments = {
+            _leaf(fragment).id: _leaf(fragment)
+            for fragment in source.manifest.fragments
+        }
+        witnessed: dict[str, set[RecordOpcode]] = {
+            abi_id: set() for abi_id in by_id
+        }
+        for binding in source.manifest.state_operand_bindings:
+            fragment = fragments[binding.fragment_id]
+            stream = next(
+                item for item in fragment.core_streams
+                if item.logical_core == binding.logical_core
+            )
+            witnessed[binding.state_abi_id].add(
+                stream.records[binding.fragment_record_index].opcode
+            )
+        for state in source.source.overlay.trainable_down_states:
+            abi = by_binding.get(state.binding.id)
+            if abi is None or witnessed.get(abi.id) != {
+                RecordOpcode.LSU_LOAD,
+                RecordOpcode.LSU_STORE,
+            }:
+                raise SchemaError(
+                    "MoE backward trainable state requires one load and one store witness",
+                    path="source.manifest.state_operand_bindings",
+                )
+            uses[abi.id].extend((
+                (state.expert_index, StateUseAccess.READ),
+                (100 + state.expert_index, StateUseAccess.WRITE),
+            ))
     else:
         flattened_action_index = 0
         for _replica_index, context in _lowering_contexts(source):
@@ -1164,7 +1322,10 @@ def _resolved_state_abis(
                 uses=abi_uses,
             )
         )
-    if type(source) is not LiteMoeLinkedProgram and (
+    if type(source) not in (
+        LiteMoeLinkedProgram,
+        LiteMoeBackwardLinkedProgram,
+    ) and (
         any(
             action.state_uses
             for _replica_index, context in _lowering_contexts(source)
@@ -1409,6 +1570,7 @@ def _initialization(
                 and item.use.operand_index == 1
                 for item in resolved.uses
             )
+            and abi.layout != "s3_lite_moe_upstream_gradient"
             else ProgramIoPurpose.ACTIVATION
         )
     elif abi.ownership is BufferOwnership.OWNED:
@@ -1529,9 +1691,12 @@ def build_timing_program_io(
         BufferOwnership.OWNED,
         "sram_expected_overrides",
     )
-    if type(source) in _TRAIN_SOURCE_TYPES and sram_expected:
+    if (
+        type(source) in _TRAIN_SOURCE_TYPES
+        or type(source) is LiteMoeBackwardLinkedProgram
+    ) and sram_expected:
         raise SchemaError(
-            "Train timing ProgramIo does not accept numeric loss expectations",
+            "Train/MoE-backward timing ProgramIo does not accept numeric SRAM expectations",
             path="sram_expected_overrides",
         )
     automatic_label_seeds = _train_label_seed_overrides(source, resolved)
@@ -1581,9 +1746,12 @@ def build_timing_program_io(
             "state_expected_overrides may reference only stored READ_WRITE state",
             path="state_expected_overrides",
         )
-    if type(source) in _LITE_TRAIN_SOURCE_TYPES and expected:
+    if (
+        type(source) in _LITE_TRAIN_SOURCE_TYPES
+        or type(source) is LiteMoeBackwardLinkedProgram
+    ) and expected:
         raise SchemaError(
-            "S2-Lite timing does not claim numeric updated-weight expectations",
+            "Lite timing does not accept caller-provided updated-weight expectations",
             path="state_expected_overrides",
         )
     for path, payloads in (
@@ -1599,7 +1767,8 @@ def build_timing_program_io(
                 )
 
     terminal_values = _terminal_value_ids(source)
-    if not terminal_values:
+    backward_hbm_terminals = type(source) is LiteMoeBackwardLinkedProgram
+    if not terminal_values and not backward_hbm_terminals:
         raise SchemaError(
             "timing ProgramIo requires at least one IR1 terminal value",
             path="source.lowering_context.ir1.values",
@@ -1659,6 +1828,14 @@ def build_timing_program_io(
         state_ref: ProgramBlob.create(payload)
         for state_ref, payload in expected.items()
     }
+    if backward_hbm_terminals:
+        expected_blobs.update(
+            (
+                state_ref,
+                ProgramBlob.create(seeds[state_ref]),
+            )
+            for state_ref in sorted(writable_refs)
+        )
     blobs.update((blob.id, blob) for blob in seed_blobs.values())
     blobs.update((blob.id, blob) for blob in expected_blobs.values())
 
@@ -1679,7 +1856,7 @@ def build_timing_program_io(
     )
     state_probes = tuple(
         _state_probe(item, expected_blobs[state_ref])
-        for state_ref in sorted(expected)
+        for state_ref in sorted(expected_blobs)
         for item in state_by_ref[state_ref]
     )
     contract = ProgramIoContract.create(

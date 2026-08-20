@@ -2820,7 +2820,8 @@ std::vector<StateTransferEndpointWitness> ValidateStateTransferFragments(
 
 void ValidateActionSequence(
     const std::vector<const RelocatableRecordDto *> &records,
-    const std::string &path) {
+    const std::string &path,
+    bool s3_lite_backward_link) {
     std::set<std::string> completed;
     std::set<std::string> allocated_once;
     std::set<std::string> freed_once;
@@ -2861,12 +2862,23 @@ void ValidateActionSequence(
                    opcode == Opcode::SGD_UPDATE;
         };
         bool valid_body = false;
-        if (suffix == cursor + 2 &&
+        if (s3_lite_backward_link && suffix == cursor + 3 &&
+            records[cursor]->opcode == Opcode::SRAM_BIND &&
+            records[cursor + 1]->opcode == Opcode::SGD_UPDATE &&
+            records[cursor + 2]->opcode == Opcode::LSU_STORE) {
+            if (records[cursor]->operands.empty() ||
+                LiteralU64(records[cursor]->operands[0], path) != 2)
+                Fail(path,
+                     "S3-Lite backward SGD SRAM_BIND must have two inputs");
+            valid_body = true;
+        } else if (suffix == cursor + 2 &&
             records[cursor]->opcode == Opcode::SRAM_BIND &&
             is_compute(records[cursor + 1]->opcode)) {
             const Opcode compute_opcode = records[cursor + 1]->opcode;
             const uint64_t expected_inputs =
                 compute_opcode == Opcode::CROSS_ENTROPY_BACKWARD ? 3 :
+                (s3_lite_backward_link &&
+                 compute_opcode == Opcode::MATMUL) ? 2 :
                 (compute_opcode == Opcode::RESIDUAL ||
                  compute_opcode == Opcode::EMBEDDING_LOOKUP ||
                  compute_opcode == Opcode::CROSS_ENTROPY_FORWARD ||
@@ -2878,6 +2890,10 @@ void ValidateActionSequence(
                      "compute SRAM_BIND input_count does not match its exact opcode ABI");
             valid_body = true;
         }
+        else if (s3_lite_backward_link && suffix == cursor + 2 &&
+                 records[cursor]->opcode == Opcode::DTE_RECV &&
+                 records[cursor + 1]->opcode == Opcode::DTE_WAIT)
+            valid_body = true;
         else if (suffix == cursor + 2 &&
                  records[cursor]->opcode == Opcode::DTE_ISSUE &&
                  records[cursor + 1]->opcode == Opcode::DTE_WAIT)
@@ -3033,10 +3049,15 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         const bool train_link = !train_inputs.empty();
         const bool s3_lite_link = !s3_lite_inputs.empty();
         const bool rooted_ar_link = !rooted_ar_inputs.empty();
+        const bool s3_lite_backward_link =
+            s3_lite_link &&
+            s3_lite_inputs.front()->schema_version ==
+                "wafer_frontend.s3_lite_moe_backward_lowered_program/v1alpha1";
         if (s3_lite_link) {
             const ManifestInputDigestDto &s3 = *s3_lite_inputs.front();
             if (s3.schema_version !=
-                "wafer_frontend.s3_lite_moe_lowered_program/v1alpha1")
+                    "wafer_frontend.s3_lite_moe_lowered_program/v1alpha1" &&
+                !s3_lite_backward_link)
                 Fail("linked_program_manifest.input_digests",
                      "S3-Lite lowered-program schema version mismatch");
             expected_inputs.emplace(s3.kind, s3.artifact_id,
@@ -3049,7 +3070,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {ManifestInputKindDto::SCHEDULE_SET,
                  "wafer_frontend.s3_lite_static_moe_schedule/v1alpha1"},
                 {ManifestInputKindDto::GLOBAL_ACTION_DAG,
-                 "wafer_frontend.s3_lite_static_moe_global/v1alpha1"},
+                 s3_lite_backward_link
+                     ? "wafer_frontend.s3_lite_moe_backward_overlay/v1alpha1"
+                     : "wafer_frontend.s3_lite_static_moe_global/v1alpha1"},
             };
             for (const auto &entry : s3_schemas) {
                 const std::set<std::string> &ids =
@@ -3127,6 +3150,14 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::size_t standalone_fragment_count = 0;
         std::set<std::string> rooted_local_dag_ids;
         std::vector<std::vector<Opcode>> rooted_overlay_sequences;
+        std::map<std::vector<Opcode>, std::size_t>
+            s3_backward_sequences;
+        std::map<FragmentKindDto, std::size_t> s3_backward_kinds;
+        std::map<Opcode, std::size_t> s3_backward_opcodes;
+        std::map<std::string, std::size_t> s3_backward_state_abis;
+        std::set<std::string> s3_backward_state_refs;
+        std::set<std::string> s3_backward_hbm_bindings;
+        std::size_t s3_backward_claims = 0;
         if (!train_link && !s3_lite_link && !rooted_ar_link) {
             for (const auto &entry : upstream_inputs)
                 expected_inputs.emplace(entry.first, entry.second.first,
@@ -3136,6 +3167,95 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         for (const LinkedFragmentDto &linked : manifest.fragments) {
             const CommandFragmentDto &fragment = Leaf(linked);
             fragment_global_dag_ids.insert(fragment.source_global_dag_id);
+            if (s3_lite_backward_link) {
+                if (!std::holds_alternative<CommandFragmentDto>(linked) ||
+                    fragment.producer_pass !=
+                        "lite_moe_backward_lowering" ||
+                    fragment.source_global_dag_id !=
+                        manifest.source_global_dag_id ||
+                    fragment.core_streams.size() != 1)
+                    Fail("linked_program_manifest.fragments",
+                         "S3-Lite backward leaf producer/source/core-stream contract mismatch");
+                s3_backward_claims += fragment.claimed_action_ids.size();
+                ++s3_backward_kinds[fragment.kind];
+                std::vector<Opcode> sequence;
+                for (const RelocatableRecordDto &record :
+                     fragment.core_streams.front().records) {
+                    sequence.push_back(record.opcode);
+                    ++s3_backward_opcodes[record.opcode];
+                    if (record.opcode == Opcode::DTE_SEND &&
+                        LiteralU64(record.operands[7],
+                                   "S3-Lite backward DTE_SEND bytes") != 32)
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward DTE_SEND must carry 32 bytes");
+                    if (record.opcode == Opcode::DTE_RECV &&
+                        LiteralU64(record.operands[6],
+                                   "S3-Lite backward DTE_RECV bytes") != 32)
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward DTE_RECV must carry 32 bytes");
+                    if ((record.opcode == Opcode::LSU_LOAD ||
+                         record.opcode == Opcode::LSU_STORE) &&
+                        LiteralU64(record.operands[1],
+                                   "S3-Lite backward LSU bytes") != 1024)
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward LSU state span must be 1024 bytes");
+                    if (record.opcode == Opcode::SRAM_BIND &&
+                        LiteralU64(record.operands[0],
+                                   "S3-Lite backward SRAM_BIND inputs") != 2)
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward compute binding must have two inputs");
+                    if (record.opcode == Opcode::MATMUL) {
+                        const std::vector<uint64_t> &parameters =
+                            LiteralU64Array(
+                                record.operands[4],
+                                "S3-Lite backward MATMUL parameters");
+                        if (LiteralU64(
+                                record.operands[0],
+                                "S3-Lite backward MATMUL dtype") != 1 ||
+                            parameters !=
+                                std::vector<uint64_t>{1, 32, 1, 16})
+                            Fail("linked_program_manifest.fragments",
+                                 "S3-Lite backward WGRAD MATMUL literals changed");
+                    }
+                    if (record.opcode == Opcode::LOCAL_REDUCE &&
+                        (LiteralU64(record.operands[0], "reduce input dtype") != 1 ||
+                         LiteralU64(record.operands[1], "reduce accumulator dtype") != 1 ||
+                         LiteralU64(record.operands[2], "reduce output dtype") != 1 ||
+                         LiteralU64(record.operands[3], "reduce op") != 1 ||
+                         LiteralU64(record.operands[4], "reduce rounding") != 0 ||
+                         LiteralU64(record.operands[5], "reduce order") != 0 ||
+                         LiteralU64(record.operands[6], "reduce input count") != 2 ||
+                         LiteralU64(record.operands[7], "reduce element count") != 512 ||
+                         LiteralU64(record.operands[8], "reduce stride") != 2048))
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward FP32 LOCAL_REDUCE literals changed");
+                    if (record.opcode == Opcode::SGD_UPDATE &&
+                        (LiteralU64(record.operands[0], "SGD weight dtype") != 1 ||
+                         LiteralU64(record.operands[1], "SGD gradient dtype") != 3 ||
+                         LiteralU64(record.operands[2], "SGD output dtype") != 1 ||
+                         LiteralU64(record.operands[3], "SGD rounding") != 0 ||
+                         LiteralU64(record.operands[7], "SGD elements") != 512 ||
+                         LiteralU64(record.operands[8], "SGD learning rate") !=
+                             UINT64_C(4562254508917369340) ||
+                         LiteralU64(record.operands[9], "SGD momentum") != 0))
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward SGD literals changed");
+                }
+                ++s3_backward_sequences[sequence];
+                for (const StateAbiDto &state : fragment.state_abi) {
+                    if (state.kind != StateKindDto::TRAINABLE_PARAMETER ||
+                        state.lifetime != StateLifetimeDto::PERSISTENT ||
+                        state.access != StateAccessDto::READ_WRITE ||
+                        state.dtype != BufferDTypeDto::FP16 ||
+                        state.size_bytes != 1024)
+                        Fail("linked_program_manifest.fragments",
+                             "S3-Lite backward StateABI contract changed");
+                    ++s3_backward_state_abis[state.id];
+                    s3_backward_state_refs.insert(state.state_ref);
+                    s3_backward_hbm_bindings.insert(
+                        state.hbm_binding_ref);
+                }
+            }
             if (rooted_ar_link) {
                 if (fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR) {
                     if (fragment.producer_pass !=
@@ -3169,6 +3289,68 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     region->fusion_plan_id,
                     "wafer_frontend.fusion_plan/v1alpha10");
             }
+        }
+        if (s3_lite_backward_link) {
+            const std::map<std::vector<Opcode>, std::size_t>
+                expected_sequences{
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::LSU_LOAD}, 4},
+                    {{Opcode::SRAM_BIND, Opcode::SGD_UPDATE,
+                      Opcode::LSU_STORE, Opcode::SRAM_FREE,
+                      Opcode::SRAM_FREE}, 4},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::DTE_SEND,
+                      Opcode::SRAM_FREE}, 4},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
+                      Opcode::DTE_WAIT}, 4},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::SRAM_ALLOC_AT,
+                      Opcode::SRAM_BIND, Opcode::MATMUL,
+                      Opcode::SRAM_FREE, Opcode::SRAM_FREE}, 4},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::SRAM_ALLOC_AT,
+                      Opcode::SRAM_ALLOC_AT, Opcode::SRAM_BIND,
+                      Opcode::MATMUL, Opcode::SRAM_FREE,
+                      Opcode::SRAM_FREE}, 2},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::SRAM_BIND,
+                      Opcode::MATMUL, Opcode::SRAM_FREE,
+                      Opcode::SRAM_FREE}, 2},
+                    {{Opcode::LOCAL_REDUCE}, 4},
+                };
+            const std::map<Opcode, std::size_t> expected_opcodes{
+                {Opcode::SRAM_ALLOC_AT, 28},
+                {Opcode::SRAM_FREE, 28},
+                {Opcode::SRAM_BIND, 12},
+                {Opcode::MATMUL, 8},
+                {Opcode::DTE_SEND, 4},
+                {Opcode::DTE_RECV, 4},
+                {Opcode::DTE_WAIT, 4},
+                {Opcode::LOCAL_REDUCE, 4},
+                {Opcode::LSU_LOAD, 4},
+                {Opcode::SGD_UPDATE, 4},
+                {Opcode::LSU_STORE, 4},
+            };
+            const std::map<FragmentKindDto, std::size_t> expected_kinds{
+                {FragmentKindDto::COARSE, 12},
+                {FragmentKindDto::MOE_TRANSFER, 8},
+                {FragmentKindDto::STATE_IO, 8},
+            };
+            if (manifest.fragments.size() != 28 ||
+                manifest.input_digests.size() != 33 ||
+                manifest.core_streams.size() != 2 ||
+                manifest.runtime_symbol_definitions.size() != 18 ||
+                manifest.program_symbol_definitions.size() != 69 ||
+                manifest.address_operand_bindings.size() != 180 ||
+                manifest.state_operand_bindings.size() != 8 ||
+                s3_backward_claims != 32 ||
+                s3_backward_kinds != expected_kinds ||
+                s3_backward_sequences != expected_sequences ||
+                s3_backward_opcodes != expected_opcodes ||
+                s3_backward_state_abis.size() != 4 ||
+                s3_backward_state_refs.size() != 4 ||
+                s3_backward_hbm_bindings.size() != 4 ||
+                std::any_of(
+                    s3_backward_state_abis.begin(),
+                    s3_backward_state_abis.end(),
+                    [](const auto &entry) { return entry.second != 2; }))
+                Fail("linked_program_manifest",
+                     "S3-Lite backward production quotient changed");
         }
         std::size_t standalone_digest_count = 0;
         for (const ManifestInputDigestDto &digest : manifest.input_digests) {
@@ -3437,6 +3619,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         std::move(endpoint));
             }
         }
+        std::map<std::string, std::set<uint64_t>>
+            s3_backward_wgrad_alias_offsets;
         for (const auto &entry : known_buffer_abi) {
             const BufferAbiDto &abi = *entry.second;
             const bool aliased = abi.ownership == BufferOwnershipDto::ALIASED;
@@ -3451,22 +3635,60 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 Fail("command_fragment.buffer_abi",
                      "aliased BufferABI references a missing canonical root");
             const BufferAbiDto &root = *root_it->second;
-            if (root.ownership == BufferOwnershipDto::ALIASED || root.alias_of ||
-                root.schedule_id != abi.schedule_id ||
-                !(root.logical_core == abi.logical_core) ||
-                root.region_ref != abi.region_ref ||
-                root.region_offset_bytes != abi.region_offset_bytes ||
-                root.size_bytes != abi.size_bytes ||
-                root.alignment_bytes != abi.alignment_bytes ||
-                root.banks != abi.banks || root.storage_id != abi.storage_id ||
-                root.dtype != abi.dtype || root.layout != abi.layout ||
-                root.tensor_slice.offset != abi.tensor_slice.offset ||
-                root.tensor_slice.shape != abi.tensor_slice.shape ||
-                root.lifetime_start > abi.lifetime_start ||
-                root.lifetime_end_exclusive < abi.lifetime_end_exclusive)
+            const bool common_geometry =
+                root.ownership != BufferOwnershipDto::ALIASED &&
+                !root.alias_of && root.schedule_id == abi.schedule_id &&
+                root.logical_core == abi.logical_core &&
+                root.region_ref == abi.region_ref &&
+                root.alignment_bytes == abi.alignment_bytes &&
+                root.banks == abi.banks &&
+                root.storage_id == abi.storage_id &&
+                root.dtype == abi.dtype &&
+                root.lifetime_start <= abi.lifetime_start &&
+                root.lifetime_end_exclusive >=
+                    abi.lifetime_end_exclusive;
+            const bool exact_full_alias =
+                common_geometry &&
+                root.region_offset_bytes == abi.region_offset_bytes &&
+                root.size_bytes == abi.size_bytes &&
+                root.layout == abi.layout &&
+                root.tensor_slice.offset == abi.tensor_slice.offset &&
+                root.tensor_slice.shape == abi.tensor_slice.shape;
+            const bool exact_backward_wgrad_slice =
+                s3_lite_backward_link && common_geometry &&
+                root.dtype == BufferDTypeDto::FP32 &&
+                root.layout == "s3_lite_moe_wgrad_root" &&
+                abi.layout == "s3_lite_moe_wgrad_root_view" &&
+                root.size_bytes == 4096 && abi.size_bytes == 2048 &&
+                root.tensor_slice.shape == std::vector<uint64_t>{1024} &&
+                abi.tensor_slice.shape == std::vector<uint64_t>{512} &&
+                std::all_of(root.tensor_slice.offset.begin(),
+                            root.tensor_slice.offset.end(),
+                            [](uint64_t value) { return value == 0; }) &&
+                std::all_of(abi.tensor_slice.offset.begin(),
+                            abi.tensor_slice.offset.end(),
+                            [](uint64_t value) { return value == 0; }) &&
+                abi.region_offset_bytes >= root.region_offset_bytes &&
+                abi.region_offset_bytes - root.region_offset_bytes <= 2048 &&
+                (abi.region_offset_bytes - root.region_offset_bytes) % 2048 ==
+                    0;
+            if (!exact_full_alias && !exact_backward_wgrad_slice)
                 Fail("command_fragment.buffer_abi",
                      "aliased BufferABI must preserve one enclosing canonical root geometry");
+            if (exact_backward_wgrad_slice)
+                s3_backward_wgrad_alias_offsets[*abi.alias_of].insert(
+                    abi.region_offset_bytes - root.region_offset_bytes);
         }
+        if (s3_lite_backward_link &&
+            (s3_backward_wgrad_alias_offsets.size() != 4 ||
+             std::any_of(
+                 s3_backward_wgrad_alias_offsets.begin(),
+                 s3_backward_wgrad_alias_offsets.end(),
+                 [](const auto &entry) {
+                     return entry.second != std::set<uint64_t>{0, 2048};
+                 })))
+            Fail("command_fragment.buffer_abi",
+                 "S3-Lite backward requires four exact contiguous WGRAD alias pairs");
         for (const auto &entry : state_transfer_endpoints) {
             const std::vector<StateTransferEndpointWitness> &endpoints =
                 entry.second;
@@ -3870,7 +4092,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 source_records.push_back(&record);
             }
             ValidateActionSequence(
-                source_records, "linked_program_manifest.core_streams");
+                source_records, "linked_program_manifest.core_streams",
+                s3_lite_backward_link);
             artifact.cores.push_back(std::move(core));
         }
         if (actual_record_refs != expected_record_refs)

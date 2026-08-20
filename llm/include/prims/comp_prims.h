@@ -105,10 +105,18 @@ public:
                   u_int64_t &dram_time, u_int64_t &exu_ops, u_int64_t &sfu_ops,
                   u_int64_t &vec_ops);
     void initialize();
+    void enableProgramTwoInputMode() noexcept {
+        program_two_input_mode_ = true;
+    }
     Matmul_f() {
         name = "Matmul_f";
         param_name.insert(param_name.end(), {"B", "T", "C", "OC"});
     }
+
+private:
+    void prepareProgramSramBinding(PrimCoreContext &context) override;
+
+    bool program_two_input_mode_ = false;
 };
 
 

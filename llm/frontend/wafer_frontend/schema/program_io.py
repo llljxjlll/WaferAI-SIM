@@ -552,40 +552,54 @@ def _manifest_allocations(
         for alias in members:
             if alias is root:
                 continue
-            if (
+            common_alias = (
                 alias.ownership is not BufferOwnership.ALIASED
                 or alias.alias_of != root.binding_id
                 or (
                     alias.schedule_id,
                     alias.logical_core,
                     alias.region_ref,
-                    alias.region_offset_bytes,
-                    alias.size_bytes,
                     alias.alignment_bytes,
                     alias.banks,
                     alias.storage_id,
-                    alias.tensor_slice.offset,
-                    alias.tensor_slice.shape,
                     alias.dtype,
-                    alias.layout,
                 )
                 != (
                     root.schedule_id,
                     root.logical_core,
                     root.region_ref,
-                    root.region_offset_bytes,
-                    root.size_bytes,
                     root.alignment_bytes,
                     root.banks,
                     root.storage_id,
-                    root.tensor_slice.offset,
-                    root.tensor_slice.shape,
                     root.dtype,
-                    root.layout,
                 )
                 or root.lifetime_start > alias.lifetime_start
                 or root.lifetime_end_exclusive
                 < alias.lifetime_end_exclusive
+            )
+            whole_root_alias = (
+                alias.region_offset_bytes,
+                alias.size_bytes,
+                alias.tensor_slice.offset,
+                alias.tensor_slice.shape,
+                alias.layout,
+            ) == (
+                root.region_offset_bytes,
+                root.size_bytes,
+                root.tensor_slice.offset,
+                root.tensor_slice.shape,
+                root.layout,
+            )
+            backward_subview_alias = (
+                manifest.producer_pass == "lite_moe_backward_manifest_linker"
+                and alias.region_offset_bytes >= root.region_offset_bytes
+                and alias.size_bytes > 0
+                and alias.region_offset_bytes + alias.size_bytes
+                <= root.region_offset_bytes + root.size_bytes
+                and alias.layout == f"{root.layout}_view"
+            )
+            if common_alias or not (
+                whole_root_alias or backward_subview_alias
             ):
                 raise SchemaError(
                     "aliased BufferABI must directly reuse its canonical root allocation",

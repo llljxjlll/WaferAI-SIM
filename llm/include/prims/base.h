@@ -124,6 +124,11 @@ public:
     NpuBase() { prim_type |= NPU_PRIM; }
 
 protected:
+    // Strict program wires intentionally carry only the published primitive
+    // parameters. Give a primitive one last chance to derive a timing-only
+    // profile from the explicit one-shot SRAM binding before arity checking.
+    virtual void prepareProgramSramBinding(PrimCoreContext &) {}
+
     // Manual program memory schedules own every SRAM allocation and transfer.
     // Legacy configurations retain the historical implicit primitive accesses.
     bool usesLegacyImplicitMemory(

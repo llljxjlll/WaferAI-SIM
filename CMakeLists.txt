@@ -740,6 +740,26 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "\\[S2-LITE DP2 ROOTED-AR\\] PASS"
         FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
 
+    set(s3_lite_moe_backward_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_lite_moe_backward_runtime.py")
+    add_test(NAME s3_lite_moe_backward_runtime
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}:${CMAKE_SOURCE_DIR}/llm/test/frontend/integration
+            ${PYTHON_EXECUTABLE} -B ${s3_lite_moe_backward_runtime_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --runtime-root ${program_runtime_dir}
+            --timeout 600)
+    set_tests_properties(s3_lite_moe_backward_runtime PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        TIMEOUT 600
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;n6;program-io;s3-lite;moe;backward;ep2;runtime"
+        PASS_REGULAR_EXPRESSION "\\[S3-LITE MOE BACKWARD\\] PASS"
+        FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
+
     set(stage3_static_profiles_runner
         "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage3_static_profiles.py")
     foreach(stage3_case IN ITEMS prefill mixed decode)

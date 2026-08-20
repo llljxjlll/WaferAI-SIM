@@ -1130,11 +1130,21 @@ void CheckSramBindLifecycle(Checks &checks) {
             config_helper_program rejected(dangling);
         });
 
-    ProgramArtifact wrong_count = Artifact(
+    ProgramArtifact dual_input_matmul = Artifact(
         {{0, {BindRecord(2), MatmulRecord()}}},
         EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {0});
+    dual_input_matmul.strings = {
+        "p3c_wgrad_activation", "p3c_wgrad_gradient",
+        "p3c_wgrad_output"};
+    config_helper_program dual_input_helper(dual_input_matmul);
+    checks.Check(!dual_input_helper.BuildConfigMessages().empty(),
+                 "explicit SRAM_BIND input_count=2 enables dual-input MATMUL");
+
+    ProgramArtifact wrong_count = Artifact(
+        {{0, {BindRecord(3), MatmulRecord()}}},
+        EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {0});
     wrong_count.strings = {"p3c_rollback_zeta", "p3c_rollback_alpha",
-                           "p3c_rollback_output"};
+                           "p3c_rollback_third", "p3c_rollback_output"};
     const auto label_table_before_failure = g_addr_label_table.table;
     checks.Reject<ConfigHelperProgramError>(
         "bind input_count mismatch", "does not match", [&] {
@@ -1142,6 +1152,16 @@ void CheckSramBindLifecycle(Checks &checks) {
         });
     checks.Check(g_addr_label_table.table == label_table_before_failure,
                  "pre-intern validation failure does not pollute label table");
+
+    ProgramArtifact wrong_opcode = Artifact(
+        {{0, {BindRecord(2), GreedySampleRecord()}}},
+        EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {0});
+    wrong_opcode.strings = {"p3c_nonmatmul_a", "p3c_nonmatmul_b",
+                            "p3c_nonmatmul_output"};
+    checks.Reject<ConfigHelperProgramError>(
+        "dual-input profile is MATMUL-only", "does not match", [&] {
+            config_helper_program rejected(wrong_opcode);
+        });
 
     ProgramArtifact post_intern_failure = Artifact(
         {{0, BoundMatmul()}}, EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {0});
