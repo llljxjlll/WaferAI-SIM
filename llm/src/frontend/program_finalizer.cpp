@@ -2818,14 +2818,16 @@ std::vector<StateTransferEndpointWitness> ValidateStateTransferFragments(
 }
 
 
-void ValidateActionSequence(
+std::set<std::string> ValidateActionSequence(
     const std::vector<const RelocatableRecordDto *> &records,
     const std::string &path,
-    bool s3_lite_backward_link) {
+    bool s3_lite_backward_link,
+    bool s3_lite_dp4_train_forward_link) {
     std::set<std::string> completed;
     std::set<std::string> allocated_once;
     std::set<std::string> freed_once;
     std::set<std::string> active;
+    std::set<std::string> terminal_tape_labels;
     std::size_t begin = 0;
     while (begin < records.size()) {
         const std::string action = records[begin]->source_global_action_id;
@@ -2836,6 +2838,7 @@ void ValidateActionSequence(
                records[end]->source_global_action_id == action)
             ++end;
         std::size_t cursor = begin;
+        std::vector<std::string> action_allocated_labels;
         while (cursor < end && records[cursor]->opcode == Opcode::SRAM_ALLOC_AT) {
             const std::string label = AddressSymbolRef(
                 *records[cursor], SemanticOperandId::LABEL_SYMBOL);
@@ -2843,6 +2846,7 @@ void ValidateActionSequence(
                 !active.insert(label).second)
                 Fail(path,
                      "SRAM_ALLOC_AT label must be globally unique and inactive on its final core stream");
+            action_allocated_labels.push_back(label);
             ++cursor;
         }
         std::size_t suffix = end;
@@ -2925,6 +2929,17 @@ void ValidateActionSequence(
         }
         if (!valid_body)
             Fail(path, "action has a non-canonical mixed record body");
+        const bool terminal_tape =
+            s3_lite_dp4_train_forward_link && suffix == end &&
+            action_allocated_labels.size() == 1 && suffix == cursor + 2 &&
+            records[cursor]->opcode == Opcode::DTE_ISSUE &&
+            records[cursor + 1]->opcode == Opcode::DTE_WAIT;
+        if (terminal_tape) {
+            const std::string &label = action_allocated_labels.front();
+            if (active.erase(label) != 1 ||
+                !terminal_tape_labels.insert(label).second)
+                Fail(path, "DP4 MoE terminal tape label is not unique/active");
+        }
         cursor = suffix;
         while (cursor < end) {
             const std::string label = AddressSymbolRef(
@@ -2937,9 +2952,14 @@ void ValidateActionSequence(
         }
         begin = end;
     }
-    if (!active.empty() || allocated_once != freed_once)
+    std::set<std::string> retired = freed_once;
+    retired.insert(terminal_tape_labels.begin(), terminal_tape_labels.end());
+    if (!active.empty() || allocated_once != retired ||
+        (s3_lite_dp4_train_forward_link && terminal_tape_labels.size() != 2) ||
+        (!s3_lite_dp4_train_forward_link && !terminal_tape_labels.empty()))
         Fail(path,
              "final core stream ends with dangling TASK SRAM labels");
+    return terminal_tape_labels;
 }
 
 std::vector<uint64_t> RemapCores(
@@ -3053,15 +3073,32 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             rooted_ar_link &&
             rooted_ar_inputs.front()->schema_version ==
                 "wafer_frontend.s2_lite_dp4_tree_ar_lowered_program/v1alpha1";
-        const bool s3_lite_backward_link =
+        const bool s3_lite_dp4_infer_link =
             s3_lite_link &&
             s3_lite_inputs.front()->schema_version ==
-                "wafer_frontend.s3_lite_moe_backward_lowered_program/v1alpha1";
+                "wafer_frontend.s3_lite_moe_dp4_infer_lowered_program/v1alpha1";
+        const bool s3_lite_dp4_train_forward_link =
+            s3_lite_link &&
+            s3_lite_inputs.front()->schema_version ==
+                "wafer_frontend.s3_lite_moe_dp4_train_forward_lowered_program/v1alpha1";
+        const bool s3_lite_dp4_backward_link =
+            s3_lite_link &&
+            s3_lite_inputs.front()->schema_version ==
+                "wafer_frontend.s3_lite_moe_dp4_backward_lowered_program/v1alpha1";
+        const bool s3_lite_dp4_link =
+            s3_lite_dp4_infer_link || s3_lite_dp4_train_forward_link ||
+            s3_lite_dp4_backward_link;
+        const bool s3_lite_backward_link =
+            s3_lite_dp4_backward_link ||
+            (s3_lite_link &&
+             s3_lite_inputs.front()->schema_version ==
+                "wafer_frontend.s3_lite_moe_backward_lowered_program/v1alpha1");
         if (s3_lite_link) {
             const ManifestInputDigestDto &s3 = *s3_lite_inputs.front();
             if (s3.schema_version !=
                     "wafer_frontend.s3_lite_moe_lowered_program/v1alpha1" &&
-                !s3_lite_backward_link)
+                !s3_lite_backward_link && !s3_lite_dp4_infer_link &&
+                !s3_lite_dp4_train_forward_link)
                 Fail("linked_program_manifest.input_digests",
                      "S3-Lite lowered-program schema version mismatch");
             expected_inputs.emplace(s3.kind, s3.artifact_id,
@@ -3070,11 +3107,21 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {ManifestInputKindDto::IR1,
                  "wafer_frontend.ir1/v1alpha14"},
                 {ManifestInputKindDto::IR2_PROJECTION,
-                 "wafer_frontend.s3_lite_static_moe_projection/v1alpha1"},
+                 s3_lite_dp4_link
+                     ? "wafer_frontend.s3_lite_moe_dp4_projection/v1alpha1"
+                     : "wafer_frontend.s3_lite_static_moe_projection/v1alpha1"},
                 {ManifestInputKindDto::SCHEDULE_SET,
-                 "wafer_frontend.s3_lite_static_moe_schedule/v1alpha1"},
+                 s3_lite_dp4_link
+                     ? "wafer_frontend.s3_lite_moe_dp4_schedule/v1alpha1"
+                     : "wafer_frontend.s3_lite_static_moe_schedule/v1alpha1"},
                 {ManifestInputKindDto::GLOBAL_ACTION_DAG,
-                 s3_lite_backward_link
+                 s3_lite_dp4_backward_link
+                     ? "wafer_frontend.s3_lite_moe_dp4_backward/v1alpha1"
+                     : s3_lite_dp4_train_forward_link
+                     ? "wafer_frontend.s3_lite_moe_dp4_train_forward/v1alpha1"
+                     : s3_lite_dp4_infer_link
+                     ? "wafer_frontend.s3_lite_moe_dp4_global/v1alpha1"
+                     : s3_lite_backward_link
                      ? "wafer_frontend.s3_lite_moe_backward_overlay/v1alpha1"
                      : "wafer_frontend.s3_lite_static_moe_global/v1alpha1"},
             };
@@ -3166,6 +3213,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::set<std::string> s3_backward_state_refs;
         std::set<std::string> s3_backward_hbm_bindings;
         std::size_t s3_backward_claims = 0;
+        std::map<FragmentKindDto, std::size_t> s3_dp4_kinds;
+        std::map<Opcode, std::size_t> s3_dp4_opcodes;
+        std::map<std::string, std::size_t> s3_dp4_producers;
+        std::size_t s3_dp4_claims = 0;
         if (!train_link && !s3_lite_link && !rooted_ar_link) {
             for (const auto &entry : upstream_inputs)
                 expected_inputs.emplace(entry.first, entry.second.first,
@@ -3177,10 +3228,45 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             for (const CoreFragmentStreamDto &stream : fragment.core_streams)
                 all_fragment_records += stream.records.size();
             fragment_global_dag_ids.insert(fragment.source_global_dag_id);
+            if (s3_lite_dp4_link) {
+                if (!std::holds_alternative<CommandFragmentDto>(linked) ||
+                    fragment.source_global_dag_id !=
+                        manifest.source_global_dag_id ||
+                    fragment.core_streams.size() != 1)
+                    Fail("linked_program_manifest.fragments",
+                         "DP4 MoE leaf source/core-stream contract changed");
+                ++s3_dp4_kinds[fragment.kind];
+                ++s3_dp4_producers[fragment.producer_pass];
+                s3_dp4_claims += fragment.claimed_action_ids.size();
+                for (const RelocatableRecordDto &record :
+                     fragment.core_streams.front().records) {
+                    ++s3_dp4_opcodes[record.opcode];
+                    if (record.opcode == Opcode::DTE_SEND &&
+                        LiteralU64(record.operands[7],
+                                   "DP4 MoE DTE_SEND bytes") != 32)
+                        Fail("linked_program_manifest.fragments",
+                             "DP4 MoE DTE_SEND must carry 32 bytes");
+                    if (record.opcode == Opcode::DTE_RECV &&
+                        LiteralU64(record.operands[6],
+                                   "DP4 MoE DTE_RECV bytes") != 32)
+                        Fail("linked_program_manifest.fragments",
+                             "DP4 MoE DTE_RECV must carry 32 bytes");
+                    if (record.opcode == Opcode::DTE_ISSUE &&
+                        (!s3_lite_dp4_train_forward_link ||
+                         LiteralU64(record.operands[2],
+                                    "DP4 MoE tape payload bits") != 512 ||
+                         LiteralU64(record.operands[3],
+                                    "DP4 MoE tape bytes") != 64))
+                        Fail("linked_program_manifest.fragments",
+                             "DP4 MoE tape DTE_ISSUE must carry 64 bytes");
+                }
+            }
             if (s3_lite_backward_link) {
                 if (!std::holds_alternative<CommandFragmentDto>(linked) ||
                     fragment.producer_pass !=
-                        "lite_moe_backward_lowering" ||
+                        (s3_lite_dp4_backward_link
+                             ? "lite_moe_dp4_backward_lowering"
+                             : "lite_moe_backward_lowering") ||
                     fragment.source_global_dag_id !=
                         manifest.source_global_dag_id ||
                     fragment.core_streams.size() != 1)
@@ -3331,7 +3417,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         }
         if (s3_lite_backward_link) {
             const std::map<std::vector<Opcode>, std::size_t>
-                expected_sequences{
+                legacy_expected_sequences{
                     {{Opcode::SRAM_ALLOC_AT, Opcode::LSU_LOAD}, 4},
                     {{Opcode::SRAM_BIND, Opcode::SGD_UPDATE,
                       Opcode::LSU_STORE, Opcode::SRAM_FREE,
@@ -3352,7 +3438,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                       Opcode::SRAM_FREE}, 2},
                     {{Opcode::LOCAL_REDUCE}, 4},
                 };
-            const std::map<Opcode, std::size_t> expected_opcodes{
+            const std::map<std::vector<Opcode>, std::size_t>
+                dp4_expected_sequences{
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::LSU_LOAD}, 4},
+                    {{Opcode::SRAM_BIND, Opcode::SGD_UPDATE,
+                      Opcode::LSU_STORE, Opcode::SRAM_FREE,
+                      Opcode::SRAM_FREE}, 4},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::DTE_SEND,
+                      Opcode::SRAM_FREE}, 6},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::DTE_RECV,
+                      Opcode::DTE_WAIT}, 6},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::SRAM_ALLOC_AT,
+                      Opcode::SRAM_BIND, Opcode::MATMUL,
+                      Opcode::SRAM_FREE, Opcode::SRAM_FREE}, 4},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::SRAM_ALLOC_AT,
+                      Opcode::SRAM_ALLOC_AT, Opcode::SRAM_BIND,
+                      Opcode::MATMUL, Opcode::SRAM_FREE,
+                      Opcode::SRAM_FREE}, 1},
+                    {{Opcode::SRAM_ALLOC_AT, Opcode::SRAM_BIND,
+                      Opcode::MATMUL, Opcode::SRAM_FREE,
+                      Opcode::SRAM_FREE}, 3},
+                    {{Opcode::LOCAL_REDUCE}, 4},
+                };
+            const std::map<Opcode, std::size_t> legacy_expected_opcodes{
                 {Opcode::SRAM_ALLOC_AT, 28},
                 {Opcode::SRAM_FREE, 28},
                 {Opcode::SRAM_BIND, 12},
@@ -3365,22 +3473,66 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {Opcode::SGD_UPDATE, 4},
                 {Opcode::LSU_STORE, 4},
             };
-            const std::map<FragmentKindDto, std::size_t> expected_kinds{
+            const std::map<Opcode, std::size_t> dp4_expected_opcodes{
+                {Opcode::SRAM_ALLOC_AT, 30},
+                {Opcode::SRAM_FREE, 30},
+                {Opcode::SRAM_BIND, 12},
+                {Opcode::MATMUL, 8},
+                {Opcode::DTE_SEND, 6},
+                {Opcode::DTE_RECV, 6},
+                {Opcode::DTE_WAIT, 6},
+                {Opcode::LOCAL_REDUCE, 4},
+                {Opcode::LSU_LOAD, 4},
+                {Opcode::SGD_UPDATE, 4},
+                {Opcode::LSU_STORE, 4},
+            };
+            const std::map<FragmentKindDto, std::size_t> legacy_expected_kinds{
                 {FragmentKindDto::COARSE, 12},
                 {FragmentKindDto::MOE_TRANSFER, 8},
                 {FragmentKindDto::STATE_IO, 8},
             };
-            if (manifest.fragments.size() != 28 ||
-                manifest.input_digests.size() != 33 ||
-                manifest.core_streams.size() != 2 ||
-                manifest.runtime_symbol_definitions.size() != 18 ||
-                manifest.program_symbol_definitions.size() != 69 ||
-                manifest.address_operand_bindings.size() != 180 ||
+            const std::map<FragmentKindDto, std::size_t> dp4_expected_kinds{
+                {FragmentKindDto::COARSE, 12},
+                {FragmentKindDto::MOE_TRANSFER, 12},
+                {FragmentKindDto::STATE_IO, 8},
+            };
+            const std::size_t expected_fragments =
+                s3_lite_dp4_backward_link ? 32 : 28;
+            const std::size_t expected_inputs =
+                s3_lite_dp4_backward_link ? 37 : 33;
+            const std::size_t expected_cores =
+                s3_lite_dp4_backward_link ? 4 : 2;
+            const std::size_t expected_runtime_definitions =
+                s3_lite_dp4_backward_link ? 28 : 18;
+            const std::size_t expected_program_definitions =
+                s3_lite_dp4_backward_link ? 73 : 69;
+            const std::size_t expected_address_bindings =
+                s3_lite_dp4_backward_link ? 190 : 180;
+            const std::size_t expected_claims =
+                s3_lite_dp4_backward_link ? 38 : 32;
+            if (manifest.fragments.size() != expected_fragments ||
+                manifest.input_digests.size() != expected_inputs ||
+                manifest.core_streams.size() != expected_cores ||
+                manifest.runtime_symbol_definitions.size() !=
+                    expected_runtime_definitions ||
+                manifest.program_symbol_definitions.size() !=
+                    expected_program_definitions ||
+                manifest.address_operand_bindings.size() !=
+                    expected_address_bindings ||
                 manifest.state_operand_bindings.size() != 8 ||
-                s3_backward_claims != 32 ||
-                s3_backward_kinds != expected_kinds ||
-                s3_backward_sequences != expected_sequences ||
-                s3_backward_opcodes != expected_opcodes ||
+                s3_backward_claims != expected_claims ||
+                s3_backward_kinds !=
+                    (s3_lite_dp4_backward_link
+                         ? dp4_expected_kinds
+                         : legacy_expected_kinds) ||
+                s3_backward_sequences !=
+                    (s3_lite_dp4_backward_link
+                         ? dp4_expected_sequences
+                         : legacy_expected_sequences) ||
+                s3_backward_opcodes !=
+                    (s3_lite_dp4_backward_link
+                         ? dp4_expected_opcodes
+                         : legacy_expected_opcodes) ||
                 s3_backward_state_abis.size() != 4 ||
                 s3_backward_state_refs.size() != 4 ||
                 s3_backward_hbm_bindings.size() != 4 ||
@@ -3390,6 +3542,80 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     [](const auto &entry) { return entry.second != 2; }))
                 Fail("linked_program_manifest",
                      "S3-Lite backward production quotient changed");
+        }
+        if (s3_lite_dp4_link) {
+            const std::map<FragmentKindDto, std::size_t> infer_kinds{
+                {FragmentKindDto::COARSE, 32},
+                {FragmentKindDto::MOE_TRANSFER, 24},
+                {FragmentKindDto::STATE_IO, 24},
+            };
+            const std::map<FragmentKindDto, std::size_t> train_forward_kinds{
+                {FragmentKindDto::COARSE, 40},
+                {FragmentKindDto::MOE_TRANSFER, 24},
+                {FragmentKindDto::STATE_IO, 24},
+            };
+            const std::map<FragmentKindDto, std::size_t> backward_kinds{
+                {FragmentKindDto::COARSE, 12},
+                {FragmentKindDto::MOE_TRANSFER, 12},
+                {FragmentKindDto::STATE_IO, 8},
+            };
+            const std::map<Opcode, std::size_t> infer_opcodes{
+                {Opcode::SRAM_ALLOC_AT, 68}, {Opcode::SRAM_FREE, 68},
+                {Opcode::SRAM_BIND, 32}, {Opcode::MATMUL, 24},
+                {Opcode::SWIGLU, 8}, {Opcode::DTE_SEND, 12},
+                {Opcode::DTE_RECV, 12}, {Opcode::DTE_WAIT, 12},
+                {Opcode::LSU_LOAD, 24},
+            };
+            const std::map<Opcode, std::size_t> train_forward_opcodes{
+                {Opcode::SRAM_ALLOC_AT, 76}, {Opcode::SRAM_FREE, 68},
+                {Opcode::SRAM_BIND, 32}, {Opcode::MATMUL, 24},
+                {Opcode::SWIGLU, 8}, {Opcode::DTE_ISSUE, 8},
+                {Opcode::DTE_SEND, 12}, {Opcode::DTE_RECV, 12},
+                {Opcode::DTE_WAIT, 20}, {Opcode::LSU_LOAD, 24},
+            };
+            const std::map<Opcode, std::size_t> backward_opcodes{
+                {Opcode::SRAM_ALLOC_AT, 30}, {Opcode::SRAM_FREE, 30},
+                {Opcode::SRAM_BIND, 12}, {Opcode::MATMUL, 8},
+                {Opcode::DTE_SEND, 6}, {Opcode::DTE_RECV, 6},
+                {Opcode::DTE_WAIT, 6}, {Opcode::LOCAL_REDUCE, 4},
+                {Opcode::LSU_LOAD, 4}, {Opcode::SGD_UPDATE, 4},
+                {Opcode::LSU_STORE, 4},
+            };
+            const bool infer = s3_lite_dp4_infer_link;
+            const bool train_forward = s3_lite_dp4_train_forward_link;
+            const std::size_t fragments = infer ? 80 : train_forward ? 88 : 32;
+            const std::size_t records = infer ? 260 : train_forward ? 284 : 114;
+            const std::size_t claims = infer ? 92 : train_forward ? 100 : 38;
+            const std::size_t inputs = infer ? 85 : train_forward ? 93 : 37;
+            const std::size_t runtime_defs = infer ? 52 : train_forward ? 60 : 28;
+            const std::size_t program_defs = infer ? 149 : train_forward ? 165 : 73;
+            const std::size_t address_bindings = infer ? 404 : train_forward ? 436 : 190;
+            const std::size_t state_bindings = infer ? 24 : train_forward ? 24 : 8;
+            const std::map<FragmentKindDto, std::size_t> &expected_kinds =
+                infer ? infer_kinds : train_forward ? train_forward_kinds : backward_kinds;
+            const std::map<Opcode, std::size_t> &expected_opcodes =
+                infer ? infer_opcodes : train_forward ? train_forward_opcodes : backward_opcodes;
+            const std::map<std::string, std::size_t> expected_producers =
+                infer
+                    ? std::map<std::string, std::size_t>{{"lite_moe_dp4_infer_lowering", 80}}
+                    : train_forward
+                    ? std::map<std::string, std::size_t>{
+                          {"lite_moe_dp4_infer_lowering", 80},
+                          {"lite_moe_dp4_train_forward_lowering", 8}}
+                    : std::map<std::string, std::size_t>{{"lite_moe_dp4_backward_lowering", 32}};
+            if (manifest.fragments.size() != fragments ||
+                all_fragment_records != records ||
+                manifest.input_digests.size() != inputs ||
+                manifest.core_streams.size() != 4 ||
+                manifest.runtime_symbol_definitions.size() != runtime_defs ||
+                manifest.program_symbol_definitions.size() != program_defs ||
+                manifest.address_operand_bindings.size() != address_bindings ||
+                manifest.state_operand_bindings.size() != state_bindings ||
+                s3_dp4_claims != claims || s3_dp4_kinds != expected_kinds ||
+                s3_dp4_opcodes != expected_opcodes ||
+                s3_dp4_producers != expected_producers)
+                Fail("linked_program_manifest",
+                     "DP4 MoE production quotient changed");
         }
         std::size_t standalone_digest_count = 0;
         for (const ManifestInputDigestDto &digest : manifest.input_digests) {
@@ -4164,9 +4390,30 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     "linked_program_manifest.core_streams.record"));
                 source_records.push_back(&record);
             }
-            ValidateActionSequence(
-                source_records, "linked_program_manifest.core_streams",
-                s3_lite_backward_link);
+            const std::set<std::string> terminal_tape_labels =
+                ValidateActionSequence(
+                    source_records, "linked_program_manifest.core_streams",
+                    s3_lite_backward_link,
+                    s3_lite_dp4_train_forward_link);
+            std::size_t persistent_tape_allocations = 0;
+            for (std::size_t index = 0; index < source_records.size(); ++index) {
+                if (source_records[index]->opcode != Opcode::SRAM_ALLOC_AT)
+                    continue;
+                const std::string label = AddressSymbolRef(
+                    *source_records[index], SemanticOperandId::LABEL_SYMBOL);
+                if (terminal_tape_labels.count(label) == 0)
+                    continue;
+                auto &operands = std::get<SramAllocAtOperands>(
+                    core.records[index].operands);
+                if (operands.lifetime != SramLifetime::TASK)
+                    Fail("linked_program_manifest.core_streams",
+                         "terminal tape allocation did not lower from TASK lifetime");
+                operands.lifetime = SramLifetime::PERSISTENT;
+                ++persistent_tape_allocations;
+            }
+            if (persistent_tape_allocations != terminal_tape_labels.size())
+                Fail("linked_program_manifest.core_streams",
+                     "terminal tape persistence did not cover exact labels");
             artifact.cores.push_back(std::move(core));
         }
         if (actual_record_refs != expected_record_refs)
@@ -4753,7 +5000,12 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     uses[0].fragment_id == uses[1].fragment_id &&
                     fragments.at(uses[0].fragment_id)->kind ==
                         FragmentKindDto::S2_LITE_ROOTED_AR;
-                if (local && !rooted_local &&
+                const bool dp4_tape_local =
+                    local && s3_lite_dp4_train_forward_link &&
+                    uses[0].fragment_id == uses[1].fragment_id &&
+                    fragments.at(uses[0].fragment_id)->kind ==
+                        FragmentKindDto::COARSE;
+                if (local && !rooted_local && !dp4_tape_local &&
                     definition.destination_action_id)
                     Fail("runtime_symbol_definition",
                          "local ISSUE/WAIT token must not name a destination action");
@@ -4775,6 +5027,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     (remote && definition.destination_action_id !=
                         std::optional<std::string>(wait->action_id)) ||
                     (rooted_local && definition.destination_action_id !=
+                        std::optional<std::string>(wait->action_id)) ||
+                    (dp4_tape_local && definition.destination_action_id !=
                         std::optional<std::string>(wait->action_id)) ||
                     (local && producer->action_id != wait->action_id))
                     Fail("runtime_symbol_definition",

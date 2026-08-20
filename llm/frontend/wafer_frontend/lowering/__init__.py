@@ -55,3 +55,34 @@ __all__ = [
     "StateTransferLowering",
     "StandaloneCollectiveLowering",
 ]
+from .lite_moe_dp4 import (
+    build_lite_moe_dp4_tape_buffer_abis,
+    lower_lite_moe_dp4_compute_unit,
+    lower_lite_moe_dp4_dte_unit,
+    lower_lite_moe_dp4_infer,
+    lower_lite_moe_dp4_state_load_unit,
+    lower_lite_moe_dp4_tape_copy,
+    lower_lite_moe_dp4_train_forward_tapes,
+    rebase_lite_moe_dp4_infer_fragments,
+    validate_lite_moe_dp4_infer_fragment,
+)
+from .lite_moe_dp4_backward import (
+    lower_lite_moe_dp4_backward,
+    validate_lite_moe_dp4_backward_fragments,
+)
+from .lite_moe_dp4_linker import (
+    link_lite_moe_dp4_infer_manifest,
+    link_lite_moe_dp4_train_forward_manifest,
+)
+from .lite_moe_dp4_backward_linker import link_lite_moe_dp4_backward_manifest
+from .lite_moe_dp4 import __all__ as _lite_moe_dp4_all
+from .lite_moe_dp4_backward import __all__ as _lite_moe_dp4_backward_all
+from .lite_moe_dp4_linker import __all__ as _lite_moe_dp4_linker_all
+from .lite_moe_dp4_backward_linker import __all__ as _lite_moe_dp4_backward_linker_all
+
+__all__ += [
+    *_lite_moe_dp4_all,
+    *_lite_moe_dp4_backward_all,
+    *_lite_moe_dp4_linker_all,
+    *_lite_moe_dp4_backward_linker_all,
+]

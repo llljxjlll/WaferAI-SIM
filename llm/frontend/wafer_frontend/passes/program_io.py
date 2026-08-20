@@ -41,6 +41,12 @@ from ..schema.lite_train_dp4_n6 import (
     S2LiteDp4TreeArLinkedProgram,
 )
 from ..schema.lite_moe_execution import LiteMoeBufferAccess
+from ..schema.lite_moe_dp4_execution import LiteMoeDp4BufferAccess
+from ..schema.lite_moe_dp4_n6 import (
+    LiteMoeDp4BackwardLinkedProgram,
+    LiteMoeDp4InferLinkedProgram,
+    LiteMoeDp4TrainForwardLinkedProgram,
+)
 from ..schema.lite_moe_n6 import LiteMoeLinkedProgram
 from ..schema.lite_moe_backward_n6 import LiteMoeBackwardLinkedProgram
 from ..schema.persistent_state import PersistentStateAccess, StateKind
@@ -147,6 +153,9 @@ LinkedProgramSource = (
     | S2LiteDp4TreeArLinkedProgram
     | LiteMoeLinkedProgram
     | LiteMoeBackwardLinkedProgram
+    | LiteMoeDp4InferLinkedProgram
+    | LiteMoeDp4TrainForwardLinkedProgram
+    | LiteMoeDp4BackwardLinkedProgram
 )
 
 
@@ -159,6 +168,9 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     S2LiteDp4TreeArLinkedProgram,
     LiteMoeLinkedProgram,
     LiteMoeBackwardLinkedProgram,
+    LiteMoeDp4InferLinkedProgram,
+    LiteMoeDp4TrainForwardLinkedProgram,
+    LiteMoeDp4BackwardLinkedProgram,
 )
 
 
@@ -185,6 +197,15 @@ def _lowering_contexts(
     if type(source) is LiteMoeBackwardLinkedProgram:
         raise SchemaError(
             "S3-Lite backward uses its dedicated execution carrier",
+            path="source",
+        )
+    if type(source) in (
+        LiteMoeDp4InferLinkedProgram,
+        LiteMoeDp4TrainForwardLinkedProgram,
+        LiteMoeDp4BackwardLinkedProgram,
+    ):
+        raise SchemaError(
+            "S3-Lite DP4 uses its dedicated execution carrier",
             path="source",
         )
     return ((0, source.lowering_context),)
@@ -228,16 +249,26 @@ def _semantic_uses(
     source: LinkedProgramSource,
     abis: dict[str, BufferABI],
 ) -> dict[str, tuple[_SemanticUse, ...]]:
-    if type(source) is LiteMoeLinkedProgram:
+    if type(source) in (
+        LiteMoeLinkedProgram,
+        LiteMoeDp4InferLinkedProgram,
+        LiteMoeDp4TrainForwardLinkedProgram,
+    ):
         by_binding = {abi.binding_id: abi for abi in abis.values()}
+        if type(source) is LiteMoeDp4InferLinkedProgram:
+            execution = source.source.source
+        elif type(source) is LiteMoeDp4TrainForwardLinkedProgram:
+            execution = source.source.source.forward
+        else:
+            execution = source.source
         placements = {
             placement.task_ref: placement
-            for placement in source.source.schedule.placements
+            for placement in execution.schedule.placements
         }
         collected: dict[str, list[_LiteSemanticUse]] = {
             abi_id: [] for abi_id in abis
         }
-        for action_index, action in enumerate(source.source.global_dag.actions):
+        for action_index, action in enumerate(execution.global_dag.actions):
             placement = placements.get(action.task_ref)
             if placement is None:
                 raise SchemaError(
@@ -253,7 +284,10 @@ def _semantic_uses(
                     )
                 access = (
                     BufferAccess.READ
-                    if use.access is LiteMoeBufferAccess.READ
+                    if use.access in (
+                        LiteMoeBufferAccess.READ,
+                        LiteMoeDp4BufferAccess.READ,
+                    )
                     else BufferAccess.WRITE
                 )
                 collected[abi.id].append(_LiteSemanticUse(
@@ -264,6 +298,52 @@ def _semantic_uses(
                     BufferUseRole.COMP_INPUT if access is BufferAccess.READ else BufferUseRole.COMP_OUTPUT,
                     0,
                     placement.ordinal,
+                ))
+        if type(source) is LiteMoeDp4TrainForwardLinkedProgram:
+            action_order: dict[str, tuple[LogicalCoreRef, int]] = {}
+            for stream in source.manifest.core_streams:
+                for order_index, record_ref in enumerate(stream.records):
+                    previous = action_order.get(record_ref.source_global_action_id)
+                    if previous is None or order_index < previous[1]:
+                        action_order[record_ref.source_global_action_id] = (
+                            stream.logical_core,
+                            order_index,
+                        )
+            base = len(execution.global_dag.actions)
+            for copy_index, copy in enumerate(source.source.source.tape_copies):
+                order = action_order.get(copy.id)
+                source_abi = by_binding.get(copy.source_buffer_ref)
+                destination_abi = by_binding.get(copy.destination_buffer_ref)
+                if (
+                    order is None
+                    or source_abi is None
+                    or destination_abi is None
+                    or source_abi.logical_core != order[0]
+                    or destination_abi.logical_core != order[0]
+                    or source_abi.size_bytes != copy.bytes
+                    or destination_abi.size_bytes != copy.bytes
+                ):
+                    raise SchemaError(
+                        "DP4 tape copy lacks exact linked BufferABI/core closure",
+                        path="source.source.source.tape_copies",
+                    )
+                collected[source_abi.id].append(_LiteSemanticUse(
+                    base + copy_index,
+                    0,
+                    copy,
+                    BufferAccess.READ,
+                    BufferUseRole.LOCAL_COPY_SOURCE,
+                    0,
+                    order[1],
+                ))
+                collected[destination_abi.id].append(_LiteSemanticUse(
+                    base + copy_index,
+                    1,
+                    copy,
+                    BufferAccess.WRITE,
+                    BufferUseRole.LOCAL_COPY_DESTINATION,
+                    0,
+                    order[1],
                 ))
         result = {}
         for abi_id, uses in collected.items():
@@ -287,7 +367,10 @@ def _semantic_uses(
                 )
             result[abi_id] = ordered
         return result  # type: ignore[return-value]
-    if type(source) is LiteMoeBackwardLinkedProgram:
+    if type(source) in (
+        LiteMoeBackwardLinkedProgram,
+        LiteMoeDp4BackwardLinkedProgram,
+    ):
         fragments = {
             _leaf(fragment).id: _leaf(fragment)
             for fragment in source.manifest.fragments
@@ -327,7 +410,12 @@ def _semantic_uses(
             (RecordOpcode.LSU_STORE, SemanticOperandId.SOURCE_ADDRESS):
                 (BufferAccess.READ, BufferUseRole.DMA_SOURCE, 0),
         }
-        sgd_ids = {item.id for item in source.source.overlay.sgd_stores}
+        overlay = (
+            source.source.source
+            if type(source) is LiteMoeDp4BackwardLinkedProgram
+            else source.source.overlay
+        )
+        sgd_ids = {item.id for item in overlay.sgd_stores}
         use_index = 0
         for binding in source.manifest.address_operand_bindings:
             fragment = fragments[binding.fragment_id]
@@ -983,6 +1071,26 @@ def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
         return set()
     if type(source) is LiteMoeBackwardLinkedProgram:
         return set()
+    if type(source) is LiteMoeDp4BackwardLinkedProgram:
+        return set()
+    if type(source) is LiteMoeDp4InferLinkedProgram:
+        terminals = set(source.source.source.global_dag.combined_output_refs)
+        if len(terminals) != 8:
+            raise SchemaError(
+                "S3-Lite DP4 infer requires eight combined token outputs",
+                path="source.source.source.global_dag.combined_output_refs",
+            )
+        return terminals
+    if type(source) is LiteMoeDp4TrainForwardLinkedProgram:
+        forward = source.source.source.forward
+        combined = set(forward.global_dag.combined_output_refs)
+        tapes = {item.value_ref for item in source.source.source.tape_buffers}
+        if len(combined) != 8 or len(tapes) != 8 or combined.intersection(tapes):
+            raise SchemaError(
+                "S3-Lite DP4 TF requires eight combined and eight distinct tape terminals",
+                path="source.source.source",
+            )
+        return combined.union(tapes)
     if type(source) is LiteMoeLinkedProgram:
         resolved = _resolved_abis(source)
         terminals = {
@@ -1260,12 +1368,25 @@ def _resolved_state_abis(
     uses: dict[str, list[tuple[int, StateUseAccess]]] = {
         abi_id: [] for abi_id in by_id
     }
-    if type(source) is LiteMoeLinkedProgram:
+    if type(source) in (
+        LiteMoeLinkedProgram,
+        LiteMoeDp4InferLinkedProgram,
+        LiteMoeDp4TrainForwardLinkedProgram,
+    ):
+        if type(source) is LiteMoeDp4InferLinkedProgram:
+            execution = source.source.source
+            intent = source.source.intent
+        elif type(source) is LiteMoeDp4TrainForwardLinkedProgram:
+            execution = source.source.source.forward
+            intent = source.source.forward.intent
+        else:
+            execution = source.source
+            intent = source.source.intent
         action_order = {
             action.id: index
-            for index, action in enumerate(source.source.global_dag.actions)
+            for index, action in enumerate(execution.global_dag.actions)
         }
-        for unit in source.source.intent.state_loads:
+        for unit in intent.state_loads:
             abi = by_binding.get(unit.hbm_binding_ref)
             if abi is None:
                 raise SchemaError(
@@ -1273,7 +1394,10 @@ def _resolved_state_abis(
                     path="source.source.intent.state_loads",
                 )
             uses[abi.id].append((action_order[unit.action_ref], StateUseAccess.READ))
-    elif type(source) is LiteMoeBackwardLinkedProgram:
+    elif type(source) in (
+        LiteMoeBackwardLinkedProgram,
+        LiteMoeDp4BackwardLinkedProgram,
+    ):
         fragments = {
             _leaf(fragment).id: _leaf(fragment)
             for fragment in source.manifest.fragments
@@ -1290,7 +1414,12 @@ def _resolved_state_abis(
             witnessed[binding.state_abi_id].add(
                 stream.records[binding.fragment_record_index].opcode
             )
-        for state in source.source.overlay.trainable_down_states:
+        overlay = (
+            source.source.source
+            if type(source) is LiteMoeDp4BackwardLinkedProgram
+            else source.source.overlay
+        )
+        for state in overlay.trainable_down_states:
             abi = by_binding.get(state.binding.id)
             if abi is None or witnessed.get(abi.id) != {
                 RecordOpcode.LSU_LOAD,
@@ -1359,6 +1488,9 @@ def _resolved_state_abis(
     if type(source) not in (
         LiteMoeLinkedProgram,
         LiteMoeBackwardLinkedProgram,
+        LiteMoeDp4InferLinkedProgram,
+        LiteMoeDp4TrainForwardLinkedProgram,
+        LiteMoeDp4BackwardLinkedProgram,
     ) and (
         any(
             action.state_uses
@@ -1740,6 +1872,161 @@ def _validate_dp4_updated_weight_probes(
             )
 
 
+def _validate_lite_moe_dp4_backward_program_io(
+    source: LinkedProgramSource,
+    contract: ProgramIoContract,
+    resolved: tuple[_ResolvedAbi, ...],
+    resolved_state: tuple[_ResolvedStateAbi, ...],
+) -> None:
+    if type(source) is not LiteMoeDp4BackwardLinkedProgram:
+        return
+    overlay = source.source.source
+    tape_by_value = {
+        item.value_ref: item
+        for item in overlay.train_forward.tape_buffers
+    }
+    saved = tuple(
+        item for item in resolved
+        if item.abi.layout == "s3_lite_moe_saved_activation"
+    )
+    upstream = tuple(
+        item for item in resolved
+        if item.abi.layout == "s3_lite_moe_upstream_gradient"
+    )
+    borrowed = tuple(
+        item for item in resolved
+        if item.abi.ownership is BufferOwnership.BORROWED
+    )
+    if (
+        len(saved) != 8
+        or len(upstream) != 8
+        or {item.abi.id for item in borrowed}
+        != {item.abi.id for item in (*saved, *upstream)}
+        or any(
+            item.abi.dtype is not DType.FP16
+            or item.abi.size_bytes != 64
+            or item.abi.tensor_slice.shape != (1, 32)
+            or item.abi.value_id not in tape_by_value
+            or item.abi.logical_core.die_id
+            != tape_by_value[item.abi.value_id].die_id
+            for item in saved
+        )
+    ):
+        raise SchemaError(
+            "DP4 backward requires exact eight saved tape activation inputs",
+            path="source.manifest.fragments",
+        )
+    remote = {
+        item.token_index: item
+        for item in overlay.remote_gradients
+    }
+    expected_upstream = {
+        (
+            (
+                remote[item.token_index].source_gradient_ref
+                if item.token_index in remote
+                else item.upstream_gradient_ref
+            ),
+            (
+                remote[item.token_index].source_die_id
+                if item.token_index in remote
+                else item.home_die_id
+            ),
+        )
+        for item in overlay.token_wgrads
+    }
+    if (
+        {
+            (item.abi.value_id, item.abi.logical_core.die_id)
+            for item in upstream
+        }
+        != expected_upstream
+        or any(
+            item.abi.dtype is not DType.FP16
+            or item.abi.size_bytes != 32
+            or item.abi.tensor_slice.shape != (1, 16)
+            for item in upstream
+        )
+    ):
+        raise SchemaError(
+            "DP4 backward requires exact eight token-source upstream gradients",
+            path="source.manifest.fragments",
+        )
+    trainable = tuple(
+        item for item in resolved_state
+        if item.abi.kind is StateKind.TRAINABLE_PARAMETER
+    )
+    if (
+        len(trainable) != 4
+        or tuple(sorted(item.abi.die_id for item in trainable)) != (0, 1, 2, 3)
+        or any(
+            item.abi.access is not PersistentStateAccess.READ_WRITE
+            or item.abi.size_bytes != 1024
+            or {access for _index, access in item.uses}
+            != {StateUseAccess.READ, StateUseAccess.WRITE}
+            for item in trainable
+        )
+        or {item.abi.state_ref for item in trainable}
+        != {
+            item.declaration.id
+            for item in overlay.trainable_down_states
+        }
+    ):
+        raise SchemaError(
+            "DP4 backward requires four exact trainable down-weight states",
+            path="source.manifest.fragments",
+        )
+    sram_initializations = tuple(
+        item for item in contract.initializations
+        if type(item.target) is ProgramSramTarget
+    )
+    hbm_initializations = tuple(
+        item for item in contract.initializations
+        if type(item.target) is ProgramHbmTarget
+    )
+    probes = tuple(
+        item for item in contract.output_probes
+        if type(item.target) is ProgramHbmTarget
+    )
+    input_ids = {item.abi.id for item in borrowed}
+    initialized_inputs = {
+        item.target.buffer_abi_id
+        for item in sram_initializations
+        if item.target.buffer_abi_id in input_ids
+        and item.purpose is ProgramIoPurpose.ACTIVATION
+    }
+    state_ids = {item.abi.id for item in trainable}
+    if (
+        len(contract.blobs) != 8
+        or len(contract.initializations) != 34
+        or len(sram_initializations) != 30
+        or initialized_inputs != input_ids
+        or len(hbm_initializations) != 4
+        or {item.target.state_abi_id for item in hbm_initializations} != state_ids
+        or len(contract.output_probes) != 4
+        or len(probes) != 4
+        or {item.target.state_abi_id for item in probes} != state_ids
+        or sum(item.length_bytes for item in probes) != 4096
+    ):
+        raise SchemaError(
+            "DP4 backward ProgramIo input/state/probe closure changed",
+            path="program_io_contract",
+        )
+    initialization_by_state = {
+        item.target.state_abi_id: item
+        for item in hbm_initializations
+    }
+    if any(
+        probe.blob_ref
+        != initialization_by_state[probe.target.state_abi_id].blob_ref
+        for probe in probes
+    ):
+        raise SchemaError(
+            "DP4 backward updated-weight probes must reuse exact state seeds",
+            path="program_io_contract.output_probes",
+        )
+
+
 def build_timing_program_io(
     source: LinkedProgramSource,
     program_artifact_sha256: str,
@@ -1781,7 +2068,10 @@ def build_timing_program_io(
     )
     if (
         type(source) in _TRAIN_SOURCE_TYPES
-        or type(source) is LiteMoeBackwardLinkedProgram
+        or type(source) in (
+            LiteMoeBackwardLinkedProgram,
+            LiteMoeDp4BackwardLinkedProgram,
+        )
     ) and sram_expected:
         raise SchemaError(
             "Train/MoE-backward timing ProgramIo does not accept numeric SRAM expectations",
@@ -1836,7 +2126,10 @@ def build_timing_program_io(
         )
     if (
         type(source) in _LITE_TRAIN_SOURCE_TYPES
-        or type(source) is LiteMoeBackwardLinkedProgram
+        or type(source) in (
+            LiteMoeBackwardLinkedProgram,
+            LiteMoeDp4BackwardLinkedProgram,
+        )
     ) and expected:
         raise SchemaError(
             "Lite timing does not accept caller-provided updated-weight expectations",
@@ -1857,6 +2150,7 @@ def build_timing_program_io(
     terminal_values = _terminal_value_ids(source)
     hbm_state_terminals = type(source) in (
         LiteMoeBackwardLinkedProgram,
+        LiteMoeDp4BackwardLinkedProgram,
         S2LiteDp4TreeArLinkedProgram,
     )
     if not terminal_values and not hbm_state_terminals:
@@ -1962,4 +2256,10 @@ def build_timing_program_io(
     )
     contract.validate_against(source.manifest)
     _validate_dp4_updated_weight_probes(source, contract, resolved_state)
+    _validate_lite_moe_dp4_backward_program_io(
+        source,
+        contract,
+        resolved,
+        resolved_state,
+    )
     return contract

@@ -3997,6 +3997,132 @@ void RunLiteMoeBackwardProducedManifest() {
               << " fragments=" << dto.fragments.size() << '\n';
 }
 
+void RunLiteMoeDp4ProducedManifest(const std::string &mode) {
+    const std::string text((std::istreambuf_iterator<char>(std::cin)),
+                           std::istreambuf_iterator<char>());
+    const frontend::LinkedProgramManifestDto dto =
+        ProgramArtifactFinalizer::Parse(text);
+    const ProgramArtifactFinalizer finalizer;
+    const ProgramArtifact artifact = finalizer.Finalize(dto);
+    const std::vector<uint8_t> bytes = finalizer.FinalizeEncoded(text);
+    Require(bytes == finalizer.FinalizeEncoded(text) &&
+                bytes == EncodeProgramArtifact(artifact) &&
+                EncodeProgramArtifact(DecodeProgramArtifact(bytes)) == bytes,
+            "DP4 MoE artifact is not byte deterministic");
+
+    const bool infer = mode == "infer";
+    const bool train_forward = mode == "train_forward";
+    Require(infer || train_forward || mode == "backward",
+            "unknown DP4 MoE stdin mode");
+    const std::string top_schema =
+        infer
+            ? "wafer_frontend.s3_lite_moe_dp4_infer_lowered_program/v1alpha1"
+            : train_forward
+            ? "wafer_frontend.s3_lite_moe_dp4_train_forward_lowered_program/v1alpha1"
+            : "wafer_frontend.s3_lite_moe_dp4_backward_lowered_program/v1alpha1";
+    const std::string global_schema =
+        infer
+            ? "wafer_frontend.s3_lite_moe_dp4_global/v1alpha1"
+            : train_forward
+            ? "wafer_frontend.s3_lite_moe_dp4_train_forward/v1alpha1"
+            : "wafer_frontend.s3_lite_moe_dp4_backward/v1alpha1";
+    const std::size_t expected_fragments = infer ? 80 : train_forward ? 88 : 32;
+    const std::size_t expected_records = infer ? 260 : train_forward ? 284 : 114;
+    const std::size_t expected_claims = infer ? 92 : train_forward ? 100 : 38;
+    std::size_t top_inputs = 0;
+    std::size_t global_inputs = 0;
+    for (const frontend::ManifestInputDigestDto &digest : dto.input_digests) {
+        if (digest.kind == frontend::ManifestInputKindDto::S3_LITE_MOE) {
+            ++top_inputs;
+            Require(digest.schema_version == top_schema,
+                    "DP4 MoE top schema changed");
+        }
+        if (digest.kind == frontend::ManifestInputKindDto::GLOBAL_ACTION_DAG) {
+            ++global_inputs;
+            Require(digest.schema_version == global_schema,
+                    "DP4 MoE global schema changed");
+        }
+    }
+    std::size_t records = 0;
+    std::size_t claims = 0;
+    for (const LinkedFragmentDto &linked : dto.fragments) {
+        Require(std::holds_alternative<CommandFragmentDto>(linked),
+                "DP4 MoE manifest contains a non-command leaf");
+        const CommandFragmentDto &fragment =
+            std::get<CommandFragmentDto>(linked);
+        claims += fragment.claimed_action_ids.size();
+        for (const auto &stream : fragment.core_streams)
+            records += stream.records.size();
+    }
+    std::size_t persistent_allocations = 0;
+    for (const auto &core : artifact.cores)
+        for (const ExternalRecord &record : core.records)
+            if (record.opcode == Opcode::SRAM_ALLOC_AT &&
+                std::get<SramAllocAtOperands>(record.operands).lifetime ==
+                    SramLifetime::PERSISTENT)
+                ++persistent_allocations;
+    Require(persistent_allocations == (train_forward ? 8 : 0),
+            "only DP4 MoE train-forward tape allocations may persist");
+
+    Require(top_inputs == 1 && global_inputs == 1 &&
+                dto.fragments.size() == expected_fragments &&
+                dto.core_streams.size() == 4 &&
+                records == expected_records && claims == expected_claims,
+            "DP4 MoE dedicated manifest quotient changed");
+
+    Json old_top = Json::parse(text);
+    for (Json &digest : old_top["input_digests"])
+        if (digest["kind"] == "s3_lite_moe") {
+            digest["schema_version"] = top_schema + ".old";
+            break;
+        }
+    RefreshManifestIds(old_top);
+    ExpectFailure([&] { finalizer.FinalizeJson(old_top.dump()); },
+                  "restable DP4 MoE old top schema");
+
+    Json wrong_global = Json::parse(text);
+    for (Json &digest : wrong_global["input_digests"])
+        if (digest["kind"] == "global_action_dag") {
+            digest["schema_version"] =
+                "wafer_frontend.s3_lite_static_moe_global/v1alpha1";
+            break;
+        }
+    RefreshManifestIds(wrong_global);
+    ExpectFailure([&] { finalizer.FinalizeJson(wrong_global.dump()); },
+                  "restable DP4 MoE wrong global schema");
+
+    Json bad_producer = Json::parse(text);
+    bad_producer["fragments"][0]["producer_pass"] = "lowering";
+    RefreshManifestIds(bad_producer);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_producer.dump()); },
+                  "restable DP4 MoE producer");
+
+    Json bad_kind = Json::parse(text);
+    bad_kind["fragments"][0]["kind"] = "standalone_collective";
+    RefreshManifestIds(bad_kind);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_kind.dump()); },
+                  "restable DP4 MoE fragment kind");
+
+    Json bad_transport = Json::parse(text);
+    bool changed = false;
+    for (Json &fragment : bad_transport["fragments"])
+        for (Json &record : fragment["core_streams"][0]["records"])
+            if (!changed && record["opcode"] == 0x40) {
+                record["operands"][7]["literal_value"] = 31;
+                changed = true;
+            }
+    Require(changed, "DP4 MoE fixture lacks DTE_SEND");
+    RefreshManifestIds(bad_transport);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_transport.dump()); },
+                  "restable DP4 MoE transport bytes");
+
+    std::cout << "lite_moe_dp4_" << mode << "_bytes=" << bytes.size()
+              << " cores=" << artifact.cores.size()
+              << " records=" << records
+              << " relocations=" << artifact.relocations.size()
+              << " fragments=" << dto.fragments.size() << '\n';
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -4027,10 +4153,22 @@ int main(int argc, char **argv) {
                    std::string(argv[1]) ==
                        "--lite-moe-backward-stdin") {
             RunLiteMoeBackwardProducedManifest();
+        } else if (argc == 2 &&
+                   std::string(argv[1]) ==
+                       "--lite-moe-dp4-infer-stdin") {
+            RunLiteMoeDp4ProducedManifest("infer");
+        } else if (argc == 2 &&
+                   std::string(argv[1]) ==
+                       "--lite-moe-dp4-train-forward-stdin") {
+            RunLiteMoeDp4ProducedManifest("train_forward");
+        } else if (argc == 2 &&
+                   std::string(argv[1]) ==
+                       "--lite-moe-dp4-backward-stdin") {
+            RunLiteMoeDp4ProducedManifest("backward");
         } else {
             throw std::runtime_error(
                 "usage: program_finalizer_selftest "
-                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-dp4-tree-ar-stdin|--lite-moe-backward-stdin]");
+                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-dp4-tree-ar-stdin|--lite-moe-backward-stdin|--lite-moe-dp4-infer-stdin|--lite-moe-dp4-train-forward-stdin|--lite-moe-dp4-backward-stdin]");
         }
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

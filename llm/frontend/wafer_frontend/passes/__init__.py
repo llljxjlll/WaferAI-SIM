@@ -260,3 +260,63 @@ __all__ = [
     "PassManager",
     "PipelinePhase",
 ]
+from .lite_moe_dp4 import (
+    build_lite_moe_dp4_ir0_adapter,
+    build_lite_moe_dp4_n4,
+    build_lite_moe_dp4_oracle,
+    build_lite_moe_dp4_spec,
+    build_lite_moe_dp4_topology,
+    place_lite_moe_dp4_adapter,
+    validate_lite_moe_dp4_ir0_adapter,
+    validate_lite_moe_dp4_n4,
+    validate_lite_moe_dp4_placement,
+)
+from .lite_moe_dp4_execution import (
+    build_lite_moe_dp4_execution_case,
+    build_lite_moe_dp4_global,
+    project_lite_moe_dp4,
+    schedule_lite_moe_dp4,
+    validate_lite_moe_dp4_execution_case,
+    validate_lite_moe_dp4_global,
+    validate_lite_moe_dp4_projection,
+    validate_lite_moe_dp4_schedule,
+)
+from .lite_moe_dp4_train_forward import (
+    build_lite_moe_dp4_train_forward,
+    validate_lite_moe_dp4_train_forward,
+)
+from .lite_moe_dp4_backward import (
+    build_lite_moe_dp4_backward,
+    validate_lite_moe_dp4_backward,
+)
+from .lite_moe_dp4_n6 import (
+    build_lite_moe_dp4_infer_n6_intent,
+    validate_lite_moe_dp4_infer_n6_intent,
+)
+from .lite_moe_dp4_lower_program import (
+    lower_lite_moe_dp4_backward_program,
+    lower_lite_moe_dp4_infer_program,
+    lower_lite_moe_dp4_train_forward_program,
+)
+from .lite_moe_dp4_link_program import (
+    link_lite_moe_dp4_backward_program,
+    link_lite_moe_dp4_infer_program,
+    link_lite_moe_dp4_train_forward_program,
+)
+from .lite_moe_dp4 import __all__ as _lite_moe_dp4_all
+from .lite_moe_dp4_execution import __all__ as _lite_moe_dp4_execution_all
+from .lite_moe_dp4_train_forward import __all__ as _lite_moe_dp4_train_forward_all
+from .lite_moe_dp4_backward import __all__ as _lite_moe_dp4_backward_all
+from .lite_moe_dp4_n6 import __all__ as _lite_moe_dp4_n6_all
+from .lite_moe_dp4_lower_program import __all__ as _lite_moe_dp4_lower_program_all
+from .lite_moe_dp4_link_program import __all__ as _lite_moe_dp4_link_program_all
+
+__all__ += [
+    *_lite_moe_dp4_all,
+    *_lite_moe_dp4_execution_all,
+    *_lite_moe_dp4_train_forward_all,
+    *_lite_moe_dp4_backward_all,
+    *_lite_moe_dp4_n6_all,
+    *_lite_moe_dp4_lower_program_all,
+    *_lite_moe_dp4_link_program_all,
+]

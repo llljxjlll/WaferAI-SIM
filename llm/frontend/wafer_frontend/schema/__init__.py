@@ -1170,3 +1170,91 @@ __all__ = [
     "S2LiteRuntimeReport",
     "S3LiteRuntimeReport",
 ]
+from .lite_moe_dp4 import (
+    LITE_MOE_DP4_IR0_ADAPTER_SCHEMA_VERSION,
+    LITE_MOE_DP4_N4_SCHEMA_VERSION,
+    LITE_MOE_DP4_ORACLE_SCHEMA_VERSION,
+    LITE_MOE_DP4_P2P_BINDING_SCHEMA_VERSION,
+    LITE_MOE_DP4_PLACED_IR1_SCHEMA_VERSION,
+    LITE_MOE_DP4_SPEC_SCHEMA_VERSION,
+    LITE_MOE_DP4_TOPOLOGY_SCHEMA_VERSION,
+    S3_LITE_MOE_DP4_DOWN_WGRAD_CASE_ID,
+    S3_LITE_MOE_DP4_INFER_CASE_ID,
+    S3_LITE_MOE_DP4_TRAIN_FORWARD_CASE_ID,
+    LiteMoeDp4IR0Adapter,
+    LiteMoeDp4N4IR1,
+    LiteMoeDp4Oracle,
+    LiteMoeDp4P2PBinding,
+    LiteMoeDp4PlacedIR1,
+    LiteMoeDp4Spec,
+    LiteMoeDp4Topology,
+    LiteMoeDp4WorkloadKind,
+)
+from .lite_moe_dp4_execution import (
+    LITE_MOE_DP4_EXECUTION_CASE_SCHEMA_VERSION,
+    LITE_MOE_DP4_GLOBAL_SCHEMA_VERSION,
+    LITE_MOE_DP4_PROJECTION_SCHEMA_VERSION,
+    LITE_MOE_DP4_SCHEDULE_SCHEMA_VERSION,
+    LiteMoeDp4BufferAccess,
+    LiteMoeDp4BufferBinding,
+    LiteMoeDp4BufferUse,
+    LiteMoeDp4ExecutionCase,
+    LiteMoeDp4Flow,
+    LiteMoeDp4GlobalAction,
+    LiteMoeDp4GlobalDag,
+    LiteMoeDp4PackedSlice,
+    LiteMoeDp4ProjectedDie,
+    LiteMoeDp4Projection,
+    LiteMoeDp4Scheduled,
+    LiteMoeDp4Task,
+    LiteMoeDp4TaskKind,
+    LiteMoeDp4TaskPlacement,
+)
+from .lite_moe_dp4_train_forward import (
+    LITE_MOE_DP4_TAPE_BUFFER_SCHEMA_VERSION,
+    LITE_MOE_DP4_TAPE_COPY_SCHEMA_VERSION,
+    LITE_MOE_DP4_TRAIN_FORWARD_SCHEMA_VERSION,
+    LiteMoeDp4TapeBuffer,
+    LiteMoeDp4TapeCopy,
+    LiteMoeDp4TrainForward,
+)
+from .lite_moe_dp4_backward import (
+    LITE_MOE_DP4_BACKWARD_SCHEMA_VERSION,
+    LiteMoeDp4Backward,
+    LiteMoeDp4ExpertReduce,
+    LiteMoeDp4ExpertSgdStore,
+    LiteMoeDp4RemoteGrad,
+    LiteMoeDp4TokenWgrad,
+    LiteMoeDp4TrainableDownState,
+)
+from .lite_moe_dp4_n6 import (
+    LITE_MOE_DP4_BACKWARD_LINKED_SCHEMA_VERSION,
+    LITE_MOE_DP4_BACKWARD_LOWERED_SCHEMA_VERSION,
+    LITE_MOE_DP4_INFER_INTENT_SCHEMA_VERSION,
+    LITE_MOE_DP4_INFER_LINKED_SCHEMA_VERSION,
+    LITE_MOE_DP4_INFER_LOWERED_SCHEMA_VERSION,
+    LITE_MOE_DP4_TRAIN_FORWARD_LINKED_SCHEMA_VERSION,
+    LITE_MOE_DP4_TRAIN_FORWARD_LOWERED_SCHEMA_VERSION,
+    LiteMoeDp4BackwardLinkedProgram,
+    LiteMoeDp4BackwardLoweredProgram,
+    LiteMoeDp4ComputeUnit,
+    LiteMoeDp4DteUnit,
+    LiteMoeDp4InferLinkedProgram,
+    LiteMoeDp4InferLoweredProgram,
+    LiteMoeDp4InferN6Intent,
+    LiteMoeDp4TrainForwardLinkedProgram,
+    LiteMoeDp4TrainForwardLoweredProgram,
+)
+from .lite_moe_dp4 import __all__ as _lite_moe_dp4_all
+from .lite_moe_dp4_execution import __all__ as _lite_moe_dp4_execution_all
+from .lite_moe_dp4_train_forward import __all__ as _lite_moe_dp4_train_forward_all
+from .lite_moe_dp4_backward import __all__ as _lite_moe_dp4_backward_all
+from .lite_moe_dp4_n6 import __all__ as _lite_moe_dp4_n6_all
+
+__all__ += [
+    *_lite_moe_dp4_all,
+    *_lite_moe_dp4_execution_all,
+    *_lite_moe_dp4_train_forward_all,
+    *_lite_moe_dp4_backward_all,
+    *_lite_moe_dp4_n6_all,
+]

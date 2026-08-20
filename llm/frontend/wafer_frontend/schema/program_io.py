@@ -591,7 +591,10 @@ def _manifest_allocations(
                 root.layout,
             )
             backward_subview_alias = (
-                manifest.producer_pass == "lite_moe_backward_manifest_linker"
+                manifest.producer_pass in (
+                    "lite_moe_backward_manifest_linker",
+                    "lite_moe_dp4_backward_manifest_linker",
+                )
                 and alias.region_offset_bytes >= root.region_offset_bytes
                 and alias.size_bytes > 0
                 and alias.region_offset_bytes + alias.size_bytes
