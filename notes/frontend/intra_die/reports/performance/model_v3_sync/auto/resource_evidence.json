@@ -1,0 +1,76 @@
+{
+  "id": "intra_die_resource_evidence_12d94ced2b739c35",
+  "producer_pass": "intra_die_performance_runner",
+  "repeat": 3,
+  "repeat_signature_stable": true,
+  "repeat_signatures": [
+    "70a28b054b798be00ee2abfd4a90fe3ff273f363b15236c8d543ca2b5a410a0a",
+    "70a28b054b798be00ee2abfd4a90fe3ff273f363b15236c8d543ca2b5a410a0a",
+    "70a28b054b798be00ee2abfd4a90fe3ff273f363b15236c8d543ca2b5a410a0a"
+  ],
+  "resources": {
+    "cycle_ns": 2,
+    "d2d": {
+      "busy_cycles": 0,
+      "stall_cycles": 0
+    },
+    "overlap_cycles": null,
+    "overlap_status": "unsupported:no_explicit_overlap_marker",
+    "per_core": [
+      {
+        "core": 0,
+        "primitive_busy_cycles": {
+          "compute": 208,
+          "dte_lsu": 6492,
+          "issue_control": 32
+        },
+        "primitive_busy_ns": {
+          "compute": 416,
+          "dte_lsu": 12983,
+          "issue_control": 64
+        },
+        "primitive_counts": {
+          "Attention_exact_prim": 1,
+          "Collective_data_v1_prim": 2,
+          "Embedding_lookup_prim": 1,
+          "Lsu_mem": 11,
+          "Matmul_f": 7,
+          "Residual_f": 2,
+          "Rope_qk_exact_prim": 1,
+          "Sram_bind_oneshot": 16,
+          "Sram_lifecycle": 76,
+          "rmsnorm_forward": 3,
+          "swiglu_forward": 1
+        }
+      },
+      {
+        "core": 16,
+        "primitive_busy_cycles": {
+          "compute": 208,
+          "dte_lsu": 6484,
+          "issue_control": 32
+        },
+        "primitive_busy_ns": {
+          "compute": 416,
+          "dte_lsu": 12967,
+          "issue_control": 64
+        },
+        "primitive_counts": {
+          "Attention_exact_prim": 1,
+          "Collective_data_v1_prim": 2,
+          "Embedding_lookup_prim": 1,
+          "Lsu_mem": 11,
+          "Matmul_f": 7,
+          "Residual_f": 2,
+          "Rope_qk_exact_prim": 1,
+          "Sram_bind_oneshot": 16,
+          "Sram_lifecycle": 76,
+          "rmsnorm_forward": 3,
+          "swiglu_forward": 1
+        }
+      }
+    ],
+    "program_memory": []
+  },
+  "schema_version": "wafer_frontend.intra_die_resource_evidence/v1alpha1"
+}

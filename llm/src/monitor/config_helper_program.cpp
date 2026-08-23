@@ -283,6 +283,20 @@ void ApplyRelocation(ExternalRecord &record,
             Fail("invalid LOCAL_REDUCE relocation operand_id");
         return;
     }
+    if (auto *value = std::get_if<LocalNocSendOperands>(&record.operands)) {
+        if (operand != SemanticOperandId::SOURCE_ADDRESS)
+            Fail("invalid LOCAL_NOC_SEND relocation operand_id");
+        RequireAbsolute(relocation, "LOCAL_NOC_SEND source");
+        SetAddress(value->source, relocation, symbol);
+        return;
+    }
+    if (auto *value = std::get_if<LocalNocRecvOperands>(&record.operands)) {
+        if (operand != SemanticOperandId::DESTINATION_ADDRESS)
+            Fail("invalid LOCAL_NOC_RECV relocation operand_id");
+        RequireAbsolute(relocation, "LOCAL_NOC_RECV destination");
+        SetAddress(value->destination, relocation, symbol);
+        return;
+    }
     if (auto *value = std::get_if<LsuOperands>(&record.operands)) {
         if (operand == SemanticOperandId::HBM_ADDRESS) {
             RequireAbsolute(relocation, "LSU HBM address");
@@ -714,6 +728,36 @@ void config_helper_program::LoadProgram(
                         static_cast<uint32_t>(core.core_id), record_index};
                     candidate_endpoint_recvs[key].push_back(metadata);
                 }
+            } else if (record.opcode == Opcode::LOCAL_NOC_SEND) {
+                const auto &operands =
+                    std::get<LocalNocSendOperands>(record.operands);
+                if (operands.destination_core == core.core_id)
+                    Fail("LOCAL_NOC_SEND self peer is forbidden");
+                if (!Contains(candidate.envelope.active_cores,
+                              operands.destination_core))
+                    Fail("LOCAL_NOC_SEND destination is not an active core");
+                const EndpointPairKey key{
+                    static_cast<uint32_t>(core.core_id),
+                    static_cast<uint32_t>(operands.destination_core),
+                    static_cast<uint32_t>(operands.event_id)};
+                candidate_endpoint_sends[key].push_back({
+                    operands.byte_count, EndpointDataType::UINT8,
+                    static_cast<uint32_t>(core.core_id), record_index});
+            } else if (record.opcode == Opcode::LOCAL_NOC_RECV) {
+                const auto &operands =
+                    std::get<LocalNocRecvOperands>(record.operands);
+                if (operands.source_core == core.core_id)
+                    Fail("LOCAL_NOC_RECV self peer is forbidden");
+                if (!Contains(candidate.envelope.active_cores,
+                              operands.source_core))
+                    Fail("LOCAL_NOC_RECV source is not an active core");
+                const EndpointPairKey key{
+                    static_cast<uint32_t>(operands.source_core),
+                    static_cast<uint32_t>(core.core_id),
+                    static_cast<uint32_t>(operands.event_id)};
+                candidate_endpoint_recvs[key].push_back({
+                    operands.byte_count, EndpointDataType::UINT8,
+                    static_cast<uint32_t>(core.core_id), record_index});
             } else if (record.opcode == Opcode::GROUP_SYNC) {
                 const auto &operands =
                     std::get<GroupSyncOperands>(record.operands);
@@ -942,7 +986,30 @@ void config_helper_program::LoadProgram(
                     candidate_label_names.insert(recv->destination.region);
             }
 
-            if (record.opcode == Opcode::DTE_ISSUE) {
+            if (record.opcode == Opcode::LOCAL_NOC_SEND) {
+                const uint32_t event = static_cast<uint32_t>(
+                    std::get<LocalNocSendOperands>(record.operands).event_id);
+                if (outstanding_rx_fsms.count(event) != 0 ||
+                    !seen_tx_fsms.insert(event).second)
+                    Fail("LOCAL_NOC_SEND reuses an active event_id on its core");
+            } else if (record.opcode == Opcode::LOCAL_NOC_RECV) {
+                const uint32_t event = static_cast<uint32_t>(
+                    std::get<LocalNocRecvOperands>(record.operands).event_id);
+                if (seen_tx_fsms.count(event) != 0 ||
+                    !outstanding_rx_fsms.insert(event).second ||
+                    !outstanding_dte_tokens.emplace(event, event).second)
+                    Fail("LOCAL_NOC_RECV reuses an active event_id/token on its core");
+            } else if (record.opcode == Opcode::LOCAL_NOC_WAIT) {
+                const uint32_t event = static_cast<uint32_t>(
+                    std::get<LocalNocWaitOperands>(record.operands).event_id);
+                const auto outstanding = outstanding_dte_tokens.find(event);
+                if (outstanding == outstanding_dte_tokens.end() ||
+                    !outstanding->second.has_value() ||
+                    *outstanding->second != event ||
+                    outstanding_rx_fsms.erase(event) != 1)
+                    Fail("LOCAL_NOC_WAIT references an unknown or completed receive event");
+                outstanding_dte_tokens.erase(outstanding);
+            } else if (record.opcode == Opcode::DTE_ISSUE) {
                 const auto token = static_cast<uint32_t>(
                     std::get<DteIssueOperands>(record.operands).token);
                 if (!outstanding_dte_tokens.emplace(token, std::nullopt)

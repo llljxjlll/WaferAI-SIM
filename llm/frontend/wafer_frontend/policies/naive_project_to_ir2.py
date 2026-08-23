@@ -12,10 +12,13 @@ from ..schema.action import (
     ComputeOperand,
     FusionActionKind,
     FusionPlan,
+    ReductionContract,
     StandaloneCollectivePlan,
+    SwizzleBoundActionRef,
     SyncContract,
 )
-from ..schema.ir0 import EdgeKind, OpKind, StateAccessMode
+from ..schema.common import DType, RoundingMode, Sharding
+from ..schema.ir0 import EdgeKind, FusionPattern, OpKind, ReduceOp, StateAccessMode
 from ..schema.ir1 import IR1, PhysicalNode
 from ..schema.ir2 import (
     DmaContract,
@@ -34,6 +37,8 @@ from ..schema.ir2 import (
     StateIoOrigin,
     StateTransferOrigin,
     StateStagingValue,
+    SwizzleIntraDieValue,
+    SwizzleNodeOrigin,
     TensorSlice,
     canonical_semantic_flow_id,
     canonical_state_access_view,
@@ -47,12 +52,14 @@ from ..schema.ir2 import (
     canonical_transit_completion_event,
     dense_row_major_view_byte_addend,
 )
+from ..schema.swizzle_plan import FusedPlan, SwizzleFusionPlan
 from ..schema.state_transfer import (
     SegmentedKvStateTransferContract,
     SlicedKvStateTransferContract,
     StateTransferContract,
     StateTransferLike,
 )
+from .swizzle_project_to_ir2 import project_swizzle_gemm_rs_to_ir2
 
 
 def _fail(message: str, path: str) -> None:
@@ -114,7 +121,7 @@ class NaiveProjectToIR2:
     def run(
         self,
         ir1: IR1,
-        fusion_plans: tuple[FusionPlan, ...],
+        fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
         *,
         state_transfers: tuple[StateTransferLike, ...],
@@ -128,8 +135,8 @@ class NaiveProjectToIR2:
         if type(state_transfers) is not tuple:
             _fail("must be an immutable tuple", "state_transfers")
         ir1.validate("ir1")
-        if any(type(plan) is not FusionPlan for plan in fusion_plans):
-            _fail("entries must be FusionPlan", "fusion_plans")
+        if any(type(plan) not in (FusionPlan, SwizzleFusionPlan) for plan in fusion_plans):
+            _fail("entries must be FusionPlan or SwizzleFusionPlan", "fusion_plans")
         if any(
             type(plan) is not StandaloneCollectivePlan
             for plan in standalone_plans
@@ -137,6 +144,23 @@ class NaiveProjectToIR2:
             _fail("entries must be StandaloneCollectivePlan", "standalone_plans")
         for plan in fusion_plans:
             plan.validate_against(ir1)
+        if any(type(plan) is SwizzleFusionPlan for plan in fusion_plans):
+            if any(type(plan) is FusionPlan for plan in fusion_plans):
+                raise UnsupportedFeatureError(
+                    "common IR2 cannot yet mix legacy and Swizzle fusion plans; "
+                    "the bridge must preserve the full Swizzle value/buffer contract",
+                    path="fusion_plans",
+                )
+            return project_swizzle_gemm_rs_to_ir2(
+                ir1,
+                tuple(
+                    plan
+                    for plan in fusion_plans
+                    if type(plan) is SwizzleFusionPlan
+                ),
+                standalone_plans,
+                state_transfers=state_transfers,
+            )
         for plan in standalone_plans:
             plan.validate_against(ir1)
         transfer_type: type[object] | None = None

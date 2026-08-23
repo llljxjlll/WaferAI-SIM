@@ -209,6 +209,10 @@ bool ValidRelocationOperand(const ExternalRecord &record,
         return id == SemanticOperandId::SOURCE_ADDRESS ||
                id == SemanticOperandId::DESTINATION_ADDRESS;
     }
+    if (std::holds_alternative<LocalNocSendOperands>(record.operands))
+        return id == SemanticOperandId::SOURCE_ADDRESS;
+    if (std::holds_alternative<LocalNocRecvOperands>(record.operands))
+        return id == SemanticOperandId::DESTINATION_ADDRESS;
     if (std::holds_alternative<LsuOperands>(record.operands)) {
         if (id == SemanticOperandId::HBM_ADDRESS)
             return true;
@@ -1039,6 +1043,11 @@ void ValidateProgramArtifact(const ProgramArtifact &artifact) {
             Require(relocation.kind ==
                         SemanticRelocationKind::ABSOLUTE_ADDRESS,
                     "LOCAL_REDUCE relocation requires ABSOLUTE_ADDRESS kind");
+        if (std::holds_alternative<LocalNocSendOperands>(target.operands) ||
+            std::holds_alternative<LocalNocRecvOperands>(target.operands))
+            Require(relocation.kind ==
+                        SemanticRelocationKind::ABSOLUTE_ADDRESS,
+                    "LOCAL_NOC relocation requires ABSOLUTE_ADDRESS kind");
 
         Require(relocation.symbol_index < artifact.symbols.size(),
                 "relocation references an unknown symbol");

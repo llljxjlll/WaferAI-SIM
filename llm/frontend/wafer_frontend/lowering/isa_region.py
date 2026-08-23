@@ -24,14 +24,20 @@ from ..schema.artifact_manifest import (
     RuntimeSymbolKind,
     SemanticOperandId,
     _fused_recv_wait_pairs,
+    _plan_barrier_group,
+    _plan_barrier_operands,
+    _plan_barrier_record_specs,
+    canonical_plan_barrier_core_symbol,
 )
 from ..schema.common import DType, stable_artifact_id
 from ..schema.global_action import GlobalAction, LogicalCoreRef
-from ..schema.ir0 import FusionImpl
+from ..schema.ir0 import FusionImpl, FusionPattern
+from ..schema.swizzle_plan import FusedPlan, SwizzleFusionPlan
 from ..schema.ir2 import (
     BufferBinding,
     BufferUseRole,
     FusedNodeOrigin,
+    SwizzleNodeOrigin,
     RegionLowering,
     SemanticTaskKind,
     dense_row_major_view_byte_addend,
@@ -554,16 +560,43 @@ def _reduce_record(
 
 
 def _exact_plan_actions(
-    plan: FusionPlan, context: LoweringContext
+    plan: FusedPlan, context: LoweringContext
 ) -> tuple[GlobalAction, ...]:
     return tuple(
         action
         for action in context.global_dag.actions
-        if isinstance(action.origin_ref, FusedNodeOrigin)
+        if isinstance(action.origin_ref, (FusedNodeOrigin, SwizzleNodeOrigin))
         and action.origin_ref.plan_id == plan.id
         and action.task_kind is not SemanticTaskKind.TRANSIT
     )
 
+
+def _swizzle_recv_wait_pairs(actions: tuple[GlobalAction, ...]) -> tuple[dict[str, GlobalAction], dict[str, GlobalAction]]:
+    receives = tuple(action for action in actions if action.task_kind is SemanticTaskKind.RECV)
+    waits = tuple(action for action in actions if action.task_kind is SemanticTaskKind.WAIT)
+    recv_by_wait: dict[str, GlobalAction] = {}
+    wait_by_recv: dict[str, GlobalAction] = {}
+    for wait in waits:
+        if wait.sync is None or wait.sync.wait_event is None:
+            raise SchemaError("Swizzle WAIT requires an exact wait event", path="actions")
+        matches = tuple(
+            recv for recv in receives
+            if recv.sync is not None
+            and recv.sync.completion_event == wait.sync.wait_event
+            and recv.origin_ref.plan_id == wait.origin_ref.plan_id
+            and recv.origin_ref.rank == wait.origin_ref.rank
+            and recv.id in wait.deps
+            and recv.runtime_binding is not None
+            and wait.runtime_binding is not None
+            and recv.runtime_binding.token_symbol == wait.runtime_binding.token_symbol
+        )
+        if len(matches) != 1 or matches[0].id in wait_by_recv:
+            raise SchemaError("Swizzle WAIT must pair with one same-rank RECV token", path="actions")
+        recv_by_wait[wait.id] = matches[0]
+        wait_by_recv[matches[0].id] = wait
+    if len(wait_by_recv) != len(receives):
+        raise SchemaError("every Swizzle RECV requires one WAIT", path="actions")
+    return recv_by_wait, wait_by_recv
 
 def _unique_by_id(values: Iterable[object]) -> tuple[object, ...]:
     result: dict[str, object] = {}
@@ -589,13 +622,13 @@ class NaiveIsaRegionLowering:
 
     def lower(
         self,
-        plan: FusionPlan,
+        plan: FusedPlan,
         actions: tuple[GlobalAction, ...],
         context: LoweringContext,
     ) -> tuple[RegionManifest, ...]:
         if type(context) is not LoweringContext:
             raise SchemaError("must be a LoweringContext", path="context")
-        if type(plan) is not FusionPlan:
+        if not isinstance(plan, (FusionPlan, SwizzleFusionPlan)):
             raise SchemaError("must be a FusionPlan", path="plan")
         if type(actions) is not tuple or any(
             type(action) is not GlobalAction for action in actions
@@ -614,13 +647,19 @@ class NaiveIsaRegionLowering:
                 path="plan",
             )
         plan.validate_against(context.ir1, "plan")
-        if (
-            plan.impl is not FusionImpl.NAIVE
-            or plan.collective_algorithm is not CollectiveAlgorithm.DIRECT
-        ):
+        if type(plan) is FusionPlan:
+            if (
+                plan.impl is not FusionImpl.NAIVE
+                or plan.collective_algorithm is not CollectiveAlgorithm.DIRECT
+            ):
+                raise SchemaError(
+                    "ISA region v1 supports only NAIVE DIRECT fused GEMM->ReduceScatter",
+                    path="plan",
+                )
+        elif plan.pattern is not FusionPattern.GEMM_RS:
             raise SchemaError(
-                "ISA region v1 supports only NAIVE DIRECT fused GEMM->ReduceScatter",
-                path="plan",
+                "Swizzle ISA region v1 supports only the common-IR2 GEMM_RS bridge",
+                path="plan.pattern",
             )
         expected_actions = _exact_plan_actions(plan, context)
         if actions != expected_actions:
@@ -634,6 +673,8 @@ class NaiveIsaRegionLowering:
             SemanticTaskKind.RECV,
             SemanticTaskKind.WAIT,
             SemanticTaskKind.REDUCE,
+            SemanticTaskKind.LOCAL_COPY,
+            SemanticTaskKind.BARRIER,
         }
         if not actions or any(
             action.task_kind not in allowed
@@ -647,9 +688,12 @@ class NaiveIsaRegionLowering:
             )
 
         all_actions = {action.id: action for action in context.global_dag.actions}
-        recv_by_wait, wait_by_recv = _fused_recv_wait_pairs(
-            all_actions, "actions"
-        )
+        if type(plan) is SwizzleFusionPlan:
+            recv_by_wait, wait_by_recv = _swizzle_recv_wait_pairs(actions)
+        else:
+            recv_by_wait, wait_by_recv = _fused_recv_wait_pairs(
+                all_actions, "actions"
+            )
         schedules = {
             schedule.id: schedule for schedule in context.schedule_set.schedules
         }
@@ -772,6 +816,65 @@ class NaiveIsaRegionLowering:
                             )
                         )
                         fragment_bindings.append(used_binding)
+                    elif action.task_kind is SemanticTaskKind.LOCAL_COPY:
+                        from .standalone import _local_copy_records
+                        (
+                            emitted, action_runtime, action_program,
+                            emitted_runtime, emitted_addresses, used_bindings,
+                        ) = _local_copy_records(action, schedule_id, bindings)
+                        records.extend(emitted)
+                        fragment_runtime_symbols.extend(action_runtime)
+                        fragment_program_symbols.extend(action_program)
+                        runtime_relocations.extend(
+                            RuntimeRelocation(
+                                relocation.record_index + record_base,
+                                relocation.field, relocation.symbol_ref,
+                            )
+                            for relocation in emitted_runtime
+                        )
+                        address_relocations.extend(
+                            AddressRelocation(
+                                relocation.record_index + record_base,
+                                relocation.operand_id, relocation.symbol_kind,
+                                relocation.symbol_ref, relocation.addend,
+                            )
+                            for relocation in emitted_addresses
+                        )
+                        fragment_bindings.extend(used_bindings)
+                    elif action.task_kind is SemanticTaskKind.BARRIER:
+                        participants = _plan_barrier_group(
+                            context.global_dag, action, "actions"
+                        )
+                        specs = _plan_barrier_record_specs(
+                            context.global_dag.id, participants, action
+                        )
+                        for spec_index, spec in enumerate(specs):
+                            records.append(
+                                RelocatableRecord(
+                                    action.id,
+                                    spec.opcode,
+                                    _plan_barrier_operands(
+                                        context.global_dag.id, spec
+                                    ),
+                                )
+                            )
+                            for participant in (spec.source, spec.destination):
+                                fragment_runtime_symbols.append(
+                                    canonical_plan_barrier_core_symbol(
+                                        context.global_dag.id, participant
+                                    )
+                                )
+                            fragment_runtime_symbols.append(spec.event)
+                            runtime_relocations.extend(
+                                RuntimeRelocation(
+                                    record_base + spec_index,
+                                    operand.runtime_field,
+                                    operand.symbol_ref,
+                                )
+                                for operand in records[-1].operands
+                                if operand.runtime_field is not None
+                                and operand.symbol_ref is not None
+                            )
                     elif action.task_kind is SemanticTaskKind.WAIT:
                         recv = recv_by_wait[action.id]
                         token = _token_symbol(recv)

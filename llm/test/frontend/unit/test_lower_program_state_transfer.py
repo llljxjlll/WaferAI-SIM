@@ -310,19 +310,19 @@ class LowerProgramStateTransferTest(unittest.TestCase):
         manifest = NaiveManifestLinker().link(context, lowered.fragments)
         self.assertEqual(
             COMMAND_FRAGMENT_SCHEMA_VERSION,
-            "wafer_frontend.command_fragment/v1alpha12",
+            "wafer_frontend.command_fragment/v1alpha13",
         )
         self.assertEqual(
             LOWERED_PROGRAM_BUNDLE_SCHEMA_VERSION,
-            "wafer_frontend.lowered_program_bundle/v1alpha8",
+            "wafer_frontend.lowered_program_bundle/v1alpha9",
         )
         self.assertEqual(
             LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
-            "wafer_frontend.linked_program_manifest/v1alpha13",
+            "wafer_frontend.linked_program_manifest/v1alpha14",
         )
         self.assertEqual(
             LINKED_PROGRAM_BUNDLE_SCHEMA_VERSION,
-            "wafer_frontend.linked_program_bundle/v1alpha9",
+            "wafer_frontend.linked_program_bundle/v1alpha10",
         )
         with self.assertRaisesRegex(SchemaError, "schema version"):
             replace(

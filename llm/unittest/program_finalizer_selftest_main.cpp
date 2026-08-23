@@ -643,6 +643,85 @@ Json Manifest() {
     return manifest;
 }
 
+Json LocalNocManifest() {
+    Json manifest = Manifest();
+    Json &fragment = manifest["fragments"][0];
+    const std::string fragment_id = fragment["id"].get<std::string>();
+    const Json core0 = Core(0, 0);
+    const Json core1 = Core(0, 1);
+
+    auto buffer_id = [&](const Json &core) {
+        const auto found = std::find_if(
+            fragment["buffer_abi"].begin(), fragment["buffer_abi"].end(),
+            [&](const Json &abi) {
+                return abi["logical_core"] == core &&
+                       abi["binding_id"] == "abs_output";
+            });
+        if (found == fragment["buffer_abi"].end())
+            throw std::runtime_error("LOCAL_NOC test output BufferABI is absent");
+        return (*found)["id"].get<std::string>();
+    };
+    auto linked_stream = [&](const Json &core) -> Json & {
+        const auto found = std::find_if(
+            manifest["core_streams"].begin(), manifest["core_streams"].end(),
+            [&](const Json &stream) { return stream["logical_core"] == core; });
+        if (found == manifest["core_streams"].end())
+            throw std::runtime_error("LOCAL_NOC test linked stream is absent");
+        return *found;
+    };
+
+    for (Json &stream : fragment["core_streams"]) {
+        const Json core = stream["logical_core"];
+        const uint64_t record_index = stream["records"].size();
+        if (core == core0) {
+            stream["records"].push_back(Record(
+                "local_send", 0x44,
+                Json::array({Address("source_address", 4, "p_abs_output"),
+                             Literal("destination_core", 2),
+                             Literal("byte_count", 64),
+                             Literal("event_id", 7)})));
+            stream["address_relocations"].push_back(
+                Relocation(record_index, 4, 1, "p_abs_output"));
+            linked_stream(core)["records"].push_back(
+                {{"fragment_id", fragment_id},
+                 {"fragment_record_index", record_index},
+                 {"source_global_action_id", "local_send"}});
+            Json binding = AddressBinding(core, record_index, 4, buffer_id(core));
+            binding["fragment_id"] = fragment_id;
+            manifest["address_operand_bindings"].push_back(std::move(binding));
+        } else {
+            stream["records"].push_back(Record(
+                "local_recv", 0x45,
+                Json::array({Address("destination_address", 5, "p_abs_output"),
+                             Literal("source_core", 9),
+                             Literal("byte_count", 64),
+                             Literal("event_id", 7)})));
+            stream["address_relocations"].push_back(
+                Relocation(record_index, 5, 1, "p_abs_output"));
+            stream["records"].push_back(Record(
+                "local_wait", 0x46,
+                Json::array({Literal("event_id", 7)})));
+            linked_stream(core)["records"].push_back(
+                {{"fragment_id", fragment_id},
+                 {"fragment_record_index", record_index},
+                 {"source_global_action_id", "local_recv"}});
+            linked_stream(core)["records"].push_back(
+                {{"fragment_id", fragment_id},
+                 {"fragment_record_index", record_index + 1},
+                 {"source_global_action_id", "local_wait"}});
+            Json binding = AddressBinding(core, record_index, 5, buffer_id(core));
+            binding["fragment_id"] = fragment_id;
+            manifest["address_operand_bindings"].push_back(std::move(binding));
+        }
+    }
+    fragment["claimed_action_ids"] =
+        Json::array({"a0", "a1", "local_recv", "local_send", "local_wait"});
+    for (Json &binding : manifest["address_operand_bindings"])
+        binding.erase("tensor_slices");
+    RefreshManifestIds(manifest);
+    return manifest;
+}
+
 Json Stage2Manifest(uint64_t opcode) {
     Json manifest = Manifest();
     Json &fragment = manifest["fragments"][0];
@@ -1664,6 +1743,87 @@ void Run() {
             "finalization is not deterministic");
     Require(EncodeProgramArtifact(DecodeProgramArtifact(encoded)) == encoded,
             "final artifact did not round-trip canonically");
+
+    const Json local_noc = LocalNocManifest();
+    const ProgramArtifact local_noc_artifact =
+        finalizer.FinalizeJson(local_noc.dump());
+    std::map<Opcode, uint64_t> local_noc_counts;
+    for (const ProgramCore &core : local_noc_artifact.cores)
+        for (const ExternalRecord &record : core.records)
+            if (record.opcode == Opcode::LOCAL_NOC_SEND ||
+                record.opcode == Opcode::LOCAL_NOC_RECV ||
+                record.opcode == Opcode::LOCAL_NOC_WAIT)
+                ++local_noc_counts[record.opcode];
+    Require(local_noc_counts == std::map<Opcode, uint64_t>{
+                {Opcode::LOCAL_NOC_SEND, 1},
+                {Opcode::LOCAL_NOC_RECV, 1},
+                {Opcode::LOCAL_NOC_WAIT, 1}},
+            "LOCAL_NOC SEND/RECV/WAIT did not finalize exactly once");
+    const std::vector<uint8_t> local_noc_encoded =
+        finalizer.FinalizeEncoded(local_noc.dump());
+    Require(EncodeProgramArtifact(DecodeProgramArtifact(local_noc_encoded)) ==
+                local_noc_encoded,
+            "LOCAL_NOC final artifact did not round-trip canonically");
+
+    auto mutate_local_record = [](Json &manifest, uint64_t opcode,
+                                  const std::function<void(Json &)> &mutate) {
+        for (Json &linked : manifest["fragments"]) {
+            Json &leaf = linked["schema_version"] ==
+                                 "wafer_frontend.region_manifest/v1alpha12"
+                             ? linked["fragment"]
+                             : linked;
+            for (Json &stream : leaf["core_streams"])
+                for (Json &record : stream["records"])
+                    if (record["opcode"] == opcode) {
+                        mutate(record);
+                        return;
+                    }
+        }
+        throw std::runtime_error("LOCAL_NOC test opcode is absent");
+    };
+    Json oversized_local_noc = local_noc;
+    mutate_local_record(oversized_local_noc, 0x44, [](Json &record) {
+        record["operands"][2]["literal_value"] = 65;
+    });
+    mutate_local_record(oversized_local_noc, 0x45, [](Json &record) {
+        record["operands"][2]["literal_value"] = 65;
+    });
+    RefreshManifestIds(oversized_local_noc);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(oversized_local_noc.dump()); },
+        "LOCAL_NOC payload exceeding its BufferABI dense view");
+
+    Json forged_local_peer = local_noc;
+    mutate_local_record(forged_local_peer, 0x44, [](Json &record) {
+        record["operands"][1]["literal_value"] = 9;
+    });
+    RefreshManifestIds(forged_local_peer);
+    ExpectFailure([&] { finalizer.FinalizeJson(forged_local_peer.dump()); },
+                  "LOCAL_NOC forged reciprocal peer");
+
+    Json missing_local_wait = local_noc;
+    Json &local_leaf = missing_local_wait["fragments"][0];
+    for (Json &stream : local_leaf["core_streams"]) {
+        Json &records = stream["records"];
+        records.erase(std::remove_if(
+            records.begin(), records.end(), [](const Json &record) {
+                return record["opcode"] == 0x46;
+            }), records.end());
+    }
+    for (Json &stream : missing_local_wait["core_streams"]) {
+        Json &records = stream["records"];
+        records.erase(std::remove_if(
+            records.begin(), records.end(), [](const Json &record) {
+                return record["source_global_action_id"] == "local_wait";
+            }), records.end());
+    }
+    Json &local_claims = local_leaf["claimed_action_ids"];
+    local_claims.erase(std::remove(local_claims.begin(), local_claims.end(),
+                                   Json("local_wait")),
+                       local_claims.end());
+    RefreshManifestIds(missing_local_wait);
+    ExpectFailure([&] { finalizer.FinalizeJson(missing_local_wait.dump()); },
+                  "LOCAL_NOC missing destination WAIT");
 
     for (uint64_t opcode : std::array<uint64_t, 8>{{
              0x10, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20}}) {

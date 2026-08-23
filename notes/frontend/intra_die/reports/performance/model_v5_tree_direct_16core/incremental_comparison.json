@@ -1,0 +1,13 @@
+{
+  "baseline": "16-way streaming reduce",
+  "baseline_auto_cycles": 20293,
+  "baseline_report_id": "naive_run_report_ff55c1c2390a3bfb",
+  "cycle_reduction": 0.2966540186271128,
+  "id": "intra_die_incremental_performance_b810831de7e0f6a8",
+  "optimized": "16-way tree reduce + target-core direct DMA",
+  "optimized_auto_cycles": 14273,
+  "optimized_report_id": "naive_run_report_bd434cf5c2c976af",
+  "schema_version": "wafer_frontend.intra_die_incremental_performance/v1alpha1",
+  "speedup": 1.4217753800882786,
+  "status": "pass"
+}

@@ -2244,9 +2244,13 @@ def build_timing_program_io(
         )
 
     reused_owned_roots = set()
-    if packed_swizzle or (
-        type(source) is UnfusedComparisonStandardLinkedProgram
-        and len(source.manifest.core_streams) == 4
+    if (
+        source.manifest.producer_pass == "manifest_linker"
+        or packed_swizzle
+        or (
+            type(source) is UnfusedComparisonStandardLinkedProgram
+            and len(source.manifest.core_streams) == 4
+        )
     ):
         roots = tuple(
             item
@@ -2256,7 +2260,7 @@ def build_timing_program_io(
         reused_owned_roots = {
             item.abi.id
             for item in roots
-            if item.abi.ownership is BufferOwnership.OWNED
+            if item.abi.ownership is not BufferOwnership.BORROWED
             and any(
                 other is not item
                 and other.runtime_core_id == item.runtime_core_id
@@ -2265,8 +2269,17 @@ def build_timing_program_io(
                 < other.abi.region_offset_bytes + other.abi.size_bytes
                 and other.abi.region_offset_bytes
                 < item.abi.region_offset_bytes + item.abi.size_bytes
-                and other.abi.lifetime_end_exclusive
-                <= item.abi.lifetime_start
+                and (
+                    other.abi.ownership is BufferOwnership.BORROWED
+                    or other.abi.lifetime_end_exclusive
+                    <= item.abi.lifetime_start
+                )
+                and (
+                    other.abi.lifetime_end_exclusive
+                    <= item.abi.lifetime_start
+                    or item.abi.lifetime_end_exclusive
+                    <= other.abi.lifetime_start
+                )
                 for other in roots
             )
         }

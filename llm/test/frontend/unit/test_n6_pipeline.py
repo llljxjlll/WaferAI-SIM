@@ -129,9 +129,9 @@ def _compile_through_n6() -> _E1PipelineRun:
     context_digests = tuple(canonical_digest(context) for context in contexts)
     stage_inputs = compilation.artifacts[:-1]
     input_digests = tuple(canonical_digest(value) for value in stage_inputs)
-    scheduled = compilation.artifacts[7]
-    global_bundle = compilation.artifacts[8]
-    lowered = compilation.artifacts[9]
+    scheduled = compilation.artifacts[8]
+    global_bundle = compilation.artifacts[9]
+    lowered = compilation.artifacts[10]
     linked = compilation.linked
     assert isinstance(scheduled, ScheduledIR2Bundle)
     assert isinstance(global_bundle, GlobalActionBundle)
@@ -193,6 +193,7 @@ class N6PipelineTest(unittest.TestCase):
                 "fusion_partition",
                 "inter_die_plan",
                 "project_to_ir2",
+                "intra_die_refine",
                 "intra_die_schedule",
                 "global_action_dag",
                 "lowering",

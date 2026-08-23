@@ -5,6 +5,8 @@ from pathlib import Path
 import unittest
 
 from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.compiler import _schedule_refined_bundle
+from llm.frontend.wafer_frontend.passes.intra_die_refine import refine_bundle
 from llm.frontend.wafer_frontend.passes import (
     PassManager,
     PipelinePhase,
@@ -19,6 +21,9 @@ from llm.frontend.wafer_frontend.passes import (
     schedule_bundle,
 )
 from llm.frontend.wafer_frontend.schema.experiment import ExperimentSpec
+from llm.frontend.wafer_frontend.schema.intra_die_refine import IntraDieRefineContext
+from llm.frontend.wafer_frontend.policies.registry import production_registry, RegistryKind
+from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePolicy
 from llm.frontend.wafer_frontend.schema.n4 import (
     FusionPartitionContext,
     InterDiePlanningContext,
@@ -121,11 +126,18 @@ def _compile_through_n5():
         project_bundle,
         context=projection_context,
     )
+    intra_selection = production_registry().instantiate(RegistryKind.INTRA_DIE, "naive").selection
+    refine_context = IntraDieRefineContext.create(
+        producer_pass="n5_pipeline_fixture", policy=intra_selection
+    )
+    refined = manager.run_pass(
+        "intra_die_refine", projected, refine_bundle, context=refine_context
+    )
     scheduling_context = naive_intra_die_scheduling_context("n5_pipeline_fixture")
     scheduled = manager.run_pass(
         "intra_die_schedule",
-        projected,
-        schedule_bundle,
+        refined,
+        lambda source, context: _schedule_refined_bundle(source, context, NaiveIntraDiePolicy()),
         context=scheduling_context,
         policy_selections=(scheduling_context.policy,),
     )
@@ -154,14 +166,17 @@ class N5PipelineTest(unittest.TestCase):
         ) = _compile_through_n5()
 
         self.assertEqual(manager.snapshot.phase, PipelinePhase.GLOBAL_DAG_BUILT)
-        self.assertEqual(len(manager.snapshot.receipts), 8)
+        self.assertEqual(len(manager.snapshot.receipts), 9)
         self.assertEqual(
-            tuple(receipt.pass_name for receipt in manager.snapshot.receipts[-3:]),
-            ("project_to_ir2", "intra_die_schedule", "global_action_dag"),
+            tuple(receipt.pass_name for receipt in manager.snapshot.receipts[-4:]),
+            ("project_to_ir2", "intra_die_refine", "intra_die_schedule", "global_action_dag"),
         )
         self.assertEqual(
-            manager.snapshot.receipts[-3].context_digest,
+            manager.snapshot.receipts[-4].context_digest,
             canonical_digest(projection_context),
+        )
+        self.assertIsNotNone(
+            manager.snapshot.receipts[-3].context_digest
         )
         self.assertEqual(
             manager.snapshot.receipts[-2].context_digest,
@@ -237,19 +252,26 @@ class N5PipelineTest(unittest.TestCase):
             project_bundle,
             context=projection_context,
         )
+        intra_selection = production_registry().instantiate(RegistryKind.INTRA_DIE, "naive").selection
+        refine_context = IntraDieRefineContext.create(
+            producer_pass="n5_pipeline_fixture", policy=intra_selection
+        )
+        refined = manager.run_pass(
+            "intra_die_refine", projected, refine_bundle, context=refine_context
+        )
         before = manager.snapshot
         scheduling_context = naive_intra_die_scheduling_context("n5_pipeline_fixture")
         with self.assertRaisesRegex(SchemaError, "SRAM capacity.*comm"):
             manager.run_pass(
                 "intra_die_schedule",
-                projected,
-                schedule_bundle,
+                refined,
+                lambda source, context: _schedule_refined_bundle(source, context, NaiveIntraDiePolicy()),
                 context=scheduling_context,
                 policy_selections=(scheduling_context.policy,),
             )
         self.assertEqual(manager.snapshot, before)
-        self.assertEqual(manager.snapshot.phase, PipelinePhase.IR2_PROJECTED)
-        self.assertEqual(len(manager.snapshot.receipts), 6)
+        self.assertEqual(manager.snapshot.phase, PipelinePhase.INTRADIE_REFINED)
+        self.assertEqual(len(manager.snapshot.receipts), 7)
 
 
 if __name__ == "__main__":

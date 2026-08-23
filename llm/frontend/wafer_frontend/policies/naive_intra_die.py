@@ -19,6 +19,7 @@ from ..schema.ir2 import (
     FlowRouteRole,
     IR2ProjectionResult,
     IntraDieDAG,
+    IntraDieValue,
     IntraDieSchedule,
     IntraDieScheduleSet,
     LogicalRuntimeBinding,
@@ -118,6 +119,18 @@ def _executable_components(
             continue
         for dependency in task.deps:
             if dependency in executable:
+                dependency_task = next(
+                    candidate for candidate in topological
+                    if candidate.id == dependency
+                )
+                if (
+                    task.kind is SemanticTaskKind.LOCAL_RECV
+                    and dependency_task.kind is SemanticTaskKind.LOCAL_SEND
+                    and task.flow_id == dependency_task.flow_id
+                ):
+                    # The one legal cross-core edge is scheduled as an
+                    # explicit local NoC handoff, not a placement component.
+                    continue
                 neighbors[task.id].add(dependency)
                 neighbors[dependency].add(task.id)
     position = {task.id: index for index, task in enumerate(topological)}
@@ -190,6 +203,8 @@ def _component_cores(
         SemanticTaskKind.RECV: MemoryInitiator.NOC_RX,
         SemanticTaskKind.REDUCE: MemoryInitiator.COMPUTE,
         SemanticTaskKind.LOCAL_COPY: MemoryInitiator.LSU,
+        SemanticTaskKind.LOCAL_SEND: MemoryInitiator.DTE,
+        SemanticTaskKind.LOCAL_RECV: MemoryInitiator.NOC_RX,
         SemanticTaskKind.DMA_IN: MemoryInitiator.LSU,
         SemanticTaskKind.DMA_OUT: MemoryInitiator.LSU,
     }
@@ -318,19 +333,23 @@ def _minimum_root(
             root,
             view,
             dtype,
-            path=f"schedule.buffer_views[{index}]",
+            path=f"schedule.buffer_views[{value_id!r}][{index}]",
         )
     return root
 
 
 def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
     topological = _canonical_kahn(dag)
+    split_k_refined = any(".split_k." in task.id for task in dag.tasks)
     supported = {
         SemanticTaskKind.COMP,
         SemanticTaskKind.SEND,
         SemanticTaskKind.RECV,
         SemanticTaskKind.REDUCE,
         SemanticTaskKind.LOCAL_COPY,
+        SemanticTaskKind.LOCAL_SEND,
+        SemanticTaskKind.LOCAL_RECV,
+        SemanticTaskKind.LOCAL_WAIT,
         SemanticTaskKind.WAIT,
         SemanticTaskKind.BARRIER,
         SemanticTaskKind.TRANSIT,
@@ -382,16 +401,60 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
                     SemanticTaskKind.RECV: MemoryInitiator.NOC_RX,
                     SemanticTaskKind.REDUCE: MemoryInitiator.COMPUTE,
                     SemanticTaskKind.LOCAL_COPY: MemoryInitiator.LSU,
+                    SemanticTaskKind.LOCAL_SEND: MemoryInitiator.DTE,
+                    SemanticTaskKind.LOCAL_RECV: MemoryInitiator.NOC_RX,
                     SemanticTaskKind.DMA_IN: MemoryInitiator.LSU,
                     SemanticTaskKind.DMA_OUT: MemoryInitiator.LSU,
                 }.get(task_by_id[task_id].kind),
             )
             if initiator is not None
         )
+        forbidden_peer_cores: set[int] = set()
+        for task_id in component:
+            local_task = task_by_id[task_id]
+            peer_kind = {
+                SemanticTaskKind.LOCAL_SEND: SemanticTaskKind.LOCAL_RECV,
+                SemanticTaskKind.LOCAL_RECV: SemanticTaskKind.LOCAL_SEND,
+            }.get(local_task.kind)
+            if peer_kind is None:
+                continue
+            peer = next(
+                (candidate for candidate in topological
+                 if candidate.kind is peer_kind
+                 and candidate.flow_id == local_task.flow_id),
+                None,
+            )
+            if peer is not None and peer.id in placement_by_task:
+                forbidden_peer_cores.add(placement_by_task[peer.id])
+        selectable_cores = tuple(
+            core for core in compatible_cores
+            if core.runtime_core_id not in forbidden_peer_cores
+        )
+        if not selectable_cores:
+            _fail(
+                "local NoC handoff has no distinct compatible peer core",
+                "ir1.fabric.sram_profiles.regions",
+            )
         next_index = next_core_by_initiators.get(signature, 0)
-        core_id = compatible_cores[
-            next_index % len(compatible_cores)
-        ].runtime_core_id
+        split_part_indices = tuple(
+            int(task_id.rsplit(".split_k.part.", 1)[1])
+            for task_id in component
+            if task_by_id[task_id].kind is SemanticTaskKind.COMP
+            and ".split_k.part." in task_id
+            and task_id.rsplit(".split_k.part.", 1)[1].isdigit()
+        )
+        preferred_core_id = (
+            cores[min(split_part_indices) % len(cores)].runtime_core_id
+            if split_k_refined and split_part_indices else None
+        )
+        preferred = next((
+            core for core in selectable_cores
+            if core.runtime_core_id == preferred_core_id
+        ), None)
+        core_id = (
+            preferred.runtime_core_id if preferred is not None
+            else selectable_cores[next_index % len(selectable_cores)].runtime_core_id
+        )
         next_core_by_initiators[signature] = next_index + 1
         for task_id in component:
             placement_by_task[task_id] = core_id
@@ -418,9 +481,46 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
         for task_ids in order_by_core.values()
         for position, task_id in enumerate(task_ids)
     }
+    ir1_values = {value.id: value for value in ir1.values}
+    swizzle_schedule_values: list[IntraDieValue] = []
+    for temporary in dag.swizzle_values:
+        producer_witnesses = tuple(
+            task_by_id[task_id]
+            for task_id in temporary.producer_tasks
+            if task_by_id[task_id].tensor_slice is not None
+            and task_by_id[task_id].dtype is not None
+        )
+        witnesses = producer_witnesses or tuple(
+            task_by_id[task_id]
+            for task_id in temporary.consumer_tasks
+            if task_by_id[task_id].tensor_slice is not None
+            and task_by_id[task_id].dtype is not None
+        )
+        source_ids = {task.tensor_slice.value_id for task in witnesses if task.tensor_slice is not None}
+        dtypes = {task.dtype for task in witnesses}
+        if len(source_ids) != 1 or len(dtypes) != 1:
+            _fail(
+                "Swizzle temporary requires one exact typed tensor-slice domain",
+                f"projection.dags.swizzle_values.{temporary.id}",
+            )
+        source = ir1_values.get(next(iter(source_ids)))
+        if source is None or next(iter(dtypes)) is not source.dtype:
+            _fail(
+                "Swizzle temporary slice must resolve to one exact IR-1 value",
+                f"projection.dags.swizzle_values.{temporary.id}",
+            )
+        swizzle_schedule_values.append(
+            IntraDieValue(
+                id=temporary.id, origin_value_id=source.id, shape=source.shape,
+                dtype=source.dtype, logical_layout=source.logical_layout,
+                sharding=source.sharding, alias_set=None,
+                producer_tasks=temporary.producer_tasks,
+                consumer_tasks=temporary.consumer_tasks,
+            )
+        )
     value_index = {
         value.id: value
-        for value in (*dag.values, *dag.state_staging_values)
+        for value in (*dag.values, *dag.state_staging_values, *swizzle_schedule_values)
     }
     state_value_ids = {value.id for value in dag.state_staging_values}
     staging_value_index = {
@@ -615,6 +715,26 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
                 )
                 for operand_index, value_id in enumerate(task.write_values)
             )
+        elif task.kind is SemanticTaskKind.LOCAL_SEND:
+            assert task.tensor_slice is not None
+            tile_slices[(task.id, BufferUseRole.SEND_SOURCE, 0)] = TensorSlice(
+                task.tensor_slice.value_id, task.tensor_slice.offset,
+                task.tensor_slice.shape,
+            )
+            required.append((
+                task.id, BufferUseRole.SEND_SOURCE, 0, None,
+                task.tensor_slice.value_id, BufferAccess.READ,
+            ))
+        elif task.kind is SemanticTaskKind.LOCAL_RECV:
+            assert task.tensor_slice is not None
+            tile_slices[(task.id, BufferUseRole.RECV_DESTINATION, 0)] = TensorSlice(
+                task.tensor_slice.value_id, task.tensor_slice.offset,
+                task.tensor_slice.shape,
+            )
+            required.append((
+                task.id, BufferUseRole.RECV_DESTINATION, 0, None,
+                task.tensor_slice.value_id, BufferAccess.WRITE,
+            ))
         elif task.kind is SemanticTaskKind.REDUCE:
             assert task.reduction is not None
             required.extend(
@@ -642,6 +762,13 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
                 for operand_index, value_id in enumerate(task.write_values)
             )
         elif task.kind is SemanticTaskKind.LOCAL_COPY:
+            assert task.tensor_slice is not None
+            tile_slices[(task.id, BufferUseRole.LOCAL_COPY_SOURCE, 0)] = TensorSlice(
+                task.read_values[0], task.tensor_slice.offset, task.tensor_slice.shape
+            )
+            tile_slices[(task.id, BufferUseRole.LOCAL_COPY_DESTINATION, 0)] = TensorSlice(
+                task.write_values[0], task.tensor_slice.offset, task.tensor_slice.shape
+            )
             required.extend(
                 (
                     task.id,
@@ -726,7 +853,32 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
             elif tensor_slice is None:
                 tensor_slice = exact_state_view
             elif tensor_slice != exact_state_view:
-                _fail(
+                direct_dma_view = any(
+                    candidate.kind is SemanticTaskKind.DMA_IN
+                    and candidate.dma is not None
+                    and candidate.dma.local_value_ref == value_id
+                    and candidate.tensor_slice == tensor_slice
+                    for candidate in topological
+                )
+                local_copy_subview = (
+                    task.kind in (
+                        SemanticTaskKind.LOCAL_COPY,
+                        SemanticTaskKind.LOCAL_SEND,
+                        SemanticTaskKind.LOCAL_RECV,
+                    )
+                    and tensor_slice.value_id == exact_state_view.value_id
+                    and len(tensor_slice.shape) == len(exact_state_view.shape)
+                    and all(
+                        tensor_slice.offset[axis] >= exact_state_view.offset[axis]
+                        and tensor_slice.offset[axis] + tensor_slice.shape[axis]
+                        <= exact_state_view.offset[axis] + exact_state_view.shape[axis]
+                        for axis in range(len(tensor_slice.shape))
+                    )
+                )
+                if direct_dma_view or local_copy_subview:
+                    pass
+                else:
+                    _fail(
                     "fused parameter tile must equal its exact DMA view",
                     f"projection.dags.tasks.{task_id}.compute.tile",
                 )
@@ -830,21 +982,14 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
         if task.kind is not SemanticTaskKind.REDUCE:
             continue
         group_requirements = tuple(
-            item
-            for item in requirement_keys
+            item for item in requirement_keys
             if item[1] == task.id
-            and item[2]
-            in (BufferUseRole.REDUCE_INPUT, BufferUseRole.REDUCE_OUTPUT)
+            and item[2] in (BufferUseRole.REDUCE_INPUT, BufferUseRole.REDUCE_OUTPUT)
         )
         group_keys = tuple(item[0] for item in group_requirements)
         if len(group_keys) != len(set(group_keys)):
             _fail(
                 "LOCAL_REDUCE operands must have distinct buffer keys",
-                f"projection.dags.tasks.{task.id}",
-            )
-        if any(key in forced_region_by_key for key in group_keys):
-            _fail(
-                "a buffer key cannot belong to multiple LOCAL_REDUCE groups",
                 f"projection.dags.tasks.{task.id}",
             )
         core_id = placement_by_task[task.id]
@@ -856,8 +1001,7 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
             for _task_id, _access, role, _view in uses_by_key[key]
         }
         candidates = tuple(
-            item
-            for item in sorted(
+            item for item in sorted(
                 profile.regions,
                 key=lambda candidate: (candidate.base_bytes, candidate.id),
             )
@@ -868,14 +1012,28 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
         )
         if comm_candidates:
             candidates = comm_candidates
+        existing_regions = {
+            forced_region_by_key[key].id for key in group_keys
+            if key in forced_region_by_key
+        }
+        if len(existing_regions) > 1:
+            _fail(
+                "streaming LOCAL_REDUCE accumulator regions disagree",
+                f"projection.dags.tasks.{task.id}",
+            )
+        if existing_regions:
+            candidates = tuple(
+                item for item in candidates if item.id in existing_regions
+            )
         if not candidates:
             _fail(
                 "LOCAL_REDUCE has no common named SRAM region",
                 f"projection.dags.tasks.{task.id}",
             )
         for key in group_keys:
+            if key not in forced_region_by_key:
+                allocation_keys.append(key)
             forced_region_by_key[key] = candidates[0]
-            allocation_keys.append(key)
     allocation_keys.extend(
         key
         for key in uses_by_key
@@ -930,23 +1088,108 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
             role in (BufferUseRole.REDUCE_INPUT, BufferUseRole.REDUCE_OUTPUT)
             for _task_id, _access, role, _view in uses_by_key[key]
         )
+        # Preserve the legacy tight-stride contract for sub-line reduce chunks.
+        # Line-sized chunks use the native fixed-allocation alignment so their
+        # lifecycle records are executable without changing LOCAL_REDUCE ABI.
         alignment_bytes = (
-            2 if is_reduce_staging else profile.allocation_alignment_bytes
+            profile.allocation_alignment_bytes
+            if is_reduce_staging
+            and size_bytes % profile.allocation_alignment_bytes == 0
+            else 2 if is_reduce_staging else profile.allocation_alignment_bytes
         )
-        offset = _align_up(
-            cursor_by_core_region.get(cursor_key, 0),
-            alignment_bytes,
+        accesses = uses_by_key[key]
+        lifetime_start = min(
+            position_by_task[task_id]
+            for task_id, _access, _role, _view in accesses
         )
+        lifetime_end = max(
+            position_by_task[task_id]
+            for task_id, _access, _role, _view in accesses
+        ) + 1
+        owned = any(
+            access is BufferAccess.WRITE
+            for _task_id, access, _role, _view in accesses
+        )
+        # Reuse an exact physical span only when the logical lifetimes are
+        # disjoint.  Reduce groups keep their rank-ordered tight-stride ABI.
+        reusable = next((
+            binding for binding in binding_by_key.values()
+            if owned
+            and split_k_refined
+            and bool(value.consumer_tasks)
+            and not is_reduce_staging
+            and binding.core_id == core_id
+            and binding.region_ref == region.id
+            and binding.size_bytes == size_bytes
+            and binding.alignment_bytes == alignment_bytes
+            and binding.lifetime_end_exclusive <= lifetime_start
+            and all(
+                other.core_id != core_id
+                or other.region_ref != region.id
+                or binding.region_offset_bytes + size_bytes
+                    <= other.region_offset_bytes
+                or other.region_offset_bytes + other.size_bytes
+                    <= binding.region_offset_bytes
+                or other.lifetime_end_exclusive <= lifetime_start
+                for other in binding_by_key.values()
+            )
+        ), None)
+        sequential_offset = _align_up(
+            cursor_by_core_region.get(cursor_key, 0), alignment_bytes
+        )
+        offset = (
+            reusable.region_offset_bytes if reusable is not None
+            else sequential_offset
+        )
+        # Preserve every previously fitting identity schedule byte-for-byte.
+        # Only when append allocation would fail, place an owned nonterminal
+        # value into a gap whose existing lifetimes are disjoint.  This makes
+        # capacity a liveness property without weakening overlap validation.
+        if (
+            reusable is None
+            and offset + size_bytes > region.size_bytes
+            and (owned or value_id in state_value_ids)
+            and (bool(value.consumer_tasks) or value_id in state_value_ids)
+        ):
+            blockers = tuple(
+                binding for binding in binding_by_key.values()
+                if binding.core_id == core_id
+                and binding.region_ref == region.id
+                and binding.lifetime_start < lifetime_end
+                and lifetime_start < binding.lifetime_end_exclusive
+            )
+            gap_offsets = {0}
+            gap_offsets.update(
+                _align_up(
+                    binding.region_offset_bytes + binding.size_bytes,
+                    alignment_bytes,
+                )
+                for binding in blockers
+            )
+            legal_offsets = tuple(
+                candidate
+                for candidate in sorted(gap_offsets)
+                if candidate + size_bytes <= region.size_bytes
+                and all(
+                    candidate + size_bytes <= binding.region_offset_bytes
+                    or binding.region_offset_bytes + binding.size_bytes <= candidate
+                    for binding in blockers
+                )
+            )
+            if legal_offsets:
+                offset = legal_offsets[0]
         if offset + size_bytes > region.size_bytes:
             _fail(
                 (
                     "SRAM capacity exceeded for named region "
                     f"{region.name!r}: required={offset + size_bytes}, "
-                    f"available={region.size_bytes}"
+                    f"available={region.size_bytes}, value={value_id!r}, "
+                    f"size={size_bytes}, lifetime=({lifetime_start},{lifetime_end})"
                 ),
                 f"schedule.die_{dag.die_id}.core_{core_id}.{region.id}",
             )
-        cursor_by_core_region[cursor_key] = offset + size_bytes
+        if reusable is None and offset == sequential_offset:
+            cursor_by_core_region[cursor_key] = offset + size_bytes
         accesses = uses_by_key[key]
         lifetime_start = min(
             position_by_task[task_id]

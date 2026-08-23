@@ -6,6 +6,10 @@ import unittest
 from dataclasses import replace
 
 from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.policies.registry import (
+    RegistryKind,
+    production_registry,
+)
 from llm.frontend.wafer_frontend.schema.common import stable_artifact_id
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
 from llm.frontend.wafer_frontend.schema.ir2 import (
@@ -29,6 +33,7 @@ from llm.frontend.wafer_frontend.schema.n5 import (
     PROJECT_TO_IR2_CONTEXT_SCHEMA_VERSION,
     SCHEDULED_IR2_BUNDLE_SCHEMA_VERSION,
     IntraDieSchedulingContext,
+    IntraDieSchedulingContract,
     GlobalActionBundle,
     GlobalActionProfile,
     ProjectToIR2Context,
@@ -465,13 +470,28 @@ class N5ContextSchemaTest(unittest.TestCase):
                 projection,
                 contract="exact_naive_projection/v1",  # type: ignore[arg-type]
             ).validate()
-        with self.assertRaisesRegex(SchemaError, "naive intra-die policy"):
+        with self.assertRaisesRegex(SchemaError, "registered intra-die policy"):
             replace(
                 scheduling,
                 policy=naive_inter_die_planning_context(
                     "wrong_policy"
                 ).fused_policy,
             ).validate()
+        optimized_policy = production_registry().instantiate(
+            RegistryKind.INTRA_DIE, "optimized"
+        ).selection
+        optimized_scheduling = IntraDieSchedulingContext.create(
+            producer_pass="optimized",
+            policy=optimized_policy,
+            contract=IntraDieSchedulingContract.OPTIMIZED_CRITICAL_PATH_XY_V1,
+        )
+        optimized_scheduling.validate()
+        with self.assertRaisesRegex(SchemaError, "exact supported pair"):
+            replace(
+                scheduling,
+                contract=IntraDieSchedulingContract.OPTIMIZED_CRITICAL_PATH_XY_V1,
+            ).validate()
+
         raw = json.loads(canonical_json(scheduling))
         raw["contract"] = "unsupported/v1"
         with self.assertRaisesRegex(SchemaError, "unknown value"):

@@ -136,8 +136,8 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
 
     Check(result, CountCategory(OpcodeCategory::COMPUTE) == 32,
           "compute range contains 32 assigned opcodes");
-    Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 4,
-          "communication range contains 4 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 7,
+          "communication range contains 7 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::MEMORY) == 10,
           "memory range contains 10 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::SYNCHRONIZATION) == 7,
@@ -210,7 +210,7 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
     }
 
     constexpr std::array<uint8_t, 7> kReservedEncoding{{
-        0x00, 0x21, 0x44, 0x8a, 0xc7, 0xf0, 0xff,
+        0x00, 0x21, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
     }};
     for (uint8_t value : kReservedEncoding) {
         Check(result, LookupOpcode(value) == nullptr,

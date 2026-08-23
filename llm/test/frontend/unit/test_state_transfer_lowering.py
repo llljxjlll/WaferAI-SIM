@@ -84,7 +84,7 @@ class NaiveStateTransferLoweringTest(unittest.TestCase):
         )
         self.assertEqual(
             COMMAND_FRAGMENT_SCHEMA_VERSION,
-            "wafer_frontend.command_fragment/v1alpha12",
+            "wafer_frontend.command_fragment/v1alpha13",
         )
         self.assertTrue(
             all(

@@ -115,6 +115,7 @@ class SwizzlePlanner:
 
     hardware_profile: SwizzleHardwareProfile
     constraints: SwizzleConstraints
+    force_deployment: bool = False
     generators: tuple[CandidateGenerator, ...] = (
         generate_wang_1d_drafts,
         generate_meshslice_2d_drafts,
@@ -123,6 +124,8 @@ class SwizzlePlanner:
     def validate(self, path: str = "swizzle_planner") -> None:
         self.hardware_profile.validate(f"{path}.hardware_profile")
         self.constraints.validate(f"{path}.constraints")
+        if type(self.force_deployment) is not bool:
+            _fail("must be bool", f"{path}.force_deployment")
         if type(self.generators) is not tuple or not self.generators:
             _fail("must contain candidate generators", f"{path}.generators")
         if len({id(generator) for generator in self.generators}) != len(
@@ -171,6 +174,8 @@ class SwizzlePlanner:
         fused_op: FusedOpSkeleton,
         profile: ProfileKey,
     ) -> SwizzleFusionPlan:
+        if self.force_deployment:
+            return self.plan_forced(ir1, fused_op, profile)
         return materialize_swizzle_plan(
             ir1,
             self.decide(ir1, fused_op, profile),

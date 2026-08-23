@@ -38,6 +38,11 @@ from .schema.common import stable_artifact_id, validate_nonempty
 from .schema.ir0 import AttentionWorkload, GemmWorkload
 from .schema.n6 import LinkedProgramProfile
 from .schema.policy import PolicySelection, RegistryKind
+from .schema.intra_die_refine import (
+    IntraDieOptimizationOptions, RefinedIR2Bundle, SplitKRefineOptions,
+)
+from .schema.intra_die_v2_calibration import IntraDieV2CalibrationEvidence
+from .schema.intra_die_v2_search import IntraDieV2SearchDecision
 from .schema.serde import (
     canonical_digest,
     canonical_json,
@@ -47,7 +52,7 @@ from .schema.serde import (
 )
 
 
-NAIVE_RUN_REPORT_SCHEMA_VERSION = "wafer_frontend.naive_run_report/v1alpha2"
+NAIVE_RUN_REPORT_SCHEMA_VERSION = "wafer_frontend.naive_run_report/v1alpha3"
 
 _PROGRAM_IO_PREFIX = "[PROGRAM_IO] "
 _PROGRAM_IO_PROBE_PREFIX = "[PROGRAM_IO_PROBE] "
@@ -108,6 +113,7 @@ class NaiveRunRequest:
     timeout_seconds: int = 300
     repeat: int = 2
     keep_failed: bool = False
+    intra_die_refine_options: SplitKRefineOptions | IntraDieOptimizationOptions | None = None
 
     def validate(self, path: str = "request") -> None:
         if type(self.case) is not NaiveRunCase:
@@ -163,13 +169,24 @@ class NaiveRunRequest:
             value = getattr(self, field_name)
             if type(value) is not int or value <= 0:
                 raise SchemaError("must be a positive integer", path=f"{path}.{field_name}")
-        if self.repeat != 2:
+        if self.repeat not in (2, 3):
             raise SchemaError(
-                "the frozen timing gate requires exactly two runs",
+                "the timing gate requires exactly two or three runs",
                 path=f"{path}.repeat",
             )
         if type(self.keep_failed) is not bool:
             raise SchemaError("must be bool", path=f"{path}.keep_failed")
+        if self.intra_die_refine_options is not None:
+            if type(self.intra_die_refine_options) not in (
+                SplitKRefineOptions, IntraDieOptimizationOptions,
+            ):
+                raise SchemaError(
+                    "must be SplitKRefineOptions, IntraDieOptimizationOptions, or None",
+                    path=f"{path}.intra_die_refine_options",
+                )
+            self.intra_die_refine_options.validate(
+                f"{path}.intra_die_refine_options"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,12 +384,12 @@ class NaiveRunReport:
             for index, raw_receipt in enumerate(raw_receipts)
         )
         if (
-            len(receipts) != 10
+            len(receipts) != 11
             or tuple(receipt.pass_name for receipt in receipts)
-            != tuple(spec.name for spec in PASS_SPECS[:10])
+            != tuple(spec.name for spec in PASS_SPECS[:11])
         ):
             raise SchemaError(
-                "must contain the ten fixed compile receipts in order",
+                "must contain the eleven fixed compile receipts in order",
                 path=f"{path}.provenance.pass_receipts",
             )
         raw_stage_digests = self.provenance["stage_digests"]
@@ -382,9 +399,9 @@ class NaiveRunReport:
                 path=f"{path}.provenance.stage_digests",
             )
         stage_digests = tuple(raw_stage_digests)
-        if len(stage_digests) != 11:
+        if len(stage_digests) != 12:
             raise SchemaError(
-                "must contain eleven adjacent artifact digests",
+                "must contain twelve adjacent artifact digests",
                 path=f"{path}.provenance.stage_digests",
             )
         for index, digest in enumerate(stage_digests):
@@ -408,7 +425,7 @@ class NaiveRunReport:
                 )
         receipt_selections = (
             *receipts[4].policy_selections,
-            *receipts[6].policy_selections,
+            *receipts[7].policy_selections,
         )
         if receipt_selections != policy_selections:
             raise SchemaError(
@@ -418,11 +435,11 @@ class NaiveRunReport:
         context_ids = self.provenance["context_ids"]
         if (
             not isinstance(context_ids, (tuple, list))
-            or len(context_ids) != 5
+            or len(context_ids) != 6
             or any(type(value) is not str or not value for value in context_ids)
         ):
             raise SchemaError(
-                "must contain the five non-empty context ids",
+                "must contain the six non-empty context ids",
                 path=f"{path}.provenance.context_ids",
             )
         assert isinstance(self.runtime, dict)
@@ -475,6 +492,71 @@ def _sha256_file(path: Path) -> str:
 
 def _write_json(path: Path, value: object) -> None:
     path.write_text(canonical_json(value) + "\n", encoding="utf-8")
+
+
+def _build_intra_die_v2_calibration_evidence(
+    decisions: tuple[IntraDieV2SearchDecision, ...],
+    *,
+    simulator_measured_makespan_cycles: int,
+    simulator_calls_used: int,
+    repeat_signature_stable: bool,
+) -> tuple[IntraDieV2CalibrationEvidence, ...]:
+    """Bind analytic predictions to the already-reserved final timing runs."""
+
+    evidence = tuple(
+        IntraDieV2CalibrationEvidence.create(
+            decision,
+            simulator_measured_makespan_cycles=simulator_measured_makespan_cycles,
+            simulator_calls_used=simulator_calls_used,
+            repeat_signature_stable=repeat_signature_stable,
+        )
+        for decision in decisions
+    )
+    for index, (item, decision) in enumerate(zip(evidence, decisions)):
+        item.validate_against(
+            decision, path=f"intra_die_v2_calibration_evidence[{index}]"
+        )
+    return evidence
+
+
+def _write_intra_die_v2_calibration_evidence(
+    path: Path,
+    decisions: tuple[IntraDieV2SearchDecision, ...],
+    *,
+    simulator_measured_makespan_cycles: int,
+    simulator_calls_used: int,
+    repeat_signature_stable: bool,
+) -> tuple[IntraDieV2CalibrationEvidence, ...]:
+    evidence = _build_intra_die_v2_calibration_evidence(
+        decisions,
+        simulator_measured_makespan_cycles=simulator_measured_makespan_cycles,
+        simulator_calls_used=simulator_calls_used,
+        repeat_signature_stable=repeat_signature_stable,
+    )
+    if evidence:
+        _write_json(path, evidence)
+    return evidence
+
+
+def _intra_die_v2_calibration_notes(
+    evidence: tuple[IntraDieV2CalibrationEvidence, ...],
+) -> tuple[str, ...]:
+    if not evidence:
+        return ()
+    notes = [
+        "intra-die v2 calibration evidence: "
+        + ", ".join(
+            f"{item.id}:calibrated={str(item.calibrated).lower()}:"
+            f"relative_error={item.relative_error:.6f}"
+            for item in evidence
+        )
+    ]
+    if any(not item.calibrated for item in evidence):
+        notes.append(
+            "calibrated=false: this timing-only evidence explicitly forbids "
+            "paper-grade performance claims"
+        )
+    return tuple(notes)
 
 
 def _copy_input(source: Path, destination: Path) -> str:
@@ -999,6 +1081,7 @@ def run_naive(
             fabric,
             hbm_address_spaces=hbm_address_spaces,
             registry=registry,
+            intra_die_refine_options=request.intra_die_refine_options,
         )
         _validate_case_identity(request, compilation)
         source = _select_profile(compilation, request.profile_id)
@@ -1021,6 +1104,44 @@ def run_naive(
         _write_json(receipts_path, receipts)
         stage_digests = tuple(canonical_digest(value) for value in compilation.artifacts)
         _write_json(stage_path, stage_digests)
+        refined_bundle = next(
+            (
+                artifact
+                for artifact in compilation.artifacts
+                if type(artifact) is RefinedIR2Bundle
+            ),
+            None,
+        )
+        v2_search_decisions = (
+            tuple(
+                entry.split_k_refinement.search_decision
+                for entry in refined_bundle.entries
+                if entry.split_k_refinement is not None
+            )
+            if refined_bundle is not None
+            else ()
+        )
+        for decision_index, decision in enumerate(v2_search_decisions):
+            if decision.hardware_digest != hardware_sha:
+                raise NaiveRunError(
+                    "timing model hardware digest does not match the run input",
+                    path=(
+                        "compile.intra_die_v2_search_decisions"
+                        f"[{decision_index}].hardware_digest"
+                    ),
+                )
+            if decision.simulation_digest != simulation_sha:
+                raise NaiveRunError(
+                    "timing model simulation digest does not match the run input",
+                    path=(
+                        "compile.intra_die_v2_search_decisions"
+                        f"[{decision_index}].simulation_digest"
+                    ),
+                )
+        _write_json(
+            compile_dir / "intra_die_v2_search_decisions.json",
+            v2_search_decisions,
+        )
 
         artifact_path = program_dir / "program.npup"
         finalizer_report_path = program_dir / "finalization_report.json"
@@ -1104,10 +1225,24 @@ def run_naive(
                     "d2d_link_packets": evidence.d2d_link_packets,
                 }
             )
-        if runtime_evidence[0] != runtime_evidence[1]:
+        if any(
+            evidence != runtime_evidence[0]
+            for evidence in runtime_evidence[1:]
+        ):
             raise NaiveRunError(
                 "repeat runtime marker signature changed", path="runtime.repeat"
             )
+        intra_die_v2_calibration_evidence = (
+            _write_intra_die_v2_calibration_evidence(
+                compile_dir / "intra_die_v2_calibration_evidence.json",
+                v2_search_decisions,
+                simulator_measured_makespan_cycles=(
+                    runtime_evidence[0].makespan_cycles
+                ),
+                simulator_calls_used=request.repeat,
+                repeat_signature_stable=True,
+            )
+        )
         _write_json(run_dir / "parsed_markers.json", tuple(parsed_runs))
 
         static_metrics = _static_metrics(source)
@@ -1136,6 +1271,9 @@ def run_naive(
             "d2d_link_packets": runtime_evidence[0].d2d_link_packets,
         }
         context_ids = tuple(context.id for context in compilation.contexts)
+        calibration_notes = _intra_die_v2_calibration_notes(
+            intra_die_v2_calibration_evidence
+        )
         report = NaiveRunReport.create(
             case=request.case,
             validation_mode=request.validation,
@@ -1189,6 +1327,7 @@ def run_naive(
                     "timing-only compute does not write Dense numerical output",
                     "zero timing probes prove address/lifecycle/transport/control closure only",
                     "reduction-u3f requires the independent E0 non-zero oracle",
+                    *calibration_notes,
                 ),
             },
         )

@@ -631,6 +631,67 @@ LoweredPrimList LowerDteRecv(const ExternalRecord &record,
     return result;
 }
 
+LoweredPrimList LowerLocalNoc(const ExternalRecord &record,
+                               const OpcodeManifestEntry &entry,
+                               const LoweringContext &context) {
+    if (record.opcode == Opcode::LOCAL_NOC_SEND) {
+        const auto &operands = std::get<LocalNocSendOperands>(record.operands);
+        auto base = CreateUntracked(PrimId::DTE_SEND_ENDPOINT);
+        auto *prim = dynamic_cast<Dte_send_endpoint_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "DTE_SEND_ENDPOINT factory returned the wrong type");
+        prim->mode = DteEndpointSendMode::P2P;
+        prim->source_space = DteEndpointSourceSpace::SRAM;
+        prim->completion = DteEndpointCompletion::SYNC;
+        prim->datatype = DteEndpointDataType::UINT8;
+        prim->reduce_op = DteEndpointReduceOp::NONE;
+        prim->fsm_id = static_cast<uint32_t>(operands.event_id);
+        prim->token = 0;
+        prim->length_bytes = operands.byte_count;
+        prim->peer_core = static_cast<uint16_t>(operands.destination_core);
+        SetEndpointAddress(prim->source, operands.source, entry, context);
+        prim->Validate();
+        LoweredPrimList result;
+        result.push_back(std::move(base));
+        return result;
+    }
+    if (record.opcode == Opcode::LOCAL_NOC_RECV) {
+        const auto &operands = std::get<LocalNocRecvOperands>(record.operands);
+        auto base = CreateUntracked(PrimId::DTE_RECV_ENDPOINT);
+        auto *prim = dynamic_cast<Dte_recv_endpoint_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "DTE_RECV_ENDPOINT factory returned the wrong type");
+        prim->mode = DteEndpointRecvMode::P2P;
+        prim->completion = DteEndpointCompletion::ASYNC;
+        prim->datatype = DteEndpointDataType::UINT8;
+        prim->reduce_op = DteEndpointReduceOp::NONE;
+        prim->fsm_id = static_cast<uint32_t>(operands.event_id);
+        prim->token = static_cast<uint32_t>(operands.event_id);
+        prim->length_bytes = operands.byte_count;
+        prim->peer_core = static_cast<uint16_t>(operands.source_core);
+        SetEndpointAddress(prim->destination, operands.destination, entry, context);
+        prim->Validate();
+        LoweredPrimList result;
+        result.push_back(std::move(base));
+        return result;
+    }
+    if (record.opcode == Opcode::LOCAL_NOC_WAIT) {
+        const auto &operands = std::get<LocalNocWaitOperands>(record.operands);
+        auto base = CreateUntracked(PrimId::DTE_ASYNC);
+        auto *prim = dynamic_cast<Dte_async_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "DTE_ASYNC factory returned the wrong type");
+        prim->op = DteAsyncOp::WAIT;
+        prim->token = static_cast<uint32_t>(operands.event_id);
+        prim->payload_bits = 0;
+        prim->refreshPrimType();
+        LoweredPrimList result;
+        result.push_back(std::move(base));
+        return result;
+    }
+    LoweringFailure(entry, "unexpected local NoC opcode");
+}
+
 LoweredPrimList LowerDteIssue(const ExternalRecord &record,
                               const OpcodeManifestEntry &entry,
                               const LoweringContext &context) {
@@ -1186,6 +1247,10 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
         return LowerDteSend(record, *entry, context);
     case Opcode::DTE_RECV:
         return LowerDteRecv(record, *entry, context);
+    case Opcode::LOCAL_NOC_SEND:
+    case Opcode::LOCAL_NOC_RECV:
+    case Opcode::LOCAL_NOC_WAIT:
+        return LowerLocalNoc(record, *entry, context);
     case Opcode::REDUCE_COMPUTE:
         Unavailable(*entry,
                     "requires whole-artifact P6 lowering and the future strict byte-executing reduction runtime; legacy timing-only Reduce_compute_prim is forbidden");

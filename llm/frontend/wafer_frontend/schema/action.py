@@ -59,6 +59,9 @@ FUSION_PLAN_SCHEMA_VERSION = "wafer_frontend.fusion_plan/v1alpha10"
 STANDALONE_COLLECTIVE_PLAN_SCHEMA_VERSION = (
     "wafer_frontend.standalone_collective_plan/v1alpha9"
 )
+SWIZZLE_BOUND_ACTION_REF_SCHEMA_VERSION = (
+    "wafer_frontend.swizzle_bound_action_ref/v1"
+)
 
 
 class FusionActionKind(str, Enum):
@@ -69,6 +72,28 @@ class FusionActionKind(str, Enum):
     REDUCE = "reduce"
     WAIT = "wait"
     BARRIER = "barrier"
+
+
+@dataclass(frozen=True, slots=True)
+class SwizzleBoundActionRef:
+    """Stable common-IR2 reference to one lossless Swizzle bound action.
+
+    ``SwizzleFusionPlan`` deliberately owns richer semantics than the legacy
+    ``FusionAction`` carrier (chunk origin, temporary-value lineage and
+    deployment selection).  Common IR2 must reference that action directly,
+    rather than reconstructing a naive action and losing those semantics.
+    The plan itself remains the authoritative payload and is checked by the
+    projection boundary.
+    """
+
+    plan_id: str
+    rank: int
+    action_id: str
+
+    def validate(self, path: str) -> None:
+        validate_nonempty(self.plan_id, f"{path}.plan_id")
+        validate_uint64(self.rank, f"{path}.rank")
+        validate_nonempty(self.action_id, f"{path}.action_id")
 
 
 class CollectiveAlgorithm(str, Enum):

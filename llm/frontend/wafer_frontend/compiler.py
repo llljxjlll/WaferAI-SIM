@@ -7,7 +7,7 @@ runtime-ID assignment and ProgramArtifact encoding are performed by the C++
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 from .errors import SchemaError
@@ -26,12 +26,31 @@ from .passes import (
     schedule_bundle,
 )
 from .passes.pass_manager import PipelineSnapshot
+from .passes.intra_die_refine import refine_bundle
 from .policies.registry import PolicyRegistry, RegistryKind, production_registry
-from .schema.common import validate_nonempty
+from .schema.common import stable_artifact_id, validate_nonempty
 from .schema.experiment import ExperimentSpec
 from .schema.ir1 import PhysicalFabric
-from .schema.n4 import FusionPartitionContext, InterDiePlanningContext
-from .schema.n5 import IntraDieSchedulingContext, ProjectToIR2Context
+from .schema.n4 import (
+    FusedInterDieContract,
+    FusionPartitionContext,
+    InterDiePlanningContext,
+)
+from .schema.intra_die_refine import (
+    IntraDieOptimizationOptions,
+    IntraDieRefineContext,
+    IntraDieRefineContract,
+    RefinedIR2Bundle,
+    SplitKRefineOptions,
+)
+from .schema.n5 import (
+    IntraDieSchedulingContext,
+    IntraDieSchedulingContract,
+    ProjectToIR2Context,
+    ProjectedIR2Bundle,
+    ProjectedProfileIR2,
+    PROJECTED_IR2_BUNDLE_SCHEMA_VERSION,
+)
 from .schema.n6 import LinkedProgramBundle
 from .schema.placement import PlacementContext
 from .schema.policy import PolicySelection
@@ -54,9 +73,9 @@ class NaiveCompilation:
     def validate(self, path: str = "naive_compilation") -> None:
         self.spec.validate(f"{path}.spec")
         self.fabric.validate(f"{path}.fabric")
-        if len(self.contexts) != 5:
+        if len(self.contexts) != 6:
             raise SchemaError(
-                "must contain the five fixed naive pass contexts",
+                "must contain the six fixed naive pass contexts",
                 path=f"{path}.contexts",
             )
         for index, context in enumerate(self.contexts):
@@ -67,9 +86,9 @@ class NaiveCompilation:
                     path=f"{path}.contexts[{index}]",
                 )
             validator(f"{path}.contexts[{index}]")
-        if len(self.artifacts) != 11 or self.artifacts[0] != self.spec:
+        if len(self.artifacts) != 12 or self.artifacts[0] != self.spec:
             raise SchemaError(
-                "must contain the exact spec plus ten ordered pass outputs",
+                "must contain the exact spec plus eleven ordered pass outputs",
                 path=f"{path}.artifacts",
             )
         if self.artifacts[-1] != self.linked:
@@ -84,9 +103,9 @@ class NaiveCompilation:
                 "pipeline must stop at MANIFEST_LINKED",
                 path=f"{path}.snapshot.phase",
             )
-        if len(self.snapshot.receipts) != 10:
+        if len(self.snapshot.receipts) != 11:
             raise SchemaError(
-                "must contain ten fixed pass receipts",
+                "must contain eleven fixed pass receipts",
                 path=f"{path}.snapshot.receipts",
             )
         for index, receipt in enumerate(self.snapshot.receipts):
@@ -111,11 +130,11 @@ class NaiveCompilation:
             receipt.context_digest for receipt in self.snapshot.receipts
         ) != expected_context_digests:
             raise SchemaError(
-                "receipt context digests disagree with the five fixed contexts",
+                "receipt context digests disagree with the six fixed contexts",
                 path=f"{path}.snapshot.receipts",
             )
         planning_context = self.contexts[2]
-        scheduling_context = self.contexts[4]
+        scheduling_context = self.contexts[5]
         if type(planning_context) is not InterDiePlanningContext:
             raise SchemaError(
                 "third context must be InterDiePlanningContext",
@@ -123,8 +142,8 @@ class NaiveCompilation:
             )
         if type(scheduling_context) is not IntraDieSchedulingContext:
             raise SchemaError(
-                "fifth context must be IntraDieSchedulingContext",
-                path=f"{path}.contexts[4]",
+                "sixth context must be IntraDieSchedulingContext",
+                path=f"{path}.contexts[5]",
             )
         expected_summary = (
             planning_context.fused_policy,
@@ -146,6 +165,7 @@ class NaiveCompilation:
                 planning_context.standalone_policy,
             ),
             (),
+            (),
             (scheduling_context.policy,),
             (),
             (),
@@ -160,6 +180,104 @@ class NaiveCompilation:
             )
 
 
+def _fused_inter_die_contract_for_policy(
+    policy: PolicySelection,
+) -> FusedInterDieContract:
+    contracts = {
+        "naive": FusedInterDieContract.DIRECT_NAIVE_V1,
+        "swizzle_topo": FusedInterDieContract.SWIZZLE_TOPO_V1,
+    }
+    try:
+        return contracts[policy.name]
+    except KeyError as exc:
+        raise SchemaError(
+            "unsupported inter-die policy for compiler contract",
+            path="spec.policy.inter_die",
+        ) from exc
+
+
+def _intra_die_contract_for_policy(
+    policy: PolicySelection,
+) -> IntraDieSchedulingContract:
+    contracts = {
+        "naive": (
+            IntraDieSchedulingContract
+            .NAIVE_COMPONENT_RR_XY_SEQUENTIAL_STATE_TRANSFER_V5
+        ),
+        "optimized": IntraDieSchedulingContract.OPTIMIZED_CRITICAL_PATH_XY_V1,
+    }
+    try:
+        return contracts[policy.name]
+    except KeyError as exc:
+        raise SchemaError(
+            "unsupported intra-die policy for compiler contract",
+            path="spec.policy.intra_die",
+        ) from exc
+
+
+def _refine_contract_for_policy(
+    policy: PolicySelection,
+    options: SplitKRefineOptions | IntraDieOptimizationOptions | None,
+) -> tuple[IntraDieRefineContract, SplitKRefineOptions | IntraDieOptimizationOptions]:
+    if policy.name not in ("naive", "optimized"):
+        raise SchemaError(
+            "unsupported intra-die policy for refine contract",
+            path="spec.policy.intra_die",
+        )
+    if options is not None and type(options) not in (
+        SplitKRefineOptions, IntraDieOptimizationOptions,
+    ):
+        raise SchemaError(
+            "must be SplitKRefineOptions or IntraDieOptimizationOptions",
+            path="intra_die_refine_options",
+        )
+    if options is None or options == SplitKRefineOptions():
+        return IntraDieRefineContract.IDENTITY_V1, SplitKRefineOptions()
+    options.validate("intra_die_refine_options")
+    if policy.name != "optimized":
+        raise SchemaError(
+            "split-K graph refinement requires intra_die=optimized",
+            path="intra_die_refine_options",
+        )
+    return IntraDieRefineContract.SPLIT_K_REDUCE_DOUBLE_BUFFER_V2, options
+
+
+def _refined_projected_schedule_view(source: RefinedIR2Bundle) -> ProjectedIR2Bundle:
+    entries: list[ProjectedProfileIR2] = []
+    for refined in source.entries:
+        projection = (
+            refined.split_k_refinement.projection
+            if refined.split_k_refinement is not None
+            else refined.projection
+        )
+        entry = replace(refined.source, id="", projection=projection)
+        entry = replace(
+            entry,
+            id=stable_artifact_id(
+                "projected_profile_ir2", entry._semantic_key(),
+                schema_version=PROJECTED_IR2_BUNDLE_SCHEMA_VERSION,
+            ),
+        )
+        entry.validate("refined_projected_schedule_view.entry")
+        entries.append(entry)
+    view = replace(source.source, id="", entries=tuple(entries))
+    view = replace(
+        view,
+        id=stable_artifact_id(
+            "projected_ir2_bundle", view._semantic_key(),
+            schema_version=PROJECTED_IR2_BUNDLE_SCHEMA_VERSION,
+        ),
+    )
+    view.validate("refined_projected_schedule_view")
+    return view
+
+def _schedule_refined_bundle(source: RefinedIR2Bundle, context: IntraDieSchedulingContext, policy: object):
+    if type(source) is not RefinedIR2Bundle:
+        raise SchemaError("must be a RefinedIR2Bundle", path="source")
+    source.validate("source")
+    return schedule_bundle(_refined_projected_schedule_view(source), context, policy)
+
+
 def compile_naive(
     spec: ExperimentSpec,
     fabric: PhysicalFabric,
@@ -167,6 +285,7 @@ def compile_naive(
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
     producer_pass: str = "naive_frontend",
     registry: PolicyRegistry | None = None,
+    intra_die_refine_options: SplitKRefineOptions | IntraDieOptimizationOptions | None = None,
 ) -> NaiveCompilation:
     """Compile one validated experiment through the fixed naive Python path."""
 
@@ -207,20 +326,34 @@ def compile_naive(
         producer_pass=producer_pass,
         fused_policy=inter_die_policy.selection,
         standalone_policy=standalone_policy.selection,
+        fused_contract=_fused_inter_die_contract_for_policy(
+            inter_die_policy.selection
+        ),
     )
     projection_context = ProjectToIR2Context.create(
         producer_pass=producer_pass,
         state_transfers=(),
     )
+    refine_contract, refine_options = _refine_contract_for_policy(
+        intra_die_policy.selection, intra_die_refine_options
+    )
+    refine_context = IntraDieRefineContext.create(
+        producer_pass=producer_pass,
+        policy=intra_die_policy.selection,
+        contract=refine_contract,
+        options=refine_options,
+    )
     scheduling_context = IntraDieSchedulingContext.create(
         producer_pass=producer_pass,
         policy=intra_die_policy.selection,
+        contract=_intra_die_contract_for_policy(intra_die_policy.selection),
     )
     contexts: tuple[object, ...] = (
         placement_context,
         partition_context,
         planning_context,
         projection_context,
+        refine_context,
         scheduling_context,
     )
 
@@ -230,7 +363,7 @@ def compile_naive(
         standalone_policy=standalone_policy.implementation,
     )
     selected_schedule_bundle = partial(
-        schedule_bundle,
+        _schedule_refined_bundle,
         policy=intra_die_policy.implementation,
     )
 
@@ -247,6 +380,7 @@ def compile_naive(
             (inter_die_policy.selection, standalone_policy.selection),
         ),
         ("project_to_ir2", project_bundle, projection_context, ()),
+        ("intra_die_refine", refine_bundle, refine_context, ()),
         (
             "intra_die_schedule",
             selected_schedule_bundle,

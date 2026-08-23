@@ -265,6 +265,10 @@ struct LocalReduceOperands {
     SramAddressOperand destination;
 };
 
+struct LocalNocSendOperands { SramAddressOperand source; uint64_t destination_core = 0; uint64_t byte_count = 1; uint64_t event_id = 0; };
+struct LocalNocRecvOperands { SramAddressOperand destination; uint64_t source_core = 0; uint64_t byte_count = 1; uint64_t event_id = 0; };
+struct LocalNocWaitOperands { uint64_t event_id = 0; };
+
 struct LsuOperands {
     uint64_t hbm_address_bytes = 0;
     uint64_t size_bytes = 1;
@@ -357,6 +361,7 @@ using RecordOperands =
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
                  DteSendOperands, DteRecvOperands,
                  ReduceComputeOperands, LocalReduceOperands, LsuOperands,
+                 LocalNocSendOperands, LocalNocRecvOperands, LocalNocWaitOperands,
                  DteIssueOperands,
                  SymbolOperands, SramBindOperands, SramAllocOperands,
                  SramAllocAtOperands, SramResizeOperands, SramRenameOperands,
@@ -382,6 +387,9 @@ enum class RecordOperandKind : uint8_t {
     DTE_RECV,
     REDUCE_COMPUTE,
     LOCAL_REDUCE,
+    LOCAL_NOC_SEND,
+    LOCAL_NOC_RECV,
+    LOCAL_NOC_WAIT,
     LSU,
     DTE_ISSUE,
     SYMBOL,

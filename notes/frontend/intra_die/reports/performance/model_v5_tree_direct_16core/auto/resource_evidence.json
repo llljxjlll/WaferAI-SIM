@@ -1,0 +1,660 @@
+{
+  "id": "intra_die_resource_evidence_523d91bf3d22b98d",
+  "producer_pass": "intra_die_performance_runner",
+  "repeat": 3,
+  "repeat_signature_stable": true,
+  "repeat_signatures": [
+    "d64bb86dcdb9d80c45d36cfea7ab9c94ba7e79567788b09cd22b68a9364adf7c",
+    "d64bb86dcdb9d80c45d36cfea7ab9c94ba7e79567788b09cd22b68a9364adf7c",
+    "d64bb86dcdb9d80c45d36cfea7ab9c94ba7e79567788b09cd22b68a9364adf7c"
+  ],
+  "resources": {
+    "cycle_ns": 2,
+    "d2d": {
+      "busy_cycles": 0,
+      "stall_cycles": 0
+    },
+    "overlap_cycles": null,
+    "overlap_status": "unsupported:no_explicit_overlap_marker",
+    "per_core": [
+      {
+        "core": 0,
+        "primitive_busy_cycles": {
+          "compute": 304,
+          "dte_lsu": 8724,
+          "issue_control": 474
+        },
+        "primitive_busy_ns": {
+          "compute": 608,
+          "dte_lsu": 17447,
+          "issue_control": 948
+        },
+        "primitive_counts": {
+          "Attention_exact_prim": 1,
+          "Collective_data_v1_prim": 6,
+          "Embedding_lookup_prim": 1,
+          "Lsu_mem": 11,
+          "Matmul_f": 7,
+          "Residual_f": 2,
+          "Rope_qk_exact_prim": 1,
+          "Sram_bind_oneshot": 16,
+          "Sram_lifecycle": 124,
+          "rmsnorm_forward": 3,
+          "swiglu_forward": 1
+        }
+      },
+      {
+        "core": 1,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 566,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 1131,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 2,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2345,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4689,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 3,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 3083,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 6165,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 4,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2932,
+          "issue_control": 212
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5863,
+          "issue_control": 424
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 2,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 14
+        }
+      },
+      {
+        "core": 5,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 637,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 1273,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 6,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2566,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5131,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 7,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 3228,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 6455,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 8,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2041,
+          "issue_control": 318
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4081,
+          "issue_control": 636
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 3,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 18
+        }
+      },
+      {
+        "core": 9,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 421,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 841,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 10,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2785,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5569,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 11,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2785,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5569,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 12,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 1748,
+          "issue_control": 212
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 3495,
+          "issue_control": 424
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 2,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 14
+        }
+      },
+      {
+        "core": 13,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 486,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 971,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 14,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 1964,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 3927,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 15,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2262,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4523,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 16,
+        "primitive_busy_cycles": {
+          "compute": 304,
+          "dte_lsu": 8734,
+          "issue_control": 474
+        },
+        "primitive_busy_ns": {
+          "compute": 608,
+          "dte_lsu": 17467,
+          "issue_control": 948
+        },
+        "primitive_counts": {
+          "Attention_exact_prim": 1,
+          "Collective_data_v1_prim": 6,
+          "Embedding_lookup_prim": 1,
+          "Lsu_mem": 11,
+          "Matmul_f": 7,
+          "Residual_f": 2,
+          "Rope_qk_exact_prim": 1,
+          "Sram_bind_oneshot": 16,
+          "Sram_lifecycle": 124,
+          "rmsnorm_forward": 3,
+          "swiglu_forward": 1
+        }
+      },
+      {
+        "core": 17,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 566,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 1131,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 18,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 3095,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 6189,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 19,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2945,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5889,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 20,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2124,
+          "issue_control": 212
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4247,
+          "issue_control": 424
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 2,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 14
+        }
+      },
+      {
+        "core": 21,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 637,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 1273,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 22,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2942,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5883,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 23,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 3242,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 6483,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 24,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 1829,
+          "issue_control": 318
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 3657,
+          "issue_control": 636
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 3,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 18
+        }
+      },
+      {
+        "core": 25,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 490,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 979,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 26,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2415,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4829,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 27,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2713,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 5425,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 28,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2038,
+          "issue_control": 212
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4075,
+          "issue_control": 424
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 2,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 14
+        }
+      },
+      {
+        "core": 29,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 410,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 819,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 30,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2040,
+          "issue_control": 106
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4079,
+          "issue_control": 212
+        },
+        "primitive_counts": {
+          "Collective_data_v1_prim": 1,
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 10
+        }
+      },
+      {
+        "core": 31,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 2482,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 4963,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Lsu_mem": 1,
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      }
+    ],
+    "program_memory": []
+  },
+  "schema_version": "wafer_frontend.intra_die_resource_evidence/v1alpha1"
+}

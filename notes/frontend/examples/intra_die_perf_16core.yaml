@@ -1,0 +1,62 @@
+schema_version: wafer_frontend.experiment/v1alpha5
+model:
+  source: analytic
+  arch: llama
+  V: 256
+  H: 32
+  I: 64
+  NH: 4
+  KVH: 2
+  DH: 8
+  rotary_dim: 8
+  L: 1
+  dtype: fp16
+  tie_word_embeddings: false
+  rms_norm_epsilon: 0.00001
+  rope_theta: 10000.0
+  max_position_embeddings: 4096
+  moe: null
+hardware:
+  ref: hardware_2x1.json
+workload:
+  mode: infer
+  infer:
+    source: static_profile
+    output: logits
+    profile:
+      prefill_tokens: 4
+      decode_tokens: 0
+      num_seqs: 1
+      context_sum: 4
+      context_max: 4
+      kv_pages: 1
+      expert_load: null
+parallel:
+  instances:
+    - id: P0
+      role: prefill
+      tp: 2
+      sp: true
+      replicas: 1
+      dp: 1
+      pp: 1
+      ep: 1
+placement:
+  strategy: compact
+  groups: []
+policy:
+  partition: gemm_coll
+  inter_die: naive
+  intra_die: optimized
+backend:
+  execution: unified_stream
+  ordinary_lowering: json_coarse
+  fused_lowering: isa_region
+  standalone_collective_lowering: strict_actions
+  reduction_contract:
+    accumulate: fp32
+    rounding: rne
+    validation: timing
+  transport: strict
+  static_link: true
+  dynamic_region_dispatch: false

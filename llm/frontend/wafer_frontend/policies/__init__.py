@@ -25,16 +25,24 @@ from .naive_intra_die import (
     NaiveIntraDiePolicy,
 )
 from .naive_inter_die import DirectAllGatherPolicy, NaiveInterDiePolicy
+from .optimized_intra_die import (
+    OPTIMIZED_INTRADIE_POLICY_SCHEMA_VERSION,
+    OptimizedIntraDiePolicy,
+)
 from .naive_project_to_ir2 import NaiveProjectToIR2
+from .intra_die_v2_search import evaluate_intra_die_v2_candidates
 
 __all__ = [
     "FusionPartition",
     "GlobalActionDAGBuilder",
     "InterDiePolicy",
     "IntraDiePolicy",
+    "evaluate_intra_die_v2_candidates",
     "NaiveFusionPartition",
     "NAIVE_INTRADIE_POLICY_SCHEMA_VERSION",
     "NaiveIntraDiePolicy",
+    "OPTIMIZED_INTRADIE_POLICY_SCHEMA_VERSION",
+    "OptimizedIntraDiePolicy",
     "NaiveInterDiePolicy",
     "NaiveProjectToIR2",
     "DirectAllGatherPolicy",

@@ -164,10 +164,9 @@ def _require_compute(
         or action.lowering is not lowering
         or action.logical_core is None
         or compute is None
-        or compute.tile is not None
     ):
         raise SchemaError(
-            "coarse lowering requires one ordinary scheduled Dense COMP",
+            "coarse lowering requires one ordinary scheduled Dense COMP, optionally refined into a compute tile",
             path=path,
         )
     return compute, _compute_record_abi(compute, path=f"{path}.compute")
@@ -485,6 +484,81 @@ def _require_matmul(
     return compute, compute.workload
 
 
+def _runtime_core_id(context: LoweringContext, core: LogicalCoreRef) -> int:
+    die = next((item for item in context.ir1.fabric.dies if item.id == core.die_id), None)
+    if die is None:
+        raise SchemaError("local NoC action references an unknown die", path="action.logical_core")
+    physical = next((item for item in die.cores if item.local_core_id == core.local_core_id), None)
+    if physical is None:
+        raise SchemaError("local NoC action references an unknown local core", path="action.logical_core")
+    return physical.runtime_core_id
+
+
+def _lower_local_noc(action: GlobalAction, context: LoweringContext) -> CommandFragment:
+    if action.logical_core is None or action.flow_id is None or not action.flow_id.startswith("local."):
+        raise SchemaError("Local NoC lowering requires one placed local.* action", path="action")
+    schedule = next((item for item in context.schedule_set.schedules if item.id == action.source.schedule_id), None)
+    if schedule is None:
+        raise SchemaError("action references an unknown schedule", path="action.source.schedule_id")
+    bindings = {binding.id: binding for binding in schedule.buffer_bindings}
+    local_flow_ids = tuple(sorted({
+        candidate.flow_id for candidate in context.global_dag.actions
+        if candidate.flow_id is not None and candidate.flow_id.startswith("local.")
+    }))
+    local_index = local_flow_ids.index(action.flow_id) + 1
+    if local_index >= 0x80000000:
+        raise SchemaError("too many local NoC flows for event namespace", path="action.flow_id")
+    event_id = 0x80000000 | local_index
+    program_symbols: tuple[ProgramSymbol, ...] = ()
+    used_bindings: tuple[BufferBinding, ...] = ()
+    address_relocations: tuple[AddressRelocation, ...] = ()
+    if action.task_kind is SemanticTaskKind.LOCAL_SEND:
+        peer = next((candidate for candidate in context.global_dag.actions if candidate.flow_id == action.flow_id and candidate.task_kind is SemanticTaskKind.LOCAL_RECV), None)
+        if peer is None or peer.logical_core is None:
+            raise SchemaError("LOCAL_SEND requires one placed matching LOCAL_RECV", path="action.flow_id")
+        binding = _binding_for_use(action, bindings, BufferUseRole.SEND_SOURCE, 0, path="action.buffer_uses")
+        symbol = _program_symbol(schedule_id=schedule.id, binding=binding, kind=ProgramSymbolKind.ABSOLUTE_ADDRESS)
+        addend = _view_addend_for_use(action, binding, BufferUseRole.SEND_SOURCE, 0, path="action.buffer_uses")
+        record = RelocatableRecord(action.id, RecordOpcode.LOCAL_NOC_SEND, (
+            RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, symbol.id),
+            RecordOperand.literal("destination_core", _runtime_core_id(context, peer.logical_core)),
+            RecordOperand.literal("byte_count", action.bytes),
+            RecordOperand.literal("event_id", event_id),
+        ))
+        program_symbols, used_bindings = (symbol,), (binding,)
+        address_relocations = (AddressRelocation(0, SemanticOperandId.SOURCE_ADDRESS, ProgramSymbolKind.ABSOLUTE_ADDRESS, symbol.id, addend),)
+    elif action.task_kind is SemanticTaskKind.LOCAL_RECV:
+        peer = next((candidate for candidate in context.global_dag.actions if candidate.flow_id == action.flow_id and candidate.task_kind is SemanticTaskKind.LOCAL_SEND), None)
+        if peer is None or peer.logical_core is None:
+            raise SchemaError("LOCAL_RECV requires one placed matching LOCAL_SEND", path="action.flow_id")
+        binding = _binding_for_use(action, bindings, BufferUseRole.RECV_DESTINATION, 0, path="action.buffer_uses")
+        symbol = _program_symbol(schedule_id=schedule.id, binding=binding, kind=ProgramSymbolKind.ABSOLUTE_ADDRESS)
+        addend = _view_addend_for_use(action, binding, BufferUseRole.RECV_DESTINATION, 0, path="action.buffer_uses")
+        record = RelocatableRecord(action.id, RecordOpcode.LOCAL_NOC_RECV, (
+            RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, symbol.id),
+            RecordOperand.literal("source_core", _runtime_core_id(context, peer.logical_core)),
+            RecordOperand.literal("byte_count", action.bytes),
+            RecordOperand.literal("event_id", event_id),
+        ))
+        program_symbols, used_bindings = (symbol,), (binding,)
+        address_relocations = (AddressRelocation(0, SemanticOperandId.DESTINATION_ADDRESS, ProgramSymbolKind.ABSOLUTE_ADDRESS, symbol.id, addend),)
+    elif action.task_kind is SemanticTaskKind.LOCAL_WAIT:
+        record = RelocatableRecord(action.id, RecordOpcode.LOCAL_NOC_WAIT, (RecordOperand.literal("event_id", event_id),))
+    else:
+        raise SchemaError("unsupported Local NoC task kind", path="action.task_kind")
+    return CommandFragment.create(
+        producer_pass=_PRODUCER_PASS,
+        source_global_dag_id=context.global_dag.id,
+        kind=FragmentKind.COARSE,
+        claimed_action_ids=(action.id,),
+        core_streams=(CoreFragmentStream(action.logical_core, (record,), (), address_relocations),),
+        runtime_symbols=(),
+        program_symbols=program_symbols,
+        buffer_abi=tuple(_buffer_abi(schedule.id, binding, action.logical_core) for binding in used_bindings),
+    )
+
+
+
 class NaiveCoarseLowering:
     """Lower one ordinary Dense compute without changing schedule decisions."""
 
@@ -516,8 +590,11 @@ class NaiveCoarseLowering:
                 "action must exactly equal one action in the lowering context",
                 path="action",
             )
-        compute, compute_abi = _require_compute(action, "action")
-        assert action.logical_core is not None
+        if action.task_kind in (SemanticTaskKind.LOCAL_SEND, SemanticTaskKind.LOCAL_RECV, SemanticTaskKind.LOCAL_WAIT):
+            fragment = _lower_local_noc(action, context)
+            if self._validate_output:
+                fragment.validate_against(context.global_dag)
+            return fragment
 
         schedule = next(
             (
@@ -533,6 +610,91 @@ class NaiveCoarseLowering:
                 path="action.source.schedule_id",
             )
         bindings = {binding.id: binding for binding in schedule.buffer_bindings}
+
+        if action.task_kind is SemanticTaskKind.LOCAL_COPY:
+            from .standalone import _local_copy_records
+
+            (
+                records,
+                runtime_symbols,
+                program_symbols,
+                runtime_relocations,
+                address_relocations,
+                used_bindings,
+            ) = _local_copy_records(action, schedule.id, bindings)
+            fragment = CommandFragment.create(
+                producer_pass=_PRODUCER_PASS,
+                source_global_dag_id=context.global_dag.id,
+                kind=FragmentKind.COARSE,
+                claimed_action_ids=(action.id,),
+                core_streams=(
+                    CoreFragmentStream(
+                        action.logical_core,
+                        records,
+                        runtime_relocations,
+                        address_relocations,
+                    ),
+                ),
+                runtime_symbols=runtime_symbols,
+                program_symbols=program_symbols,
+                buffer_abi=tuple(
+                    sorted(
+                        (
+                            _buffer_abi(
+                                schedule.id, binding, action.logical_core
+                            )
+                            for binding in used_bindings
+                        ),
+                        key=lambda abi: abi.id,
+                    )
+                ),
+            )
+            if self._validate_output:
+                fragment.validate_against(context.global_dag)
+            return fragment
+
+        if action.task_kind is SemanticTaskKind.REDUCE:
+            from .isa_region import _reduce_record
+
+            (
+                record,
+                program_symbols,
+                address_relocations,
+                used_bindings,
+            ) = _reduce_record(action, schedule.id, bindings)
+            fragment = CommandFragment.create(
+                producer_pass=_PRODUCER_PASS,
+                source_global_dag_id=context.global_dag.id,
+                kind=FragmentKind.COARSE,
+                claimed_action_ids=(action.id,),
+                core_streams=(
+                    CoreFragmentStream(
+                        action.logical_core,
+                        (record,),
+                        (),
+                        address_relocations,
+                    ),
+                ),
+                runtime_symbols=(),
+                program_symbols=program_symbols,
+                buffer_abi=tuple(
+                    sorted(
+                        (
+                            _buffer_abi(
+                                schedule.id, binding, action.logical_core
+                            )
+                            for binding in used_bindings
+                        ),
+                        key=lambda abi: abi.id,
+                    )
+                ),
+            )
+            if self._validate_output:
+                fragment.validate_against(context.global_dag)
+            return fragment
+
+        compute, compute_abi = _require_compute(action, "action")
+        assert action.logical_core is not None
         inputs = tuple(
             _binding_for_use(
                 action,

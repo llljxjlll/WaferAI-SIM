@@ -295,6 +295,14 @@ from .ir2 import (
     canonical_state_transfer_region_id,
     canonical_state_transfer_task_id,
 )
+from .local_transport import (
+    LOCAL_TRANSPORT_PLAN_SCHEMA_VERSION,
+    LocalEvent,
+    LocalEventPhase,
+    LocalFlow,
+    LocalNocRoute,
+    LocalTransportPlan,
+)
 from .placement import (
     PLACEMENT_CONTEXT_SCHEMA_VERSION,
     PlacementContext,
@@ -1252,6 +1260,12 @@ from .lite_moe_dp4_backward import __all__ as _lite_moe_dp4_backward_all
 from .lite_moe_dp4_n6 import __all__ as _lite_moe_dp4_n6_all
 
 __all__ += [
+    "LOCAL_TRANSPORT_PLAN_SCHEMA_VERSION",
+    "LocalEvent",
+    "LocalEventPhase",
+    "LocalFlow",
+    "LocalNocRoute",
+    "LocalTransportPlan",
     *_lite_moe_dp4_all,
     *_lite_moe_dp4_execution_all,
     *_lite_moe_dp4_train_forward_all,

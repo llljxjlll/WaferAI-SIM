@@ -327,6 +327,32 @@ ExternalRecord DteRecvRecord(
     return ExternalRecord{Opcode::DTE_RECV, operands};
 }
 
+ExternalRecord LocalNocSendRecord(
+    uint64_t destination_core = 1, uint64_t event_id = 7,
+    uint64_t byte_count = 32) {
+    LocalNocSendOperands operands;
+    operands.source = AbsoluteAddress(0x100);
+    operands.destination_core = destination_core;
+    operands.byte_count = byte_count;
+    operands.event_id = event_id;
+    return {Opcode::LOCAL_NOC_SEND, operands};
+}
+
+ExternalRecord LocalNocRecvRecord(
+    uint64_t source_core = 0, uint64_t event_id = 7,
+    uint64_t byte_count = 32) {
+    LocalNocRecvOperands operands;
+    operands.destination = AbsoluteAddress(0x200);
+    operands.source_core = source_core;
+    operands.byte_count = byte_count;
+    operands.event_id = event_id;
+    return {Opcode::LOCAL_NOC_RECV, operands};
+}
+
+ExternalRecord LocalNocWaitRecord(uint64_t event_id = 7) {
+    return {Opcode::LOCAL_NOC_WAIT, LocalNocWaitOperands{event_id}};
+}
+
 ExternalRecord DteScatterRecord() {
     ExternalRecord record = DteSendRecord(
         0, 1, EndpointCompletion::ASYNC, 31, 8);
@@ -1291,6 +1317,50 @@ void CheckDteTokenPrograms(Checks &checks) {
                  {DteIssueRecord(7)});
 }
 
+void CheckLocalNocPrograms(Checks &checks) {
+    ProgramArtifact valid = Artifact(
+        {{0, {LocalNocSendRecord()}},
+         {1, {LocalNocRecvRecord(), LocalNocWaitRecord()}}},
+        EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {1});
+    config_helper_program helper(valid);
+    const auto messages = helper.BuildConfigMessages();
+    checks.Check(helper.coreconfigs.size() == 2 && !messages.empty() &&
+                     helper.expected_ack_cores() == std::set<int>({0, 1}) &&
+                     helper.expected_done_cores() == std::set<int>({1}),
+                 "LOCAL_NOC SEND/RECV/WAIT prepare as one closed two-core program");
+
+    ProgramArtifact missing_wait = valid;
+    missing_wait.cores[1].records.pop_back();
+    checks.Reject<ConfigHelperProgramError>(
+        "LOCAL_NOC missing WAIT", "dangling DTE token", [&] {
+            config_helper_program rejected(missing_wait);
+        });
+
+    ProgramArtifact wrong_wait = valid;
+    std::get<LocalNocWaitOperands>(
+        wrong_wait.cores[1].records[1].operands).event_id = 8;
+    checks.Reject<ConfigHelperProgramError>(
+        "LOCAL_NOC WAIT event mismatch", "unknown or completed", [&] {
+            config_helper_program rejected(wrong_wait);
+        });
+
+    ProgramArtifact byte_mismatch = valid;
+    std::get<LocalNocRecvOperands>(
+        byte_mismatch.cores[1].records[0].operands).byte_count = 16;
+    checks.Reject<ConfigHelperProgramError>(
+        "LOCAL_NOC endpoint byte mismatch", "length mismatch", [&] {
+            config_helper_program rejected(byte_mismatch);
+        });
+
+    ProgramArtifact inactive_peer = valid;
+    std::get<LocalNocSendOperands>(
+        inactive_peer.cores[0].records[0].operands).destination_core = 2;
+    checks.Reject<ConfigHelperProgramError>(
+        "LOCAL_NOC inactive destination", "not an active core", [&] {
+            config_helper_program rejected(inactive_peer);
+        });
+}
+
 void CheckDteEndpointPrograms(Checks &checks) {
     ProgramArtifact ordered = Artifact(
         {{0,
@@ -2126,6 +2196,7 @@ ConfigHelperProgramSelfTestResult CheckConfigHelperProgram() {
     CheckSramBindLifecycle(checks);
     CheckSramLifecyclePrograms(checks);
     CheckDteTokenPrograms(checks);
+    CheckLocalNocPrograms(checks);
     CheckDteEndpointPrograms(checks);
     CheckCollectiveProgramImages(checks);
     CheckTransactionalLoadAndClone(checks);

@@ -20,6 +20,7 @@ from ..schema.artifact_manifest import (
 )
 from ..schema.ir2 import (
     FusedNodeOrigin,
+    SwizzleNodeOrigin,
     OrdinaryNodeOrigin,
     SemanticTaskKind,
     StateIoOrigin,
@@ -271,14 +272,14 @@ def _lower_fragments(
         plan_actions = tuple(
             action
             for action in actions
-            if isinstance(action.origin_ref, FusedNodeOrigin)
+            if isinstance(action.origin_ref, (FusedNodeOrigin, SwizzleNodeOrigin))
             and action.origin_ref.plan_id == plan.id
             and action.task_kind is not SemanticTaskKind.TRANSIT
         )
         plan_transit = tuple(
             action
             for action in actions
-            if isinstance(action.origin_ref, FusedNodeOrigin)
+            if isinstance(action.origin_ref, (FusedNodeOrigin, SwizzleNodeOrigin))
             and action.origin_ref.plan_id == plan.id
             and action.task_kind is SemanticTaskKind.TRANSIT
         )

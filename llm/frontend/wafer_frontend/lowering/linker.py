@@ -326,6 +326,14 @@ def _operand_role(
             BufferUseRole.RECV_DESTINATION,
             0,
         ),
+        (RecordOpcode.LOCAL_NOC_SEND, SemanticOperandId.SOURCE_ADDRESS): (
+            BufferUseRole.SEND_SOURCE,
+            0,
+        ),
+        (RecordOpcode.LOCAL_NOC_RECV, SemanticOperandId.DESTINATION_ADDRESS): (
+            BufferUseRole.RECV_DESTINATION,
+            0,
+        ),
         (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS): (
             BufferUseRole.REDUCE_INPUT,
             -1,

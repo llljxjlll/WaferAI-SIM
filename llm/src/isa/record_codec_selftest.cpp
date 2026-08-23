@@ -356,6 +356,32 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::LOCAL_NOC_SEND: {
+        LocalNocSendOperands operands;
+        operands.source = Address(boundary);
+        operands.destination_core = Select(boundary, 0, 7, UINT16_MAX);
+        operands.byte_count = Select(
+            boundary, 1, 257, std::numeric_limits<uint64_t>::max());
+        operands.event_id = Select(boundary, 1, 11, UINT32_MAX);
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_RECV: {
+        LocalNocRecvOperands operands;
+        operands.destination = Address(boundary);
+        operands.source_core = Select(boundary, 0, 7, UINT16_MAX);
+        operands.byte_count = Select(
+            boundary, 1, 257, std::numeric_limits<uint64_t>::max());
+        operands.event_id = Select(boundary, 1, 11, UINT32_MAX);
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_WAIT: {
+        LocalNocWaitOperands operands;
+        operands.event_id = Select(boundary, 1, 11, UINT32_MAX);
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::LSU: {
         LsuOperands operands;
         operands.hbm_address_bytes =
@@ -513,7 +539,7 @@ void CheckManifest(Checks &checks) {
                          "SRAM_BIND fixed payload size");
     }
     checks.Check(LookupRecordSchema(0) == nullptr, "INVALID has no schema");
-    checks.Check(LookupRecordSchema(0x44) == nullptr,
+    checks.Check(LookupRecordSchema(0x47) == nullptr,
                  "unassigned opcode has no schema");
 }
 
@@ -574,7 +600,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 48, "executable opcode count");
+    checks.Check(executable_count == 51, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {

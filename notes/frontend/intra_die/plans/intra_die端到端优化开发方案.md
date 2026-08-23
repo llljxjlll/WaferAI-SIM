@@ -741,3 +741,69 @@ Nightly：
 - same-die 跨核依赖都有显式数据搬运与 event，不靠放宽 validator；
 - 新 carrier 经 GlobalAction、lowering、manifest、finalizer 和 simulator 闭合；
 - 搜索规模、解析模型误差和 simulator 调用预算满足参考方案的约束。
+
+
+## 14. 实现状态、接口与复现证据（2026-08-23）
+
+### 14.1 已完成的 production 闭环
+
+- `intra_die/optimized` 已由 production registry 的独立 ACTIVE factory 提供；identity 默认不改图，显式 v2 options 才启用 refine。
+- 固定 pass 顺序已包含 `intra_die_refine`；naive、optimized、swizzle_topo 均继续经过 project、schedule、GlobalAction、lowering、link、finalizer、ProgramIO 和 simulator。
+- Swizzle GEMM_RS common IR2 会合并 Swizzle region、standalone collective 和所有未被 plan 覆盖的 ordinary nodes，终端 `P0.logits` 仍为 OWNED ABI；不存在专用 runtime 旁路。
+- v2 split-K carrier v1alpha2 显式记录 CG 数量、part 到 CG 的归属、reduce CG、输入 handoff、partial handoff、版本化 stage/event 和双槽绑定。
+- 多兼容核时使用 CG0/CG1 parity：CG0 producer 通过 `LOCAL_SEND/LOCAL_RECV/LOCAL_WAIT` 把精确 K tile 交给奇数 part，奇数 partial 再显式返回 CG0 reduce；单兼容核合法退化为同核 fallback。
+- LOCAL_NOC 0x44/0x45/0x46 已贯通 Python GlobalAction/lowering/manifest 与 C++ finalizer、Program Format、config helper、P2P session；event 使用独立高位 namespace，所有普通跨核 dependency 校验保持 fail closed。
+- 双缓冲只 stage 精确 K tile；version 0/2 与 1/3 在同 core、同 operand、同 slot 时复用物理 offset，同时保留不同 storage ID 和不重叠 lifetime。
+- bounded evaluator 只枚举首版允许的 identity 与 split-K fallback，候选上限 8，搜索内 simulator 调用为 0，总预算不超过 10，最终双跑预留并实际使用 2 次。
+
+### 14.2 调用接口
+
+Python 编译接口：
+
+~~~python
+from llm.frontend.wafer_frontend import compile_naive
+from llm.frontend.wafer_frontend.schema.intra_die_refine import SplitKRefineOptions
+
+result = compile_naive(
+    spec,
+    fabric,
+    hbm_address_spaces=hbm_address_spaces,
+    intra_die_refine_options=SplitKRefineOptions(
+        split_k_parts=2,
+        enable_reduce=True,
+        enable_double_buffer=True,
+    ),
+)
+~~~
+
+负载运行接口使用同一个 options 字段：
+
+~~~python
+run_naive(NaiveRunRequest(
+    ...,
+    intra_die_refine_options=SplitKRefineOptions(
+        split_k_parts=2,
+        enable_reduce=True,
+        enable_double_buffer=True,
+    ),
+))
+~~~
+
+可复现 CLI：
+
+~~~bash
+PYTHONPATH=/workspace python3 llm/test/frontend/integration/run_intra_die_split_k.py --spec notes/frontend/examples/intra_die_split_k_e2e.yaml --hardware notes/frontend/examples/hardware_2x1.json --simulation notes/frontend/baselines/stage2-dense-forward-v1/stage1a/e1/inputs/simulation.json --mapping notes/frontend/baselines/stage2-dense-forward-v1/stage1a/e1/inputs/mapping.spec --npusim build-debug-final/npusim --finalizer build-debug-final/npusim_program_finalizer --output /tmp/intra-die-split-k-e2e --case E1 --split-k-parts 2 --enable-reduce --enable-double-buffer --repeat 2
+~~~
+
+inter-die 与 schedule-only intra-die 仍只由 YAML 的两个独立 policy 字段控制，因此 A00/A10/A01/A11 可以独立开启并用于消融；graph-refine v2 由运行接口的 options 单独控制，不改变默认四格语义。
+
+### 14.3 正式证据
+
+- 2×2：`notes/frontend/intra_die/reports/2x2/matrix.json`、`comparison.md` 和四份 `run_report.json`。A00/A01 为 8964 cycles，A10/A11 为 2721 cycles，combined speedup 为 3.294377，interaction 为 0；四格均双跑稳定。
+- 跨核 v2：`notes/frontend/intra_die/reports/split_k_cross_core/`。正式结果为 9990 cycles、354 records、artifact SHA `2224399eda49f1914756b411dd1b10733f6be19240d51aefbbbf8e1c50466f09`，活跃核为 0/2/16/18，ACK 8、DONE 4、drain 0、credit balanced，双跑稳定。
+- search/calibration evidence 随正式报告保存。当前 provisional analytic model 预测 231 cycles、simulator 测得 9990 cycles，相对误差 0.976877，因此 `calibrated=false`。这不阻塞功能 timing 闭环，但按本方案 2.3 的口径明确禁止论文级性能声明。
+- timing simulator 的 Dense compute 不写数值输出，所以本次证明 address/lifecycle/transport/control 闭环；`compute_functional` 与 `end_to_end_functional` 仍明确标记 unsupported，不宣称数值正确性。
+
+### 14.4 延期边界
+
+本轮完成首个 v2 模板集和 production carrier。第 12 节明确延期的 push/pull 自动选择、3×3 环树、SUMMA/脉动/嵌套模板、phase、HBM spill、source/adaptive routing、退火与动态拥塞反馈仍不属于本轮 Done；后续加入时必须继续复用当前 exact carrier、预算和 calibration gate。

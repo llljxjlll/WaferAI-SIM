@@ -17,10 +17,14 @@ from llm.frontend.wafer_frontend.policies.registry import (
 )
 from llm.frontend.wafer_frontend.runner import (
     NaiveRunCase,
+    NaiveRunError,
     NaiveRunReport,
     NaiveRunRequest,
     NaiveRunValidation,
     run_naive,
+)
+from llm.frontend.wafer_frontend.schema.intra_die_refine import (
+    IntraDieOptimizationMode, IntraDieOptimizationOptions,
 )
 from llm.frontend.wafer_frontend.schema.policy import PolicySelection
 from llm.frontend.wafer_frontend.schema.serde import (
@@ -41,16 +45,17 @@ def _compile_provenance() -> dict[str, object]:
         ).selection,
         registry.instantiate(RegistryKind.INTRA_DIE, "naive").selection,
     )
-    stage_digests = tuple(f"{index:064x}" for index in range(11))
+    stage_digests = tuple(f"{index:064x}" for index in range(12))
     context_passes = {
         "placement",
         "fusion_partition",
         "inter_die_plan",
         "project_to_ir2",
+        "intra_die_refine",
         "intra_die_schedule",
     }
     receipts = []
-    for index, spec in enumerate(PASS_SPECS[:10]):
+    for index, spec in enumerate(PASS_SPECS[:11]):
         if spec.name == "inter_die_plan":
             receipt_selections = selections[:2]
         elif spec.name == "intra_die_schedule":
@@ -75,7 +80,7 @@ def _compile_provenance() -> dict[str, object]:
         "profile_weight": 1.0,
         "pass_receipts": tuple(receipts),
         "stage_digests": stage_digests,
-        "context_ids": tuple(f"context_{index}" for index in range(5)),
+        "context_ids": tuple(f"context_{index}" for index in range(6)),
         "policy_selections": tuple(
             to_primitive(selection) for selection in selections
         ),
@@ -210,6 +215,31 @@ class NaiveRunnerSchemaTest(unittest.TestCase):
                     ),
                 },
             ).validate()
+
+    def test_product_timing_digest_mismatch_fails_before_finalizer(self) -> None:
+        workspace = Path(__file__).resolve().parents[4]
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            hardware = root / "hardware.json"
+            hardware.write_text(
+                (workspace / "notes/frontend/examples/hardware_2x1.json").read_text() + "\n"
+            )
+            dummy = root / "dummy"
+            dummy.write_text("#!/bin/sh\nexit 99\n"); dummy.chmod(0o700)
+            request = NaiveRunRequest(
+                case=NaiveRunCase.E1, validation=NaiveRunValidation.TIMING,
+                spec_path=workspace / "notes/frontend/examples/intra_die_perf_sync_bound.yaml",
+                hardware_config_path=hardware,
+                simulation_config_path=workspace / "llm/test/sram/simulation.json",
+                mapping_config_path=workspace / "llm/test/default/mapping.spec",
+                output_dir=root / "out", npusim_path=dummy, finalizer_path=dummy,
+                repeat=3, intra_die_refine_options=IntraDieOptimizationOptions(
+                    mode=IntraDieOptimizationMode.OFF
+                ),
+            )
+            with self.assertRaisesRegex(NaiveRunError, "hardware digest"):
+                run_naive(request)
+            self.assertFalse(request.output_dir.exists())
 
     def test_request_rejects_wrong_mode_repeat_output_and_missing_tools(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

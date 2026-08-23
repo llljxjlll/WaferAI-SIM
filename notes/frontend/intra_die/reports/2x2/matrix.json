@@ -1,0 +1,879 @@
+{
+  "calibrated": false,
+  "cases": {
+    "A00": {
+      "config_digests": {
+        "fabric_digest": "53961111d7e15d1f308b29130a3196f93cfb33475e7eb0abf57e10689be2aca4",
+        "hardware_sha256": "0696e5805d9b6a94b2652db341a6e3b5ccef387212a55b8e537a0e71a3a7c322",
+        "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+        "simulation_sha256": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c",
+        "spec_digest": "ac312c195014be1855d1b0f1a6608c431622f1afefcb5357dc67e469eaead332"
+      },
+      "inter_die": "naive",
+      "intra_die": "naive",
+      "makespan_cycles": 8964,
+      "pass_receipts": [
+        {
+          "context_digest": null,
+          "input_digest": "ac312c195014be1855d1b0f1a6608c431622f1afefcb5357dc67e469eaead332",
+          "input_phase": "spec_validated",
+          "output_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "output_phase": "ir0_ready",
+          "pass_name": "build_ir0",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "input_phase": "ir0_ready",
+          "output_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "output_phase": "logical_expanded",
+          "pass_name": "logical_expand",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "9932e88c006a6385eaf0d45f5f0fa03789c5c0bb5c5ab3b73861b5c741df5b8b",
+          "input_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "input_phase": "logical_expanded",
+          "output_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "output_phase": "ir1_placed",
+          "pass_name": "placement",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "0743c5f538ededec4392d0e412b2fd5d359b75e5a5e3cf154c23918fb3a614c9",
+          "input_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "input_phase": "ir1_placed",
+          "output_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "output_phase": "fusion_partitioned",
+          "pass_name": "fusion_partition",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "07046506a9d5e670cbdeaf7c6dac149c6a81439d7f7fb3de5e18baf09602f44e",
+          "input_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "input_phase": "fusion_partitioned",
+          "output_digest": "a02bb16808095d04b80ad2773eb45ce486a70af3ebf0f9b08ac3a71d8942e89b",
+          "output_phase": "interdie_planned",
+          "pass_name": "inter_die_plan",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_feb21c143650f01c",
+              "implementation_id": "wafer_frontend.policy.inter_die.naive",
+              "implementation_schema_version": "wafer_frontend.naive_inter_die_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+              "kind": "inter_die",
+              "name": "naive",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            },
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_5ad82dcf378dcb50",
+              "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+              "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+              "kind": "standalone_collective",
+              "name": "direct_all_gather",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": "f2374a102a84d7706dbf171bf5b849b4ec517500d7fed5ff77ddd6616215e196",
+          "input_digest": "a02bb16808095d04b80ad2773eb45ce486a70af3ebf0f9b08ac3a71d8942e89b",
+          "input_phase": "interdie_planned",
+          "output_digest": "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+          "output_phase": "ir2_projected",
+          "pass_name": "project_to_ir2",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "d19c080fd128cbdbdd9d96de275aa7644dcc20363cb550b2ecdcff34da076e4b",
+          "input_digest": "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+          "input_phase": "ir2_projected",
+          "output_digest": "2e478505e425b4b45969a3465cc0f59e76b251a7598be1157e04cfd745b3ba05",
+          "output_phase": "intradie_refined",
+          "pass_name": "intra_die_refine",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "ce05ea684cd29880def0aa883efa56404e9fad8fbe8336835251a191f39991bd",
+          "input_digest": "2e478505e425b4b45969a3465cc0f59e76b251a7598be1157e04cfd745b3ba05",
+          "input_phase": "intradie_refined",
+          "output_digest": "ce2d7633076d733e712731e09f11fec6b3f9199c0adca198a98e44ce006ee56f",
+          "output_phase": "intradie_scheduled",
+          "pass_name": "intra_die_schedule",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_f6d44859e95ca79b",
+              "implementation_id": "wafer_frontend.policy.intra_die.naive",
+              "implementation_schema_version": "wafer_frontend.naive_intra_die_policy/v8",
+              "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+              "kind": "intra_die",
+              "name": "naive",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": null,
+          "input_digest": "ce2d7633076d733e712731e09f11fec6b3f9199c0adca198a98e44ce006ee56f",
+          "input_phase": "intradie_scheduled",
+          "output_digest": "ba7929ab1e1d77df9eb6f6b50a9a439d09b1dc88d09adac1f341f3422f26e07b",
+          "output_phase": "global_dag_built",
+          "pass_name": "global_action_dag",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "ba7929ab1e1d77df9eb6f6b50a9a439d09b1dc88d09adac1f341f3422f26e07b",
+          "input_phase": "global_dag_built",
+          "output_digest": "c3b334a03877a57ec266181f526bfa6611fddd549856c96b6ba5d9b54b88e200",
+          "output_phase": "lowered",
+          "pass_name": "lowering",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "c3b334a03877a57ec266181f526bfa6611fddd549856c96b6ba5d9b54b88e200",
+          "input_phase": "lowered",
+          "output_digest": "4c0d05340848be8444892c866309f55d0dfc3342f9eeb11e38487f90abb60616",
+          "output_phase": "manifest_linked",
+          "pass_name": "manifest_link",
+          "policy_selections": []
+        }
+      ],
+      "policy_selections": [
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_feb21c143650f01c",
+          "implementation_id": "wafer_frontend.policy.inter_die.naive",
+          "implementation_schema_version": "wafer_frontend.naive_inter_die_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+          "kind": "inter_die",
+          "name": "naive",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_5ad82dcf378dcb50",
+          "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+          "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+          "kind": "standalone_collective",
+          "name": "direct_all_gather",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_f6d44859e95ca79b",
+          "implementation_id": "wafer_frontend.policy.intra_die.naive",
+          "implementation_schema_version": "wafer_frontend.naive_intra_die_policy/v8",
+          "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+          "kind": "intra_die",
+          "name": "naive",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        }
+      ],
+      "profile_id": "profile_dfa727cb6fed438b",
+      "projection_stage_digest": "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+      "report_id": "naive_run_report_ef8a84f50c9f86e0",
+      "stage_digests": [
+        "ac312c195014be1855d1b0f1a6608c431622f1afefcb5357dc67e469eaead332",
+        "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+        "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+        "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+        "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+        "a02bb16808095d04b80ad2773eb45ce486a70af3ebf0f9b08ac3a71d8942e89b",
+        "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+        "2e478505e425b4b45969a3465cc0f59e76b251a7598be1157e04cfd745b3ba05",
+        "ce2d7633076d733e712731e09f11fec6b3f9199c0adca198a98e44ce006ee56f",
+        "ba7929ab1e1d77df9eb6f6b50a9a439d09b1dc88d09adac1f341f3422f26e07b",
+        "c3b334a03877a57ec266181f526bfa6611fddd549856c96b6ba5d9b54b88e200",
+        "4c0d05340848be8444892c866309f55d0dfc3342f9eeb11e38487f90abb60616"
+      ]
+    },
+    "A01": {
+      "config_digests": {
+        "fabric_digest": "53961111d7e15d1f308b29130a3196f93cfb33475e7eb0abf57e10689be2aca4",
+        "hardware_sha256": "0696e5805d9b6a94b2652db341a6e3b5ccef387212a55b8e537a0e71a3a7c322",
+        "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+        "simulation_sha256": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c",
+        "spec_digest": "3ca1257672e4714ad24bf780b8a00b67283f9be317851d9290abcb7ecb9817ee"
+      },
+      "inter_die": "naive",
+      "intra_die": "optimized",
+      "makespan_cycles": 8964,
+      "pass_receipts": [
+        {
+          "context_digest": null,
+          "input_digest": "3ca1257672e4714ad24bf780b8a00b67283f9be317851d9290abcb7ecb9817ee",
+          "input_phase": "spec_validated",
+          "output_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "output_phase": "ir0_ready",
+          "pass_name": "build_ir0",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "input_phase": "ir0_ready",
+          "output_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "output_phase": "logical_expanded",
+          "pass_name": "logical_expand",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "9932e88c006a6385eaf0d45f5f0fa03789c5c0bb5c5ab3b73861b5c741df5b8b",
+          "input_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "input_phase": "logical_expanded",
+          "output_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "output_phase": "ir1_placed",
+          "pass_name": "placement",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "0743c5f538ededec4392d0e412b2fd5d359b75e5a5e3cf154c23918fb3a614c9",
+          "input_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "input_phase": "ir1_placed",
+          "output_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "output_phase": "fusion_partitioned",
+          "pass_name": "fusion_partition",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "07046506a9d5e670cbdeaf7c6dac149c6a81439d7f7fb3de5e18baf09602f44e",
+          "input_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "input_phase": "fusion_partitioned",
+          "output_digest": "a02bb16808095d04b80ad2773eb45ce486a70af3ebf0f9b08ac3a71d8942e89b",
+          "output_phase": "interdie_planned",
+          "pass_name": "inter_die_plan",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_feb21c143650f01c",
+              "implementation_id": "wafer_frontend.policy.inter_die.naive",
+              "implementation_schema_version": "wafer_frontend.naive_inter_die_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+              "kind": "inter_die",
+              "name": "naive",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            },
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_5ad82dcf378dcb50",
+              "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+              "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+              "kind": "standalone_collective",
+              "name": "direct_all_gather",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": "f2374a102a84d7706dbf171bf5b849b4ec517500d7fed5ff77ddd6616215e196",
+          "input_digest": "a02bb16808095d04b80ad2773eb45ce486a70af3ebf0f9b08ac3a71d8942e89b",
+          "input_phase": "interdie_planned",
+          "output_digest": "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+          "output_phase": "ir2_projected",
+          "pass_name": "project_to_ir2",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "c65c893a630c66ef7b9d8394566492aa5a52fb6c5764dfa795a498b43fbe7dfe",
+          "input_digest": "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+          "input_phase": "ir2_projected",
+          "output_digest": "d3d3eabc2e0014f0543b9b0798e633600f1b8378835141b13a3421fe68399368",
+          "output_phase": "intradie_refined",
+          "pass_name": "intra_die_refine",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "f4307e2fe743a33ce4292e9fd09da6031219a7b01565f10e038a648e797476d7",
+          "input_digest": "d3d3eabc2e0014f0543b9b0798e633600f1b8378835141b13a3421fe68399368",
+          "input_phase": "intradie_refined",
+          "output_digest": "9519be7cdff5409db1d42db18d31abb2415326f1be01176e5e37df7c45b0a934",
+          "output_phase": "intradie_scheduled",
+          "pass_name": "intra_die_schedule",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "o2.intra_die.bank_stagger",
+                "o2.intra_die.critical_path_order",
+                "o2.intra_die.lifetime_reuse"
+              ],
+              "configuration_digest": "da1ab0bbd25f9dac09297db54a95ecb5e6e50e1f810ec59f719ba5d1c359d7a3",
+              "id": "policy_selection_5f7b298ceca6df29",
+              "implementation_id": "wafer_frontend.policy.intra_die.optimized",
+              "implementation_schema_version": "wafer_frontend.optimized_intra_die_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+              "kind": "intra_die",
+              "name": "optimized",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": null,
+          "input_digest": "9519be7cdff5409db1d42db18d31abb2415326f1be01176e5e37df7c45b0a934",
+          "input_phase": "intradie_scheduled",
+          "output_digest": "7d2595febf81ffc96a7cd64a596aaf3d0642075359446ca77cdaedc31c15d590",
+          "output_phase": "global_dag_built",
+          "pass_name": "global_action_dag",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "7d2595febf81ffc96a7cd64a596aaf3d0642075359446ca77cdaedc31c15d590",
+          "input_phase": "global_dag_built",
+          "output_digest": "e88e5a62eb2c5720604b7cd7bd509fe811a9d472cfd24fbdb70b5e715fce5f22",
+          "output_phase": "lowered",
+          "pass_name": "lowering",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "e88e5a62eb2c5720604b7cd7bd509fe811a9d472cfd24fbdb70b5e715fce5f22",
+          "input_phase": "lowered",
+          "output_digest": "eb9bda4e9a56a941572af2f3e120bdd5046085a3690a1136fee9e93a18856707",
+          "output_phase": "manifest_linked",
+          "pass_name": "manifest_link",
+          "policy_selections": []
+        }
+      ],
+      "policy_selections": [
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_feb21c143650f01c",
+          "implementation_id": "wafer_frontend.policy.inter_die.naive",
+          "implementation_schema_version": "wafer_frontend.naive_inter_die_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+          "kind": "inter_die",
+          "name": "naive",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_5ad82dcf378dcb50",
+          "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+          "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+          "kind": "standalone_collective",
+          "name": "direct_all_gather",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "o2.intra_die.bank_stagger",
+            "o2.intra_die.critical_path_order",
+            "o2.intra_die.lifetime_reuse"
+          ],
+          "configuration_digest": "da1ab0bbd25f9dac09297db54a95ecb5e6e50e1f810ec59f719ba5d1c359d7a3",
+          "id": "policy_selection_5f7b298ceca6df29",
+          "implementation_id": "wafer_frontend.policy.intra_die.optimized",
+          "implementation_schema_version": "wafer_frontend.optimized_intra_die_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+          "kind": "intra_die",
+          "name": "optimized",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        }
+      ],
+      "profile_id": "profile_dfa727cb6fed438b",
+      "projection_stage_digest": "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+      "report_id": "naive_run_report_370ea2c48714b5f1",
+      "stage_digests": [
+        "3ca1257672e4714ad24bf780b8a00b67283f9be317851d9290abcb7ecb9817ee",
+        "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+        "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+        "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+        "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+        "a02bb16808095d04b80ad2773eb45ce486a70af3ebf0f9b08ac3a71d8942e89b",
+        "3538d6dc45f6c0bb69e7f508c51653a19f5fbe254c73eb7ebeec37d3edf60022",
+        "d3d3eabc2e0014f0543b9b0798e633600f1b8378835141b13a3421fe68399368",
+        "9519be7cdff5409db1d42db18d31abb2415326f1be01176e5e37df7c45b0a934",
+        "7d2595febf81ffc96a7cd64a596aaf3d0642075359446ca77cdaedc31c15d590",
+        "e88e5a62eb2c5720604b7cd7bd509fe811a9d472cfd24fbdb70b5e715fce5f22",
+        "eb9bda4e9a56a941572af2f3e120bdd5046085a3690a1136fee9e93a18856707"
+      ]
+    },
+    "A10": {
+      "config_digests": {
+        "fabric_digest": "53961111d7e15d1f308b29130a3196f93cfb33475e7eb0abf57e10689be2aca4",
+        "hardware_sha256": "0696e5805d9b6a94b2652db341a6e3b5ccef387212a55b8e537a0e71a3a7c322",
+        "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+        "simulation_sha256": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c",
+        "spec_digest": "cdf3aed1979e5da26b85bb6bb50615d07e8e62209a5704912fb6ec30671a71f2"
+      },
+      "inter_die": "swizzle_topo",
+      "intra_die": "naive",
+      "makespan_cycles": 2721,
+      "pass_receipts": [
+        {
+          "context_digest": null,
+          "input_digest": "cdf3aed1979e5da26b85bb6bb50615d07e8e62209a5704912fb6ec30671a71f2",
+          "input_phase": "spec_validated",
+          "output_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "output_phase": "ir0_ready",
+          "pass_name": "build_ir0",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "input_phase": "ir0_ready",
+          "output_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "output_phase": "logical_expanded",
+          "pass_name": "logical_expand",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "9932e88c006a6385eaf0d45f5f0fa03789c5c0bb5c5ab3b73861b5c741df5b8b",
+          "input_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "input_phase": "logical_expanded",
+          "output_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "output_phase": "ir1_placed",
+          "pass_name": "placement",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "0743c5f538ededec4392d0e412b2fd5d359b75e5a5e3cf154c23918fb3a614c9",
+          "input_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "input_phase": "ir1_placed",
+          "output_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "output_phase": "fusion_partitioned",
+          "pass_name": "fusion_partition",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "6e591a0de01b7db84f047135d91f13b49145b309389eb2bac9cb240213d66cf0",
+          "input_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "input_phase": "fusion_partitioned",
+          "output_digest": "46f41e217b5d6640ddeca7d5d22517d14e282c0bb140f5049c03875d236a0c90",
+          "output_phase": "interdie_planned",
+          "pass_name": "inter_die_plan",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "o1.swizzle.ag_gemm",
+                "o1.swizzle.gemm_ar",
+                "o1.swizzle.gemm_rs"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_2ed57a55c01b079a",
+              "implementation_id": "wafer_frontend.policy.inter_die.swizzle_topo",
+              "implementation_schema_version": "wafer_frontend.swizzle_topo_policy/v1alpha2",
+              "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+              "kind": "inter_die",
+              "name": "swizzle_topo",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            },
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_5ad82dcf378dcb50",
+              "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+              "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+              "kind": "standalone_collective",
+              "name": "direct_all_gather",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": "f2374a102a84d7706dbf171bf5b849b4ec517500d7fed5ff77ddd6616215e196",
+          "input_digest": "46f41e217b5d6640ddeca7d5d22517d14e282c0bb140f5049c03875d236a0c90",
+          "input_phase": "interdie_planned",
+          "output_digest": "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+          "output_phase": "ir2_projected",
+          "pass_name": "project_to_ir2",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "d19c080fd128cbdbdd9d96de275aa7644dcc20363cb550b2ecdcff34da076e4b",
+          "input_digest": "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+          "input_phase": "ir2_projected",
+          "output_digest": "561f450cba306edf0c216dea74afe8ec80354ec886ebce9090042d1a7d372134",
+          "output_phase": "intradie_refined",
+          "pass_name": "intra_die_refine",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "ce05ea684cd29880def0aa883efa56404e9fad8fbe8336835251a191f39991bd",
+          "input_digest": "561f450cba306edf0c216dea74afe8ec80354ec886ebce9090042d1a7d372134",
+          "input_phase": "intradie_refined",
+          "output_digest": "3fc0df01c7488833fca7f3b7469af3786295edc6f498ade2d7411bfd1a68e73a",
+          "output_phase": "intradie_scheduled",
+          "pass_name": "intra_die_schedule",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_f6d44859e95ca79b",
+              "implementation_id": "wafer_frontend.policy.intra_die.naive",
+              "implementation_schema_version": "wafer_frontend.naive_intra_die_policy/v8",
+              "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+              "kind": "intra_die",
+              "name": "naive",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": null,
+          "input_digest": "3fc0df01c7488833fca7f3b7469af3786295edc6f498ade2d7411bfd1a68e73a",
+          "input_phase": "intradie_scheduled",
+          "output_digest": "5977d9fb40f004e55d1e2e81be80e6102fd66f241c7a032a2e5aeda13dc5d5ac",
+          "output_phase": "global_dag_built",
+          "pass_name": "global_action_dag",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "5977d9fb40f004e55d1e2e81be80e6102fd66f241c7a032a2e5aeda13dc5d5ac",
+          "input_phase": "global_dag_built",
+          "output_digest": "954fd725141b33af5fb45d1ab86117095813270e33ff2b62216b3956d4b5a62d",
+          "output_phase": "lowered",
+          "pass_name": "lowering",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "954fd725141b33af5fb45d1ab86117095813270e33ff2b62216b3956d4b5a62d",
+          "input_phase": "lowered",
+          "output_digest": "787b524af0c0d7962fad3fe11dbf95dcd2d8343ec8faba44fa21b0e009c11450",
+          "output_phase": "manifest_linked",
+          "pass_name": "manifest_link",
+          "policy_selections": []
+        }
+      ],
+      "policy_selections": [
+        {
+          "capability_ids": [
+            "o1.swizzle.ag_gemm",
+            "o1.swizzle.gemm_ar",
+            "o1.swizzle.gemm_rs"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_2ed57a55c01b079a",
+          "implementation_id": "wafer_frontend.policy.inter_die.swizzle_topo",
+          "implementation_schema_version": "wafer_frontend.swizzle_topo_policy/v1alpha2",
+          "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+          "kind": "inter_die",
+          "name": "swizzle_topo",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_5ad82dcf378dcb50",
+          "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+          "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+          "kind": "standalone_collective",
+          "name": "direct_all_gather",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_f6d44859e95ca79b",
+          "implementation_id": "wafer_frontend.policy.intra_die.naive",
+          "implementation_schema_version": "wafer_frontend.naive_intra_die_policy/v8",
+          "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+          "kind": "intra_die",
+          "name": "naive",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        }
+      ],
+      "profile_id": "profile_dfa727cb6fed438b",
+      "projection_stage_digest": "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+      "report_id": "naive_run_report_e7a0eda8b1335d3a",
+      "stage_digests": [
+        "cdf3aed1979e5da26b85bb6bb50615d07e8e62209a5704912fb6ec30671a71f2",
+        "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+        "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+        "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+        "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+        "46f41e217b5d6640ddeca7d5d22517d14e282c0bb140f5049c03875d236a0c90",
+        "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+        "561f450cba306edf0c216dea74afe8ec80354ec886ebce9090042d1a7d372134",
+        "3fc0df01c7488833fca7f3b7469af3786295edc6f498ade2d7411bfd1a68e73a",
+        "5977d9fb40f004e55d1e2e81be80e6102fd66f241c7a032a2e5aeda13dc5d5ac",
+        "954fd725141b33af5fb45d1ab86117095813270e33ff2b62216b3956d4b5a62d",
+        "787b524af0c0d7962fad3fe11dbf95dcd2d8343ec8faba44fa21b0e009c11450"
+      ]
+    },
+    "A11": {
+      "config_digests": {
+        "fabric_digest": "53961111d7e15d1f308b29130a3196f93cfb33475e7eb0abf57e10689be2aca4",
+        "hardware_sha256": "0696e5805d9b6a94b2652db341a6e3b5ccef387212a55b8e537a0e71a3a7c322",
+        "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+        "simulation_sha256": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c",
+        "spec_digest": "04a3cde0876ceecc17b27c1551e8c7f7a9a9dcfc7b06ba6ed35bbd0938120f4c"
+      },
+      "inter_die": "swizzle_topo",
+      "intra_die": "optimized",
+      "makespan_cycles": 2721,
+      "pass_receipts": [
+        {
+          "context_digest": null,
+          "input_digest": "04a3cde0876ceecc17b27c1551e8c7f7a9a9dcfc7b06ba6ed35bbd0938120f4c",
+          "input_phase": "spec_validated",
+          "output_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "output_phase": "ir0_ready",
+          "pass_name": "build_ir0",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+          "input_phase": "ir0_ready",
+          "output_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "output_phase": "logical_expanded",
+          "pass_name": "logical_expand",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "9932e88c006a6385eaf0d45f5f0fa03789c5c0bb5c5ab3b73861b5c741df5b8b",
+          "input_digest": "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+          "input_phase": "logical_expanded",
+          "output_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "output_phase": "ir1_placed",
+          "pass_name": "placement",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "0743c5f538ededec4392d0e412b2fd5d359b75e5a5e3cf154c23918fb3a614c9",
+          "input_digest": "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+          "input_phase": "ir1_placed",
+          "output_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "output_phase": "fusion_partitioned",
+          "pass_name": "fusion_partition",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "6e591a0de01b7db84f047135d91f13b49145b309389eb2bac9cb240213d66cf0",
+          "input_digest": "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+          "input_phase": "fusion_partitioned",
+          "output_digest": "46f41e217b5d6640ddeca7d5d22517d14e282c0bb140f5049c03875d236a0c90",
+          "output_phase": "interdie_planned",
+          "pass_name": "inter_die_plan",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "o1.swizzle.ag_gemm",
+                "o1.swizzle.gemm_ar",
+                "o1.swizzle.gemm_rs"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_2ed57a55c01b079a",
+              "implementation_id": "wafer_frontend.policy.inter_die.swizzle_topo",
+              "implementation_schema_version": "wafer_frontend.swizzle_topo_policy/v1alpha2",
+              "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+              "kind": "inter_die",
+              "name": "swizzle_topo",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            },
+            {
+              "capability_ids": [
+                "s1.gemm_collective.naive"
+              ],
+              "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+              "id": "policy_selection_5ad82dcf378dcb50",
+              "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+              "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+              "kind": "standalone_collective",
+              "name": "direct_all_gather",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": "f2374a102a84d7706dbf171bf5b849b4ec517500d7fed5ff77ddd6616215e196",
+          "input_digest": "46f41e217b5d6640ddeca7d5d22517d14e282c0bb140f5049c03875d236a0c90",
+          "input_phase": "interdie_planned",
+          "output_digest": "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+          "output_phase": "ir2_projected",
+          "pass_name": "project_to_ir2",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "c65c893a630c66ef7b9d8394566492aa5a52fb6c5764dfa795a498b43fbe7dfe",
+          "input_digest": "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+          "input_phase": "ir2_projected",
+          "output_digest": "448516d504b0e4c9c42231b9adbcf32b955a559e545d4749a81b67307e76f261",
+          "output_phase": "intradie_refined",
+          "pass_name": "intra_die_refine",
+          "policy_selections": []
+        },
+        {
+          "context_digest": "f4307e2fe743a33ce4292e9fd09da6031219a7b01565f10e038a648e797476d7",
+          "input_digest": "448516d504b0e4c9c42231b9adbcf32b955a559e545d4749a81b67307e76f261",
+          "input_phase": "intradie_refined",
+          "output_digest": "8906fe33a4375bb37256f922c641e80ae6b57d14da4415776949ac60bfe122ec",
+          "output_phase": "intradie_scheduled",
+          "pass_name": "intra_die_schedule",
+          "policy_selections": [
+            {
+              "capability_ids": [
+                "o2.intra_die.bank_stagger",
+                "o2.intra_die.critical_path_order",
+                "o2.intra_die.lifetime_reuse"
+              ],
+              "configuration_digest": "da1ab0bbd25f9dac09297db54a95ecb5e6e50e1f810ec59f719ba5d1c359d7a3",
+              "id": "policy_selection_5f7b298ceca6df29",
+              "implementation_id": "wafer_frontend.policy.intra_die.optimized",
+              "implementation_schema_version": "wafer_frontend.optimized_intra_die_policy/v1",
+              "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+              "kind": "intra_die",
+              "name": "optimized",
+              "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+            }
+          ]
+        },
+        {
+          "context_digest": null,
+          "input_digest": "8906fe33a4375bb37256f922c641e80ae6b57d14da4415776949ac60bfe122ec",
+          "input_phase": "intradie_scheduled",
+          "output_digest": "6a4583930df7d8a7929332ba3ede0d2b718b9c0714df1f4381428275904e1923",
+          "output_phase": "global_dag_built",
+          "pass_name": "global_action_dag",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "6a4583930df7d8a7929332ba3ede0d2b718b9c0714df1f4381428275904e1923",
+          "input_phase": "global_dag_built",
+          "output_digest": "1d3f0649501f0c64b825271321bd2cf17c6c12b1502ef0ee603691922a6784e5",
+          "output_phase": "lowered",
+          "pass_name": "lowering",
+          "policy_selections": []
+        },
+        {
+          "context_digest": null,
+          "input_digest": "1d3f0649501f0c64b825271321bd2cf17c6c12b1502ef0ee603691922a6784e5",
+          "input_phase": "lowered",
+          "output_digest": "3adcfb50995573105434b72b6fe5909ab8fb5dd3214f8666aeaee35f5d719987",
+          "output_phase": "manifest_linked",
+          "pass_name": "manifest_link",
+          "policy_selections": []
+        }
+      ],
+      "policy_selections": [
+        {
+          "capability_ids": [
+            "o1.swizzle.ag_gemm",
+            "o1.swizzle.gemm_ar",
+            "o1.swizzle.gemm_rs"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_2ed57a55c01b079a",
+          "implementation_id": "wafer_frontend.policy.inter_die.swizzle_topo",
+          "implementation_schema_version": "wafer_frontend.swizzle_topo_policy/v1alpha2",
+          "interface_version": "wafer_frontend.policy_interface/inter_die/v1",
+          "kind": "inter_die",
+          "name": "swizzle_topo",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "s1.gemm_collective.naive"
+          ],
+          "configuration_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "id": "policy_selection_5ad82dcf378dcb50",
+          "implementation_id": "wafer_frontend.policy.standalone.direct_all_gather",
+          "implementation_schema_version": "wafer_frontend.direct_all_gather_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/standalone_collective/v1",
+          "kind": "standalone_collective",
+          "name": "direct_all_gather",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        },
+        {
+          "capability_ids": [
+            "o2.intra_die.bank_stagger",
+            "o2.intra_die.critical_path_order",
+            "o2.intra_die.lifetime_reuse"
+          ],
+          "configuration_digest": "da1ab0bbd25f9dac09297db54a95ecb5e6e50e1f810ec59f719ba5d1c359d7a3",
+          "id": "policy_selection_5f7b298ceca6df29",
+          "implementation_id": "wafer_frontend.policy.intra_die.optimized",
+          "implementation_schema_version": "wafer_frontend.optimized_intra_die_policy/v1",
+          "interface_version": "wafer_frontend.policy_interface/intra_die/v1",
+          "kind": "intra_die",
+          "name": "optimized",
+          "schema_version": "wafer_frontend.policy_selection/v1alpha1"
+        }
+      ],
+      "profile_id": "profile_dfa727cb6fed438b",
+      "projection_stage_digest": "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+      "report_id": "naive_run_report_7d2f0479c897b48c",
+      "stage_digests": [
+        "04a3cde0876ceecc17b27c1551e8c7f7a9a9dcfc7b06ba6ed35bbd0938120f4c",
+        "ed86a3f341d72a43828480bf6ed249d68338e6e6284da205fa9e5beb6b6ee837",
+        "454de3d0da3c82a5a58bb171dbd55839a6b54fcdaeba4184ce686462ecf8f0cf",
+        "22fb8707de762d0441a55e0008a65f93622715f962735ff5aa42a04ebe662d24",
+        "1f8b481be089645d32f17b4ffdbc69c29735a1991c45683470b670321221fcc6",
+        "46f41e217b5d6640ddeca7d5d22517d14e282c0bb140f5049c03875d236a0c90",
+        "a5b8985821e8855e36f3fa711654ff4d14b739a23d8d598655c926d52aa0fc67",
+        "448516d504b0e4c9c42231b9adbcf32b955a559e545d4749a81b67307e76f261",
+        "8906fe33a4375bb37256f922c641e80ae6b57d14da4415776949ac60bfe122ec",
+        "6a4583930df7d8a7929332ba3ede0d2b718b9c0714df1f4381428275904e1923",
+        "1d3f0649501f0c64b825271321bd2cf17c6c12b1502ef0ee603691922a6784e5",
+        "3adcfb50995573105434b72b6fe5909ab8fb5dd3214f8666aeaee35f5d719987"
+      ]
+    }
+  },
+  "metrics": {
+    "combined_speedup": 3.2943770672546857,
+    "inter_speedup_naive_intra": 3.2943770672546857,
+    "inter_speedup_optimized_intra": 3.2943770672546857,
+    "interaction": 0.0,
+    "intra_speedup_naive_inter": 1.0,
+    "intra_speedup_swizzle_inter": 1.0
+  },
+  "schema_version": "wafer_frontend.intra_die_ablation/v2",
+  "scope": "dense_tp2_gemm_rs_common_ir2"
+}

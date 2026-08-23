@@ -11,7 +11,7 @@ from ..schema.swizzle import (
 from .swizzle_topo import SwizzlePlanner
 
 
-SWIZZLE_POLICY_SCHEMA_VERSION = "wafer_frontend.swizzle_topo_policy/v1alpha1"
+SWIZZLE_POLICY_SCHEMA_VERSION = "wafer_frontend.swizzle_topo_policy/v1alpha2"
 
 
 def production_swizzle_policy() -> SwizzlePlanner:
@@ -46,7 +46,7 @@ def production_swizzle_policy() -> SwizzlePlanner:
         max_chunk_count=64,
         allow_unroll_two=True,
     )
-    return SwizzlePlanner(hardware, constraints)
+    return SwizzlePlanner(hardware, constraints, force_deployment=True)
 
 
 __all__ = ["SWIZZLE_POLICY_SCHEMA_VERSION", "production_swizzle_policy"]

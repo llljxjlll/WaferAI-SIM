@@ -51,6 +51,9 @@ enum class Opcode : uint8_t {
     DTE_RECV = 0x41,
     REDUCE_COMPUTE = 0x42,
     LOCAL_REDUCE = 0x43,
+    LOCAL_NOC_SEND = 0x44,
+    LOCAL_NOC_RECV = 0x45,
+    LOCAL_NOC_WAIT = 0x46,
 
     LSU_LOAD = 0x80,
     LSU_STORE = 0x81,
@@ -221,6 +224,10 @@ constexpr OpcodeLowering OpcodeLoweringFor(Opcode opcode) noexcept {
         return DirectPrim(PrimId::REDUCE_COMPUTE);
     case Opcode::LOCAL_REDUCE:
         return DirectPrim(PrimId::COLLECTIVE_DATA_V1);
+    case Opcode::LOCAL_NOC_SEND:
+    case Opcode::LOCAL_NOC_RECV:
+    case Opcode::LOCAL_NOC_WAIT:
+        return NewThinPrim();
     case Opcode::LSU_LOAD:
         return PrimVariant(PrimId::LSU_MEM,
                            OpcodeLoweringVariant::LSU_LOAD_BLOCKING);
@@ -311,7 +318,7 @@ inline constexpr uint8_t kSynchronizationOpcodeFirst = 0xc0;
 inline constexpr uint8_t kSynchronizationOpcodeLast = 0xc6;
 inline constexpr uint8_t kReservedOpcodeFirst = 0xf0;
 inline constexpr uint8_t kReservedOpcodeLast = 0xff;
-inline constexpr std::size_t kOpcodeManifestSize = 53;
+inline constexpr std::size_t kOpcodeManifestSize = 56;
 
 // The returned array is sorted by numeric opcode and has static lifetime.
 const std::array<OpcodeManifestEntry, kOpcodeManifestSize> &

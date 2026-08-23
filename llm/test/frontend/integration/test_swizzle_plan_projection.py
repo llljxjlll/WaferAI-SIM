@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import unittest
 
-from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.errors import SchemaError, UnsupportedFeatureError
 from llm.frontend.wafer_frontend.passes.project_swizzle_plan import (
     SwizzlePlanProjection,
     project_swizzle_plan,
@@ -18,6 +18,11 @@ from llm.frontend.wafer_frontend.policies.swizzle.materialize_ir1 import (
     materialize_swizzle_plan,
 )
 from llm.frontend.wafer_frontend.schema.ir0 import FusionPattern
+from llm.frontend.wafer_frontend.schema.ir2 import (
+    OrdinaryNodeOrigin,
+    SemanticTaskKind,
+    SwizzleNodeOrigin,
+)
 
 from swizzle_cases import build_swizzle_integration_cases
 
@@ -113,16 +118,75 @@ class SwizzlePlanProjectionTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "different production plan"):
             result.validate_against(case.partitioned_graph, other_plan)
 
-    def test_legacy_projector_remains_fail_closed_at_exact_plan_type(self) -> None:
-        case, plan = _production_plans()[0]
-        with self.assertRaisesRegex(SchemaError, "entries must be FusionPlan"):
-            NaiveProjectToIR2().run(
-                case.partitioned_graph,
-                (plan,),
-                (),
-                state_transfers=(),
-            )
+    def test_common_ir2_projector_supports_only_gemm_rs(self) -> None:
+        entries = _production_plans()
+        for case, plan in (entries[0], entries[2]):
+            with self.subTest(pattern=case.pattern.value):
+                with self.assertRaisesRegex(UnsupportedFeatureError, "supports GEMM_RS only"):
+                    NaiveProjectToIR2().run(
+                        case.partitioned_graph,
+                        (plan,),
+                        (),
+                        state_transfers=(),
+                    )
 
+        case, plan = entries[1]
+        projection = NaiveProjectToIR2().run(
+            case.partitioned_graph,
+            (plan,),
+            (),
+            state_transfers=(),
+        )
+        projection.validate_against(case.partitioned_graph, (plan,), ())
+        self.assertEqual(projection.fusion_plan_ids, (plan.id,))
+        self.assertTrue(
+            all(
+                any(isinstance(task.origin_ref, SwizzleNodeOrigin) for task in dag.tasks)
+                and any(isinstance(task.origin_ref, OrdinaryNodeOrigin) for task in dag.tasks)
+                and len(dag.ordinary_node_ids) == 13
+                for dag in projection.dags
+            )
+        )
+        self.assertEqual(
+            tuple(len(dag.tasks) for dag in projection.dags),
+            (20, 20),
+        )
+        self.assertEqual(
+            tuple(len(dag.flows) for dag in projection.dags),
+            (2, 2),
+        )
+
+
+    def test_gemm_rs_common_ir2_reaches_production_isa_regions(self) -> None:
+        from llm.frontend.wafer_frontend.lowering.context import LoweringContext
+        from llm.frontend.wafer_frontend.lowering.isa_region import NaiveIsaRegionLowering
+        from llm.frontend.wafer_frontend.passes.global_action import build_global_action_dag
+        from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePolicy
+        from llm.frontend.wafer_frontend.policies.optimized_intra_die import OptimizedIntraDiePolicy
+        case, plan = _production_plans()[1]
+        projection = NaiveProjectToIR2().run(
+            case.partitioned_graph, (plan,), (), state_transfers=()
+        )
+        for policy in (NaiveIntraDiePolicy(), OptimizedIntraDiePolicy()):
+            schedules = policy.schedule(projection, case.partitioned_graph)
+            actions = build_global_action_dag(
+                case.partitioned_graph, projection, schedules
+            )
+            context = LoweringContext(
+                case.partitioned_graph, (plan,), (), projection, schedules, actions
+            )
+            plan_actions = tuple(
+                action
+                for action in actions.actions
+                if isinstance(action.origin_ref, SwizzleNodeOrigin)
+                and action.origin_ref.plan_id == plan.id
+                and action.task_kind is not SemanticTaskKind.TRANSIT
+            )
+            regions = NaiveIsaRegionLowering().lower(
+                plan, plan_actions, context
+            )
+            self.assertEqual(tuple(region.fusion_plan_id for region in regions), (plan.id, plan.id))
+            self.assertTrue(all(region.fragment.core_streams for region in regions))
 
 if __name__ == "__main__":
     unittest.main()

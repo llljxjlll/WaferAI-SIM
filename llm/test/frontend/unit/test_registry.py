@@ -7,7 +7,6 @@ from dataclasses import replace
 from llm.frontend.wafer_frontend.errors import (
     RegistryError,
     SchemaError,
-    StageNotImplementedError,
     UnsupportedFeatureError,
 )
 from llm.frontend.wafer_frontend.policies.naive_inter_die import (
@@ -16,6 +15,9 @@ from llm.frontend.wafer_frontend.policies.naive_inter_die import (
 )
 from llm.frontend.wafer_frontend.policies.naive_intra_die import (
     NaiveIntraDiePolicy,
+)
+from llm.frontend.wafer_frontend.policies.optimized_intra_die import (
+    OptimizedIntraDiePolicy,
 )
 from llm.frontend.wafer_frontend.policies.swizzle_topo import SwizzlePlanner
 from llm.frontend.wafer_frontend.policies.registry import (
@@ -52,25 +54,43 @@ class RegistryTest(unittest.TestCase):
     def test_default_registry_activates_naive_and_swizzle_production_policies(self) -> None:
         registry = default_registry()
         expected_active_types = (
-            (RegistryKind.INTER_DIE, "naive", NaiveInterDiePolicy),
+            (
+                RegistryKind.INTER_DIE,
+                "naive",
+                NaiveInterDiePolicy,
+                ("s1.gemm_collective.naive",),
+            ),
             (
                 RegistryKind.STANDALONE_COLLECTIVE,
                 "direct_all_gather",
                 DirectAllGatherPolicy,
+                ("s1.gemm_collective.naive",),
             ),
-            (RegistryKind.INTRA_DIE, "naive", NaiveIntraDiePolicy),
+            (
+                RegistryKind.INTRA_DIE,
+                "naive",
+                NaiveIntraDiePolicy,
+                ("s1.gemm_collective.naive",),
+            ),
+            (
+                RegistryKind.INTRA_DIE,
+                "optimized",
+                OptimizedIntraDiePolicy,
+                (
+                    "o2.intra_die.bank_stagger",
+                    "o2.intra_die.critical_path_order",
+                    "o2.intra_die.lifetime_reuse",
+                ),
+            ),
         )
-        for kind, name, implementation_type in expected_active_types:
+        for kind, name, implementation_type, capability_ids in expected_active_types:
             with self.subTest(kind=kind, name=name):
                 registration = registry.registration(kind, name)
                 self.assertIs(registration.state, RegistrationState.ACTIVE)
                 self.assertTrue(registration.interface_version.endswith("/v1"))
                 self.assertTrue(registration.implementation_id)
                 self.assertTrue(registration.implementation_schema_version)
-                self.assertEqual(
-                    registration.capability_ids,
-                    ("s1.gemm_collective.naive",),
-                )
+                self.assertEqual(registration.capability_ids, capability_ids)
                 self.assertIsInstance(registry.create(kind, name), implementation_type)
 
         swizzle = registry.registration(RegistryKind.INTER_DIE, "swizzle_topo")
@@ -88,18 +108,6 @@ class RegistryTest(unittest.TestCase):
             registry.create(RegistryKind.INTER_DIE, "swizzle_topo"),
             SwizzlePlanner,
         )
-
-        for kind, name, stage in (
-            (RegistryKind.INTRA_DIE, "optimized", "O2"),
-        ):
-            with self.subTest(kind=kind, name=name):
-                registration = registry.registration(kind, name)
-                self.assertIs(registration.state, RegistrationState.DECLARED)
-                self.assertEqual(registration.available_stage, stage)
-                self.assertIsNone(registration.implementation_id)
-                self.assertEqual(registration.capability_ids, ())
-                with self.assertRaises(StageNotImplementedError):
-                    registry.instantiate(kind, name)
 
     def test_unsupported_name_never_falls_back(self) -> None:
         registry = default_registry()

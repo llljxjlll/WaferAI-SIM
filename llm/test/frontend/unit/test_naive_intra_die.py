@@ -1002,5 +1002,33 @@ class NaiveIntraDieStateTest(unittest.TestCase):
         )
 
 
+
+class OptimizedIntraDiePolicyTest(unittest.TestCase):
+    def test_deterministic_nonmutating_schedule_reuses_lifetimes(self) -> None:
+        from llm.frontend.wafer_frontend.policies.optimized_intra_die import (
+            OptimizedIntraDiePolicy,
+        )
+        ir1, projection = _component_projection()
+        projection_before = canonical_digest(projection)
+        ir1_before = canonical_digest(ir1)
+        baseline = NaiveIntraDiePolicy().schedule(projection, ir1)
+        first = OptimizedIntraDiePolicy().schedule(projection, ir1)
+        second = OptimizedIntraDiePolicy().schedule(projection, ir1)
+        self.assertEqual(first, second)
+        self.assertNotEqual(first.id, baseline.id)
+        self.assertEqual(canonical_digest(projection), projection_before)
+        self.assertEqual(canonical_digest(ir1), ir1_before)
+        baseline_peak = max(
+            binding.region_offset_bytes + binding.size_bytes
+            for schedule in baseline.schedules
+            for binding in schedule.buffer_bindings
+        )
+        optimized_peak = max(
+            binding.region_offset_bytes + binding.size_bytes
+            for schedule in first.schedules
+            for binding in schedule.buffer_bindings
+        )
+        self.assertLess(optimized_peak, baseline_peak)
+
 if __name__ == "__main__":
     unittest.main()

@@ -357,6 +357,9 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x40:
     case 0x41:
     case 0x43:
+    case 0x44:
+    case 0x45:
+    case 0x46:
     case 0x80:
     case 0x81:
     case 0x82:
@@ -1644,6 +1647,9 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
         return LiteralU64(record.operands[6], path + ".length_bytes");
     case Opcode::DTE_ISSUE:
         return LiteralU64(record.operands[3], path + ".size_bytes");
+    case Opcode::LOCAL_NOC_SEND:
+    case Opcode::LOCAL_NOC_RECV:
+        return LiteralU64(record.operands[2], path + ".byte_count");
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:
         return LiteralU64(record.operands[1], path + ".size_bytes");
@@ -2467,6 +2473,46 @@ ExternalRecord FinalizeRecord(
         operands.source = address(SemanticOperandId::SOURCE_ADDRESS);
         operands.destination = address(SemanticOperandId::DESTINATION_ADDRESS);
         result.operands = operands;
+    } else if (record.opcode == Opcode::LOCAL_NOC_SEND) {
+        if (record.operands.size() != 4)
+            Fail(path + ".operands", "LOCAL_NOC_SEND requires four operands");
+        RequireAddress(record.operands[0], "source_address",
+                       SemanticOperandId::SOURCE_ADDRESS, path + ".operands[0]");
+        RequireLiteral(record.operands[1], "destination_core", path + ".operands[1]");
+        RequireLiteral(record.operands[2], "byte_count", path + ".operands[2]");
+        RequireLiteral(record.operands[3], "event_id", path + ".operands[3]");
+        if (symbol(SemanticOperandId::SOURCE_ADDRESS).definition->symbol.kind !=
+            ProgramSymbolKind::ABSOLUTE_ADDRESS)
+            Fail(path, "LOCAL_NOC_SEND source requires ABSOLUTE_ADDRESS");
+        LocalNocSendOperands operands;
+        operands.source = address(SemanticOperandId::SOURCE_ADDRESS);
+        operands.destination_core = LiteralU64(record.operands[1], path);
+        operands.byte_count = LiteralU64(record.operands[2], path);
+        operands.event_id = LiteralU64(record.operands[3], path);
+        result.operands = operands;
+    } else if (record.opcode == Opcode::LOCAL_NOC_RECV) {
+        if (record.operands.size() != 4)
+            Fail(path + ".operands", "LOCAL_NOC_RECV requires four operands");
+        RequireAddress(record.operands[0], "destination_address",
+                       SemanticOperandId::DESTINATION_ADDRESS, path + ".operands[0]");
+        RequireLiteral(record.operands[1], "source_core", path + ".operands[1]");
+        RequireLiteral(record.operands[2], "byte_count", path + ".operands[2]");
+        RequireLiteral(record.operands[3], "event_id", path + ".operands[3]");
+        if (symbol(SemanticOperandId::DESTINATION_ADDRESS).definition->symbol.kind !=
+            ProgramSymbolKind::ABSOLUTE_ADDRESS)
+            Fail(path, "LOCAL_NOC_RECV destination requires ABSOLUTE_ADDRESS");
+        LocalNocRecvOperands operands;
+        operands.destination = address(SemanticOperandId::DESTINATION_ADDRESS);
+        operands.source_core = LiteralU64(record.operands[1], path);
+        operands.byte_count = LiteralU64(record.operands[2], path);
+        operands.event_id = LiteralU64(record.operands[3], path);
+        result.operands = operands;
+    } else if (record.opcode == Opcode::LOCAL_NOC_WAIT) {
+        if (record.operands.size() != 1)
+            Fail(path + ".operands", "LOCAL_NOC_WAIT requires one operand");
+        RequireLiteral(record.operands[0], "event_id", path + ".operands[0]");
+        result.operands = LocalNocWaitOperands{
+            LiteralU64(record.operands[0], path)};
     } else if (record.opcode == Opcode::LSU_LOAD ||
                record.opcode == Opcode::LSU_STORE) {
         if (record.operands.size() != 3)
@@ -3053,6 +3099,9 @@ std::set<std::string> ValidateActionSequence(
             valid_body = opcode == Opcode::DTE_SEND ||
                          opcode == Opcode::DTE_RECV ||
                          opcode == Opcode::DTE_WAIT ||
+                         opcode == Opcode::LOCAL_NOC_SEND ||
+                         opcode == Opcode::LOCAL_NOC_RECV ||
+                         opcode == Opcode::LOCAL_NOC_WAIT ||
                          opcode == Opcode::LOCAL_REDUCE ||
                          opcode == Opcode::LSU_LOAD ||
                          opcode == Opcode::LSU_STORE ||
@@ -4272,10 +4321,23 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 expected_inputs.emplace(
                     ManifestInputKindDto::REGION_MANIFEST, region->id,
                     kRegionManifestSchemaVersion);
+                const auto plan_digest = std::find_if(
+                    manifest.input_digests.begin(),
+                    manifest.input_digests.end(),
+                    [&](const ManifestInputDigestDto &digest) {
+                        return digest.kind == ManifestInputKindDto::FUSION_PLAN &&
+                               digest.artifact_id == region->fusion_plan_id;
+                    });
+                if (plan_digest == manifest.input_digests.end() ||
+                    (plan_digest->schema_version !=
+                         "wafer_frontend.fusion_plan/v1alpha10" &&
+                     plan_digest->schema_version !=
+                         "wafer_frontend.swizzle_fusion_plan/v1alpha1"))
+                    Fail("linked_program_manifest.input_digests",
+                         "region manifest fusion-plan lineage is not exact");
                 expected_inputs.emplace(
-                    ManifestInputKindDto::FUSION_PLAN,
-                    region->fusion_plan_id,
-                    "wafer_frontend.fusion_plan/v1alpha10");
+                    plan_digest->kind, plan_digest->artifact_id,
+                    plan_digest->schema_version);
             }
         }
         if (swizzle_link) {
@@ -6526,6 +6588,16 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::map<std::string, LogicalCoreDto> action_cores;
         std::map<std::string, std::set<Opcode>> action_opcodes;
         std::map<LogicalCoreDto, std::string> first_action_by_core;
+        struct LocalNocUse {
+            Opcode opcode = Opcode::INVALID;
+            LogicalCoreDto logical_core;
+            uint64_t runtime_core_id = 0;
+            uint64_t peer_core_id = 0;
+            uint64_t byte_count = 0;
+            uint64_t event_id = 0;
+            std::string action_id;
+        };
+        std::vector<LocalNocUse> local_noc_uses;
 
         for (std::size_t core_index = 0; core_index < pending.size(); ++core_index) {
             const LinkedCoreStreamDto &linked = *pending[core_index].linked;
@@ -6626,6 +6698,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     instruction,
                     "linked_program_manifest.core_streams.record",
                     moe_calibration_link || whole_terminal_alloc));
+                const ExternalRecord &finalized_record = core.records.back();
+                if (record.opcode == Opcode::LOCAL_NOC_SEND) {
+                    const auto &operands = std::get<LocalNocSendOperands>(
+                        finalized_record.operands);
+                    local_noc_uses.push_back({
+                        record.opcode, linked.logical_core, core.core_id,
+                        operands.destination_core, operands.byte_count,
+                        operands.event_id, record.source_global_action_id});
+                } else if (record.opcode == Opcode::LOCAL_NOC_RECV) {
+                    const auto &operands = std::get<LocalNocRecvOperands>(
+                        finalized_record.operands);
+                    local_noc_uses.push_back({
+                        record.opcode, linked.logical_core, core.core_id,
+                        operands.source_core, operands.byte_count,
+                        operands.event_id, record.source_global_action_id});
+                } else if (record.opcode == Opcode::LOCAL_NOC_WAIT) {
+                    const auto &operands = std::get<LocalNocWaitOperands>(
+                        finalized_record.operands);
+                    local_noc_uses.push_back({
+                        record.opcode, linked.logical_core, core.core_id,
+                        0, 0, operands.event_id,
+                        record.source_global_action_id});
+                }
                 source_records.push_back(&record);
             }
             const std::set<std::string> terminal_tape_labels =
@@ -6677,6 +6772,40 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                      "terminal tape persistence did not cover exact labels");
             artifact.cores.push_back(std::move(core));
         }
+        std::map<uint64_t, std::vector<const LocalNocUse *>> local_noc_events;
+        for (const LocalNocUse &use : local_noc_uses)
+            local_noc_events[use.event_id].push_back(&use);
+        for (const auto &entry : local_noc_events) {
+            const LocalNocUse *send = nullptr;
+            const LocalNocUse *recv = nullptr;
+            const LocalNocUse *wait = nullptr;
+            for (const LocalNocUse *use : entry.second) {
+                const LocalNocUse **slot = nullptr;
+                if (use->opcode == Opcode::LOCAL_NOC_SEND) slot = &send;
+                else if (use->opcode == Opcode::LOCAL_NOC_RECV) slot = &recv;
+                else if (use->opcode == Opcode::LOCAL_NOC_WAIT) slot = &wait;
+                if (slot == nullptr || *slot != nullptr)
+                    Fail("linked_program_manifest.core_streams",
+                         "LOCAL_NOC event must have exactly one SEND, RECV, and WAIT");
+                *slot = use;
+            }
+            if (send == nullptr || recv == nullptr || wait == nullptr ||
+                entry.second.size() != 3)
+                Fail("linked_program_manifest.core_streams",
+                     "LOCAL_NOC event must have exactly one SEND, RECV, and WAIT");
+            if (send->logical_core.die_id != recv->logical_core.die_id ||
+                send->runtime_core_id == recv->runtime_core_id ||
+                send->peer_core_id != recv->runtime_core_id ||
+                recv->peer_core_id != send->runtime_core_id ||
+                send->byte_count != recv->byte_count ||
+                wait->runtime_core_id != recv->runtime_core_id ||
+                send->action_id == recv->action_id ||
+                send->action_id == wait->action_id ||
+                recv->action_id == wait->action_id)
+                Fail("linked_program_manifest.core_streams",
+                     "LOCAL_NOC event endpoints, peers, bytes, actions, and destination WAIT must close exactly");
+        }
+
         if (actual_record_refs != expected_record_refs)
             Fail("linked_program_manifest.core_streams",
                  "linked streams do not cover every fragment record exactly once");

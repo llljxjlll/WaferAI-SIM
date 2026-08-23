@@ -230,12 +230,12 @@ struct CollectiveDataV1PrimBench final : sc_module {
                   SentinelPreserved(0x180, 8, 0x5a),
               "signed INT32 MAX handles negatives and exact destination span");
         Check(Counter(sram::Command::kRead).requests ==
-                      reads.requests + 1 &&
+                      reads.requests + 3 &&
                   Counter(sram::Command::kRead).bytes == reads.bytes + 24 &&
                   Counter(sram::Command::kWrite).requests ==
                       writes.requests + 1 &&
                   Counter(sram::Command::kWrite).bytes == writes.bytes + 8,
-              "REDUCE accounts one N*L read and one L write");
+              "REDUCE accounts N rank-local reads and one L write");
     }
 
     void TestLocalFp16(TaskCoreContext &context) {

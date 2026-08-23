@@ -572,7 +572,7 @@ class NaiveIntraDieStateTransferTest(unittest.TestCase):
         )
         self.assertEqual(
             INTRADIE_SCHEDULING_CONTEXT_SCHEMA_VERSION,
-            "wafer_frontend.intra_die_scheduling_context/v1alpha7",
+            "wafer_frontend.intra_die_scheduling_context/v1alpha8",
         )
         self.assertEqual(
             IntraDieSchedulingContract

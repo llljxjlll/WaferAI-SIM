@@ -289,13 +289,21 @@ int Collective_data_v1_prim::taskCoreDefault(TaskCoreContext &context) {
     const int compute_delay = ComputeDelay(*this, context);
     const uint64_t source_bytes = SourceBytes(*this);
 
-    sram::Request read;
-    read.initiator = sram::Initiator::kCompute;
-    read.command = sram::Command::kRead;
-    read.address = source_address_bytes;
-    read.size_bytes = source_bytes;
-    std::vector<uint8_t> source =
-        context.sram_access->Access(read).payload;
+    std::vector<uint8_t> source;
+    source.reserve(static_cast<size_t>(source_bytes));
+    const uint16_t read_count =
+        mode == CollectiveDataV1PrimMode::REDUCE ? input_count : 1;
+    for (uint16_t rank = 0; rank < read_count; ++rank) {
+        sram::Request read;
+        read.initiator = sram::Initiator::kCompute;
+        read.command = sram::Command::kRead;
+        read.address = source_address_bytes +
+                       static_cast<uint64_t>(rank) * length_bytes;
+        read.size_bytes = length_bytes;
+        std::vector<uint8_t> chunk =
+            context.sram_access->Access(read).payload;
+        source.insert(source.end(), chunk.begin(), chunk.end());
+    }
     if (source.size() != source_bytes)
         throw std::runtime_error(
             "Collective_data_v1_prim SRAM read returned the wrong byte count");

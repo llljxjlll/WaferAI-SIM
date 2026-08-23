@@ -1,0 +1,582 @@
+{
+  "artifact_bytes": 56936,
+  "artifact_sha256": "7ea39a035f78f4d2b27583a440b0e38ae239d6228e21707bd023ba05e06f7d63",
+  "core_count": 2,
+  "linked_manifest_digest": "8f1d9bb1e54df60667ebff486f127d6bf742fd1e7158b44d48b6af830d275892",
+  "linked_manifest_id": "linked_program_manifest_e39608150691434f",
+  "record_count": 472,
+  "relocation_count": 740,
+  "runtime_assignments": [
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_0d41f36f559f6502",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_1861d81b199bef3d",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_1e8860f5318f56fc",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_324d66556c753951",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_673410c2f77dd465",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_693f26d62b3eee39",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_b65a954d82d1c690",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "plan_barrier_core_df51922d9ba64e88",
+      "value": 16
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_0099a68cac75eeab",
+      "value": 0
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_4b4dbd747c65d5a3",
+      "value": 1
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_5f35361a1c2837a6",
+      "value": 2
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_60728b349102e493",
+      "value": 3
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_66c37e9127fe0de0",
+      "value": 4
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_8b8d00a24acb00b0",
+      "value": 5
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_a472f5633ecd3c1a",
+      "value": 6
+    },
+    {
+      "kind": "event_tag",
+      "symbol_id": "plan_barrier_event_e74555330206ca78",
+      "value": 7
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_007b4fcec7bf5684",
+      "value": 1
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_033b6661163ac946",
+      "value": 0
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_0394615ffe8a7485",
+      "value": 2
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_04d201fd3312350e",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_04fc604cb6bd6327",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_0638ddfa23f29b55",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_0abf0230bc28ccff",
+      "value": 1
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_0f3ae738bf71326d",
+      "value": 2
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_10151a4fbbca1101",
+      "value": 3
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_13b2e319b3736fcd",
+      "value": 4
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_146ad2a342541ddd",
+      "value": 3
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_15c2cf19e1a279d7",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_15eaca309bd8a943",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_176158bb58a370ed",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_1ab02d62ae69adac",
+      "value": 5
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_1f21b26ccf0dab20",
+      "value": 6
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_2081a3cca6b20c47",
+      "value": 7
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_248e413c0468d7de",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_24cc08614b42a94b",
+      "value": 8
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_24d5ee182e572931",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_2b83b1394a904d9e",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_3007cfb622ce4082",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_318e43044b1df321",
+      "value": 9
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_3560838fc64407f4",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_35daee4e917dc3d6",
+      "value": 10
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_3819cb17e4db36c7",
+      "value": 11
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_396e8d3ad141f61a",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_3abbbc8573de5c71",
+      "value": 12
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_3b18c94b1958ec86",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_3b404073b1d3eb88",
+      "value": 13
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_3cbae144c888d022",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_3e1780769c8c81a3",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_40d47a33178bb1e7",
+      "value": 14
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_4317b92390baa46a",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_434bd9306fc9ac5f",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_442457c8bbc8f3fd",
+      "value": 4
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_4489f44ca6d7dbae",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_465ea0965b092646",
+      "value": 15
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_48bc2de4d6b99e7d",
+      "value": 5
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_4c4e5305246a5f79",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_4d793dc05f1be2ba",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_4eac576f226c426e",
+      "value": 17
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_510b88d127f4401f",
+      "value": 18
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_526c8d425efb115c",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_53f5825316299048",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_5743af3ce0e93131",
+      "value": 6
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_5924a59336ed8433",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_5ef78a3d3241bd58",
+      "value": 7
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_6509fba19b09f454",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_6a45d327a6554571",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_6e0f65eaac010803",
+      "value": 19
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_7032c0595f6c81b2",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_71de4ca443f0f0be",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_7b7b13a92e26fb59",
+      "value": 8
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_84abc597334d917a",
+      "value": 20
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_84b05e6eb4aab4a6",
+      "value": 21
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_84b59c126d917899",
+      "value": 22
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_8c58884b4d602920",
+      "value": 23
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_918a2331bab6a339",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_92ba3a8fba191cdd",
+      "value": 9
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_981769a2e3c9963f",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_9b3dd2f7c18fe2a7",
+      "value": 0
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_9d15e80585f3d649",
+      "value": 10
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_9e997499ea2369d7",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_a1e25fdd00103aa5",
+      "value": 0
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_a2e0623af2f77c67",
+      "value": 16
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_a3797bee26fbed32",
+      "value": 24
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_a589ca91d72f9001",
+      "value": 25
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_b1653aa3d7b3922c",
+      "value": 11
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_b17e29243715f33e",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_b96cc89e32a2245a",
+      "value": 26
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_ba3ee20040a7bc66",
+      "value": 16
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_c1e40c667aa188e9",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_c54b8f99a2c671f5",
+      "value": 12
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_c7ec6cdb3f1a3c50",
+      "value": 27
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_c931994a447e7936",
+      "value": 28
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_c9f116c65dd84e50",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_cb2b6188a07d4f29",
+      "value": 29
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_d2568a1fedb43919",
+      "value": 30
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_d3b76a1156a6aafa",
+      "value": 0
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_d49e853f56428c8f",
+      "value": 13
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_d4a5fa3cfeb399ba",
+      "value": 14
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_d4f58c15109675fb",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_d84407ebd7a4dead",
+      "value": 31
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_dc4e386a7021ab22",
+      "value": 32
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_de9989fd1d034f3a",
+      "value": 15
+    },
+    {
+      "kind": "runtime_core",
+      "symbol_id": "runtime_symbol_e15d78f2ed1abde9",
+      "value": 0
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_e2582575022eb976",
+      "value": 33
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_e36b80003d92882e",
+      "value": 16
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_e7f6c0d17772e3c2",
+      "value": 17
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_e812e8b829cd09a2",
+      "value": 34
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_e950c7986f6dd4b9",
+      "value": 18
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_f51ae77279aca29f",
+      "value": 19
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_f593946b9373c257",
+      "value": 35
+    },
+    {
+      "kind": "dte_fsm",
+      "symbol_id": "runtime_symbol_fae8a20d002661eb",
+      "value": 20
+    },
+    {
+      "kind": "dte_token",
+      "symbol_id": "runtime_symbol_fc110d2070f6cf7c",
+      "value": 36
+    },
+    {
+      "kind": "start_tag",
+      "symbol_id": "start_tag_5642f15c677d7b3b",
+      "value": 0
+    },
+    {
+      "kind": "start_tag",
+      "symbol_id": "start_tag_c39ee6686782a737",
+      "value": 1
+    }
+  ],
+  "schema_version": "npusim.program_finalization_report/v1alpha1"
+}

@@ -18,6 +18,7 @@ from .action import (
     FusionPlan,
     ReductionContract,
     StandaloneCollectivePlan,
+    SwizzleBoundActionRef,
     SyncContract,
 )
 from .common import (
@@ -32,6 +33,7 @@ from .common import (
 )
 from .ir0 import (
     EdgeKind,
+    FusionPattern,
     OpKind,
     StateAccess,
     StateAccessMode,
@@ -51,6 +53,7 @@ from .state_transfer import (
     StateTransferContract,
     StateTransferLike,
 )
+from .swizzle_plan import FusedPlan, SwizzleFusionPlan, SwizzleValueOrigin
 
 
 INTRA_DIE_DAG_SCHEMA_VERSION = "wafer_frontend.intra_die_dag/v1alpha14"
@@ -66,6 +69,7 @@ STATE_TRANSFER_IR2_ID_SCHEMA_VERSION = (
 
 class OriginKind(str, Enum):
     FUSED = "fused"
+    SWIZZLE_FUSED = "swizzle_fused"
     ORDINARY = "ordinary"
     STANDALONE_COLLECTIVE = "standalone_collective"
     STATE_IO = "state_io"
@@ -85,6 +89,41 @@ class FusedNodeOrigin:
         validate_nonempty(self.plan_id, f"{path}.plan_id")
         validate_uint64(self.rank, f"{path}.rank")
         validate_nonempty(self.action_id, f"{path}.action_id")
+
+
+@dataclass(frozen=True, slots=True)
+class SwizzleNodeOrigin:
+    """Origin for an action owned by a ``SwizzleFusionPlan``.
+
+    This is intentionally distinct from ``FusedNodeOrigin``: a Swizzle bound
+    action has authoritative provenance outside legacy ``FusionAction`` and
+    must never be normalized into one.  The common projection boundary later
+    resolves ``action_ref`` against the supplied ``SwizzleFusionPlan``.
+    """
+
+    kind: OriginKind
+    action_ref: SwizzleBoundActionRef
+
+    @property
+    def plan_id(self) -> str:
+        return self.action_ref.plan_id
+
+    @property
+    def rank(self) -> int:
+        return self.action_ref.rank
+
+    @property
+    def action_id(self) -> str:
+        return self.action_ref.action_id
+
+    def validate(self, path: str) -> None:
+        if self.kind is not OriginKind.SWIZZLE_FUSED:
+            raise SchemaError("must be swizzle_fused", path=f"{path}.kind")
+        if type(self.action_ref) is not SwizzleBoundActionRef:
+            raise SchemaError(
+                "must be a SwizzleBoundActionRef", path=f"{path}.action_ref"
+            )
+        self.action_ref.validate(f"{path}.action_ref")
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +195,7 @@ class StateTransferOrigin:
 
 NodeOrigin = (
     FusedNodeOrigin
+    | SwizzleNodeOrigin
     | OrdinaryNodeOrigin
     | StandaloneNodeOrigin
     | StateIoOrigin
@@ -164,7 +204,7 @@ NodeOrigin = (
 
 
 def canonical_semantic_flow_id(
-    source_send_origin: FusedNodeOrigin | StandaloneNodeOrigin,
+    source_send_origin: FusedNodeOrigin | SwizzleNodeOrigin | StandaloneNodeOrigin,
     logical_channel: str,
 ) -> str:
     """Return the one semantic-flow identity shared by every route replica."""
@@ -298,6 +338,9 @@ class SemanticTaskKind(str, Enum):
     DMA_IN = "dma_in"
     COMP = "comp"
     LOCAL_COPY = "local_copy"
+    LOCAL_SEND = "local_send"
+    LOCAL_RECV = "local_recv"
+    LOCAL_WAIT = "local_wait"
     SEND = "send"
     RECV = "recv"
     REDUCE = "reduce"
@@ -642,6 +685,48 @@ class IntraDieValue:
 
 
 @dataclass(frozen=True, slots=True)
+class SwizzleIntraDieValue:
+    """Rank-local temporary/value lineage owned by a Swizzle bound action.
+
+    Legacy ``IntraDieValue`` is deliberately IR-1 shaped and typed.  Swizzle
+    action temporaries are neither necessarily IR-1 values nor do they always
+    have a standalone tensor geometry, so forcing them into that carrier would
+    fabricate provenance.  This companion carrier keeps the exact published
+    ``SwizzleValueOrigin`` records and the local task-use closure instead.
+    """
+
+    id: str
+    plan_id: str
+    rank: int
+    origins: tuple[SwizzleValueOrigin, ...]
+    producer_tasks: tuple[str, ...]
+    consumer_tasks: tuple[str, ...]
+
+    def validate(self, path: str) -> None:
+        validate_nonempty(self.id, f"{path}.id")
+        validate_nonempty(self.plan_id, f"{path}.plan_id")
+        validate_uint64(self.rank, f"{path}.rank")
+        if not self.origins:
+            raise SchemaError("must preserve at least one Swizzle value origin", path=f"{path}.origins")
+        seen_origins: set[SwizzleValueOrigin] = set()
+        for index, origin in enumerate(self.origins):
+            if type(origin) is not SwizzleValueOrigin:
+                raise SchemaError("must be a SwizzleValueOrigin", path=f"{path}.origins[{index}]")
+            origin.validate(f"{path}.origins[{index}]")
+            if origin.value_ref != self.id:
+                raise SchemaError("origin value_ref must equal carrier id", path=f"{path}.origins[{index}].value_ref")
+            if origin in seen_origins:
+                raise SchemaError("contains a duplicate value origin", path=f"{path}.origins[{index}]")
+            seen_origins.add(origin)
+        for field_name in ("producer_tasks", "consumer_tasks"):
+            refs = getattr(self, field_name)
+            if len(set(refs)) != len(refs):
+                raise SchemaError("contains duplicate task ids", path=f"{path}.{field_name}")
+            for index, ref in enumerate(refs):
+                validate_nonempty(ref, f"{path}.{field_name}[{index}]")
+
+
+@dataclass(frozen=True, slots=True)
 class DmaContract:
     """Bounded state transfer with exactly one local SRAM endpoint."""
 
@@ -935,7 +1020,8 @@ class SemanticTask:
             if tuple(item.value_id for item in self.compute.outputs) != self.write_values:
                 raise SchemaError("outputs must exactly match write_values", path=f"{path}.compute.outputs")
         planned_origin = isinstance(
-            self.origin_ref, (FusedNodeOrigin, StandaloneNodeOrigin)
+            self.origin_ref,
+            (FusedNodeOrigin, SwizzleNodeOrigin, StandaloneNodeOrigin),
         )
         if planned_origin and self.sync is None:
             raise SchemaError("planned task requires sync identity", path=f"{path}.sync")
@@ -955,6 +1041,30 @@ class SemanticTask:
                 raise SchemaError("transport task requires flow, slice, dtype and non-zero bytes", path=path)
             if self.source_rank is None or self.destination_rank is None:
                 raise SchemaError("transport task requires source and destination ranks", path=path)
+        elif self.kind in (SemanticTaskKind.LOCAL_SEND, SemanticTaskKind.LOCAL_RECV):
+            if (
+                self.flow_id is None
+                or not self.flow_id.startswith("local.")
+                or self.tensor_slice is None
+                or self.dtype is None
+                or self.bytes == 0
+                or self.source_rank is not None
+                or self.destination_rank is not None
+            ):
+                raise SchemaError("local transport requires a local.* flow_id and payload only", path=path)
+            if self.read_values or self.write_values:
+                raise SchemaError("local transport payload stays owned by its endpoint tasks", path=path)
+        elif self.kind is SemanticTaskKind.LOCAL_WAIT:
+            if (
+                self.flow_id is None
+                or not self.flow_id.startswith("local.")
+                or self.bytes != 0
+                or self.dtype is not None
+                or self.tensor_slice is not None
+                or self.read_values
+                or self.write_values
+            ):
+                raise SchemaError("LOCAL_WAIT requires only a local.* flow_id", path=path)
         elif self.kind in (SemanticTaskKind.WAIT, SemanticTaskKind.BARRIER):
             if self.bytes != 0 or self.dtype is not None or self.tensor_slice is not None:
                 raise SchemaError("WAIT/BARRIER cannot carry a payload", path=path)
@@ -1129,6 +1239,80 @@ def _validate_rectangular_slices(
         raise SchemaError("writer slices do not fully cover the value", path=path)
 
 
+def _validate_split_k_row_pack(
+    value: IntraDieValue,
+    writers: tuple[SemanticTask, ...],
+    task_index: dict[str, SemanticTask],
+    *,
+    path: str,
+) -> bool:
+    marker = "::refine."
+    if marker not in value.id or not value.id.endswith(".packed"):
+        return False
+    source_value_id, refined = value.id.rsplit(marker, 1)
+    if ".split_k.part." not in refined:
+        return False
+    source_task_id, suffix = refined.rsplit(".split_k.part.", 1)
+    try:
+        part_text, operand_suffix = suffix.split(".input.", 1)
+        operand_text, terminal = operand_suffix.split(".", 1)
+        part_index = int(part_text)
+        operand_index = int(operand_text)
+    except (ValueError, TypeError):
+        return False
+    if terminal != "packed" or part_index < 0 or operand_index < 0:
+        return False
+    consumers = tuple(
+        task for task in task_index.values()
+        if value.id in task.read_values
+        and task.kind is SemanticTaskKind.COMP
+        and task.compute is not None
+        and task.compute.tile is not None
+    )
+    if len(consumers) != 1:
+        raise SchemaError(
+            "split-K row pack requires one exact COMP consumer", path=path
+        )
+    bindings = tuple(
+        binding for binding in consumers[0].compute.tile.input_slices
+        if binding.operand_id == value.id
+    )
+    if len(bindings) != 1:
+        raise SchemaError(
+            "split-K row pack lacks one exact compute operand slice", path=path
+        )
+    target = TensorSlice(
+        value.id, bindings[0].logical_offset, bindings[0].logical_shape
+    )
+    if len(target.shape) != 2 or target.shape[0] != len(writers):
+        raise SchemaError(
+            "split-K row pack writer count must equal the target row count", path=path
+        )
+    expected_prefix = (
+        f"{source_task_id}.split_k.part.{part_index}.input."
+        f"{operand_index}.pack.row."
+    )
+    for row_index, writer in enumerate(writers):
+        expected_slice = TensorSlice(
+            source_value_id,
+            (target.offset[0] + row_index, target.offset[1]),
+            (1, target.shape[1]),
+        )
+        if (
+            writer.id != f"{expected_prefix}{row_index}"
+            or writer.kind is not SemanticTaskKind.LOCAL_COPY
+            or writer.read_values != (source_value_id,)
+            or writer.write_values != (value.id,)
+            or writer.tensor_slice != expected_slice
+            or (row_index > 0 and writer.deps != (writers[row_index - 1].id,))
+        ):
+            raise SchemaError(
+                "split-K row pack must be a canonical contiguous row chain",
+                path=f"{path}[{row_index}]",
+            )
+    return True
+
+
 def _producer_sort_key(task: SemanticTask) -> tuple[tuple[int, ...], tuple[int, ...], str]:
     tensor_slice = task.tensor_slice
     return (
@@ -1136,6 +1320,400 @@ def _producer_sort_key(task: SemanticTask) -> tuple[tuple[int, ...], tuple[int, 
         tensor_slice.shape if tensor_slice is not None else (),
         task.id,
     )
+
+
+def _require_swizzle_gemm_rs(plan: SwizzleFusionPlan, path: str) -> None:
+    """Fail closed until each additional Swizzle pattern has a common ABI."""
+
+    if plan.pattern is not FusionPattern.GEMM_RS:
+        raise SchemaError(
+            "common IR2 Swizzle projection currently supports GEMM_RS only",
+            path=path,
+        )
+
+
+def _validate_swizzle_gemm_rs_dag(dag: "IntraDieDAG", ir1: IR1, plans: tuple[SwizzleFusionPlan, ...], *, path: str) -> None:
+    """Validate the first direct-route GEMM_RS common-IR2 shape exactly."""
+    if dag.state_access_ids or dag.state_transfer_ids:
+        raise SchemaError("Swizzle GEMM_RS cannot combine state transfer yet", path=path)
+    groups = {group.id: group for group in ir1.groups}
+    action_owner_rank = {
+        (plan.id, action.source_action.id): program.rank
+        for plan in plans
+        for program in plan.rank_programs
+        for action in program.actions
+    }
+    expected: dict[tuple[str, int, str], object] = {}
+    for plan in plans:
+        rank_die = {item.rank: item.die_id for item in groups[plan.group_ref].placements}
+        for program in plan.rank_programs:
+            for action in program.actions:
+                if len(action.expected_route) > 2:
+                    raise SchemaError("Swizzle common IR2 GEMM_RS supports direct routes only", path=path)
+                if rank_die[program.rank] == dag.die_id:
+                    expected[(plan.id, program.rank, action.source_action.id)] = action
+    actual: dict[tuple[str, int, str], SemanticTask] = {}
+    for task in dag.tasks:
+        if isinstance(task.origin_ref, SwizzleNodeOrigin):
+            origin = task.origin_ref
+            key = (origin.plan_id, origin.rank, origin.action_id)
+            if key in actual:
+                raise SchemaError("Swizzle action is projected more than once", path=f"{path}.tasks")
+            actual[key] = task
+    if set(actual) != set(expected):
+        raise SchemaError("Swizzle action coverage must exactly match plan actions", path=f"{path}.tasks")
+    expected_values: dict[tuple[str, int, str], list[SwizzleValueOrigin]] = {}
+    ir1_value_ids = {value.id for value in ir1.values}
+    plan_index = {plan.id: plan for plan in plans}
+    def materialized(
+        plan_id: str, rank: int, action: object, ref: str, *, write: bool
+    ) -> str:
+        plan = plan_index[plan_id]
+        if write and action.fusion_kind is FusionActionKind.LOCAL_COPY:
+            logical_output = plan.decision.problem.collective.output.value_ref
+            if (
+                action.source_action.output_refs != (ref,)
+                or action.member_ref != plan.decision.problem.collective.node_ref
+                or logical_output not in ir1_value_ids
+            ):
+                raise SchemaError(
+                    "terminal Swizzle LOCAL_COPY lacks one exact IR-1 output",
+                    path=path,
+                )
+            return logical_output
+        return ref if ref in ir1_value_ids else f"swizzle.{plan_id}.rank.{rank}.{ref}"
+    for key, action in expected.items():
+        task = actual[key]
+        source = action.source_action
+        expected_reads = tuple(
+            materialized(key[0], key[1], action, ref, write=False)
+            for ref in source.input_refs
+        )
+        expected_writes = tuple(
+            materialized(key[0], key[1], action, ref, write=True)
+            for ref in source.output_refs
+        )
+        if (task.kind.value, task.member_id, task.read_values, task.write_values, task.sync) != (action.fusion_kind.value, action.member_ref, expected_reads, expected_writes, action.sync):
+            raise SchemaError("task fields disagree with Swizzle bound action", path=f"{path}.tasks[{task.id}]")
+        if action.fusion_kind is FusionActionKind.LOCAL_COPY:
+            chunk = action.chunk_origin
+            assert chunk is not None
+            logical_output = plan_index[key[0]].decision.problem.collective.output.value_ref
+            if task.tensor_slice != TensorSlice(
+                logical_output, chunk.logical_offset, chunk.logical_shape
+            ):
+                raise SchemaError(
+                    "terminal Swizzle LOCAL_COPY must write its exact IR-1 output slice",
+                    path=f"{path}.tasks[{task.id}].tensor_slice",
+                )
+        expected_deps = tuple(
+            actual[(key[0], key[1], ref)].id
+            for ref in source.deps
+            if action_owner_rank[(key[0], ref)] == key[1]
+        )
+        if task.deps[:len(expected_deps)] != expected_deps:
+            raise SchemaError("task deps do not preserve the Swizzle action dependency prefix", path=f"{path}.tasks[{task.id}].deps")
+        for origin in action.value_origins:
+            materialized_ref = materialized(
+                key[0], key[1], action, origin.value_ref,
+                write=origin.value_ref in source.output_refs,
+            )
+            materialized_origin = SwizzleValueOrigin(
+                value_ref=materialized_ref,
+                use=origin.use,
+                logical_source_ref=origin.logical_source_ref,
+                producer_action_ref=origin.producer_action_ref,
+                local_member_ref=origin.local_member_ref,
+            )
+            origins = expected_values.setdefault(
+                (key[0], key[1], materialized_ref), []
+            )
+            if materialized_origin not in origins:
+                origins.append(materialized_origin)
+    carriers = {(value.plan_id, value.rank, value.id): value for value in dag.swizzle_values}
+    required = {key for key in expected_values if key[2] not in ir1_value_ids}
+    if set(carriers) != required:
+        raise SchemaError("Swizzle temporary values must exactly cover action values", path=f"{path}.swizzle_values")
+    for key in required:
+        if tuple(carriers[key].origins) != tuple(expected_values[key]):
+            raise SchemaError("Swizzle temporary origins disagree with bound actions", path=f"{path}.swizzle_values")
+
+
+def _validate_standalone_dag_provenance(
+    dag: "IntraDieDAG",
+    ir1: IR1,
+    plans: tuple[StandaloneCollectivePlan, ...],
+    *,
+    path: str,
+) -> None:
+    """Validate standalone action provenance alongside a Swizzle fusion DAG."""
+
+    groups = {group.id: group for group in ir1.groups}
+    expected: dict[tuple[str, int, str], tuple[object, StandaloneCollectivePlan]] = {}
+    for plan in plans:
+        group = groups[plan.group_ref]
+        rank_die = {placement.rank: placement.die_id for placement in group.placements}
+        for program in plan.rank_programs:
+            for action in program.actions:
+                if rank_die[program.rank] == dag.die_id:
+                    expected[(plan.id, program.rank, action.id)] = (action, plan)
+    actual = {
+        (task.origin_ref.collective_plan_id, task.origin_ref.rank, task.origin_ref.action_id): task
+        for task in dag.tasks
+        if isinstance(task.origin_ref, StandaloneNodeOrigin)
+        and task.kind is not SemanticTaskKind.TRANSIT
+    }
+    if set(actual) != set(expected):
+        raise SchemaError(
+            "standalone action coverage must exactly match plans",
+            path=f"{path}.tasks",
+        )
+    for key, (action, plan) in expected.items():
+        task = actual[key]
+        chunk = next(
+            (item for item in plan.chunk_slices if item.id == action.slice_ref),
+            None,
+        )
+        tensor_slice = (
+            TensorSlice(chunk.value_id, chunk.offset, chunk.shape)
+            if chunk is not None else None
+        )
+        if (
+            task.kind.value,
+            task.member_id,
+            task.chunk_id,
+            task.tensor_slice,
+            task.bytes,
+            task.dtype,
+            task.read_values,
+            task.write_values,
+            task.sync,
+        ) != (
+            action.kind.value,
+            action.member_id,
+            action.chunk_id,
+            tensor_slice,
+            action.bytes,
+            action.dtype,
+            action.reads,
+            action.writes,
+            action.sync,
+        ):
+            raise SchemaError(
+                "task fields disagree with standalone action",
+                path=f"{path}.tasks[{task.id}]",
+            )
+
+
+def _validate_ordinary_dag_provenance(
+    dag: "IntraDieDAG",
+    ir1: IR1,
+    fusion_plans: tuple[SwizzleFusionPlan, ...],
+    standalone_plans: tuple[StandaloneCollectivePlan, ...],
+    *,
+    path: str,
+) -> None:
+    """Require exact common-IR2 coverage for every unplanned IR-1 node."""
+
+    skeletons = {item.id: item for item in ir1.fused_op_skeletons}
+    covered = {
+        member_id
+        for plan in fusion_plans
+        for member_id in skeletons[plan.fused_op_id].member_node_ids
+    } | {plan.op_id for plan in standalone_plans}
+    groups = {group.id: group for group in ir1.groups}
+    expected: dict[tuple[str, int], object] = {}
+    expected_ids: list[str] = []
+    for node in ir1.nodes:
+        if node.id in covered or node.kind is OpKind.COLLECTIVE:
+            continue
+        for placement in groups[node.execution_group_ref].placements:
+            if placement.die_id != dag.die_id:
+                continue
+            expected[(node.id, placement.rank)] = node
+            expected_ids.append(node.id)
+    if dag.ordinary_node_ids != tuple(dict.fromkeys(expected_ids)):
+        raise SchemaError(
+            "ordinary_node_ids must exactly cover all unplanned local nodes",
+            path=f"{path}.ordinary_node_ids",
+        )
+    actual = {
+        (task.origin_ref.op_id, task.origin_ref.rank): task
+        for task in dag.tasks
+        if isinstance(task.origin_ref, OrdinaryNodeOrigin)
+    }
+    if set(actual) != set(expected):
+        raise SchemaError(
+            "ordinary task coverage must exactly match unplanned local nodes",
+            path=f"{path}.tasks",
+        )
+    for key, node in expected.items():
+        task = actual[key]
+        input_roles, output_roles = canonical_compute_operand_roles(
+            node.kind, node.workload, tiled=False,
+            path=f"{path}.tasks[{task.id}].compute",
+        )
+        compute = ComputeContract(
+            op_kind=node.kind, workload=node.workload, math=node.math,
+            effects=node.effects, impl_ref=node.impl_ref,
+            inputs=tuple(
+                ComputeOperand(value_id, role)
+                for value_id, role in zip(node.inputs, input_roles, strict=True)
+            ),
+            outputs=tuple(
+                ComputeOperand(value_id, role)
+                for value_id, role in zip(node.outputs, output_roles, strict=True)
+            ),
+        )
+        if (
+            task.kind, task.member_id, task.read_values, task.write_values,
+            task.compute, task.sync, task.flow_id, task.tensor_slice, task.bytes,
+        ) != (
+            SemanticTaskKind.COMP, node.id, node.inputs, node.outputs, compute,
+            None, None, None, 0,
+        ):
+            raise SchemaError(
+                "ordinary task fields disagree with exact IR-1 node",
+                path=f"{path}.tasks[{task.id}]",
+            )
+
+
+def _validate_mixed_dag_dependencies(
+    dag: "IntraDieDAG", ir1: IR1,
+    fusion_plans: tuple[SwizzleFusionPlan, ...],
+    standalone_plans: tuple[StandaloneCollectivePlan, ...], *, path: str,
+) -> None:
+    """Reconstruct exact plan-local plus IR-1 cross-unit dependencies."""
+
+    tasks = tuple(dag.tasks)
+    skeletons = {item.id: item for item in ir1.fused_op_skeletons}
+    fusion_by_member = {
+        member_id: plan
+        for plan in fusion_plans
+        for member_id in skeletons[plan.fused_op_id].member_node_ids
+    }
+    standalone_by_node = {plan.op_id: plan for plan in standalone_plans}
+    nodes = {node.id: node for node in ir1.nodes}
+
+    def coverage(node_id: str) -> tuple[str, str]:
+        if node_id in fusion_by_member:
+            return ("fusion", fusion_by_member[node_id].id)
+        if node_id in standalone_by_node:
+            return ("standalone", standalone_by_node[node_id].id)
+        if nodes[node_id].kind is OpKind.COLLECTIVE:
+            return ("uncovered_collective", node_id)
+        return ("ordinary", node_id)
+
+    def belongs(task: SemanticTask, node_id: str, whole: bool) -> bool:
+        category, unit_id = coverage(node_id)
+        origin = task.origin_ref
+        if category == "ordinary":
+            return isinstance(origin, OrdinaryNodeOrigin) and origin.op_id == unit_id
+        if category == "fusion":
+            return (
+                isinstance(origin, SwizzleNodeOrigin)
+                and origin.plan_id == unit_id
+                and (whole or task.member_id == node_id)
+            )
+        return (
+            isinstance(origin, StandaloneNodeOrigin)
+            and origin.collective_plan_id == unit_id
+            and (whole or task.member_id == node_id)
+        )
+
+    def reads_source(task: SemanticTask, value_id: str) -> bool:
+        if value_id in task.read_values:
+            return True
+        return (
+            task.kind is SemanticTaskKind.COMP
+            and task.compute is not None and task.compute.tile is not None
+            and any(
+                binding.source_value_id == value_id
+                and binding.operand_id in task.read_values
+                for binding in task.compute.tile.input_slices
+            )
+        )
+
+    swizzle_tasks = {
+        (task.origin_ref.plan_id, task.origin_ref.rank, task.origin_ref.action_id): task
+        for task in tasks if isinstance(task.origin_ref, SwizzleNodeOrigin)
+    }
+    standalone_tasks = {
+        (task.origin_ref.collective_plan_id, task.origin_ref.rank, task.origin_ref.action_id): task
+        for task in tasks if isinstance(task.origin_ref, StandaloneNodeOrigin)
+    }
+    expected: dict[str, list[str]] = {task.id: [] for task in tasks}
+    swizzle_owner = {
+        (plan.id, action.source_action.id): program.rank
+        for plan in fusion_plans for program in plan.rank_programs
+        for action in program.actions
+    }
+    for plan in fusion_plans:
+        for program in plan.rank_programs:
+            for action in program.actions:
+                task = swizzle_tasks.get((plan.id, program.rank, action.source_action.id))
+                if task is None:
+                    continue
+                expected[task.id].extend(
+                    swizzle_tasks[(plan.id, program.rank, dependency)].id
+                    for dependency in action.source_action.deps
+                    if swizzle_owner[(plan.id, dependency)] == program.rank
+                )
+    for plan in standalone_plans:
+        for program in plan.rank_programs:
+            for action in program.actions:
+                task = standalone_tasks.get((plan.id, program.rank, action.id))
+                if task is None:
+                    continue
+                expected[task.id].extend(
+                    standalone_tasks[(plan.id, program.rank, dependency)].id
+                    for dependency in action.deps
+                )
+
+    for edge in sorted(ir1.edges, key=lambda item: item.id):
+        source_coverage = coverage(edge.source_node)
+        destination_coverage = coverage(edge.destination_node)
+        if (
+            "uncovered_collective"
+            in (source_coverage[0], destination_coverage[0])
+            or source_coverage == destination_coverage
+        ):
+            continue
+        whole = edge.kind is EdgeKind.CONTROL
+        entries = tuple(
+            task for task in tasks
+            if belongs(task, edge.destination_node, whole)
+            and (whole or reads_source(task, edge.value_id))
+        )
+        if whole:
+            unit_tasks = tuple(
+                task for task in tasks if belongs(task, edge.source_node, True)
+            )
+            completions = tuple(
+                task for task in unit_tasks
+                if not any(task.id in candidate.deps for candidate in unit_tasks)
+            )
+        elif source_coverage[0] == "standalone":
+            completions = tuple(
+                task for task in tasks
+                if belongs(task, edge.source_node, False)
+                and task.kind is SemanticTaskKind.BARRIER
+            )
+        else:
+            completions = tuple(
+                task for task in tasks
+                if belongs(task, edge.source_node, False)
+                and edge.value_id in task.write_values
+            )
+        for entry in entries:
+            expected[entry.id].extend(task.id for task in completions)
+    for task in tasks:
+        exact = tuple(dict.fromkeys(expected[task.id]))
+        if task.deps != exact:
+            raise SchemaError(
+                "task dependencies must exactly preserve plan-local and IR-1 edges",
+                path=f"{path}.tasks[{task.id}].deps",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1156,6 +1734,7 @@ class IntraDieDAG:
     state_access_ids: tuple[str, ...] = ()
     state_staging_values: tuple[StateStagingValue, ...] = ()
     state_transfer_ids: tuple[str, ...] = ()
+    swizzle_values: tuple[SwizzleIntraDieValue, ...] = ()
 
     @classmethod
     def create(cls, *, producer_pass: str, **semantic_key: object) -> "IntraDieDAG":
@@ -1171,12 +1750,16 @@ class IntraDieDAG:
         )
 
     def _semantic_key(self) -> dict[str, object]:
-        return {name: getattr(self, name) for name in (
+        result = {name: getattr(self, name) for name in (
             "source_ir1_id", "die_id", "fusion_plan_ids", "standalone_collective_plan_ids",
             "ordinary_node_ids", "tasks", "values", "flows", "regions",
             "source_state_manifest_id", "state_access_ids", "state_staging_values",
             "state_transfer_ids",
         )}
+        # Do not perturb historical IR2 ids for the legacy empty case.
+        if self.swizzle_values:
+            result["swizzle_values"] = self.swizzle_values
+        return result
 
     def validate(self, path: str = "intra_die_dag") -> None:
         if self.schema_version != INTRA_DIE_DAG_SCHEMA_VERSION:
@@ -1247,10 +1830,18 @@ class IntraDieDAG:
         staging_index = validate_unique_ids(
             self.state_staging_values, f"{path}.state_staging_values"
         )
-        if set(value_index).intersection(staging_index):
-            raise SchemaError("ordinary and state values must have disjoint ids", path=path)
+        swizzle_index = validate_unique_ids(
+            self.swizzle_values, f"{path}.swizzle_values"
+        )
+        if (
+            set(value_index).intersection(staging_index)
+            or set(value_index).intersection(swizzle_index)
+            or set(staging_index).intersection(swizzle_index)
+        ):
+            raise SchemaError("ordinary, state, and Swizzle values must have disjoint ids", path=path)
         local_value_index = dict(value_index)
         local_value_index.update(staging_index)
+        local_value_index.update(swizzle_index)
         flow_index = validate_unique_ids(self.flows, f"{path}.flows")
         if len({flow.logical_channel for flow in self.flows}) != len(self.flows):
             raise SchemaError(
@@ -1267,7 +1858,18 @@ class IntraDieDAG:
                 )
             if task.region_id not in region_index:
                 raise SchemaError("dangling region", path=f"{path}.tasks[{index}].region_id")
-            if task.flow_id is not None and task.flow_id not in flow_index:
+            if (
+                task.flow_id is not None
+                and task.flow_id not in flow_index
+                and not (
+                    task.kind in (
+                        SemanticTaskKind.LOCAL_SEND,
+                        SemanticTaskKind.LOCAL_RECV,
+                        SemanticTaskKind.LOCAL_WAIT,
+                    )
+                    and task.flow_id.startswith("local.")
+                )
+            ):
                 raise SchemaError("dangling flow", path=f"{path}.tasks[{index}].flow_id")
             if not set(task.read_values + task.write_values).issubset(local_value_index):
                 raise SchemaError("contains a dangling value", path=f"{path}.tasks[{index}]")
@@ -1275,13 +1877,25 @@ class IntraDieDAG:
             if isinstance(origin, StateIoOrigin):
                 expected_task_id = canonical_state_task_id(origin.state_access_ref, task.kind)
                 expected_region_id = canonical_state_region_id(origin.state_access_ref, task.kind)
-                if task.id != expected_task_id or task.region_id != expected_region_id:
+                direct_dma = (
+                    task.kind is SemanticTaskKind.DMA_IN
+                    and task.id.startswith(
+                        f"{expected_task_id}.split_k.direct_dma."
+                    )
+                    and task.region_id == f"{task.id}.region"
+                )
+                if not direct_dma and (
+                    task.id != expected_task_id
+                    or task.region_id != expected_region_id
+                ):
                     raise SchemaError(
                         "state DMA task/region identity is not canonical",
                         path=f"{path}.tasks[{index}]",
                     )
             if isinstance(origin, FusedNodeOrigin) and origin.plan_id not in self.fusion_plan_ids:
                 raise SchemaError("dangling fusion plan origin", path=f"{path}.tasks[{index}].origin_ref.plan_id")
+            if isinstance(origin, SwizzleNodeOrigin) and origin.plan_id not in self.fusion_plan_ids:
+                raise SchemaError("dangling Swizzle fusion plan origin", path=f"{path}.tasks[{index}].origin_ref.action_ref.plan_id")
             if isinstance(origin, StandaloneNodeOrigin) and origin.collective_plan_id not in self.standalone_collective_plan_ids:
                 raise SchemaError("dangling standalone plan origin", path=f"{path}.tasks[{index}].origin_ref.collective_plan_id")
             if isinstance(origin, OrdinaryNodeOrigin) and origin.op_id not in self.ordinary_node_ids:
@@ -1336,7 +1950,13 @@ class IntraDieDAG:
                 )
             if len(actual_writers) > 1:
                 origins = tuple(task.origin_ref for task in actual_writers)
-                if all(isinstance(origin, StandaloneNodeOrigin) for origin in origins):
+                is_split_k_row_pack = _validate_split_k_row_pack(
+                    value, actual_writers, task_index,
+                    path=f"{path}.values[{index}].producer_tasks",
+                )
+                if is_split_k_row_pack:
+                    require_full_cover = None
+                elif all(isinstance(origin, StandaloneNodeOrigin) for origin in origins):
                     if len(
                         {origin.collective_plan_id for origin in origins}
                     ) != 1:
@@ -1345,7 +1965,10 @@ class IntraDieDAG:
                             path=f"{path}.values[{index}].producer_tasks",
                         )
                     require_full_cover = True
-                elif all(isinstance(origin, FusedNodeOrigin) for origin in origins):
+                elif all(
+                    isinstance(origin, (FusedNodeOrigin, SwizzleNodeOrigin))
+                    for origin in origins
+                ):
                     if len({origin.plan_id for origin in origins}) != 1:
                         raise SchemaError(
                             "multiple writers must belong to one fusion plan",
@@ -1366,13 +1989,14 @@ class IntraDieDAG:
                         "multiple writers require explicit tensor slices",
                         path=f"{path}.values[{index}].producer_tasks",
                     )
-                _validate_rectangular_slices(
-                    writer_slices,
-                    value_id=value.id,
-                    value_shape=value.shape,
-                    require_full_cover=require_full_cover,
-                    path=f"{path}.values[{index}].producer_tasks",
-                )
+                if require_full_cover is not None:
+                    _validate_rectangular_slices(
+                        writer_slices,
+                        value_id=value.id,
+                        value_shape=value.shape,
+                        require_full_cover=require_full_cover,
+                        path=f"{path}.values[{index}].producer_tasks",
+                    )
             for consumer_id in value.consumer_tasks:
                 consumer = task_index.get(consumer_id)
                 if consumer is None or value.id not in consumer.read_values:
@@ -1403,7 +2027,18 @@ class IntraDieDAG:
                 writer_path = (
                     f"{path}.state_staging_values[{index}].producer_tasks"
                 )
-                if any(
+                direct_dma_writers = all(
+                    writer.kind is SemanticTaskKind.DMA_IN
+                    and isinstance(writer.origin_ref, StateIoOrigin)
+                    and ".split_k.direct_dma." in writer.id
+                    and writer.tensor_slice is not None
+                    for writer in actual_writers
+                ) and len({
+                    writer.origin_ref.state_access_ref
+                    for writer in actual_writers
+                    if isinstance(writer.origin_ref, StateIoOrigin)
+                }) == 1
+                if not direct_dma_writers and (any(
                     writer.kind is not SemanticTaskKind.RECV
                     or not isinstance(
                         writer.origin_ref, StateTransferOrigin
@@ -1421,7 +2056,8 @@ class IntraDieDAG:
                             writer.origin_ref, StateTransferOrigin
                         )
                     }
-                ) != len(actual_writers):
+                ) != len(actual_writers)
+                ):
                     raise SchemaError(
                         "multiple state writers require distinct transfer/segment RECV tasks",
                         path=writer_path,
@@ -1444,6 +2080,26 @@ class IntraDieDAG:
                         "state consumer is dangling or does not read the staging value",
                         path=f"{path}.state_staging_values[{index}].consumer_tasks",
                     )
+        for index, value in enumerate(self.swizzle_values):
+            value.validate(f"{path}.swizzle_values[{index}]")
+            if value.plan_id not in self.fusion_plan_ids:
+                raise SchemaError("references an undeclared fusion plan", path=f"{path}.swizzle_values[{index}].plan_id")
+            producers = tuple(
+                task.id for task in self.tasks if value.id in task.write_values
+            )
+            consumers = tuple(
+                task.id for task in self.tasks if value.id in task.read_values
+            )
+            if (value.producer_tasks, value.consumer_tasks) != (producers, consumers):
+                raise SchemaError("task use closure disagrees with Swizzle value", path=f"{path}.swizzle_values[{index}]")
+            for task_id in producers + consumers:
+                task = task_index[task_id]
+                origin = task.origin_ref
+                if not isinstance(origin, SwizzleNodeOrigin) or (
+                    origin.plan_id,
+                    origin.rank,
+                ) != (value.plan_id, value.rank):
+                    raise SchemaError("Swizzle value use must stay within its plan/rank", path=f"{path}.swizzle_values[{index}]")
         for index, task in enumerate(self.tasks):
             for value_id in task.read_values:
                 if task.id not in local_value_index[value_id].consumer_tasks:
@@ -1472,18 +2128,32 @@ class IntraDieDAG:
             dependency_closure = ancestors(task.id)
             for value_id in task.read_values:
                 value = local_value_index[value_id]
+                consumer_slice = task.tensor_slice
+                if task.compute is not None and task.compute.tile is not None:
+                    input_slices = tuple(
+                        binding for binding in task.compute.tile.input_slices
+                        if binding.operand_id == value_id
+                    )
+                    if len(input_slices) == 1:
+                        consumer_slice = TensorSlice(
+                            value_id, input_slices[0].logical_offset,
+                            input_slices[0].logical_shape,
+                        )
                 producer_tasks = tuple(task_index[item] for item in value.producer_tasks)
                 relevant_producers = {
                     producer.id
                     for producer in producer_tasks
-                    if task.tensor_slice is None
-                    or producer.tensor_slice is None
-                    or len(task.tensor_slice.shape) != len(producer.tensor_slice.shape)
-                    or _slices_overlap(task.tensor_slice, producer.tensor_slice)
+                    if producer.id != task.id
+                    and (
+                        consumer_slice is None
+                        or producer.tensor_slice is None
+                        or len(consumer_slice.shape) != len(producer.tensor_slice.shape)
+                        or _slices_overlap(consumer_slice, producer.tensor_slice)
+                    )
                 }
                 if not relevant_producers.issubset(dependency_closure):
                     raise SchemaError(
-                        "consumer dependency closure omits a relevant slice producer",
+                        f"consumer dependency closure omits a relevant slice producer: task={task.id!r}, value={value_id!r}, missing={sorted(relevant_producers - dependency_closure)!r}",
                         path=f"{path}.tasks[{index}].deps",
                     )
         staging_by_access: dict[str, list[StateStagingValue]] = {}
@@ -1515,33 +2185,24 @@ class IntraDieDAG:
                     path=f"{path}.state_access_ids[{access_index}]",
                 )
             kinds = tuple(task.kind for task in access_dma_tasks)
-            if len(set(kinds)) != len(kinds):
+            if kinds.count(SemanticTaskKind.DMA_OUT) > 1:
                 raise SchemaError(
-                    "state access permits at most one DMA_IN and one DMA_OUT",
+                    "state access permits at most one DMA_OUT",
                     path=f"{path}.state_access_ids[{access_index}]",
                 )
-            first_contract = access_dma_tasks[0].dma
-            assert first_contract is not None
-            access_task_refs = first_contract.access_task_refs
-            if tuple(
-                sorted(access_task_refs, key=task_order.__getitem__)
-            ) != access_task_refs:
-                raise SchemaError(
-                    "access_task_refs must follow canonical local task order",
-                    path=f"{path}.state_access_ids[{access_index}]",
-                )
-            for target_ref in access_task_refs:
-                target = task_index.get(target_ref)
-                if target is None or isinstance(target.origin_ref, StateIoOrigin):
-                    raise SchemaError(
-                        "access_task_refs must name local non-DMA tasks",
-                        path=f"{path}.state_access_ids[{access_index}]",
-                    )
             for dma_task in access_dma_tasks:
                 origin = dma_task.origin_ref
                 contract = dma_task.dma
                 assert isinstance(origin, StateIoOrigin)
                 assert contract is not None
+                access_task_refs = contract.access_task_refs
+                if tuple(
+                    sorted(access_task_refs, key=task_order.__getitem__)
+                ) != access_task_refs:
+                    raise SchemaError(
+                        "access_task_refs must follow canonical local task order",
+                        path=f"{path}.state_access_ids[{access_index}]",
+                    )
                 if (
                     contract.state_ref != staging_value.state_ref
                     or contract.local_value_ref != staging_value.id
@@ -1694,7 +2355,7 @@ class IntraDieDAG:
             if region.standalone_collective_plan_id is not None and region.standalone_collective_plan_id not in self.standalone_collective_plan_ids:
                 raise SchemaError("dangling standalone plan", path=f"{path}.regions[{index}].standalone_collective_plan_id")
             if region.lowering is RegionLowering.ISA_REGION and any(
-                not isinstance(task.origin_ref, FusedNodeOrigin)
+                not isinstance(task.origin_ref, (FusedNodeOrigin, SwizzleNodeOrigin))
                 or task.origin_ref.plan_id != region.fusion_plan_id
                 for task in expected_tasks
             ):
@@ -1726,8 +2387,18 @@ class IntraDieDAG:
                 state_task = expected_tasks[0]
                 state_origin = state_task.origin_ref
                 assert isinstance(state_origin, StateIoOrigin)
-                if region.id != canonical_state_region_id(
+                expected_region_id = canonical_state_region_id(
                     state_origin.state_access_ref, state_task.kind
+                )
+                direct_region = (
+                    state_task.kind is SemanticTaskKind.DMA_IN
+                    and state_task.id.startswith(
+                        f"{canonical_state_task_id(state_origin.state_access_ref, state_task.kind)}.split_k.direct_dma."
+                    )
+                    and region.id == f"{state_task.id}.region"
+                )
+                if (
+                    not direct_region and region.id != expected_region_id
                 ) or region.task_ids != (state_task.id,):
                     raise SchemaError(
                         "strict-state-io region identity/partition is not canonical",
@@ -1840,11 +2511,46 @@ class IntraDieDAG:
     def validate_against(
         self,
         ir1: IR1,
-        fusion_plans: tuple[FusionPlan, ...],
+        fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
         path: str = "intra_die_dag",
     ) -> None:
         self.validate(path)
+        swizzle_plans = tuple(
+            plan for plan in fusion_plans if type(plan) is SwizzleFusionPlan
+        )
+        if swizzle_plans:
+            ir1.validate("ir1")
+            expected_manifest_id = (
+                ir1.persistent_state_manifest.id
+                if ir1.persistent_state_manifest is not None else None
+            )
+            if (
+                self.source_ir1_id != ir1.id
+                or self.die_id not in {die.id for die in ir1.fabric.dies}
+                or self.source_state_manifest_id != expected_manifest_id
+            ):
+                raise SchemaError(
+                    "Swizzle DAG provenance disagrees with IR-1", path=path
+                )
+            if len(swizzle_plans) != len(fusion_plans):
+                raise SchemaError("common IR2 cannot mix legacy and Swizzle fusion plans", path=f"{path}.fusion_plans")
+            for index, plan in enumerate(swizzle_plans):
+                _require_swizzle_gemm_rs(plan, f"{path}.fusion_plans[{index}]")
+                plan.validate_against(ir1, f"{path}.fusion_plans[{index}]")
+            _validate_swizzle_gemm_rs_dag(self, ir1, swizzle_plans, path=path)
+            for index, plan in enumerate(standalone_plans):
+                plan.validate_against(ir1, f"{path}.standalone_plans[{index}]")
+            _validate_standalone_dag_provenance(
+                self, ir1, standalone_plans, path=path
+            )
+            _validate_ordinary_dag_provenance(
+                self, ir1, swizzle_plans, standalone_plans, path=path
+            )
+            _validate_mixed_dag_dependencies(
+                self, ir1, swizzle_plans, standalone_plans, path=path
+            )
+            return
         task_index = {task.id: task for task in self.tasks}
         ir1.validate("ir1")
         if self.source_ir1_id != ir1.id:
@@ -2819,12 +3525,78 @@ class IR2ProjectionResult:
     def validate_against(
         self,
         ir1: IR1,
-        fusion_plans: tuple[FusionPlan, ...],
+        fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
         path: str = "ir2_projection_result",
     ) -> None:
         self.validate(path)
         ir1.validate("ir1")
+        if self.producer_pass == "intra_die_refine":
+            if (
+                self.source_ir1_id != ir1.id
+                or self.fusion_plan_ids != tuple(plan.id for plan in fusion_plans)
+                or self.standalone_collective_plan_ids
+                != tuple(plan.id for plan in standalone_plans)
+                or tuple(dag.die_id for dag in self.dags)
+                != tuple(die.id for die in ir1.fabric.dies)
+            ):
+                raise SchemaError(
+                    "refined projection must preserve exact upstream ids and die order",
+                    path=path,
+                )
+            expected_manifest = (
+                ir1.persistent_state_manifest.id
+                if ir1.persistent_state_manifest is not None else None
+            )
+            if self.source_state_manifest_id != expected_manifest:
+                raise SchemaError(
+                    "refined projection must preserve state manifest provenance",
+                    path=f"{path}.source_state_manifest_id",
+                )
+            for index, plan in enumerate(fusion_plans):
+                plan.validate_against(ir1, f"{path}.fusion_plans[{index}]")
+            for index, plan in enumerate(standalone_plans):
+                plan.validate_against(ir1, f"{path}.standalone_plans[{index}]")
+            for index, contract in enumerate(self.state_transfers):
+                contract.validate_against(ir1, f"{path}.state_transfers[{index}]")
+            return
+        swizzle_plans = tuple(
+            plan for plan in fusion_plans if type(plan) is SwizzleFusionPlan
+        )
+        if swizzle_plans:
+            if len(swizzle_plans) != len(fusion_plans):
+                raise SchemaError(
+                    "common IR2 cannot mix legacy and Swizzle fusion plans",
+                    path=f"{path}.fusion_plans",
+                )
+            if self.fusion_plan_ids != tuple(plan.id for plan in swizzle_plans):
+                raise SchemaError(
+                    "fusion plan ids must exactly follow Swizzle plan order",
+                    path=f"{path}.fusion_plan_ids",
+                )
+            if self.standalone_collective_plan_ids != tuple(
+                plan.id for plan in standalone_plans
+            ):
+                raise SchemaError(
+                    "standalone plan ids must exactly follow input plan order",
+                    path=f"{path}.standalone_collective_plan_ids",
+                )
+            if tuple(dag.die_id for dag in self.dags) != tuple(
+                die.id for die in ir1.fabric.dies
+            ):
+                raise SchemaError(
+                    "DAGs must exactly follow IR-1 fabric die order",
+                    path=f"{path}.dags",
+                )
+            for index, plan in enumerate(swizzle_plans):
+                _require_swizzle_gemm_rs(plan, f"{path}.fusion_plans[{index}]")
+                plan.validate_against(ir1, f"{path}.fusion_plans[{index}]")
+            for index, dag in enumerate(self.dags):
+                dag.validate_against(
+                    ir1, swizzle_plans, standalone_plans,
+                    path=f"{path}.dags[{index}]",
+                )
+            return
         if self.source_ir1_id != ir1.id:
             raise SchemaError("projection references a different IR-1", path=f"{path}.source_ir1_id")
         expected_manifest_id = (
@@ -3364,6 +4136,8 @@ class IR2ProjectionResult:
                     for value_id in task.read_values + task.write_values
                     if value_id
                     not in {value.id for value in dag.state_staging_values}
+                    and value_id
+                    not in {value.id for value in dag.swizzle_values}
                 )
             )
             if tuple(value.id for value in dag.values) != expected_value_ids:
@@ -4779,6 +5553,40 @@ class IntraDieSchedule:
         route_catalog = _global_route_index(ir1, "ir1")
         task_index = {task.id: task for task in dag.tasks}
         value_index = {value.id: value for value in dag.values}
+        ir1_values = {value.id: value for value in ir1.values}
+        for temporary in dag.swizzle_values:
+            producer_witnesses = tuple(
+                task_index[task_id]
+                for task_id in temporary.producer_tasks
+                if task_index[task_id].tensor_slice is not None
+                and task_index[task_id].dtype is not None
+            )
+            witnesses = producer_witnesses or tuple(
+                task_index[task_id]
+                for task_id in temporary.consumer_tasks
+                if task_index[task_id].tensor_slice is not None
+                and task_index[task_id].dtype is not None
+            )
+            source_ids = {task.tensor_slice.value_id for task in witnesses if task.tensor_slice is not None}
+            dtypes = {task.dtype for task in witnesses}
+            if len(source_ids) != 1 or len(dtypes) != 1:
+                raise SchemaError(
+                    "Swizzle temporary requires one exact typed tensor-slice domain",
+                    path=f"{path}.buffer_bindings",
+                )
+            source = ir1_values.get(next(iter(source_ids)))
+            if source is None or next(iter(dtypes)) is not source.dtype:
+                raise SchemaError(
+                    "Swizzle temporary slice must resolve to one exact IR-1 value",
+                    path=f"{path}.buffer_bindings",
+                )
+            value_index[temporary.id] = IntraDieValue(
+                id=temporary.id, origin_value_id=source.id, shape=source.shape,
+                dtype=source.dtype, logical_layout=source.logical_layout,
+                sharding=source.sharding, alias_set=None,
+                producer_tasks=temporary.producer_tasks,
+                consumer_tasks=temporary.consumer_tasks,
+            )
         staging_value_index = {
             value.id: value for value in dag.state_staging_values
         }
@@ -4814,17 +5622,38 @@ class IntraDieSchedule:
                     raise SchemaError("core order disagrees with placement", path=f"{path}.core_orders")
                 positions[task_id] = position
         for task in dag.tasks:
+            if task.kind is SemanticTaskKind.LOCAL_RECV:
+                matching_sends = tuple(
+                    candidate for candidate in dag.tasks
+                    if candidate.kind is SemanticTaskKind.LOCAL_SEND
+                    and candidate.flow_id == task.flow_id
+                )
+                if len(matching_sends) != 1:
+                    raise SchemaError(
+                        "LOCAL_RECV requires one exact matching LOCAL_SEND",
+                        path=f"{path}.placements",
+                    )
+                if placements[matching_sends[0].id] == placements[task.id]:
+                    raise SchemaError(
+                        f"local NoC handoff endpoints must occupy distinct cores: flow={task.flow_id!r}, core={placements[task.id]}",
+                        path=f"{path}.placements",
+                    )
             for dependency in task.deps:
                 if (
                     dependency in executable_tasks
                     and task.id in executable_tasks
                 ):
-                    if placements[dependency] != placements[task.id]:
+                    cross_core_local_handoff = (
+                        task.kind is SemanticTaskKind.LOCAL_RECV
+                        and task_index[dependency].kind is SemanticTaskKind.LOCAL_SEND
+                        and task.flow_id == task_index[dependency].flow_id
+                    )
+                    if placements[dependency] != placements[task.id] and not cross_core_local_handoff:
                         raise SchemaError(
                             "MVP requires both ends of every executable dependency on the same core",
                             path=f"{path}.placements",
                         )
-                    if positions[dependency] >= positions[task.id]:
+                    if not cross_core_local_handoff and positions[dependency] >= positions[task.id]:
                         raise SchemaError("core order violates a task dependency", path=f"{path}.core_orders")
         dma_tasks = {
             task.id: task
@@ -5118,7 +5947,7 @@ class IntraDieSchedule:
                 < binding.lifetime_end_exclusive
             ):
                 raise SchemaError("buffer use lies outside its lifetime", path=f"{path}.task_buffer_uses[{index}]")
-            if binding.value_id not in task.read_values + task.write_values:
+            if binding.value_id not in task.read_values + task.write_values and (task.tensor_slice is None or binding.value_id != task.tensor_slice.value_id):
                 raise SchemaError("task does not access the bound value", path=f"{path}.task_buffer_uses[{index}]")
             if use.tensor_slice.value_id != binding.value_id:
                 raise SchemaError(
@@ -5206,6 +6035,14 @@ class IntraDieSchedule:
                     )
                     for index, value_id in enumerate(task.write_values)
                 )
+            if task.kind is SemanticTaskKind.LOCAL_SEND:
+                assert task.tensor_slice is not None
+                return ((BufferUseRole.SEND_SOURCE, 0, None, task.tensor_slice.value_id, BufferAccess.READ),)
+            if task.kind is SemanticTaskKind.LOCAL_RECV:
+                assert task.tensor_slice is not None
+                return ((BufferUseRole.RECV_DESTINATION, 0, None, task.tensor_slice.value_id, BufferAccess.WRITE),)
+            if task.kind is SemanticTaskKind.LOCAL_WAIT:
+                return ()
             if task.kind is SemanticTaskKind.REDUCE:
                 assert task.reduction is not None
                 if len(task.read_values) != len(task.reduction.input_ranks):
@@ -6008,13 +6845,16 @@ class IntraDieSchedule:
                     barrier = task.sync.barrier
                     if (
                         barrier is None
-                        or barrier.scope is not BarrierScope.PLAN
+                        or (
+                            barrier.scope is not BarrierScope.PLAN
+                            and not isinstance(task.origin_ref, SwizzleNodeOrigin)
+                        )
                         or binding.flow_id is not None
                         or binding.channel_symbol is not None
                         or binding.event_symbol != barrier.id
                     ):
                         raise SchemaError(
-                            "PLAN BARRIER runtime binding must reference exactly its shared barrier id",
+                            "BARRIER runtime binding must reference exactly its shared barrier id",
                             path=f"{path}.runtime_bindings",
                         )
         scheduled_routes = {binding.flow_id: binding for binding in self.flow_routes}
@@ -6169,6 +7009,7 @@ class IntraDieScheduleSet:
         occurrences: dict[str, list[tuple[int, SemanticFlow, FlowRouteBinding]]] = {}
         barrier_definitions: dict[str, BarrierContract] = {}
         barrier_ranks: dict[str, list[int]] = {}
+        barrier_is_swizzle: dict[str, bool] = {}
         for index, schedule in enumerate(self.schedules):
             dag = dag_index[schedule.dag_id]
             schedule.validate_against(dag, ir1, f"{path}.schedules[{index}]")
@@ -6188,18 +7029,30 @@ class IntraDieScheduleSet:
                         "shared barrier id has conflicting PLAN definitions",
                         path=f"{path}.schedules",
                     )
+                is_swizzle = isinstance(task.origin_ref, SwizzleNodeOrigin)
+                previous_is_swizzle = barrier_is_swizzle.setdefault(
+                    barrier.id, is_swizzle
+                )
+                if previous_is_swizzle != is_swizzle:
+                    raise SchemaError(
+                        "shared barrier id mixes Swizzle and legacy origins",
+                        path=f"{path}.schedules",
+                    )
                 barrier_ranks.setdefault(barrier.id, []).append(
                     task.origin_ref.rank
                 )
         for barrier_id, barrier in barrier_definitions.items():
             ranks = barrier_ranks[barrier_id]
             if (
-                barrier.scope is not BarrierScope.PLAN
+                (
+                    barrier.scope is not BarrierScope.PLAN
+                    and not barrier_is_swizzle[barrier_id]
+                )
                 or len(ranks) != len(set(ranks))
                 or set(ranks) != set(barrier.participant_ranks)
             ):
                 raise SchemaError(
-                    f"PLAN barrier {barrier_id!r} requires exactly one action per participant rank",
+                    f"barrier {barrier_id!r} requires exactly one action per participant rank",
                     path=f"{path}.schedules",
                 )
         route_catalog = _global_route_index(ir1, "ir1")

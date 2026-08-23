@@ -8,7 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from ..errors import SchemaError
-from .action import FusionPlan, StandaloneCollectivePlan
+from .action import StandaloneCollectivePlan
 from .common import DType, stable_artifact_id, validate_nonempty, validate_uint64
 from .global_action import GlobalActionDAG
 from .ir1 import IR1
@@ -46,6 +46,7 @@ from .state_transfer import (
     StateTransferContract,
     StateTransferLike,
 )
+from .swizzle_plan import FusedPlan
 
 if TYPE_CHECKING:
     from ..lowering.context import LoweringContext
@@ -58,7 +59,7 @@ STAGE4_PROJECT_TO_IR2_CONTEXT_SCHEMA_VERSION = (
     "wafer_frontend.stage4_project_to_ir2_context/v1alpha1"
 )
 INTRADIE_SCHEDULING_CONTEXT_SCHEMA_VERSION = (
-    "wafer_frontend.intra_die_scheduling_context/v1alpha7"
+    "wafer_frontend.intra_die_scheduling_context/v1alpha8"
 )
 PROJECTED_IR2_BUNDLE_SCHEMA_VERSION = (
     "wafer_frontend.projected_ir2_bundle/v1alpha6"
@@ -99,6 +100,7 @@ class IntraDieSchedulingContract(str, Enum):
     NAIVE_COMPONENT_RR_XY_SEQUENTIAL_STATE_TRANSFER_V5 = (
         "naive_component_rr_xy_sequential_state_transfer/v5"
     )
+    OPTIMIZED_CRITICAL_PATH_XY_V1 = "optimized_critical_path_xy/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,12 +334,9 @@ class IntraDieSchedulingContext:
                 "must be a PolicySelection", path=f"{path}.policy"
             )
         self.policy.validate(f"{path}.policy")
-        if (
-            self.policy.kind is not RegistryKind.INTRA_DIE
-            or self.policy.name != "naive"
-        ):
+        if self.policy.kind is not RegistryKind.INTRA_DIE:
             raise SchemaError(
-                "must select the registered naive intra-die policy",
+                "must select a registered intra-die policy",
                 path=f"{path}.policy",
             )
         if type(self.contract) is not IntraDieSchedulingContract:
@@ -345,13 +344,20 @@ class IntraDieSchedulingContext:
                 "must be an IntraDieSchedulingContract",
                 path=f"{path}.contract",
             )
-        if (
-            self.contract
-            is not IntraDieSchedulingContract
-            .NAIVE_COMPONENT_RR_XY_SEQUENTIAL_STATE_TRANSFER_V5
-        ):
+        expected_pairs = {
+            (
+                "naive",
+                IntraDieSchedulingContract
+                .NAIVE_COMPONENT_RR_XY_SEQUENTIAL_STATE_TRANSFER_V5,
+            ),
+            (
+                "optimized",
+                IntraDieSchedulingContract.OPTIMIZED_CRITICAL_PATH_XY_V1,
+            ),
+        }
+        if (self.policy.name, self.contract) not in expected_pairs:
             raise SchemaError(
-                "unsupported scheduling contract",
+                "intra-die policy and contract must be an exact supported pair",
                 path=f"{path}.contract",
             )
         expected_id = stable_artifact_id(
@@ -400,7 +406,7 @@ def _validate_weight(value: float, path: str) -> None:
 def _validate_projected_payload(
     *,
     graph: IR1,
-    fusion_plans: tuple[FusionPlan, ...],
+    fusion_plans: tuple[FusedPlan, ...],
     standalone_plans: tuple[StandaloneCollectivePlan, ...],
     projection: IR2ProjectionResult,
     profile_id: str,
@@ -429,9 +435,9 @@ def _validate_projected_payload(
             "must be an IR2ProjectionResult",
             path=f"{path}.projection",
         )
-    if projection.producer_pass != "project_to_ir2":
+    if projection.producer_pass not in ("project_to_ir2", "intra_die_refine"):
         raise SchemaError(
-            "must be produced by project_to_ir2",
+            "must be produced by project_to_ir2 or a validated intra_die_refine carrier",
             path=f"{path}.projection.producer_pass",
         )
     projection.validate_against(
@@ -452,7 +458,7 @@ class ProjectedProfileIR2:
     profile_id: str
     weight: float
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
 
@@ -910,7 +916,7 @@ class TrainProjectedReplica:
     source_replica_plan_id: str
     source_ir1_id: str
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
 
@@ -1333,7 +1339,7 @@ class Stage4ProjectedIR2:
     projection_context_id: str
     pd_plan: Stage4PdPlan
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
 
@@ -2028,7 +2034,7 @@ class Stage4ScheduledIR2:
     scheduling_context_id: str
     pd_plan: Stage4PdPlan
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
     schedule_set: IntraDieScheduleSet
@@ -2280,7 +2286,7 @@ class Stage4ScheduledIR2:
 def _validate_scheduled_payload(
     *,
     graph: IR1,
-    fusion_plans: tuple[FusionPlan, ...],
+    fusion_plans: tuple[FusedPlan, ...],
     standalone_plans: tuple[StandaloneCollectivePlan, ...],
     projection: IR2ProjectionResult,
     schedule_set: IntraDieScheduleSet,
@@ -2339,7 +2345,7 @@ class ScheduledProfileIR2:
     profile_id: str
     weight: float
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
     schedule_set: IntraDieScheduleSet
@@ -2704,7 +2710,7 @@ class ScheduledIR2Bundle:
 def _validate_global_payload(
     *,
     graph: IR1,
-    fusion_plans: tuple[FusionPlan, ...],
+    fusion_plans: tuple[FusedPlan, ...],
     standalone_plans: tuple[StandaloneCollectivePlan, ...],
     projection: IR2ProjectionResult,
     schedule_set: IntraDieScheduleSet,
@@ -2757,7 +2763,7 @@ class Stage4GlobalAction:
     scheduling_context_id: str
     pd_plan: Stage4PdPlan
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
     schedule_set: IntraDieScheduleSet
@@ -3035,7 +3041,7 @@ class GlobalActionProfile:
     profile_id: str
     weight: float
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
     schedule_set: IntraDieScheduleSet

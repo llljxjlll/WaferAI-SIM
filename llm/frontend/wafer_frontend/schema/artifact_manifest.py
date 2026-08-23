@@ -47,6 +47,7 @@ from .ir2 import (
     BufferOwnership,
     BufferUseRole,
     FusedNodeOrigin,
+    SwizzleNodeOrigin,
     FlowRouteRole,
     IR2ProjectionResult,
     IntraDieScheduleSet,
@@ -119,6 +120,9 @@ class RecordOpcode(IntEnum):
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
+    LOCAL_NOC_SEND = 0x44
+    LOCAL_NOC_RECV = 0x45
+    LOCAL_NOC_WAIT = 0x46
     DTE_ISSUE = 0x82
     SRAM_BIND = 0x84
     LSU_LOAD = 0x80
@@ -236,22 +240,37 @@ class RuntimeSymbol:
 def _plan_barrier_action_fields(
     action: GlobalAction, path: str
 ) -> tuple[str, int, object, LogicalCoreRef]:
+    standalone_barrier = (
+        isinstance(action.origin_ref, StandaloneNodeOrigin)
+        and action.sync is not None
+        and action.sync.barrier is not None
+        and action.sync.barrier.scope is BarrierScope.PLAN
+    )
+    swizzle_group_barrier = (
+        isinstance(action.origin_ref, SwizzleNodeOrigin)
+        and action.sync is not None
+        and action.sync.barrier is not None
+        and action.sync.barrier.scope is BarrierScope.GROUP
+    )
     if (
         action.task_kind is not SemanticTaskKind.BARRIER
-        or not isinstance(action.origin_ref, StandaloneNodeOrigin)
-        or action.sync is None
-        or action.sync.barrier is None
-        or action.sync.barrier.scope is not BarrierScope.PLAN
+        or not (standalone_barrier or swizzle_group_barrier)
         or action.logical_core is None
         or action.runtime_binding is None
         or action.runtime_binding.event_symbol != action.sync.barrier.id
     ):
         raise SchemaError(
-            "PLAN barrier runtime symbols require one placed standalone PLAN barrier action",
+            "barrier runtime symbols require one placed standalone PLAN barrier or Swizzle GROUP barrier action",
             path=path,
         )
+    assert action.sync is not None and action.sync.barrier is not None
+    plan_id = (
+        action.origin_ref.collective_plan_id
+        if isinstance(action.origin_ref, StandaloneNodeOrigin)
+        else action.origin_ref.plan_id
+    )
     return (
-        action.origin_ref.collective_plan_id,
+        plan_id,
         action.origin_ref.rank,
         action.sync.barrier,
         action.logical_core,
@@ -839,6 +858,15 @@ _OPERAND_SCHEMAS = {
         _lit("tree_id"), _run("group_id", RuntimeOperandField.GROUP_ID, literal_allowed=True),
         _lit("collective_id"), _lit("epoch"),
     ),
+    RecordOpcode.LOCAL_NOC_SEND: (
+        _addr("source_address", SemanticOperandId.SOURCE_ADDRESS),
+        _lit("destination_core"), _lit("byte_count"), _lit("event_id"),
+    ),
+    RecordOpcode.LOCAL_NOC_RECV: (
+        _addr("destination_address", SemanticOperandId.DESTINATION_ADDRESS),
+        _lit("source_core"), _lit("byte_count"), _lit("event_id"),
+    ),
+    RecordOpcode.LOCAL_NOC_WAIT: (_lit("event_id"),),
     RecordOpcode.LOCAL_REDUCE: (
         _lit("input_dtype"), _lit("accumulator_dtype"), _lit("output_dtype"),
         _lit("reduce_op"), _lit("rounding"), _lit("order"), _lit("input_count"),
@@ -890,6 +918,8 @@ _ALLOWED_ADDRESS_KINDS = {
     (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.DTE_SEND, SemanticOperandId.SOURCE_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS, ProgramSymbolKind.SRAM_REGION),
     (RecordOpcode.DTE_RECV, SemanticOperandId.DESTINATION_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS, ProgramSymbolKind.SRAM_REGION),
+    (RecordOpcode.LOCAL_NOC_SEND, SemanticOperandId.SOURCE_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
+    (RecordOpcode.LOCAL_NOC_RECV, SemanticOperandId.DESTINATION_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.DESTINATION_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.LSU_LOAD, SemanticOperandId.HBM_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
@@ -1729,6 +1759,21 @@ class RelocatableRecord:
                     path=f"{path}.operands[1].literal_value",
                 )
 
+        if self.opcode in (RecordOpcode.LOCAL_NOC_SEND, RecordOpcode.LOCAL_NOC_RECV):
+            peer = self.operands[1].literal_value
+            byte_count = self.operands[2].literal_value
+            event_id = self.operands[3].literal_value
+            if type(peer) is not int or peer > 0xFFFF:
+                raise SchemaError("Local NoC peer core must fit uint16", path=f"{path}.operands[1]")
+            if type(byte_count) is not int or byte_count == 0:
+                raise SchemaError("Local NoC byte_count must be non-zero", path=f"{path}.operands[2]")
+            if type(event_id) is not int or not 0 < event_id <= 0xFFFFFFFF:
+                raise SchemaError("Local NoC event_id must be non-zero uint32", path=f"{path}.operands[3]")
+        if self.opcode is RecordOpcode.LOCAL_NOC_WAIT:
+            event_id = self.operands[0].literal_value
+            if type(event_id) is not int or not 0 < event_id <= 0xFFFFFFFF:
+                raise SchemaError("Local NoC event_id must be non-zero uint32", path=f"{path}.operands[0]")
+
         if self.opcode is RecordOpcode.SRAM_BIND:
             input_count = self.operands[0].literal_value
             if type(input_count) is not int or not 1 <= input_count <= 16:
@@ -2179,6 +2224,12 @@ def _fused_recv_wait_pairs(
             and wait.origin_ref.plan_id == recv.origin_ref.plan_id
             and wait.origin_ref.rank == recv.origin_ref.rank
         )
+        swizzle_pair = (
+            isinstance(wait.origin_ref, SwizzleNodeOrigin)
+            and isinstance(recv.origin_ref, SwizzleNodeOrigin)
+            and wait.origin_ref.plan_id == recv.origin_ref.plan_id
+            and wait.origin_ref.rank == recv.origin_ref.rank
+        )
         transfer_pair = (
             isinstance(wait.origin_ref, StateTransferOrigin)
             and isinstance(recv.origin_ref, StateTransferOrigin)
@@ -2187,7 +2238,7 @@ def _fused_recv_wait_pairs(
             and wait.origin_ref.rank == recv.origin_ref.rank
         )
         if (
-            not (fused_pair or transfer_pair)
+            not (fused_pair or swizzle_pair or transfer_pair)
             or wait.runtime_binding is None
             or recv.runtime_binding is None
             or wait.runtime_binding.token_symbol is None
@@ -2361,7 +2412,9 @@ def _expected_plan_barrier_events(
     for action in dag.actions:
         if (
             action.task_kind is not SemanticTaskKind.BARRIER
-            or not isinstance(action.origin_ref, StandaloneNodeOrigin)
+            or not isinstance(
+                action.origin_ref, (StandaloneNodeOrigin, SwizzleNodeOrigin)
+            )
         ):
             continue
         participants = _plan_barrier_group(dag, action, path)
@@ -3266,6 +3319,9 @@ class CommandFragment:
             SemanticTaskKind.SEND: (RecordOpcode.DTE_SEND,),
             SemanticTaskKind.RECV: (RecordOpcode.DTE_RECV,),
             SemanticTaskKind.REDUCE: (RecordOpcode.LOCAL_REDUCE,),
+            SemanticTaskKind.LOCAL_SEND: (RecordOpcode.LOCAL_NOC_SEND,),
+            SemanticTaskKind.LOCAL_RECV: (RecordOpcode.LOCAL_NOC_RECV,),
+            SemanticTaskKind.LOCAL_WAIT: (RecordOpcode.LOCAL_NOC_WAIT,),
             SemanticTaskKind.LOCAL_COPY: (RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_WAIT),
             SemanticTaskKind.WAIT: (RecordOpcode.DTE_WAIT,),
             SemanticTaskKind.BARRIER: (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT),
@@ -3495,7 +3551,10 @@ class CommandFragment:
             elif action.task_kind is SemanticTaskKind.BARRIER:
                 participants = _plan_barrier_group(dag, action, path)
                 participant_ids = {participant.id for participant in participants}
-                if not participant_ids.issubset(self.claimed_action_ids):
+                if (
+                    not isinstance(action.origin_ref, SwizzleNodeOrigin)
+                    and not participant_ids.issubset(self.claimed_action_ids)
+                ):
                     raise SchemaError(
                         "one coordinator PLAN barrier and all participant actions must be emitted by one fragment",
                         path=f"{path}.claimed_action_ids",
@@ -3503,14 +3562,14 @@ class CommandFragment:
                 barrier = action.sync.barrier
                 assert barrier is not None
                 claimed_plan_barrier_ids.add(barrier.id)
-                for participant in participants:
-                    symbol = canonical_plan_barrier_core_symbol(dag.id, participant)
-                    expected_plan_runtime_symbols[symbol.id] = symbol
-                    for spec in _plan_barrier_record_specs(
-                        dag.id, participants, participant
-                    ):
-                        expected_plan_runtime_symbols[spec.event.id] = spec.event
                 specs = _plan_barrier_record_specs(dag.id, participants, action)
+                for spec in specs:
+                    for participant in (spec.source, spec.destination):
+                        symbol = canonical_plan_barrier_core_symbol(
+                            dag.id, participant
+                        )
+                        expected_plan_runtime_symbols[symbol.id] = symbol
+                    expected_plan_runtime_symbols[spec.event.id] = spec.event
                 actual_records = tuple(records[index] for index in indices)
                 expected_records = tuple(
                     RelocatableRecord(
@@ -3876,7 +3935,7 @@ class RegionManifest:
             action = actions[action_id]
             if action.region_id != self.region_id or action.lowering is not RegionLowering.ISA_REGION:
                 raise SchemaError("all claimed actions must belong to this one ISA region", path=f"{path}.region_id")
-            if not isinstance(action.origin_ref, FusedNodeOrigin) or action.origin_ref.plan_id != self.fusion_plan_id:
+            if not isinstance(action.origin_ref, (FusedNodeOrigin, SwizzleNodeOrigin)) or action.origin_ref.plan_id != self.fusion_plan_id:
                 raise SchemaError("all claimed actions must belong to this one fusion plan", path=f"{path}.fusion_plan_id")
 
 
@@ -4327,6 +4386,8 @@ def _address_operand_role(
         (RecordOpcode.RMSNORM, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.DTE_SEND, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.SEND_SOURCE, 0),
         (RecordOpcode.DTE_RECV, SemanticOperandId.DESTINATION_ADDRESS): (BufferUseRole.RECV_DESTINATION, 0),
+        (RecordOpcode.LOCAL_NOC_SEND, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.SEND_SOURCE, 0),
+        (RecordOpcode.LOCAL_NOC_RECV, SemanticOperandId.DESTINATION_ADDRESS): (BufferUseRole.RECV_DESTINATION, 0),
         (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.REDUCE_INPUT, -1),
         (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.DESTINATION_ADDRESS): (BufferUseRole.REDUCE_OUTPUT, 0),
         (RecordOpcode.DTE_ISSUE, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.LOCAL_COPY_SOURCE, 0),
@@ -5844,6 +5905,8 @@ class LinkedProgramManifest:
             (RecordOpcode.RMSNORM, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
             (RecordOpcode.DTE_SEND, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.SEND_SOURCE, 0),
             (RecordOpcode.DTE_RECV, SemanticOperandId.DESTINATION_ADDRESS): (BufferUseRole.RECV_DESTINATION, 0),
+        (RecordOpcode.LOCAL_NOC_SEND, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.SEND_SOURCE, 0),
+        (RecordOpcode.LOCAL_NOC_RECV, SemanticOperandId.DESTINATION_ADDRESS): (BufferUseRole.RECV_DESTINATION, 0),
             (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.REDUCE_INPUT, -1),
             (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.DESTINATION_ADDRESS): (BufferUseRole.REDUCE_OUTPUT, 0),
             (RecordOpcode.DTE_ISSUE, SemanticOperandId.SOURCE_ADDRESS): (BufferUseRole.LOCAL_COPY_SOURCE, 0),
@@ -6540,6 +6603,11 @@ class LinkedProgramManifest:
             for dependency in action.deps
             if dependency in executable
             and executable[dependency].logical_core != action.logical_core
+            and not (
+                action.task_kind is SemanticTaskKind.LOCAL_RECV
+                and executable[dependency].task_kind is SemanticTaskKind.LOCAL_SEND
+                and action.flow_id == executable[dependency].flow_id
+            )
         }
         actual_event_pairs = {
             (source, destination)

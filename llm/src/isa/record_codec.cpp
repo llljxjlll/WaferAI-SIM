@@ -25,6 +25,8 @@ constexpr uint32_t kSgdUpdatePayloadSize = 96;
 constexpr uint32_t kEndpointPayloadSize = 72;
 constexpr uint32_t kReducePayloadSize = 80;
 constexpr uint32_t kLocalReducePayloadSize = 72;
+constexpr uint32_t kLocalNocPayloadSize = 48;
+constexpr uint32_t kLocalNocWaitPayloadSize = 8;
 constexpr uint32_t kLsuPayloadSize = 40;
 constexpr uint32_t kDteIssuePayloadSize = 80;
 constexpr uint32_t kSymbolPayloadSize = 4;
@@ -388,6 +390,27 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
                 std::numeric_limits<uint64_t>::max() -
                     (length_bytes - 1),
             "LOCAL_REDUCE destination span overflows u64");
+}
+
+void ValidateLocalNocSend(const LocalNocSendOperands &operands) {
+    ValidateAddress(operands.source, false, "LOCAL_NOC_SEND source");
+    RequireU16(operands.destination_core, "LOCAL_NOC_SEND destination_core");
+    Require(operands.byte_count != 0, "LOCAL_NOC_SEND byte_count must be non-zero");
+    RequireU32(operands.event_id, "LOCAL_NOC_SEND event_id");
+    Require(operands.event_id != 0, "LOCAL_NOC_SEND event_id must be non-zero");
+}
+
+void ValidateLocalNocRecv(const LocalNocRecvOperands &operands) {
+    ValidateAddress(operands.destination, false, "LOCAL_NOC_RECV destination");
+    RequireU16(operands.source_core, "LOCAL_NOC_RECV source_core");
+    Require(operands.byte_count != 0, "LOCAL_NOC_RECV byte_count must be non-zero");
+    RequireU32(operands.event_id, "LOCAL_NOC_RECV event_id");
+    Require(operands.event_id != 0, "LOCAL_NOC_RECV event_id must be non-zero");
+}
+
+void ValidateLocalNocWait(const LocalNocWaitOperands &operands) {
+    RequireU32(operands.event_id, "LOCAL_NOC_WAIT event_id");
+    Require(operands.event_id != 0, "LOCAL_NOC_WAIT event_id must be non-zero");
 }
 
 void ValidateLsu(const LsuOperands &operands) {
@@ -1298,6 +1321,12 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
                 kReducePayloadSize),
     FixedSchema(Opcode::LOCAL_REDUCE, RecordOperandKind::LOCAL_REDUCE,
                 kLocalReducePayloadSize),
+    FixedSchema(Opcode::LOCAL_NOC_SEND, RecordOperandKind::LOCAL_NOC_SEND,
+                kLocalNocPayloadSize),
+    FixedSchema(Opcode::LOCAL_NOC_RECV, RecordOperandKind::LOCAL_NOC_RECV,
+                kLocalNocPayloadSize),
+    FixedSchema(Opcode::LOCAL_NOC_WAIT, RecordOperandKind::LOCAL_NOC_WAIT,
+                kLocalNocWaitPayloadSize),
     FixedSchema(Opcode::LSU_LOAD, RecordOperandKind::LSU, kLsuPayloadSize),
     FixedSchema(Opcode::LSU_STORE, RecordOperandKind::LSU, kLsuPayloadSize),
     FixedSchema(Opcode::DTE_ISSUE, RecordOperandKind::DTE_ISSUE,
@@ -1403,6 +1432,15 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::LOCAL_REDUCE:
         ValidateLocalReduce(RequireOperands<LocalReduceOperands>(
             record, "LOCAL_REDUCE"));
+        return;
+    case RecordOperandKind::LOCAL_NOC_SEND:
+        ValidateLocalNocSend(RequireOperands<LocalNocSendOperands>(record, "LOCAL_NOC_SEND"));
+        return;
+    case RecordOperandKind::LOCAL_NOC_RECV:
+        ValidateLocalNocRecv(RequireOperands<LocalNocRecvOperands>(record, "LOCAL_NOC_RECV"));
+        return;
+    case RecordOperandKind::LOCAL_NOC_WAIT:
+        ValidateLocalNocWait(RequireOperands<LocalNocWaitOperands>(record, "LOCAL_NOC_WAIT"));
         return;
     case RecordOperandKind::LSU:
         ValidateLsu(RequireOperands<LsuOperands>(record, "LSU"));
@@ -1668,6 +1706,27 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         AppendLittleEndian(payload, o.input_stride_bytes, 8);
         EncodeAddress(payload, o.source);
         EncodeAddress(payload, o.destination);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_SEND: {
+        const auto &o = std::get<LocalNocSendOperands>(record.operands);
+        EncodeAddress(payload, o.source);
+        AppendLittleEndian(payload, o.destination_core, 8);
+        AppendLittleEndian(payload, o.byte_count, 8);
+        AppendLittleEndian(payload, o.event_id, 8);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_RECV: {
+        const auto &o = std::get<LocalNocRecvOperands>(record.operands);
+        EncodeAddress(payload, o.destination);
+        AppendLittleEndian(payload, o.source_core, 8);
+        AppendLittleEndian(payload, o.byte_count, 8);
+        AppendLittleEndian(payload, o.event_id, 8);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_WAIT: {
+        const auto &o = std::get<LocalNocWaitOperands>(record.operands);
+        AppendLittleEndian(payload, o.event_id, 8);
         break;
     }
     case RecordOperandKind::LSU: {
@@ -2082,6 +2141,30 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         o.source = DecodeAddress(payload, 24, "LOCAL_REDUCE source");
         o.destination =
             DecodeAddress(payload, 48, "LOCAL_REDUCE destination");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_SEND: {
+        LocalNocSendOperands o;
+        o.source = DecodeAddress(payload, 0, "LOCAL_NOC_SEND source");
+        o.destination_core = ReadLittleEndian(payload, 24, 8, "destination_core");
+        o.byte_count = ReadLittleEndian(payload, 32, 8, "byte_count");
+        o.event_id = ReadLittleEndian(payload, 40, 8, "event_id");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_RECV: {
+        LocalNocRecvOperands o;
+        o.destination = DecodeAddress(payload, 0, "LOCAL_NOC_RECV destination");
+        o.source_core = ReadLittleEndian(payload, 24, 8, "source_core");
+        o.byte_count = ReadLittleEndian(payload, 32, 8, "byte_count");
+        o.event_id = ReadLittleEndian(payload, 40, 8, "event_id");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_WAIT: {
+        LocalNocWaitOperands o;
+        o.event_id = ReadLittleEndian(payload, 0, 8, "event_id");
         record.operands = std::move(o);
         break;
     }

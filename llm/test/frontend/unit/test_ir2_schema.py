@@ -55,6 +55,7 @@ from llm.frontend.wafer_frontend.schema.ir2 import (
     IntraDieRegion,
     IntraDieSchedule,
     IntraDieValue,
+    SwizzleIntraDieValue,
     IR2ProjectionResult,
     LogicalRuntimeBinding,
     OrdinaryNodeOrigin,
@@ -72,6 +73,10 @@ from llm.frontend.wafer_frontend.schema.ir2 import (
     TensorSlice,
     canonical_semantic_flow_id,
     dense_row_major_view_byte_addend,
+)
+from llm.frontend.wafer_frontend.schema.swizzle_plan import (
+    SwizzleValueOrigin,
+    SwizzleValueUse,
 )
 from llm.frontend.wafer_frontend.schema.serde import (
     canonical_digest,
@@ -1171,6 +1176,26 @@ def recreate_projection(
 
 
 class IR2SchemaTest(unittest.TestCase):
+    def test_swizzle_temporary_value_preserves_exact_origin(self) -> None:
+        origin = SwizzleValueOrigin(
+            value_ref="tmp.partial",
+            use=SwizzleValueUse.WRITE,
+            logical_source_ref=None,
+            producer_action_ref="action.comp",
+            local_member_ref=None,
+        )
+        value = SwizzleIntraDieValue(
+            id="tmp.partial",
+            plan_id="swizzle-plan",
+            rank=0,
+            origins=(origin,),
+            producer_tasks=("task.comp",),
+            consumer_tasks=(),
+        )
+        value.validate("value")
+        with self.assertRaisesRegex(SchemaError, "must equal carrier id"):
+            replace(value, id="forged").validate("value")
+
     def test_projection_plan_and_dag_tuples_are_canonical(self) -> None:
         graph = _partitioned_graph(tp=2)
         fusion_plans = tuple(

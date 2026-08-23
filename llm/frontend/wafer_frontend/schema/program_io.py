@@ -974,7 +974,7 @@ def _validate_allocation_nonoverlap(
     core_stream_count: int,
     path: str,
 ) -> None:
-    """Admit lifetime-disjoint UNFUSED reuse only for the four-stream scale ABI."""
+    """Admit lifetime-disjoint reuse only for linkers with schedule-lifetime proof."""
 
     for index, left in enumerate(allocations):
         for right in allocations[index + 1 :]:
@@ -994,14 +994,15 @@ def _validate_allocation_nonoverlap(
                 or right.abi.lifetime_end_exclusive
                 <= left.abi.lifetime_start
             )
-            if (
-                producer_pass
-                == "unfused_comparison_standard_linker"
-                and core_stream_count == 4
-                and lifetime_disjoint
+            reuse_authorized = (
+                producer_pass == "manifest_linker"
                 or producer_pass == "moe_swizzle_standard_linker"
-                and lifetime_disjoint
-            ):
+                or (
+                    producer_pass == "unfused_comparison_standard_linker"
+                    and core_stream_count == 4
+                )
+            )
+            if reuse_authorized and lifetime_disjoint:
                 continue
             raise SchemaError(
                 "physical allocation ranges overlap during live intervals",

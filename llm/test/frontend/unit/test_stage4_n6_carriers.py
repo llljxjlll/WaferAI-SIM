@@ -60,11 +60,11 @@ class Stage4N6CarrierTest(unittest.TestCase):
         linked.validate_against(lowered)
         self.assertEqual(
             STAGE4_LOWERED_PROGRAM_SCHEMA_VERSION,
-            "wafer_frontend.stage4_lowered_program/v1alpha4",
+            "wafer_frontend.stage4_lowered_program/v1alpha5",
         )
         self.assertEqual(
             STAGE4_LINKED_PROGRAM_SCHEMA_VERSION,
-            "wafer_frontend.stage4_linked_program/v1alpha4",
+            "wafer_frontend.stage4_linked_program/v1alpha5",
         )
         self.assertEqual(len(lowered.fragments), 92)
         self.assertFalse(

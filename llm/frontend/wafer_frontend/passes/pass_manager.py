@@ -27,6 +27,7 @@ class PipelinePhase(str, Enum):
     FUSION_PARTITIONED = "fusion_partitioned"
     INTERDIE_PLANNED = "interdie_planned"
     IR2_PROJECTED = "ir2_projected"
+    INTRADIE_REFINED = "intradie_refined"
     INTRADIE_SCHEDULED = "intradie_scheduled"
     GLOBAL_DAG_BUILT = "global_dag_built"
     LOWERED = "lowered"
@@ -58,8 +59,13 @@ PASS_SPECS = (
         "project_to_ir2", PipelinePhase.INTERDIE_PLANNED, PipelinePhase.IR2_PROJECTED
     ),
     PassSpec(
-        "intra_die_schedule",
+        "intra_die_refine",
         PipelinePhase.IR2_PROJECTED,
+        PipelinePhase.INTRADIE_REFINED,
+    ),
+    PassSpec(
+        "intra_die_schedule",
+        PipelinePhase.INTRADIE_REFINED,
         PipelinePhase.INTRADIE_SCHEDULED,
     ),
     PassSpec(
@@ -87,6 +93,7 @@ _CONTEXT_REQUIRED_PASSES = frozenset(
         "fusion_partition",
         "inter_die_plan",
         "project_to_ir2",
+        "intra_die_refine",
         "intra_die_schedule",
     }
 )

@@ -404,6 +404,10 @@ def production_registry() -> PolicyRegistry:
         NAIVE_INTRADIE_POLICY_SCHEMA_VERSION,
         NaiveIntraDiePolicy,
     )
+    from .optimized_intra_die import (
+        OPTIMIZED_INTRADIE_POLICY_SCHEMA_VERSION,
+        OptimizedIntraDiePolicy,
+    )
     from .swizzle_defaults import SWIZZLE_POLICY_SCHEMA_VERSION, production_swizzle_policy
 
     registry = PolicyRegistry()
@@ -473,6 +477,24 @@ def production_registry() -> PolicyRegistry:
         implementation_id="wafer_frontend.policy.intra_die.naive",
         implementation_schema_version=NAIVE_INTRADIE_POLICY_SCHEMA_VERSION,
         capability_ids=shared_capabilities,
+    )
+    registry.activate(
+        RegistryKind.INTRA_DIE,
+        "optimized",
+        OptimizedIntraDiePolicy,
+        implementation_id="wafer_frontend.policy.intra_die.optimized",
+        implementation_schema_version=OPTIMIZED_INTRADIE_POLICY_SCHEMA_VERSION,
+        capability_ids=(
+            "o2.intra_die.bank_stagger",
+            "o2.intra_die.critical_path_order",
+            "o2.intra_die.lifetime_reuse",
+        ),
+        configuration={
+            "bank_stagger": True,
+            "critical_path_order": False,
+            "lifetime_reuse": True,
+            "placement": "n5_component_rr",
+        },
     )
     return registry
 

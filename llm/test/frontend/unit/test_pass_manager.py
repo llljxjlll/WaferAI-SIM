@@ -242,19 +242,20 @@ class PassManagerTest(unittest.TestCase):
             lambda value, context: {"source": value, "projection": context},
             context={"projection": "exact_naive/v1"},
         )
+        refined = manager.run_pass("intra_die_refine", projected, lambda value, context: {"source": value, "refine": context}, context={"refine": "identity/v1"})
         before_schedule = manager.snapshot
         with self.assertRaisesRegex(PassOrderError, "explicit immutable context"):
             manager.run_pass("intra_die_schedule", projected, lambda value: value)
         self.assertEqual(manager.snapshot, before_schedule)
         manager.run_pass(
             "intra_die_schedule",
-            projected,
+            refined,
             lambda value, context: {"source": value, "schedule": context},
             context={"schedule": "component_rr_xy/v1"},
             policy_selections=scheduling_selections,
         )
-        partition_receipt, planning_receipt, projection_receipt, schedule_receipt = (
-            manager.snapshot.receipts[-4:]
+        partition_receipt, planning_receipt, projection_receipt, refine_receipt, schedule_receipt = (
+            manager.snapshot.receipts[-5:]
         )
         self.assertEqual(
             partition_receipt.context_digest,
@@ -268,6 +269,7 @@ class PassManagerTest(unittest.TestCase):
             projection_receipt.context_digest,
             canonical_digest({"projection": "exact_naive/v1"}),
         )
+        self.assertEqual(refine_receipt.context_digest, canonical_digest({"refine": "identity/v1"}))
         self.assertEqual(
             schedule_receipt.context_digest,
             canonical_digest({"schedule": "component_rr_xy/v1"}),
@@ -284,6 +286,7 @@ class PassManagerTest(unittest.TestCase):
             partition_receipt,
             planning_receipt,
             projection_receipt,
+            refine_receipt,
             schedule_receipt,
         ):
             with self.subTest(pass_name=receipt.pass_name):

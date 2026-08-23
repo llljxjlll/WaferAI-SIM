@@ -264,6 +264,27 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         record.operands = operands;
         break;
     }
+    case RecordOperandKind::LOCAL_NOC_SEND: {
+        LocalNocSendOperands operands;
+        operands.source = Absolute(0x3000);
+        operands.destination_core = 7;
+        operands.byte_count = 64;
+        operands.event_id = 11;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_RECV: {
+        LocalNocRecvOperands operands;
+        operands.destination = Absolute(0x4000);
+        operands.source_core = 3;
+        operands.byte_count = 64;
+        operands.event_id = 11;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::LOCAL_NOC_WAIT:
+        record.operands = LocalNocWaitOperands{11};
+        break;
     case RecordOperandKind::LSU: {
         LsuOperands operands;
         operands.hbm_address_bytes = 0x123456789abcdef0ULL;
@@ -364,6 +385,9 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::DTE_SEND:
     case Opcode::DTE_RECV:
     case Opcode::LOCAL_REDUCE:
+    case Opcode::LOCAL_NOC_SEND:
+    case Opcode::LOCAL_NOC_RECV:
+    case Opcode::LOCAL_NOC_WAIT:
     case Opcode::DTE_ISSUE:
     case Opcode::SRAM_BIND:
     case Opcode::SRAM_CLEAR:
@@ -402,7 +426,9 @@ bool SameWire(const std::vector<sc_bv<128>> &left,
 int ExpectedCategory(Opcode opcode) {
     if (OpcodeValue(opcode) <= kComputeOpcodeLast) return COMP_PRIM;
     if (opcode == Opcode::DTE_SEND || opcode == Opcode::DTE_RECV ||
-        opcode == Opcode::LOCAL_REDUCE)
+        opcode == Opcode::LOCAL_REDUCE ||
+        opcode == Opcode::LOCAL_NOC_SEND ||
+        opcode == Opcode::LOCAL_NOC_RECV)
         return COMM_PRIM;
     if (opcode == Opcode::LSU_LOAD || opcode == Opcode::LSU_STORE ||
         opcode == Opcode::DTE_ISSUE || opcode == Opcode::SRAM_BIND ||
@@ -560,6 +586,31 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                 prim->destination.region.empty() &&
                 prim->destination.region_offset_bytes == 0,
             "DTE_RECV P2P fields and canonical metadata preserved");
+        return;
+    }
+    if (record.opcode == Opcode::LOCAL_NOC_SEND) {
+        auto *local_send = dynamic_cast<Dte_send_endpoint_prim *>(&base);
+        const auto &local_operands = std::get<LocalNocSendOperands>(record.operands);
+        checks.Check(local_send != nullptr && local_send->mode == DteEndpointSendMode::P2P &&
+                         local_send->completion == DteEndpointCompletion::SYNC &&
+                         local_send->fsm_id == local_operands.event_id && local_send->token == 0 &&
+                         local_send->length_bytes == local_operands.byte_count &&
+                         local_send->peer_core == local_operands.destination_core &&
+                         local_send->source.absolute_address_bytes == local_operands.source.absolute_address_bytes,
+                     "LOCAL_NOC_SEND maps to synchronous P2P endpoint");
+        return;
+    }
+    if (record.opcode == Opcode::LOCAL_NOC_RECV) {
+        auto *local_recv = dynamic_cast<Dte_recv_endpoint_prim *>(&base);
+        const auto &local_operands = std::get<LocalNocRecvOperands>(record.operands);
+        checks.Check(local_recv != nullptr && local_recv->mode == DteEndpointRecvMode::P2P &&
+                         local_recv->completion == DteEndpointCompletion::ASYNC &&
+                         local_recv->fsm_id == local_operands.event_id &&
+                         local_recv->token == local_operands.event_id &&
+                         local_recv->length_bytes == local_operands.byte_count &&
+                         local_recv->peer_core == local_operands.source_core &&
+                         local_recv->destination.absolute_address_bytes == local_operands.destination.absolute_address_bytes,
+                     "LOCAL_NOC_RECV maps to asynchronous P2P endpoint");
         return;
     }
     if (record.opcode == Opcode::LOCAL_REDUCE) {
@@ -744,6 +795,12 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
     auto *prim = dynamic_cast<Dte_async_prim *>(&base);
     checks.Check(prim != nullptr, "DTE target type");
     if (prim == nullptr) return;
+    if (record.opcode == Opcode::LOCAL_NOC_WAIT) {
+        const auto &operands = std::get<LocalNocWaitOperands>(record.operands);
+        checks.Check(prim->op == DteAsyncOp::WAIT && prim->token == operands.event_id,
+                     "LOCAL_NOC_WAIT maps event to DTE token wait");
+        return;
+    }
     if (record.opcode == Opcode::DTE_ISSUE) {
         const auto &operands = std::get<DteIssueOperands>(record.operands);
         checks.Check(prim->op == DteAsyncOp::ISSUE &&
@@ -851,7 +908,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 43,
+    checks.Check(supported == 46,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

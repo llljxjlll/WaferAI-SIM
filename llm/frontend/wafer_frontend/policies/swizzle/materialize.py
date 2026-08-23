@@ -364,6 +364,7 @@ def force_swizzle_deployment(
                 item
                 for item in economic_decision.ranked_candidates
                 if item.algorithm is not SwizzleAlgorithm.UNFUSED
+                and item.id != economic_decision.selected_candidate_ref
             ),
             None,
         )

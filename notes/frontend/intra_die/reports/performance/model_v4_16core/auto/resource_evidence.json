@@ -1,0 +1,616 @@
+{
+  "id": "intra_die_resource_evidence_b7babef35dde1e98",
+  "producer_pass": "intra_die_performance_runner",
+  "repeat": 3,
+  "repeat_signature_stable": true,
+  "repeat_signatures": [
+    "c858c8fd30c0d564e4ac63cf92cd53ce4d82f184940d9be481a938f59df142a9",
+    "c858c8fd30c0d564e4ac63cf92cd53ce4d82f184940d9be481a938f59df142a9",
+    "c858c8fd30c0d564e4ac63cf92cd53ce4d82f184940d9be481a938f59df142a9"
+  ],
+  "resources": {
+    "cycle_ns": 2,
+    "d2d": {
+      "busy_cycles": 0,
+      "stall_cycles": 0
+    },
+    "overlap_cycles": null,
+    "overlap_status": "unsupported:no_explicit_overlap_marker",
+    "per_core": [
+      {
+        "core": 0,
+        "primitive_busy_cycles": {
+          "compute": 304,
+          "dte_lsu": 10378,
+          "issue_control": 1640
+        },
+        "primitive_busy_ns": {
+          "compute": 608,
+          "dte_lsu": 20755,
+          "issue_control": 3280
+        },
+        "primitive_counts": {
+          "Attention_exact_prim": 1,
+          "Collective_data_v1_prim": 17,
+          "Embedding_lookup_prim": 1,
+          "Lsu_mem": 11,
+          "Matmul_f": 7,
+          "Residual_f": 2,
+          "Rope_qk_exact_prim": 1,
+          "Sram_bind_oneshot": 16,
+          "Sram_lifecycle": 170,
+          "rmsnorm_forward": 3,
+          "swiglu_forward": 1
+        }
+      },
+      {
+        "core": 1,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 2,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 3,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 4,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 5,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 6,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 7,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 8,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 9,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 10,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 11,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 12,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 13,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 14,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 15,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 16,
+        "primitive_busy_cycles": {
+          "compute": 304,
+          "dte_lsu": 10372,
+          "issue_control": 1640
+        },
+        "primitive_busy_ns": {
+          "compute": 608,
+          "dte_lsu": 20743,
+          "issue_control": 3280
+        },
+        "primitive_counts": {
+          "Attention_exact_prim": 1,
+          "Collective_data_v1_prim": 17,
+          "Embedding_lookup_prim": 1,
+          "Lsu_mem": 11,
+          "Matmul_f": 7,
+          "Residual_f": 2,
+          "Rope_qk_exact_prim": 1,
+          "Sram_bind_oneshot": 16,
+          "Sram_lifecycle": 170,
+          "rmsnorm_forward": 3,
+          "swiglu_forward": 1
+        }
+      },
+      {
+        "core": 17,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 18,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 19,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 20,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 21,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 22,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 23,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 24,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 25,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 26,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 27,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 28,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 29,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 30,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      },
+      {
+        "core": 31,
+        "primitive_busy_cycles": {
+          "compute": 16,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_busy_ns": {
+          "compute": 32,
+          "dte_lsu": 0,
+          "issue_control": 0
+        },
+        "primitive_counts": {
+          "Matmul_f": 1,
+          "Sram_bind_oneshot": 1,
+          "Sram_lifecycle": 6
+        }
+      }
+    ],
+    "program_memory": []
+  },
+  "schema_version": "wafer_frontend.intra_die_resource_evidence/v1alpha1"
+}

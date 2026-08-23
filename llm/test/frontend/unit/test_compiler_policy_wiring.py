@@ -17,6 +17,7 @@ from llm.frontend.wafer_frontend.policies.naive_inter_die import (
 from llm.frontend.wafer_frontend.policies.naive_intra_die import (
     NaiveIntraDiePolicy,
 )
+from llm.frontend.wafer_frontend.passes.program_io import build_timing_program_io
 from llm.frontend.wafer_frontend.passes.pass_manager import (
     PIPELINE_SCHEMA_VERSION,
 )
@@ -25,8 +26,14 @@ from llm.frontend.wafer_frontend.policies.registry import (
     RegistryKind,
 )
 from llm.frontend.wafer_frontend.schema.action import (
+    BarrierScope,
     FusionPlan,
     StandaloneCollectivePlan,
+)
+from llm.frontend.wafer_frontend.schema.artifact_manifest import (
+    BufferOwnership,
+    RecordOpcode,
+    RegionManifest,
 )
 from llm.frontend.wafer_frontend.schema.common import (
     ProfileKey,
@@ -41,6 +48,7 @@ from llm.frontend.wafer_frontend.schema.ir1 import (
 from llm.frontend.wafer_frontend.schema.ir2 import (
     IR2ProjectionResult,
     IntraDieScheduleSet,
+    SwizzleNodeOrigin,
 )
 from llm.frontend.wafer_frontend.schema.serde import canonical_digest, from_data
 
@@ -52,7 +60,7 @@ def _tiny_tp2_spec() -> ExperimentSpec:
     raw = valid_spec()
     model = raw["model"]
     assert isinstance(model, dict)
-    model.update({"H": 8, "I": 16, "NH": 2, "KVH": 2, "DH": 4, "L": 1})
+    model.update({"H": 8, "I": 16, "NH": 2, "KVH": 2, "DH": 4, "L": 1, "rotary_dim": 4})
     infer = raw["workload"]["infer"]  # type: ignore[index]
     assert isinstance(infer, dict)
     profile = infer["profile"]
@@ -185,10 +193,10 @@ class CompilerPolicyWiringTest(unittest.TestCase):
             )
         for artifact_index, payload_name in (
             (6, "projection"),
-            (7, "schedule_set"),
-            (8, "global_dag"),
-            (9, "fragments"),
-            (10, "manifest"),
+            (8, "schedule_set"),
+            (9, "global_dag"),
+            (10, "fragments"),
+            (11, "manifest"),
         ):
             self.assertEqual(
                 tuple(
@@ -206,7 +214,7 @@ class CompilerPolicyWiringTest(unittest.TestCase):
             (
                 selected.contexts[2].fused_policy,
                 selected.contexts[2].standalone_policy,
-                selected.contexts[4].policy,
+                selected.contexts[5].policy,
             ),
         )
         self.assertNotEqual(
@@ -261,27 +269,101 @@ class CompilerPolicyWiringTest(unittest.TestCase):
             ("inter", "inter", "standalone", "standalone", "intra"),
         )
 
-    def test_declared_optimized_fails_before_first_pass_without_mutation(self) -> None:
+    def test_declared_optimized_compiles_with_selected_policy(self) -> None:
         raw = valid_spec()
-        raw["policy"]["inter_die"] = "swizzle_topo"  # type: ignore[index]
+        model = raw["model"]
+        assert isinstance(model, dict)
+        model.update({"H": 8, "I": 16, "NH": 2, "KVH": 2, "DH": 4, "L": 1, "rotary_dim": 4})
+        infer = raw["workload"]["infer"]  # type: ignore[index]
+        assert isinstance(infer, dict)
+        profile = infer["profile"]
+        assert isinstance(profile, dict)
+        profile.update({"prefill_tokens": 2, "context_sum": 2, "context_max": 2})
+        raw["policy"]["intra_die"] = "optimized"  # type: ignore[index]
         spec = from_data(ExperimentSpec, raw, path="spec")
         fabric, hbm_address_spaces = _e1_compile_inputs()
         before = (canonical_digest(spec), canonical_digest(fabric))
-        with patch.object(
-            compiler_module,
-            "build_ir0",
-            side_effect=AssertionError("first pass must not run"),
-        ) as first_pass:
-            with self.assertRaisesRegex(
-                StageNotImplementedError, "swizzle_topo.*O1"
-            ):
-                compile_naive(
-                    spec,
-                    fabric,
-                    hbm_address_spaces=hbm_address_spaces,
-                )
-        first_pass.assert_not_called()
+        result = compile_naive(spec, fabric, hbm_address_spaces=hbm_address_spaces)
+        self.assertEqual(result.contexts[5].policy.name, "optimized")
+        self.assertIn("optimized", tuple(selection.name for selection in result.policy_selections))
         self.assertEqual(before, (canonical_digest(spec), canonical_digest(fabric)))
+
+    def test_swizzle_group_barrier_lowers_through_common_ir2(self) -> None:
+        raw = valid_spec()
+        model = raw["model"]
+        assert isinstance(model, dict)
+        model.update(
+            {
+                "V": 128,
+                "H": 32,
+                "I": 64,
+                "NH": 4,
+                "KVH": 2,
+                "DH": 8,
+                "L": 1,
+                "rotary_dim": 8,
+            }
+        )
+        infer = raw["workload"]["infer"]  # type: ignore[index]
+        assert isinstance(infer, dict)
+        profile = infer["profile"]
+        assert isinstance(profile, dict)
+        profile.update(
+            {"prefill_tokens": 4, "context_sum": 4, "context_max": 4}
+        )
+        raw["policy"]["inter_die"] = "swizzle_topo"  # type: ignore[index]
+        spec = from_data(ExperimentSpec, raw, path="spec")
+        fabric, hbm_address_spaces = _e1_compile_inputs()
+
+        result = compile_naive(
+            spec, fabric, hbm_address_spaces=hbm_address_spaces
+        )
+        actions = result.artifacts[9].entries[0].global_dag.actions
+        barriers = tuple(
+            action
+            for action in actions
+            if isinstance(action.origin_ref, SwizzleNodeOrigin)
+            and action.sync is not None
+            and action.sync.barrier is not None
+        )
+        self.assertEqual(
+            tuple(action.origin_ref.rank for action in barriers), (0, 1)
+        )
+        self.assertTrue(
+            all(
+                action.sync.barrier.scope is BarrierScope.GROUP
+                for action in barriers
+            )
+        )
+
+        lowered = result.artifacts[10].entries[0]
+        event_action_ids = {
+            record.source_global_action_id
+            for item in lowered.fragments
+            for fragment in (
+                (item.fragment,) if isinstance(item, RegionManifest) else (item,)
+            )
+            for stream in fragment.core_streams
+            for record in stream.records
+            if record.opcode in (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT)
+        }
+        self.assertTrue(
+            {action.id for action in barriers}.issubset(event_action_ids)
+        )
+        self.assertEqual(
+            type(result.artifacts[-1]).__name__, "LinkedProgramBundle"
+        )
+        source = result.artifacts[-1].entries[0]
+        owned_logits = tuple(
+            abi
+            for fragment in source.leaf_fragments
+            for abi in fragment.buffer_abi
+            if abi.value_id == "P0.logits"
+            and abi.ownership is BufferOwnership.OWNED
+        )
+        self.assertEqual(len(owned_logits), 2)
+        program_io = build_timing_program_io(source, "0" * 64)
+        self.assertEqual(len(program_io.output_probes), 2)
 
     def test_registry_type_is_exact(self) -> None:
         spec = _tiny_tp2_spec()

@@ -332,10 +332,18 @@ class GlobalAction:
             deps=(),
             dma=self.dma,
         ).validate(path)
-        if self.lowering is RegionLowering.JSON_COARSE and (
-            self.task_kind is not SemanticTaskKind.COMP or self.compute is None
+        if self.lowering is RegionLowering.JSON_COARSE and not (
+            (self.task_kind is SemanticTaskKind.COMP and self.compute is not None)
+            or self.task_kind
+            in (
+                SemanticTaskKind.LOCAL_SEND,
+                SemanticTaskKind.LOCAL_RECV,
+                SemanticTaskKind.LOCAL_WAIT,
+                SemanticTaskKind.LOCAL_COPY,
+                SemanticTaskKind.REDUCE,
+            )
         ):
-            raise SchemaError("JSON_COARSE requires a COMP ComputeContract", path=path)
+            raise SchemaError("JSON_COARSE requires COMP, local transport, LOCAL_COPY, or REDUCE", path=path)
         if self.task_kind is SemanticTaskKind.TRANSIT:
             if self.logical_core is not None or self.core_order_index is not None:
                 raise SchemaError("TRANSIT cannot carry a logical core", path=path)
@@ -346,8 +354,20 @@ class GlobalAction:
                 raise SchemaError("executable action requires a logical core and order index", path=path)
             self.logical_core.validate(f"{path}.logical_core")
             validate_uint64(self.core_order_index, f"{path}.core_order_index")
-        if (self.flow_id is None) != (self.flow is None):
+        is_local_flow = (
+            self.task_kind
+            in (
+                SemanticTaskKind.LOCAL_SEND,
+                SemanticTaskKind.LOCAL_RECV,
+                SemanticTaskKind.LOCAL_WAIT,
+            )
+            and self.flow_id is not None
+            and self.flow_id.startswith("local.")
+        )
+        if not is_local_flow and (self.flow_id is None) != (self.flow is None):
             raise SchemaError("flow must exactly accompany flow_id", path=f"{path}.flow")
+        if is_local_flow and (self.flow is not None or self.flow_route is not None):
+            raise SchemaError("local transport cannot carry a cross-die flow/route", path=f"{path}.flow")
         if self.flow is not None:
             self.flow.validate(
                 f"{path}.flow",
@@ -357,7 +377,7 @@ class GlobalAction:
             )
             if self.flow.id != self.flow_id:
                 raise SchemaError("flow.id disagrees with flow_id", path=f"{path}.flow.id")
-        if (self.flow_id is None) != (self.flow_route is None):
+        if not is_local_flow and (self.flow_id is None) != (self.flow_route is None):
             raise SchemaError("flow_route must exactly accompany flow_id", path=f"{path}.flow_route")
         if self.flow_route is not None:
             self.flow_route.validate(f"{path}.flow_route")

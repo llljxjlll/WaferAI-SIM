@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..errors import SchemaError
-from ..schema.action import FusionPlan, StandaloneCollectivePlan
+from ..schema.action import StandaloneCollectivePlan
+from ..schema.swizzle_plan import FusedPlan
 from ..schema.global_action import GlobalActionDAG
 from ..schema.ir1 import IR1
 from ..schema.ir2 import IR2ProjectionResult, IntraDieScheduleSet
@@ -16,7 +17,7 @@ class LoweringContext:
     """Lossless lowering boundary; backends never recover data from action ids."""
 
     ir1: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
     schedule_set: IntraDieScheduleSet
