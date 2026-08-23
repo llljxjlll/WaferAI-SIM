@@ -11,6 +11,7 @@
 #include "dte/coll_byte_wire_v1.h"
 #include "dte/coll_reduce_stream.h"
 #include "dte/p2p_session_runtime.h"
+#include "workercore/moe_swizzle_runtime_capture.h"
 #include "dte/sync_runtime.h"
 #include "link/nb_global_memif_v2.h"
 #include "macros/macros.h"
@@ -327,6 +328,12 @@ public:
     std::shared_ptr<CollectiveWaveAdmissionCoordinatorV1>
         collective_wave_coordinator_v1;
     P2pEndpointProductionStats p2p_stats;
+    std::vector<MoeSwizzleRuntimeInterval> moe_swizzle_runtime_intervals;
+    std::optional<uint64_t> moe_swizzle_pending_group_gemm_dispatch_start;
+    std::vector<MoeSwizzleRuntimeIntervalKind>
+        moe_swizzle_pending_fixed_interval_kinds;
+    uint64_t moe_swizzle_pending_fixed_interval_start = 0;
+    std::map<uint32_t, uint64_t> moe_swizzle_local_dte_starts;
     // REQUEST 可能跨迭代提前到达；每个 (source, tag) 按逻辑轮次排队，
     // 每轮用 subflow_mask 聚合 stripe 声明，RECV_DATA 每次只消费队首一轮。
     std::map<std::pair<int, int>, std::deque<DteFlowPayloadRound>>
@@ -511,5 +518,28 @@ public:
 
     const P2pEndpointProductionStats &P2pStats() const noexcept {
         return p2p_stats;
+    }
+    const std::vector<P2pEndpointLifetimeEvent> &
+    P2pLifetimeEvents() const noexcept {
+        static const std::vector<P2pEndpointLifetimeEvent> empty;
+        return p2p_endpoint ? p2p_endpoint->LifetimeEvents() : empty;
+    }
+    bool P2pLifetimeEventsComplete() const noexcept {
+        return !p2p_endpoint || p2p_endpoint->LifetimeEventsComplete();
+    }
+    size_t P2pMaxSessions() const noexcept {
+        return p2p_endpoint ? p2p_endpoint->MaxSessions() : 0;
+    }
+    const std::vector<MoeSwizzleRuntimeInterval> &
+    MoeSwizzleRuntimeIntervals() const noexcept {
+        return moe_swizzle_runtime_intervals;
+    }
+    bool MoeSwizzleRuntimeIntervalsComplete() const noexcept {
+        return moe_swizzle_local_dte_starts.empty() &&
+               !moe_swizzle_pending_group_gemm_dispatch_start.has_value();
+    }
+    bool MoeSwizzleCalibrationIntervalsComplete() const noexcept {
+        return MoeSwizzleRuntimeIntervalsComplete() &&
+               moe_swizzle_pending_fixed_interval_kinds.empty();
     }
 };

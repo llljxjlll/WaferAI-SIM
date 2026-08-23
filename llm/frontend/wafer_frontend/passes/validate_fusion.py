@@ -85,6 +85,105 @@ class FusionSemanticValidator:
     @staticmethod
     def validate(graph: IR0, path: str = "ir0") -> None:
         DenseIR0Validator.validate(graph, path)
+        from .discover_fusion import discover_fusion_candidates
+
+        expected = discover_fusion_candidates(graph)
+        seen_member_sets: set[tuple[str, ...]] = set()
+        for candidate in graph.fusion_candidates:
+            if candidate.members in seen_member_sets:
+                _fail(
+                    "fusion candidates must not share member nodes",
+                    f"{path}.fusion_candidates",
+                )
+            seen_member_sets.add(candidate.members)
+        if len(graph.fusion_candidates) != len(expected):
+            _fail(
+                "every direct supported fusion pair must have exactly one candidate",
+                f"{path}.fusion_candidates",
+            )
+        nodes = {node.id: node for node in graph.nodes}
+        values = {value.id: value for value in graph.values}
+        claimed_members: set[str] = set()
+        for index, (candidate, canonical) in enumerate(
+            zip(graph.fusion_candidates, expected, strict=True)
+        ):
+            candidate_path = f"{path}.fusion_candidates[{index}]"
+            if candidate.impl is not FusionImpl.NONE:
+                _fail(
+                    "candidate implementation must remain NONE before partitioning",
+                    f"{candidate_path}.impl",
+                )
+            if candidate.origin is not FusionOrigin.DISCOVERED:
+                _fail(
+                    "generated Dense candidates must have DISCOVERED origin",
+                    f"{candidate_path}.origin",
+                )
+            if candidate.members != canonical.members:
+                if len(candidate.members) == 2:
+                    source = nodes[candidate.members[0]]
+                    destination = nodes[candidate.members[1]]
+                    if (
+                        len(source.outputs) != 1
+                        or source.outputs[0] not in destination.inputs
+                    ):
+                        _fail(
+                            "fusion source sole partial output must be a destination input",
+                            f"{candidate_path}.members",
+                        )
+                _fail(
+                    "candidate members must preserve canonical ordered fusion pairs",
+                    f"{candidate_path}.members",
+                )
+            overlap = claimed_members.intersection(candidate.members)
+            if overlap:
+                _fail(
+                    "fusion candidates must not share member nodes",
+                    f"{candidate_path}.members",
+                )
+            claimed_members.update(candidate.members)
+            if candidate.boundary_inputs != canonical.boundary_inputs:
+                _fail(
+                    "candidate boundary input order is not canonical",
+                    f"{candidate_path}.boundary_inputs",
+                )
+            if candidate.boundary_outputs != canonical.boundary_outputs:
+                _fail(
+                    "candidate boundary_outputs are not canonical",
+                    f"{candidate_path}.boundary_outputs",
+                )
+            actual_contract = candidate.semantic_contract
+            expected_contract = canonical.semantic_contract
+            for field_name in (
+                "pattern",
+                "tile_domain",
+                "reduction_axes",
+                "input_layouts",
+                "output_layout",
+                "numerical_policy",
+            ):
+                if getattr(actual_contract, field_name) != getattr(
+                    expected_contract, field_name
+                ):
+                    label = (
+                        "numerical policy"
+                        if field_name == "numerical_policy"
+                        else field_name
+                    )
+                    _fail(
+                        f"candidate {label} is not canonical",
+                        f"{candidate_path}.semantic_contract.{field_name}",
+                    )
+            if candidate.id != canonical.id:
+                _fail(
+                    "candidate id does not match its canonical semantic content",
+                    f"{candidate_path}.id",
+                )
+            _validate_convexity(
+                graph,
+                set(candidate.members),
+                path=candidate_path,
+            )
+        return
 
         nodes = {node.id: node for node in graph.nodes}
         values = {value.id: value for value in graph.values}

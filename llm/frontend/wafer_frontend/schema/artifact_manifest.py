@@ -86,6 +86,10 @@ class FragmentKind(str, Enum):
     STATE_TRANSFER = "state_transfer"
     MOE_TRANSFER = "moe_transfer"
     S2_LITE_ROOTED_AR = "s2_lite_rooted_ar"
+    SWIZZLE = "swizzle"
+    MOE_SWIZZLE = "moe_swizzle"
+    MOE_SWIZZLE_CALIBRATION = "moe_swizzle_calibration"
+    UNFUSED_COMPARISON = "unfused_comparison"
 
 
 _FRAGMENT_KIND_BY_LOWERING = {
@@ -1670,7 +1674,12 @@ class RelocatableRecord:
     opcode: RecordOpcode
     operands: tuple[RecordOperand, ...]
 
-    def validate(self, path: str) -> None:
+    def validate(
+        self,
+        path: str,
+        *,
+        allow_persistent_sram_alloc: bool = False,
+    ) -> None:
         validate_nonempty(self.source_global_action_id, f"{path}.source_global_action_id")
         expected = _OPERAND_SCHEMAS[self.opcode]
         if tuple(operand.name for operand in self.operands) != tuple(spec.name for spec in expected):
@@ -1755,11 +1764,15 @@ class RelocatableRecord:
                 or type(alignment_bytes) is not int
                 or alignment_bytes == 0
                 or alignment_bytes & (alignment_bytes - 1)
-                or lifetime != 0
+                # A record is decoded and structurally validated before its
+                # enclosing CommandFragment is available. Keep the wire-level
+                # lifetime domain here; producer authorization is enforced at
+                # the fragment boundary below.
+                or lifetime not in (0, 2)
                 or type(spillable) is not bool
             ):
                 raise SchemaError(
-                    "SRAM_ALLOC_AT requires uint64 offset, positive size, power-of-two alignment, TASK lifetime=0 and boolean spillable",
+                    "SRAM_ALLOC_AT requires uint64 offset, positive size, power-of-two alignment, producer-allowed lifetime and boolean spillable",
                     path=f"{path}.operands",
                 )
         if self.opcode is RecordOpcode.EVENT_WAIT:
@@ -1804,12 +1817,20 @@ class CoreFragmentStream:
     runtime_relocations: tuple[RuntimeRelocation, ...]
     address_relocations: tuple[AddressRelocation, ...]
 
-    def validate(self, path: str) -> None:
+    def validate(
+        self,
+        path: str,
+        *,
+        allow_persistent_sram_alloc: bool = False,
+    ) -> None:
         self.logical_core.validate(f"{path}.logical_core")
         if not self.records:
             raise SchemaError("core fragment stream must contain records", path=f"{path}.records")
         for index, record in enumerate(self.records):
-            record.validate(f"{path}.records[{index}]")
+            record.validate(
+                f"{path}.records[{index}]",
+                allow_persistent_sram_alloc=allow_persistent_sram_alloc,
+            )
         for index, relocation in enumerate(self.runtime_relocations):
             relocation.validate(f"{path}.runtime_relocations[{index}]")
         for index, relocation in enumerate(self.address_relocations):
@@ -1820,8 +1841,13 @@ class CoreFragmentStream:
         runtime_symbols: dict[str, RuntimeSymbol],
         program_symbols: dict[str, ProgramSymbol],
         path: str,
+        *,
+        allow_persistent_sram_alloc: bool = False,
     ) -> None:
-        self.validate(path)
+        self.validate(
+            path,
+            allow_persistent_sram_alloc=allow_persistent_sram_alloc,
+        )
 
         runtime_operands: dict[tuple[int, RuntimeOperandField], RecordOperand] = {}
         address_operands: dict[tuple[int, SemanticOperandId], RecordOperand] = {}
@@ -2387,9 +2413,10 @@ def _canonical_lifecycle_roots(
         root = roots[0]
         starts = [root.lifetime_start]
         ends = [root.lifetime_end_exclusive]
+        terminal_subviews = []
         for abi in group:
             if abi is not root:
-                if (
+                exact_alias = (
                     abi.ownership is not BufferOwnership.ALIASED
                     or abi.alias_of != root.binding_id
                     or abi.region_ref != root.region_ref
@@ -2401,14 +2428,147 @@ def _canonical_lifecycle_roots(
                     or abi.tensor_slice.shape != root.tensor_slice.shape
                     or abi.dtype is not root.dtype
                     or abi.layout != root.layout
-                ):
+                )
+                terminal_subview = (
+                    root.layout == "swizzle_standard_terminal_root/v1"
+                    and root.ownership is BufferOwnership.OWNED
+                    and abi.layout == "swizzle_standard_terminal_subview/v1"
+                    and abi.ownership is BufferOwnership.ALIASED
+                    and abi.alias_of == root.binding_id
+                    and abi.schedule_id == root.schedule_id
+                    and abi.logical_core == root.logical_core
+                    and abi.region_ref == root.region_ref
+                    and abi.storage_id == root.storage_id
+                    and abi.alignment_bytes == root.alignment_bytes
+                    and abi.banks == root.banks
+                    and abi.dtype is root.dtype
+                    and abi.value_id == root.value_id
+                    and abi.tensor_slice.value_id == root.tensor_slice.value_id
+                    and root.region_offset_bytes <= abi.region_offset_bytes
+                    and abi.region_offset_bytes + abi.size_bytes
+                    <= root.region_offset_bytes + root.size_bytes
+                    and len(abi.tensor_slice.shape)
+                    == len(root.tensor_slice.shape)
+                    and all(
+                        root_offset <= alias_offset
+                        and alias_offset + alias_extent
+                        <= root_offset + root_extent
+                        for root_offset, root_extent, alias_offset, alias_extent
+                        in zip(
+                            root.tensor_slice.offset,
+                            root.tensor_slice.shape,
+                            abi.tensor_slice.offset,
+                            abi.tensor_slice.shape,
+                            strict=True,
+                        )
+                    )
+                )
+                storage_subview = (
+                    root.layout == "swizzle_standard_storage_root/v1"
+                    and abi.layout == "swizzle_standard_storage_subview/v1"
+                    and abi.ownership is BufferOwnership.ALIASED
+                    and abi.alias_of == root.binding_id
+                    and abi.schedule_id == root.schedule_id
+                    and abi.logical_core == root.logical_core
+                    and abi.region_ref == root.region_ref
+                    and abi.storage_id == root.storage_id
+                    and abi.alignment_bytes == root.alignment_bytes
+                    and abi.banks == root.banks
+                    and abi.dtype is root.dtype
+                    and root.region_offset_bytes <= abi.region_offset_bytes
+                    and abi.region_offset_bytes + abi.size_bytes
+                    <= root.region_offset_bytes + root.size_bytes
+                )
+                moe_family_subview = (
+                    root.layout.startswith("moe_swizzle_")
+                    and root.layout.endswith("_root/v1")
+                    and abi.layout
+                    == root.layout.removesuffix("_root/v1") + "_subview/v1"
+                    and abi.ownership is BufferOwnership.ALIASED
+                    and abi.alias_of == root.binding_id
+                    and abi.schedule_id == root.schedule_id
+                    and abi.logical_core == root.logical_core
+                    and abi.region_ref == root.region_ref
+                    and abi.storage_id == root.storage_id
+                    and abi.alignment_bytes == root.alignment_bytes
+                    and abi.banks == root.banks
+                    and abi.dtype is root.dtype
+                    and root.region_offset_bytes <= abi.region_offset_bytes
+                    and abi.region_offset_bytes + abi.size_bytes
+                    <= root.region_offset_bytes + root.size_bytes
+                )
+                if exact_alias and not terminal_subview and not storage_subview and not moe_family_subview:
                     raise SchemaError(
                         "lifecycle alias must exactly preserve its canonical root placement/view",
                         path=path,
                     )
+                if terminal_subview:
+                    element_bytes = {
+                        DType.FP16: 2,
+                        DType.FP32: 4,
+                        DType.INT32: 4,
+                    }.get(root.dtype)
+                    if element_bytes is None:
+                        raise SchemaError(
+                            "fused terminal subview requires a dense supported dtype",
+                            path=path,
+                        )
+                    root_elements = 1
+                    for extent in root.tensor_slice.shape:
+                        root_elements *= extent
+                    alias_elements = 1
+                    for extent in abi.tensor_slice.shape:
+                        alias_elements *= extent
+                    if (
+                        root_elements * element_bytes != root.size_bytes
+                        or alias_elements * element_bytes != abi.size_bytes
+                    ):
+                        raise SchemaError(
+                            "fused terminal storage/view byte extents must be exact",
+                            path=path,
+                        )
+                    terminal_subviews.append(abi)
+                if storage_subview or moe_family_subview:
+                    element_bytes = {
+                        DType.FP16: 2,
+                        DType.FP32: 4,
+                        DType.INT32: 4,
+                    }.get(root.dtype)
+                    alias_elements = 1
+                    for extent in abi.tensor_slice.shape:
+                        alias_elements *= extent
+                    if (
+                        element_bytes is None
+                        or alias_elements * element_bytes != abi.size_bytes
+                    ):
+                        raise SchemaError(
+                            "fused storage subview byte extent must be exact",
+                            path=path,
+                        )
                 starts.append(abi.lifetime_start)
                 ends.append(abi.lifetime_end_exclusive)
             root_by_id[abi.id] = root
+        if terminal_subviews:
+            physical = tuple(sorted(
+                (
+                    abi.region_offset_bytes - root.region_offset_bytes,
+                    abi.size_bytes,
+                )
+                for abi in terminal_subviews
+            ))
+            cursor = 0
+            for offset, size in physical:
+                if offset != cursor:
+                    raise SchemaError(
+                        "fused terminal subviews must exactly and uniquely cover storage",
+                        path=path,
+                    )
+                cursor += size
+            if cursor != root.size_bytes:
+                raise SchemaError(
+                    "fused terminal subviews must exactly and uniquely cover storage",
+                    path=path,
+                )
         if (
             root.lifetime_start != min(starts)
             or root.lifetime_end_exclusive != max(ends)
@@ -2599,11 +2759,39 @@ class CommandFragment:
             symbol.validate(f"{path}.program_symbols[{index}]")
         record_actions: dict[str, tuple[int, list[int]]] = {}
         stream_cores: set[LogicalCoreRef] = set()
+        exact_moe_producer = (
+            self.kind is FragmentKind.MOE_SWIZZLE
+            and self.producer_pass == "moe_swizzle_standard_lowering"
+        )
+        allow_persistent_sram_alloc = exact_moe_producer or (
+            self.kind is FragmentKind.MOE_SWIZZLE_CALIBRATION
+            and self.producer_pass
+            == "moe_swizzle_calibration_standard_lowering"
+        )
+        if not allow_persistent_sram_alloc:
+            for stream_index, stream in enumerate(self.core_streams):
+                for record_index, record in enumerate(stream.records):
+                    if (
+                        record.opcode is RecordOpcode.SRAM_ALLOC_AT
+                        and record.operands[5].literal_value == 2
+                    ):
+                        raise SchemaError(
+                            "PERSISTENT SRAM allocation is reserved for exact MoE producers",
+                            path=(
+                                f"{path}.core_streams[{stream_index}]"
+                                f".records[{record_index}].operands[5].literal_value"
+                            ),
+                        )
         for stream_index, stream in enumerate(self.core_streams):
             if stream.logical_core in stream_cores:
                 raise SchemaError("duplicate logical core stream", path=f"{path}.core_streams[{stream_index}].logical_core")
             stream_cores.add(stream.logical_core)
-            stream.validate_relocations(runtime_symbols, program_symbols, f"{path}.core_streams[{stream_index}]")
+            stream.validate_relocations(
+                runtime_symbols,
+                program_symbols,
+                f"{path}.core_streams[{stream_index}]",
+                allow_persistent_sram_alloc=allow_persistent_sram_alloc,
+            )
             for record_index, record in enumerate(stream.records):
                 if record.source_global_action_id not in self.claimed_action_ids:
                     raise SchemaError("record origin is not claimed by the fragment", path=f"{path}.core_streams[{stream_index}].records[{record_index}].source_global_action_id")
@@ -2622,6 +2810,47 @@ class CommandFragment:
             binding.validate(f"{path}.buffer_abi[{index}]")
             if binding.logical_core not in stream_cores:
                 raise SchemaError("buffer ABI references a non-target core", path=f"{path}.buffer_abi[{index}].logical_core")
+        if exact_moe_producer:
+            terminal_storage_ids = {
+                binding.storage_id
+                for binding in self.buffer_abi
+                if binding.alias_of is None
+                and binding.ownership is BufferOwnership.OWNED
+                and binding.layout in (
+                    "moe_swizzle_terminal_combined_root/v1",
+                    "moe_swizzle_terminal_tape_root/v1",
+                )
+            }
+            persistent_storage_ids = set()
+            freed_storage_ids = set()
+            for stream in self.core_streams:
+                for record in stream.records:
+                    if record.opcode not in (
+                        RecordOpcode.SRAM_ALLOC_AT,
+                        RecordOpcode.SRAM_FREE,
+                    ):
+                        continue
+                    label_operand = record.operands[
+                        1 if record.opcode is RecordOpcode.SRAM_ALLOC_AT else 0
+                    ]
+                    label_symbol = program_symbols[label_operand.symbol_ref]
+                    if (
+                        record.opcode is RecordOpcode.SRAM_ALLOC_AT
+                        and record.operands[5].literal_value == 2
+                    ):
+                        persistent_storage_ids.add(label_symbol.source_ref)
+                    elif record.opcode is RecordOpcode.SRAM_FREE:
+                        freed_storage_ids.add(label_symbol.source_ref)
+            if persistent_storage_ids != terminal_storage_ids:
+                raise SchemaError(
+                    "whole MoE PERSISTENT allocations must exactly cover terminal roots",
+                    path=f"{path}.core_streams",
+                )
+            if terminal_storage_ids & freed_storage_ids:
+                raise SchemaError(
+                    "whole MoE terminal roots must remain live after program completion",
+                    path=f"{path}.core_streams",
+                )
         state_ids = tuple(abi.id for abi in self.state_abi)
         if state_ids != tuple(sorted(set(state_ids))):
             raise SchemaError(
@@ -2637,11 +2866,10 @@ class CommandFragment:
                     path=f"{path}.state_abi[{index}].hbm_binding_ref",
                 )
             state_by_hbm_ref[abi.hbm_binding_ref] = abi
-        if (self.kind is FragmentKind.STATE_IO) != bool(self.state_abi):
-            raise SchemaError(
-                "STATE_IO fragments require StateABI and all other fragments forbid it",
-                path=f"{path}.state_abi",
-            )
+        if self.kind is FragmentKind.STATE_IO and not self.state_abi:
+            raise SchemaError("STATE_IO fragments require StateABI", path=f"{path}.state_abi")
+        if self.state_abi and self.kind is not FragmentKind.STATE_IO and not exact_moe_producer:
+            raise SchemaError("only STATE_IO or the exact MOE_SWIZZLE producer may carry StateABI", path=f"{path}.state_abi")
         rooted_ar = self.kind is FragmentKind.S2_LITE_ROOTED_AR
         if rooted_ar != (self.producer_pass == "s2_lite_rooted_ar_lowering"):
             raise SchemaError(
@@ -2665,6 +2893,129 @@ class CommandFragment:
             ):
                 raise SchemaError(
                     "rooted-AR fragments only permit scratch/DTE/reduce records",
+                    path=f"{path}.core_streams",
+                )
+        swizzle = self.kind is FragmentKind.SWIZZLE
+        if swizzle != (self.producer_pass == "swizzle_standard_lowering"):
+            raise SchemaError(
+                "SWIZZLE kind is reserved for its exact dedicated producer",
+                path=f"{path}.kind",
+            )
+        if swizzle:
+            allowed = {
+                RecordOpcode.SRAM_ALLOC_AT,
+                RecordOpcode.SRAM_BIND,
+                RecordOpcode.SRAM_FREE,
+                RecordOpcode.MATMUL,
+                RecordOpcode.DTE_SEND,
+                RecordOpcode.DTE_RECV,
+                RecordOpcode.DTE_WAIT,
+                RecordOpcode.LOCAL_REDUCE,
+                RecordOpcode.DTE_ISSUE,
+                RecordOpcode.EVENT_SET,
+                RecordOpcode.EVENT_WAIT,
+            }
+            if self.state_abi or any(
+                record.opcode not in allowed
+                for stream in self.core_streams
+                for record in stream.records
+            ):
+                raise SchemaError(
+                    "SWIZZLE fragment requires exact ABI-projected opcodes and no StateABI",
+                    path=f"{path}.core_streams",
+                )
+        moe_swizzle = self.kind is FragmentKind.MOE_SWIZZLE
+        if moe_swizzle != (self.producer_pass == "moe_swizzle_standard_lowering"):
+            raise SchemaError(
+                "MOE_SWIZZLE kind is reserved for its exact dedicated producer",
+                path=f"{path}.kind",
+            )
+        if moe_swizzle:
+            allowed = {
+                RecordOpcode.SRAM_ALLOC_AT,
+                RecordOpcode.SRAM_BIND,
+                RecordOpcode.SRAM_FREE,
+                RecordOpcode.MATMUL,
+                RecordOpcode.DTE_SEND,
+                RecordOpcode.DTE_RECV,
+                RecordOpcode.DTE_WAIT,
+                RecordOpcode.DTE_ISSUE,
+                RecordOpcode.LOCAL_REDUCE,
+                RecordOpcode.EVENT_SET,
+                RecordOpcode.EVENT_WAIT,
+                RecordOpcode.LSU_LOAD,
+                RecordOpcode.SWIGLU,
+            }
+            if any(
+                record.opcode not in allowed
+                for stream in self.core_streams
+                for record in stream.records
+            ):
+                raise SchemaError(
+                    "MOE_SWIZZLE fragment requires exact producer-scoped typed ABI opcodes",
+                    path=f"{path}.core_streams",
+                )
+        moe_calibration = self.kind is FragmentKind.MOE_SWIZZLE_CALIBRATION
+        if moe_calibration != (
+            self.producer_pass == "moe_swizzle_calibration_standard_lowering"
+        ):
+            raise SchemaError(
+                "MOE_SWIZZLE_CALIBRATION kind is reserved for its exact dedicated producer",
+                path=f"{path}.kind",
+            )
+        if moe_calibration:
+            allowed = {
+                RecordOpcode.SRAM_ALLOC_AT,
+                RecordOpcode.SRAM_BIND,
+                RecordOpcode.SRAM_FREE,
+                RecordOpcode.MATMUL,
+                RecordOpcode.SWIGLU,
+                RecordOpcode.DTE_SEND,
+                RecordOpcode.DTE_RECV,
+                RecordOpcode.DTE_WAIT,
+                RecordOpcode.DTE_ISSUE,
+                RecordOpcode.EVENT_SET,
+                RecordOpcode.EVENT_WAIT,
+            }
+            if self.state_abi or any(
+                record.opcode not in allowed
+                for stream in self.core_streams
+                for record in stream.records
+            ):
+                raise SchemaError(
+                    "isolated MoE calibration fragment has an illegal auxiliary opcode or StateABI",
+                    path=f"{path}.core_streams",
+                )
+
+        unfused_comparison = self.kind is FragmentKind.UNFUSED_COMPARISON
+        if unfused_comparison != (
+            self.producer_pass == "unfused_comparison_standard_lowering"
+        ):
+            raise SchemaError(
+                "UNFUSED_COMPARISON kind is reserved for its exact dedicated producer",
+                path=f"{path}.kind",
+            )
+        if unfused_comparison:
+            allowed = {
+                RecordOpcode.SRAM_ALLOC_AT,
+                RecordOpcode.SRAM_BIND,
+                RecordOpcode.SRAM_FREE,
+                RecordOpcode.MATMUL,
+                RecordOpcode.DTE_SEND,
+                RecordOpcode.DTE_RECV,
+                RecordOpcode.DTE_WAIT,
+                RecordOpcode.LOCAL_REDUCE,
+                RecordOpcode.DTE_ISSUE,
+                RecordOpcode.EVENT_SET,
+                RecordOpcode.EVENT_WAIT,
+            }
+            if self.state_abi or any(
+                record.opcode not in allowed
+                for stream in self.core_streams
+                for record in stream.records
+            ):
+                raise SchemaError(
+                    "UNFUSED comparison fragment requires exact standard opcodes and no StateABI",
                     path=f"{path}.core_streams",
                 )
         witnessed_state_ids: set[str] = set()
@@ -3544,6 +3895,34 @@ class ManifestInputKind(str, Enum):
     GLOBAL_ACTION_DAG = "global_action_dag"
     COMMAND_FRAGMENT = "command_fragment"
     REGION_MANIFEST = "region_manifest"
+    SWIZZLE_DECISION = "swizzle_decision"
+    SWIZZLE_CANDIDATE = "swizzle_candidate"
+    SWIZZLE_FUSION_PLAN = "swizzle_fusion_plan"
+    SWIZZLE_PROJECTION = "swizzle_projection"
+    SWIZZLE_LOWERED_PROGRAM = "swizzle_lowered_program"
+    SWIZZLE_CORE_ADDRESS_ABI = "swizzle_core_address_abi"
+    SWIZZLE_OPERAND_ABI = "swizzle_operand_abi"
+    MOE_SWIZZLE_SCALE_SPEC = "moe_swizzle_scale_spec"
+    MOE_SWIZZLE_SCALE_ORACLE = "moe_swizzle_scale_oracle"
+    MOE_SWIZZLE_EXECUTION = "moe_swizzle_execution"
+    MOE_SWIZZLE_DECISION = "moe_swizzle_decision"
+    MOE_SWIZZLE_WORKLOAD_SELECTION = "moe_swizzle_workload_selection"
+    MOE_SWIZZLE_WORKLOAD_PROJECTION = "moe_swizzle_workload_projection"
+    MOE_SWIZZLE_WORKLOAD_STATE_ABI = "moe_swizzle_workload_state_abi"
+    MOE_SWIZZLE_WORKLOAD_VALUE_BRIDGE = "moe_swizzle_workload_value_bridge"
+    MOE_SWIZZLE_WORKLOAD_ABI = "moe_swizzle_workload_abi"
+    MOE_SWIZZLE_HARDWARE_FACTS = "moe_swizzle_hardware_facts"
+    MOE_SWIZZLE_OVERLAY = "moe_swizzle_overlay"
+    MOE_SWIZZLE_PROJECTION = "moe_swizzle_projection"
+    MOE_SWIZZLE_CORE_ADDRESS_ABI = "moe_swizzle_core_address_abi"
+    MOE_SWIZZLE_OPERAND_ABI = "moe_swizzle_operand_abi"
+    MOE_SWIZZLE_CALIBRATION_SOURCE = "moe_swizzle_calibration_source"
+    UNFUSED_COMPARISON_BASELINE = "unfused_comparison_baseline"
+    UNFUSED_COMPARISON_PLAN = "unfused_comparison_plan"
+    UNFUSED_COMPARISON_PROJECTION = "unfused_comparison_projection"
+    UNFUSED_COMPARISON_LOWERED = "unfused_comparison_lowered"
+    UNFUSED_COMPARISON_CORE_ABI = "unfused_comparison_core_abi"
+    UNFUSED_COMPARISON_OPERAND_ABI = "unfused_comparison_operand_abi"
 
 
 class EmptyCoreAckPolicy(str, Enum):
@@ -4405,6 +4784,237 @@ class LinkedProgramManifest:
                     path=f"{path}.input_digests",
                 )
 
+        swizzle_top = self.producer_pass == "swizzle_standard_linker"
+        swizzle_kinds = {
+            ManifestInputKind.IR1,
+            ManifestInputKind.SWIZZLE_DECISION,
+            ManifestInputKind.SWIZZLE_CANDIDATE,
+            ManifestInputKind.SWIZZLE_FUSION_PLAN,
+            ManifestInputKind.SWIZZLE_PROJECTION,
+            ManifestInputKind.SWIZZLE_LOWERED_PROGRAM,
+            ManifestInputKind.SWIZZLE_CORE_ADDRESS_ABI,
+            ManifestInputKind.SWIZZLE_OPERAND_ABI,
+            ManifestInputKind.COMMAND_FRAGMENT,
+        }
+        swizzle_schemas = {
+            ManifestInputKind.IR1: "wafer_frontend.ir1/v1alpha14",
+            ManifestInputKind.SWIZZLE_DECISION: "wafer_frontend.swizzle_decision/v1alpha1",
+            ManifestInputKind.SWIZZLE_CANDIDATE: "wafer_frontend.swizzle_candidate/v1alpha1",
+            ManifestInputKind.SWIZZLE_FUSION_PLAN: "wafer_frontend.swizzle_fusion_plan/v1alpha1",
+            ManifestInputKind.SWIZZLE_PROJECTION: "wafer_frontend.swizzle_ir2/v1alpha1",
+            ManifestInputKind.SWIZZLE_LOWERED_PROGRAM: "wafer_frontend.swizzle_lowered_program/v1alpha1",
+            ManifestInputKind.SWIZZLE_CORE_ADDRESS_ABI: "wafer_frontend.swizzle_core_address_abi/v1alpha1",
+            ManifestInputKind.SWIZZLE_OPERAND_ABI: "wafer_frontend.swizzle_operand_abi/v1alpha1",
+            ManifestInputKind.COMMAND_FRAGMENT: "wafer_frontend.command_fragment/v1alpha13",
+        }
+        if swizzle_top:
+            by_kind = {
+                kind: tuple(
+                    digest for digest in self.input_digests if digest.kind is kind
+                )
+                for kind in swizzle_kinds
+            }
+            if set(digest.kind for digest in self.input_digests) != swizzle_kinds or any(
+                len(values) != 1 for values in by_kind.values()
+            ):
+                raise SchemaError(
+                    "Swizzle standard manifest requires its exact nine typed input digests",
+                    path=f"{path}.input_digests",
+                )
+            if any(
+                by_kind[kind][0].schema_version != schema_version
+                for kind, schema_version in swizzle_schemas.items()
+            ):
+                raise SchemaError(
+                    "Swizzle standard input digest schema versions are not exact",
+                    path=f"{path}.input_digests",
+                )
+            if (
+                by_kind[ManifestInputKind.IR1][0].artifact_id != self.source_ir1_id
+                or by_kind[ManifestInputKind.SWIZZLE_PROJECTION][0].artifact_id
+                != self.source_projection_id
+                or by_kind[ManifestInputKind.SWIZZLE_CORE_ADDRESS_ABI][0].artifact_id
+                != self.source_schedule_set_id
+                or self.source_global_dag_id != self.source_projection_id
+            ):
+                raise SchemaError(
+                    "Swizzle standard source provenance is not exact",
+                    path=f"{path}.input_digests",
+                )
+
+        moe_swizzle_top = self.producer_pass == "moe_swizzle_standard_linker"
+        moe_swizzle_kinds = {
+            ManifestInputKind.IR1,
+            ManifestInputKind.MOE_SWIZZLE_SCALE_SPEC,
+            ManifestInputKind.MOE_SWIZZLE_SCALE_ORACLE,
+            ManifestInputKind.MOE_SWIZZLE_EXECUTION,
+            ManifestInputKind.MOE_SWIZZLE_DECISION,
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_SELECTION,
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_PROJECTION,
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_STATE_ABI,
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_VALUE_BRIDGE,
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_ABI,
+            ManifestInputKind.MOE_SWIZZLE_HARDWARE_FACTS,
+            ManifestInputKind.MOE_SWIZZLE_OVERLAY,
+            ManifestInputKind.MOE_SWIZZLE_PROJECTION,
+            ManifestInputKind.MOE_SWIZZLE_CORE_ADDRESS_ABI,
+            ManifestInputKind.MOE_SWIZZLE_OPERAND_ABI,
+            ManifestInputKind.COMMAND_FRAGMENT,
+        }
+        moe_swizzle_schemas = {
+            ManifestInputKind.IR1: "wafer_frontend.ir1/v1alpha14",
+            ManifestInputKind.MOE_SWIZZLE_SCALE_SPEC: "wafer_frontend.moe_swizzle_scale_spec/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_SCALE_ORACLE: "wafer_frontend.moe_swizzle_scale_oracle/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_EXECUTION: "wafer_frontend.moe_swizzle_execution/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_DECISION: "wafer_frontend.moe_swizzle_decision/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_SELECTION: "wafer_frontend.moe_swizzle_workload_selection/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_PROJECTION: "wafer_frontend.moe_swizzle_workload_projection/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_STATE_ABI: "wafer_frontend.moe_swizzle_state_abi/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_VALUE_BRIDGE: "wafer_frontend.moe_swizzle_workload_value_bridge/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_WORKLOAD_ABI: "wafer_frontend.moe_swizzle_workload_abi/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_HARDWARE_FACTS: "wafer_frontend.moe_hardware_facts/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_OVERLAY: "wafer_frontend.moe_swizzle_overlay/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_PROJECTION: "wafer_frontend.moe_swizzle_ir2/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_CORE_ADDRESS_ABI: "wafer_frontend.moe_swizzle_core_address_abi/v1alpha1",
+            ManifestInputKind.MOE_SWIZZLE_OPERAND_ABI: "wafer_frontend.moe_swizzle_operand_abi/v1alpha1",
+            ManifestInputKind.COMMAND_FRAGMENT: "wafer_frontend.command_fragment/v1alpha13",
+        }
+        if moe_swizzle_top:
+            by_kind = {
+                kind: tuple(
+                    digest for digest in self.input_digests if digest.kind is kind
+                )
+                for kind in moe_swizzle_kinds
+            }
+            if (
+                set(digest.kind for digest in self.input_digests) != moe_swizzle_kinds
+                or len(self.input_digests) != 17
+                or len(by_kind[ManifestInputKind.MOE_SWIZZLE_DECISION]) != 2
+                or any(
+                    len(values) != 1
+                    for kind, values in by_kind.items()
+                    if kind is not ManifestInputKind.MOE_SWIZZLE_DECISION
+                )
+            ):
+                raise SchemaError(
+                    "MoE Swizzle manifest requires exact sixteen kinds and seventeen typed digests",
+                    path=f"{path}.input_digests",
+                )
+            if any(
+                any(digest.schema_version != moe_swizzle_schemas[kind] for digest in values)
+                for kind, values in by_kind.items()
+            ):
+                raise SchemaError(
+                    "MoE Swizzle input digest schema versions are not exact",
+                    path=f"{path}.input_digests",
+                )
+            if (
+                by_kind[ManifestInputKind.IR1][0].artifact_id != self.source_ir1_id
+                or by_kind[ManifestInputKind.MOE_SWIZZLE_PROJECTION][0].artifact_id != self.source_projection_id
+                or by_kind[ManifestInputKind.MOE_SWIZZLE_WORKLOAD_PROJECTION][0].artifact_id != self.source_global_dag_id
+                or by_kind[ManifestInputKind.MOE_SWIZZLE_CORE_ADDRESS_ABI][0].artifact_id != self.source_schedule_set_id
+            ):
+                raise SchemaError(
+                    "MoE Swizzle standard source provenance is not exact",
+                    path=f"{path}.input_digests",
+                )
+
+        moe_calibration_top = (
+            self.producer_pass == "moe_swizzle_calibration_standard_linker"
+        )
+        moe_calibration_kinds = {
+            ManifestInputKind.MOE_SWIZZLE_CALIBRATION_SOURCE,
+            ManifestInputKind.COMMAND_FRAGMENT,
+        }
+        if moe_calibration_top:
+            by_kind = {
+                kind: tuple(
+                    digest for digest in self.input_digests if digest.kind is kind
+                )
+                for kind in moe_calibration_kinds
+            }
+            if (
+                set(digest.kind for digest in self.input_digests)
+                != moe_calibration_kinds
+                or any(len(values) != 1 for values in by_kind.values())
+                or by_kind[ManifestInputKind.MOE_SWIZZLE_CALIBRATION_SOURCE][0].schema_version
+                != "wafer_frontend.moe_swizzle_calibration_program_source/v1alpha1"
+                or by_kind[ManifestInputKind.COMMAND_FRAGMENT][0].schema_version
+                != COMMAND_FRAGMENT_SCHEMA_VERSION
+            ):
+                raise SchemaError(
+                    "isolated MoE calibration manifest requires its exact two typed digests",
+                    path=f"{path}.input_digests",
+                )
+            source_id = by_kind[
+                ManifestInputKind.MOE_SWIZZLE_CALIBRATION_SOURCE
+            ][0].artifact_id
+            if (
+                self.source_projection_id != source_id
+                or self.source_schedule_set_id != source_id
+                or self.source_global_dag_id != source_id
+            ):
+                raise SchemaError(
+                    "isolated MoE calibration source lineage is not exact",
+                    path=f"{path}.input_digests",
+                )
+
+        unfused_top = self.producer_pass == "unfused_comparison_standard_linker"
+        unfused_kinds = {
+            ManifestInputKind.IR1,
+            ManifestInputKind.UNFUSED_COMPARISON_BASELINE,
+            ManifestInputKind.UNFUSED_COMPARISON_PLAN,
+            ManifestInputKind.UNFUSED_COMPARISON_PROJECTION,
+            ManifestInputKind.UNFUSED_COMPARISON_LOWERED,
+            ManifestInputKind.UNFUSED_COMPARISON_CORE_ABI,
+            ManifestInputKind.UNFUSED_COMPARISON_OPERAND_ABI,
+            ManifestInputKind.COMMAND_FRAGMENT,
+        }
+        unfused_schemas = {
+            ManifestInputKind.IR1: "wafer_frontend.ir1/v1alpha14",
+            ManifestInputKind.UNFUSED_COMPARISON_BASELINE: "wafer_frontend.swizzle_candidate/v1alpha1",
+            ManifestInputKind.UNFUSED_COMPARISON_PLAN: "wafer_frontend.unfused_comparison_plan/v1alpha1",
+            ManifestInputKind.UNFUSED_COMPARISON_PROJECTION: "wafer_frontend.unfused_comparison_projection/v1alpha1",
+            ManifestInputKind.UNFUSED_COMPARISON_LOWERED: "wafer_frontend.unfused_comparison_lowered/v1alpha1",
+            ManifestInputKind.UNFUSED_COMPARISON_CORE_ABI: "wafer_frontend.unfused_comparison_core_abi/v1alpha1",
+            ManifestInputKind.UNFUSED_COMPARISON_OPERAND_ABI: "wafer_frontend.unfused_comparison_operand_abi/v1alpha1",
+            ManifestInputKind.COMMAND_FRAGMENT: "wafer_frontend.command_fragment/v1alpha13",
+        }
+        if unfused_top:
+            by_kind = {
+                kind: tuple(
+                    digest for digest in self.input_digests if digest.kind is kind
+                )
+                for kind in unfused_kinds
+            }
+            if set(digest.kind for digest in self.input_digests) != unfused_kinds or any(
+                len(values) != 1 for values in by_kind.values()
+            ):
+                raise SchemaError(
+                    "UNFUSED comparison manifest requires its exact eight typed input digests",
+                    path=f"{path}.input_digests",
+                )
+            if any(
+                by_kind[kind][0].schema_version != schema_version
+                for kind, schema_version in unfused_schemas.items()
+            ):
+                raise SchemaError(
+                    "UNFUSED comparison input digest schema versions are not exact",
+                    path=f"{path}.input_digests",
+                )
+            if (
+                by_kind[ManifestInputKind.IR1][0].artifact_id != self.source_ir1_id
+                or by_kind[ManifestInputKind.UNFUSED_COMPARISON_PROJECTION][0].artifact_id
+                != self.source_projection_id
+                or by_kind[ManifestInputKind.UNFUSED_COMPARISON_CORE_ABI][0].artifact_id
+                != self.source_schedule_set_id
+                or self.source_global_dag_id != self.source_projection_id
+            ):
+                raise SchemaError(
+                    "UNFUSED comparison source provenance is not exact",
+                    path=f"{path}.input_digests",
+                )
+
         if not self.fragments:
             raise SchemaError("must contain lowering fragments", path=f"{path}.fragments")
         fragment_ids: list[str] = []
@@ -4430,6 +5040,7 @@ class LinkedProgramManifest:
                         "rooted-AR local fragment global DAG lacks an exact input digest",
                         path=f"{linked_path}.source_global_dag_id",
                     )
+
             elif train_inputs:
                 if leaf.source_global_dag_id not in train_lineage_ids[
                     ManifestInputKind.GLOBAL_ACTION_DAG
@@ -4441,6 +5052,106 @@ class LinkedProgramManifest:
             elif leaf.source_global_dag_id != self.source_global_dag_id:
                 raise SchemaError("fragment references a different global DAG", path=f"{linked_path}.source_global_dag_id")
             leaf_fragments[leaf.id] = leaf
+        swizzle_leaves = tuple(
+            leaf for leaf in leaf_fragments.values() if leaf.kind is FragmentKind.SWIZZLE
+        )
+        moe_swizzle_leaves = tuple(
+            leaf for leaf in leaf_fragments.values() if leaf.kind is FragmentKind.MOE_SWIZZLE
+        )
+        moe_calibration_leaves = tuple(
+            leaf
+            for leaf in leaf_fragments.values()
+            if leaf.kind is FragmentKind.MOE_SWIZZLE_CALIBRATION
+        )
+        unfused_leaves = tuple(
+            leaf
+            for leaf in leaf_fragments.values()
+            if leaf.kind is FragmentKind.UNFUSED_COMPARISON
+        )
+        if swizzle_top:
+            command_digest = next(
+                digest
+                for digest in self.input_digests
+                if digest.kind is ManifestInputKind.COMMAND_FRAGMENT
+            )
+            if (
+                len(self.fragments) != 1
+                or len(swizzle_leaves) != 1
+                or command_digest.artifact_id != swizzle_leaves[0].id
+                or swizzle_leaves[0].source_global_dag_id != self.source_projection_id
+            ):
+                raise SchemaError(
+                    "Swizzle standard manifest requires one exact projection-owned fragment",
+                    path=f"{path}.fragments",
+                )
+        elif swizzle_leaves:
+            raise SchemaError(
+                "SWIZZLE fragments require the dedicated standard linker",
+                path=f"{path}.fragments",
+            )
+        if moe_swizzle_top:
+            command_digest = next(
+                digest for digest in self.input_digests
+                if digest.kind is ManifestInputKind.COMMAND_FRAGMENT
+            )
+            if (
+                len(self.fragments) != 1
+                or len(moe_swizzle_leaves) != 1
+                or command_digest.artifact_id != moe_swizzle_leaves[0].id
+                or moe_swizzle_leaves[0].source_global_dag_id != self.source_global_dag_id
+            ):
+                raise SchemaError(
+                    "MoE Swizzle manifest requires one exact whole-workload-owned fragment",
+                    path=f"{path}.fragments",
+                )
+        elif moe_swizzle_leaves:
+            raise SchemaError(
+                "MOE_SWIZZLE fragments require the dedicated MoE standard linker",
+                path=f"{path}.fragments",
+            )
+        if moe_calibration_top:
+            command_digest = next(
+                digest
+                for digest in self.input_digests
+                if digest.kind is ManifestInputKind.COMMAND_FRAGMENT
+            )
+            if (
+                len(self.fragments) != 1
+                or len(moe_calibration_leaves) != 1
+                or command_digest.artifact_id != moe_calibration_leaves[0].id
+                or moe_calibration_leaves[0].source_global_dag_id
+                != self.source_global_dag_id
+            ):
+                raise SchemaError(
+                    "isolated MoE calibration manifest requires one exact source-owned fragment",
+                    path=f"{path}.fragments",
+                )
+        elif moe_calibration_leaves:
+            raise SchemaError(
+                "MOE_SWIZZLE_CALIBRATION fragments require the dedicated calibration linker",
+                path=f"{path}.fragments",
+            )
+        if unfused_top:
+            command_digest = next(
+                digest
+                for digest in self.input_digests
+                if digest.kind is ManifestInputKind.COMMAND_FRAGMENT
+            )
+            if (
+                len(self.fragments) != 1
+                or len(unfused_leaves) != 1
+                or command_digest.artifact_id != unfused_leaves[0].id
+                or unfused_leaves[0].source_global_dag_id != self.source_projection_id
+            ):
+                raise SchemaError(
+                    "UNFUSED comparison manifest requires one exact projection-owned fragment",
+                    path=f"{path}.fragments",
+                )
+        elif unfused_leaves:
+            raise SchemaError(
+                "UNFUSED_COMPARISON fragments require the dedicated standard linker",
+                path=f"{path}.fragments",
+            )
         if train_inputs and {
             leaf.source_global_dag_id for leaf in leaf_fragments.values()
         } != train_lineage_ids[ManifestInputKind.GLOBAL_ACTION_DAG]:

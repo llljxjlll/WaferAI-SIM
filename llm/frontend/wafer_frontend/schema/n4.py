@@ -8,12 +8,14 @@ from enum import Enum
 
 from ..errors import SchemaError
 from .action import FusionPlan, StandaloneCollectivePlan
+from .swizzle_plan import FusedPlan, SwizzleFusionPlan
 from .common import stable_artifact_id, validate_nonempty, validate_uint64
 from .ir0 import (
     CollectiveKind,
     CollectiveWorkload,
     EdgeKind,
     FusionImpl,
+    FusionPattern,
     GemmPartition,
     GemmWorkload,
     OpKind,
@@ -68,6 +70,7 @@ class FusionPartitionContract(str, Enum):
 
 class FusedInterDieContract(str, Enum):
     DIRECT_NAIVE_V1 = "direct_naive/v1"
+    SWIZZLE_TOPO_V1 = "swizzle_topo/v1"
 
 
 class StandaloneInterDieContract(str, Enum):
@@ -173,10 +176,10 @@ class InterDiePlanningContext:
         self.fused_policy.validate(f"{path}.fused_policy")
         if (
             self.fused_policy.kind is not RegistryKind.INTER_DIE
-            or self.fused_policy.name != "naive"
+            or self.fused_policy.name not in ("naive", "swizzle_topo")
         ):
             raise SchemaError(
-                "must select the registered naive inter-die policy",
+                "must select a registered naive/swizzle_topo inter-die policy",
                 path=f"{path}.fused_policy",
             )
         if type(self.standalone_policy) is not PolicySelection:
@@ -198,8 +201,15 @@ class InterDiePlanningContext:
                 "must be a FusedInterDieContract",
                 path=f"{path}.fused_contract",
             )
-        if self.fused_contract is not FusedInterDieContract.DIRECT_NAIVE_V1:
-            raise SchemaError("unsupported fused contract", path=f"{path}.fused_contract")
+        expected_pairs = {
+            ("naive", FusedInterDieContract.DIRECT_NAIVE_V1),
+            ("swizzle_topo", FusedInterDieContract.SWIZZLE_TOPO_V1),
+        }
+        if (self.fused_policy.name, self.fused_contract) not in expected_pairs:
+            raise SchemaError(
+                "fused policy and contract must be an exact supported pair",
+                path=f"{path}.fused_contract",
+            )
         if type(self.standalone_contract) is not StandaloneInterDieContract:
             raise SchemaError(
                 "must be a StandaloneInterDieContract",
@@ -307,15 +317,20 @@ def _validate_gemm_rs_candidate(graph: IR1, skeleton: FusedOpSkeleton, *, path: 
 
 
 def _validate_skeletons(graph: IR1, *, path: str) -> None:
-    if len(graph.fused_op_skeletons) != len(graph.fusion_candidates):
+    selected_candidates = tuple(
+        candidate
+        for candidate in graph.fusion_candidates
+        if candidate.semantic_contract.pattern is FusionPattern.GEMM_RS
+    )
+    if len(graph.fused_op_skeletons) != len(selected_candidates):
         raise SchemaError(
-            "gemm_rs_all/v1 must select every candidate exactly once",
+            "gemm_rs_all/v1 must select every GEMM_RS candidate exactly once",
             path=f"{path}.fused_op_skeletons",
         )
     nodes = {node.id: node for node in graph.nodes}
     occupied: set[str] = set()
     for index, (candidate, skeleton) in enumerate(
-        zip(graph.fusion_candidates, graph.fused_op_skeletons)
+        zip(selected_candidates, graph.fused_op_skeletons, strict=True)
     ):
         skeleton_path = f"{path}.fused_op_skeletons[{index}]"
         if skeleton.fusion_ref != candidate.id:
@@ -650,7 +665,7 @@ class InterDiePlannedProfile:
     profile_id: str
     weight: float
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
 
     @classmethod
@@ -659,7 +674,7 @@ class InterDiePlannedProfile:
         *,
         source: FusionPartitionedProfileIR1,
         context: InterDiePlanningContext,
-        fusion_plans: tuple[FusionPlan, ...],
+        fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
     ) -> "InterDiePlannedProfile":
         semantic_key = {
@@ -743,14 +758,14 @@ class InterDiePlannedProfile:
         ):
             for index, plan in enumerate(plans):
                 plan_path = f"{path}.{field_name}[{index}]"
-                expected_type = (
-                    FusionPlan
+                expected_types = (
+                    (FusionPlan, SwizzleFusionPlan)
                     if field_name == "fusion_plans"
-                    else StandaloneCollectivePlan
+                    else (StandaloneCollectivePlan,)
                 )
-                if type(plan) is not expected_type:
+                if type(plan) not in expected_types:
                     raise SchemaError(
-                        f"must be a {expected_type.__name__}",
+                        "must be a valid typed plan",
                         path=plan_path,
                     )
                 if plan.id in plan_ids:
@@ -772,12 +787,6 @@ class InterDiePlannedProfile:
                         path=f"{plan_path}.profile_key",
                     )
                 plan.validate_against(self.graph, plan_path)
-        for index, plan in enumerate(self.fusion_plans):
-            if getattr(plan, "impl", None) is not FusionImpl.NAIVE:
-                raise SchemaError(
-                    "direct_naive/v1 requires FusionPlan.impl=naive",
-                    path=f"{path}.fusion_plans[{index}].impl",
-                )
         expected_id = stable_artifact_id(
             "inter_die_planned_profile",
             self._semantic_key(),
@@ -803,6 +812,18 @@ class InterDiePlannedProfile:
             raise SchemaError("must match planning context", path=f"{path}.planning_context_id")
         if self.profile_id != source.profile_id or self.weight != source.weight:
             raise SchemaError("must preserve source profile and weight", path=path)
+        expected = (
+            (FusionPlan, FusionImpl.NAIVE)
+            if context.fused_contract is FusedInterDieContract.DIRECT_NAIVE_V1
+            else (SwizzleFusionPlan, FusionImpl.SWIZZLE_TOPO)
+        )
+        for index, plan in enumerate(self.fusion_plans):
+            if type(plan) is not expected[0] or plan.impl is not expected[1]:
+                raise SchemaError(
+                    "fusion plan type/impl disagrees with planning contract",
+                    path=f"{path}.fusion_plans[{index}]",
+                )
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -1057,7 +1078,7 @@ class Stage4InterDiePlannedIR1:
     planning_context_id: str
     pd_plan: Stage4PdPlan
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
 
     @classmethod
@@ -1066,7 +1087,7 @@ class Stage4InterDiePlannedIR1:
         *,
         source: Stage4FusionPartitionedIR1,
         context: InterDiePlanningContext,
-        fusion_plans: tuple[FusionPlan, ...],
+        fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
     ) -> "Stage4InterDiePlannedIR1":
         semantic_key = {
@@ -1133,14 +1154,14 @@ class Stage4InterDiePlannedIR1:
         if type(self.fusion_plans) is not tuple or type(self.standalone_plans) is not tuple:
             raise SchemaError("plan collections must be immutable tuples", path=path)
         plan_ids: set[str] = set()
-        for name, plans, expected_type in (
-            ("fusion_plans", self.fusion_plans, FusionPlan),
-            ("standalone_plans", self.standalone_plans, StandaloneCollectivePlan),
+        for name, plans, expected_types in (
+            ("fusion_plans", self.fusion_plans, (FusionPlan, SwizzleFusionPlan)),
+            ("standalone_plans", self.standalone_plans, (StandaloneCollectivePlan,)),
         ):
             for index, plan in enumerate(plans):
                 plan_path = f"{path}.{name}[{index}]"
-                if type(plan) is not expected_type:
-                    raise SchemaError(f"must be a {expected_type.__name__}", path=plan_path)
+                if type(plan) not in expected_types:
+                    raise SchemaError("must be a valid typed plan", path=plan_path)
                 if plan.id in plan_ids:
                     raise SchemaError("duplicate plan id", path=f"{plan_path}.id")
                 plan_ids.add(plan.id)
@@ -1185,6 +1206,17 @@ class Stage4InterDiePlannedIR1:
             raise SchemaError("must match planning context", path=f"{path}.planning_context_id")
         if self.pd_plan != source.pd_plan or self.graph != source.graph:
             raise SchemaError("must preserve partition graph and PD plan", path=f"{path}.graph")
+        expected = (
+            (FusionPlan, FusionImpl.NAIVE)
+            if context.fused_contract is FusedInterDieContract.DIRECT_NAIVE_V1
+            else (SwizzleFusionPlan, FusionImpl.SWIZZLE_TOPO)
+        )
+        for index, plan in enumerate(self.fusion_plans):
+            if type(plan) is not expected[0] or plan.impl is not expected[1]:
+                raise SchemaError(
+                    "fusion plan type/impl disagrees with planning contract",
+                    path=f"{path}.fusion_plans[{index}]",
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1338,7 +1370,7 @@ class TrainReplicaInterDiePlans:
     replica_index: int
     source_ir1_id: str
     graph: IR1
-    fusion_plans: tuple[FusionPlan, ...]
+    fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
 
     @classmethod
@@ -1347,7 +1379,7 @@ class TrainReplicaInterDiePlans:
         *,
         replica_index: int,
         graph: IR1,
-        fusion_plans: tuple[FusionPlan, ...],
+        fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
     ) -> "TrainReplicaInterDiePlans":
         semantic_key = {
@@ -1388,6 +1420,12 @@ class TrainReplicaInterDiePlans:
         ):
             for index, plan in enumerate(plans):
                 plan_path = f"{path}.{name}[{index}]"
+                if name == "fusion_plans" and type(plan) not in (FusionPlan, SwizzleFusionPlan):
+                    raise SchemaError("must be a FusedPlan", path=plan_path)
+                if name == "standalone_plans" and type(plan) is not StandaloneCollectivePlan:
+                    raise SchemaError(
+                        "must be a StandaloneCollectivePlan", path=plan_path
+                    )
                 if plan.id in plan_ids:
                     raise SchemaError("plan ids must be unique", path=f"{plan_path}.id")
                 plan_ids.add(plan.id)
@@ -1555,6 +1593,18 @@ class TrainInterDiePlannedIR1:
             raise SchemaError("does not preserve train partition provenance", path=path)
         for index, (replica, graph) in enumerate(zip(self.replicas, source.replicas)):
             replica.validate_against(graph, f"{path}.replicas[{index}]")
+        expected = (
+            (FusionPlan, FusionImpl.NAIVE)
+            if context.fused_contract is FusedInterDieContract.DIRECT_NAIVE_V1
+            else (SwizzleFusionPlan, FusionImpl.SWIZZLE_TOPO)
+        )
+        for replica_index, replica in enumerate(self.replicas):
+            for plan_index, plan in enumerate(replica.fusion_plans):
+                if type(plan) is not expected[0] or plan.impl is not expected[1]:
+                    raise SchemaError(
+                        "fusion plan type/impl disagrees with planning contract",
+                        path=f"{path}.replicas[{replica_index}].fusion_plans[{plan_index}]",
+                    )
 
 
 __all__ = [

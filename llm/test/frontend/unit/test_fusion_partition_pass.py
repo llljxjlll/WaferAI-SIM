@@ -10,7 +10,7 @@ from llm.frontend.wafer_frontend.passes.fusion_partition import (
 from llm.frontend.wafer_frontend.passes.logical_expand import logical_expand
 from llm.frontend.wafer_frontend.passes.placement import place_bundle
 from llm.frontend.wafer_frontend.schema.experiment import ExperimentSpec
-from llm.frontend.wafer_frontend.schema.ir0 import FusionImpl
+from llm.frontend.wafer_frontend.schema.ir0 import FusionImpl, FusionPattern
 from llm.frontend.wafer_frontend.schema.n4 import FusionPartitionContext
 from llm.frontend.wafer_frontend.schema.placement import PlacementContext
 from llm.frontend.wafer_frontend.schema.serde import from_data
@@ -45,11 +45,15 @@ class FusionPartitionPassTest(unittest.TestCase):
         self.assertEqual(len(result.entries), 1)
         graph = result.entries[0].graph
         self.assertEqual(graph.producer_pass, "fusion_partition")
-        self.assertEqual(len(graph.fusion_candidates), 2)
+        self.assertEqual(len(graph.fusion_candidates), 4)
         self.assertEqual(len(graph.fused_op_skeletons), 2)
         self.assertEqual(
             tuple(item.fusion_ref for item in graph.fused_op_skeletons),
-            tuple(item.id for item in graph.fusion_candidates),
+            tuple(
+                item.id
+                for item in graph.fusion_candidates
+                if item.semantic_contract.pattern is FusionPattern.GEMM_RS
+            ),
         )
         self.assertTrue(
             all(item.impl is FusionImpl.NONE for item in graph.fused_op_skeletons)

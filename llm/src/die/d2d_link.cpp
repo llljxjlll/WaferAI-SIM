@@ -6,6 +6,10 @@
 #include "monitor/watchdog.h"
 #include "memory/hbm_mem_wire.h"
 #include "utils/msg_utils.h"
+#include <algorithm>
+#include <limits>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -93,6 +97,131 @@ void ProbeData(D2DDataProbe &p, const sc_bv<256> &payload, long long cycle) {
     }
 }
 } // namespace
+
+std::vector<MoeSwizzlePortTimeMarker> BuildMoeSwizzlePortTimeMarkers(
+    const std::vector<D2DDirectionalDataServiceTrace> &traces,
+    uint64_t window_cycles) {
+    using Edge = std::tuple<uint16_t, uint16_t, std::string>;
+    const std::set<Edge> expected = {
+        {0, 1, "x+"}, {1, 0, "x-"}, {2, 3, "x+"}, {3, 2, "x-"},
+        {0, 2, "y+"}, {2, 0, "y-"}, {1, 3, "y+"}, {3, 1, "y-"},
+    };
+    if (window_cycles == 0)
+        throw std::invalid_argument(
+            "MoE Swizzle port-time window must be positive");
+    if (traces.size() != expected.size())
+        throw std::invalid_argument(
+            "MoE Swizzle port-time requires exact 2x2 directed edges");
+    std::set<Edge> observed;
+    std::vector<MoeSwizzlePortTimeMarker> result;
+    result.reserve(traces.size());
+    for (const D2DDirectionalDataServiceTrace &trace : traces) {
+        const Edge edge{trace.source_die, trace.destination_die,
+                        trace.direction};
+        if (!expected.count(edge) || !observed.insert(edge).second)
+            throw std::invalid_argument(
+                "MoE Swizzle port-time edge is unknown or duplicated");
+        if (!trace.complete)
+            throw std::invalid_argument(
+                "MoE Swizzle DATA service intervals are incomplete");
+        std::vector<D2DDataServiceInterval> ordered = trace.intervals;
+        std::sort(ordered.begin(), ordered.end(), [](const auto &left,
+                                                     const auto &right) {
+            return std::tie(left.start_cycle, left.end_cycle_exclusive) <
+                   std::tie(right.start_cycle, right.end_cycle_exclusive);
+        });
+        uint64_t busy = 0;
+        uint64_t union_start = 0;
+        uint64_t union_end = 0;
+        bool have_union = false;
+        for (const D2DDataServiceInterval &interval : ordered) {
+            if (interval.start_cycle >= interval.end_cycle_exclusive ||
+                interval.end_cycle_exclusive > window_cycles)
+                throw std::invalid_argument(
+                    "MoE Swizzle DATA service interval exceeds its window");
+            if (!have_union) {
+                union_start = interval.start_cycle;
+                union_end = interval.end_cycle_exclusive;
+                have_union = true;
+            } else if (interval.start_cycle <= union_end) {
+                union_end = std::max(union_end,
+                                     interval.end_cycle_exclusive);
+            } else {
+                busy += union_end - union_start;
+                union_start = interval.start_cycle;
+                union_end = interval.end_cycle_exclusive;
+            }
+        }
+        if (have_union)
+            busy += union_end - union_start;
+        result.push_back(MoeSwizzlePortTimeMarker{
+            trace.source_die, trace.destination_die, trace.direction, busy,
+            window_cycles});
+    }
+    if (observed != expected)
+        throw std::invalid_argument(
+            "MoE Swizzle port-time directed edge set drifted");
+    std::sort(result.begin(), result.end(), [](const auto &left,
+                                               const auto &right) {
+        return std::tie(left.source_die, left.destination_die) <
+               std::tie(right.source_die, right.destination_die);
+    });
+    return result;
+}
+
+std::string FormatMoeSwizzlePortTimeMarker(
+    const MoeSwizzlePortTimeMarker &marker) {
+    using Edge = std::tuple<uint16_t, uint16_t, std::string>;
+    const std::set<Edge> expected = {
+        {0, 1, "x+"}, {1, 0, "x-"}, {2, 3, "x+"}, {3, 2, "x-"},
+        {0, 2, "y+"}, {2, 0, "y-"}, {1, 3, "y+"}, {3, 1, "y-"},
+    };
+    if (!expected.count(
+            {marker.source_die, marker.destination_die, marker.direction}))
+        throw std::invalid_argument(
+            "MoE Swizzle port-time marker edge is not in the 2x2 mesh");
+    if (marker.window_cycles == 0 ||
+        marker.busy_cycles > marker.window_cycles)
+        throw std::invalid_argument(
+            "MoE Swizzle port-time marker has an invalid window");
+    std::ostringstream output;
+    output << "[MOE_SWIZZLE_PORT_TIME] source_die=" << marker.source_die
+           << " destination_die=" << marker.destination_die
+           << " direction=" << marker.direction
+           << " busy_cycles=" << marker.busy_cycles
+           << " window_cycles=" << marker.window_cycles;
+    return output.str();
+}
+
+void D2DLinkUnit::RecordDataServiceInterval(
+    long start_cycle, long end_cycle_exclusive) noexcept {
+    if (!data_service_intervals_complete_)
+        return;
+    if (start_cycle < 0 || end_cycle_exclusive <= start_cycle) {
+        data_service_intervals_complete_ = false;
+        return;
+    }
+    const D2DDataServiceInterval interval{
+        static_cast<uint64_t>(start_cycle),
+        static_cast<uint64_t>(end_cycle_exclusive)};
+    if (!data_service_intervals_.empty()) {
+        D2DDataServiceInterval &last = data_service_intervals_.back();
+        if (interval.start_cycle < last.start_cycle) {
+            data_service_intervals_complete_ = false;
+            return;
+        }
+        if (interval.start_cycle <= last.end_cycle_exclusive) {
+            last.end_cycle_exclusive = std::max(
+                last.end_cycle_exclusive, interval.end_cycle_exclusive);
+            return;
+        }
+    }
+    try {
+        data_service_intervals_.push_back(interval);
+    } catch (...) {
+        data_service_intervals_complete_ = false;
+    }
+}
 
 D2DLinkUnit::D2DLinkUnit(const sc_module_name &n, int latency_, int link_idx_,
                          D2DLinkBound bound_, D2DLinkBehavioral behavioral_)
@@ -185,6 +314,7 @@ void D2DLinkUnit::forward() {
             !fifo_.empty() && fifo_.front().first <= cyc && out_avail.read();
         bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
         if (group_request && group_ok) {
+            RecordDataServiceInterval(cyc, cyc + 1);
             out_channel.write(fifo_.front().second);
             out_sent.write(true);
             CountType(g_d2d_link_out_by_type, fifo_.front().second);
@@ -245,6 +375,7 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
                         behavioral.link_rate.num));
             const long start = std::max(cyc, behavioral_mem_data_next_);
             behavioral_mem_data_next_ = start + service;
+            RecordDataServiceInterval(start, behavioral_mem_data_next_);
             behavioral_data_events_.emplace(
                 behavioral_mem_data_next_ + latency, payload);
             g_d2d_link_in_pkts++;
@@ -281,6 +412,8 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
                 throw std::overflow_error(
                     "P2P behavioral fragment service cycle overflows");
             behavioral_endpoint_data_next_ = start + service;
+            RecordDataServiceInterval(start,
+                                      behavioral_endpoint_data_next_);
             delay += behavioral_endpoint_data_next_ - cyc;
         } else if (first_link && m.subflow_ == 0) {
             D2DBehavioralFlowMeta meta =
@@ -313,6 +446,18 @@ void D2DLinkUnit::forward_behavioral(long cyc) {
             g_d2d_behavioral_stats.logical_data_packets += meta.packets;
             g_d2d_behavioral_stats.service_cycles +=
                 estimate.bulk_service_cycles;
+            if (estimate.bulk_service_cycles >
+                static_cast<long long>(
+                    std::numeric_limits<long>::max() - cyc))
+                MarkDataServiceIntervalsIncomplete();
+            else
+                RecordDataServiceInterval(
+                    cyc, cyc + static_cast<long>(estimate.bulk_service_cycles));
+        } else if (!endpoint_fragment) {
+            // Legacy behavioral representatives only materialize serialization
+            // on the first directed link. A later hop has no observable local
+            // DATA service interval, so port-time evidence must fail closed.
+            MarkDataServiceIntervalsIncomplete();
         }
         if (delay > std::numeric_limits<long>::max() - cyc)
             throw std::runtime_error("V4 Behavioral ready-cycle overflow");
@@ -484,6 +629,7 @@ void D2DLinkUnit::forward_bounded(long cyc) {
     bool group_request = data_mature && out_avail.read() && has_token;
     bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
     if (group_request && group_ok) {
+        RecordDataServiceInterval(cyc, cyc + 1);
         out_channel.write(fifo_.front().second);
         out_sent.write(true);
         CountType(g_d2d_link_out_by_type, fifo_.front().second);
@@ -624,6 +770,7 @@ void D2DLinkUnit::forward_bounded_saf(long cyc) {
     bool group_request = ready && port_ok && link_ok && inflight_room;
     bool group_ok = V5LinkGroupGrant(link_idx, cyc, group_request);
     if (group_request && group_ok) {
+        RecordDataServiceInterval(cyc, cyc + 1);
         if (mem_ready) {
             sc_bv<256> payload = mem_saf_fifo_.front();
             mem_saf_fifo_.pop_front();

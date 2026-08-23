@@ -16,7 +16,36 @@
 #include "memory/hbm_mem_wire.h"
 #include <deque>
 #include <map>
+#include <string>
 #include <utility>
+#include <vector>
+
+struct D2DDataServiceInterval {
+    uint64_t start_cycle = 0;
+    uint64_t end_cycle_exclusive = 0;
+};
+
+struct D2DDirectionalDataServiceTrace {
+    uint16_t source_die = 0;
+    uint16_t destination_die = 0;
+    std::string direction;
+    bool complete = true;
+    std::vector<D2DDataServiceInterval> intervals;
+};
+
+struct MoeSwizzlePortTimeMarker {
+    uint16_t source_die = 0;
+    uint16_t destination_die = 0;
+    std::string direction;
+    uint64_t busy_cycles = 0;
+    uint64_t window_cycles = 0;
+};
+
+std::vector<MoeSwizzlePortTimeMarker> BuildMoeSwizzlePortTimeMarkers(
+    const std::vector<D2DDirectionalDataServiceTrace> &traces,
+    uint64_t window_cycles);
+std::string FormatMoeSwizzlePortTimeMarker(
+    const MoeSwizzlePortTimeMarker &marker);
 
 // 有限缓冲 + token-bucket 速率的可选配置。默认 disabled：functional_v2 走 forward() 的冻结分支。
 // enabled 时由 whole_flow_saf 分流：false 是 V3-b standalone 单级 credit 模型；true 是 V3-d 生产
@@ -158,8 +187,20 @@ public:
     long BehavioralEndpointCtrlFullCycles() const {
         return behavioral_endpoint_ctrl_full_cycles;
     }
+    const std::vector<D2DDataServiceInterval> &DataServiceIntervals() const
+        noexcept {
+        return data_service_intervals_;
+    }
+    bool DataServiceIntervalsComplete() const noexcept {
+        return data_service_intervals_complete_;
+    }
 
 private:
+    void RecordDataServiceInterval(long start_cycle,
+                                   long end_cycle_exclusive) noexcept;
+    void MarkDataServiceIntervalsIncomplete() noexcept {
+        data_service_intervals_complete_ = false;
+    }
     struct SafFlowBuffer {
         int expected = 0;
         bool complete = false;
@@ -197,6 +238,8 @@ private:
     bool behavioral_endpoint_ctrl_last_advertised_ = false;
     bool behavioral_endpoint_data_input_granted_ = false;
     bool behavioral_endpoint_ctrl_input_granted_ = false;
+    std::vector<D2DDataServiceInterval> data_service_intervals_;
+    bool data_service_intervals_complete_ = true;
 
     // sc_signal pulse 在写出后的一个调度周期内仍是在途信用；纳入 residual，避免过早宣布 drain。
     bool data_credit_active_ = false;

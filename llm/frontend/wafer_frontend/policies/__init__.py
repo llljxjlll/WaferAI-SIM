@@ -50,3 +50,8 @@ __all__ = [
     "RegistryKind",
     "StandaloneCollectivePolicy",
 ]
+from .swizzle_topo import SwizzleFusionPartition, SwizzlePlanner
+__all__ += [
+    "SwizzleFusionPartition",
+    "SwizzlePlanner",
+]

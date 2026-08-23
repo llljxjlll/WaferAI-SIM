@@ -6,6 +6,7 @@
 #include "die/d2d_link.h"
 #include "die/port.h"
 #include "frontend/program_io.h"
+#include "frontend/program_finalizer.h"
 #include "isa/isa_v1_selftest.h"
 #include "isa/p5_memory_probe.h"
 #include "isa/p5_memory_probe_selftest.h"
@@ -43,12 +44,15 @@
 #include "utils/simple_flags.h"
 #include "utils/system_utils.h"
 #include "workercore/workercore.h"
+#include "workercore/moe_swizzle_runtime_capture.h"
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <optional>
+#include <set>
 
 // 假设 json.hpp 文件在当前目录或包含路径中
 #include <nlohmann/json.hpp>
@@ -83,6 +87,40 @@ Define_bool_opt("--p2p-payload-selftest", g_flag_p2p_payload_selftest, false,
 
 Define_bool_opt("--p2p-session-selftest", g_flag_p2p_session_selftest, false,
                 "run P2P endpoint session runtime self-test and exit");
+
+Define_bool_opt("--moe-swizzle-runtime-markers",
+                g_flag_moe_swizzle_runtime_markers, false,
+                "emit manifest-bound dedicated MoE Swizzle runtime markers");
+Define_bool_opt("--moe-swizzle-runtime-capture-selftest",
+                g_flag_moe_swizzle_runtime_capture_selftest, false,
+                "run MoE Swizzle runtime interval aggregation self-test");
+Define_string_opt("--moe-swizzle-calibration-kind",
+                  g_flag_moe_swizzle_calibration_kind, std::string{},
+                  "emit one isolated MoE Swizzle calibration sample");
+Define_int64_opt("--moe-swizzle-calibration-core",
+                 g_flag_moe_swizzle_calibration_core, 0,
+                 "runtime core carrying the isolated calibration primitive");
+Define_int64_opt("--moe-swizzle-calibration-sample",
+                 g_flag_moe_swizzle_calibration_sample, 0,
+                 "isolated calibration sample index in [0,2]");
+Define_int64_opt("--moe-swizzle-calibration-repeat",
+                 g_flag_moe_swizzle_calibration_repeat, 0,
+                 "isolated calibration repeat index in [0,1]");
+Define_string_opt("--moe-swizzle-calibration-shape",
+                  g_flag_moe_swizzle_calibration_shape, std::string("none"),
+                  "GroupGEMM/SWIGLU_GROUP MxNxK shape; fixed samples require none");
+Define_string_opt("--moe-swizzle-calibration-tool-sha256",
+                  g_flag_moe_swizzle_calibration_tool_sha256, std::string{},
+                  "matching npusim tool SHA-256");
+Define_string_opt("--moe-swizzle-calibration-hardware-sha256",
+                  g_flag_moe_swizzle_calibration_hardware_sha256,
+                  std::string{}, "matching hardware config SHA-256");
+Define_string_opt("--moe-swizzle-calibration-simulation-sha256",
+                  g_flag_moe_swizzle_calibration_simulation_sha256,
+                  std::string{}, "matching simulation config SHA-256");
+Define_string_opt("--moe-swizzle-calibration-mapping-sha256",
+                  g_flag_moe_swizzle_calibration_mapping_sha256,
+                  std::string{}, "matching mapping config SHA-256");
 
 Define_bool_opt("--p5-memory-probe-selftest",
                 g_flag_p5_memory_probe_selftest, false,
@@ -257,6 +295,47 @@ std::vector<uint8_t> ReadProgramFile(const std::string &path) {
     return bytes;
 }
 
+MoeSwizzleCalibrationKind ParseMoeSwizzleCalibrationKind(
+    const std::string &value) {
+    static const std::map<std::string, MoeSwizzleCalibrationKind> kinds{
+        {"group_gemm", MoeSwizzleCalibrationKind::GROUP_GEMM},
+        {"swiglu_group", MoeSwizzleCalibrationKind::SWIGLU_GROUP},
+        {"dte_launch", MoeSwizzleCalibrationKind::DTE_LAUNCH},
+        {"dte_sync", MoeSwizzleCalibrationKind::DTE_SYNC},
+        {"dte_hop", MoeSwizzleCalibrationKind::DTE_HOP},
+        {"session_open", MoeSwizzleCalibrationKind::SESSION_OPEN},
+        {"session_retire", MoeSwizzleCalibrationKind::SESSION_RETIRE},
+        {"local_copy", MoeSwizzleCalibrationKind::LOCAL_COPY},
+        {"sram_alloc", MoeSwizzleCalibrationKind::SRAM_ALLOC},
+        {"sram_bind", MoeSwizzleCalibrationKind::SRAM_BIND},
+        {"sram_free", MoeSwizzleCalibrationKind::SRAM_FREE},
+        {"event_set", MoeSwizzleCalibrationKind::EVENT_SET},
+        {"event_wait", MoeSwizzleCalibrationKind::EVENT_WAIT},
+        {"terminal_done", MoeSwizzleCalibrationKind::TERMINAL_DONE},
+    };
+    const auto found = kinds.find(value);
+    if (found == kinds.end())
+        throw std::invalid_argument(
+            "unknown --moe-swizzle-calibration-kind");
+    return found->second;
+}
+
+std::optional<std::array<uint64_t, 3>> ParseMoeSwizzleCalibrationShape(
+    const std::string &value) {
+    if (value == "none") return std::nullopt;
+    std::array<uint64_t, 3> result{};
+    std::istringstream input(value);
+    char first = 0;
+    char second = 0;
+    if (!(input >> result[0] >> first >> result[1] >> second >> result[2]) ||
+        first != 'x' || second != 'x' || input.peek() != EOF ||
+        std::any_of(result.begin(), result.end(),
+                    [](uint64_t item) { return item == 0; }))
+        throw std::invalid_argument(
+            "--moe-swizzle-calibration-shape must be none or positive MxNxK");
+    return result;
+}
+
 std::string ReadRegularTextFile(const std::string &description,
                                 const std::string &path) {
     const std::filesystem::path input(path);
@@ -316,6 +395,134 @@ void ValidateIsaV1StartupInvariants() {
                 "PrimFactory registrations are not the frozen contiguous IDs");
     }
 }
+
+void CollectD2DLinkUnits(const std::vector<sc_object *> &objects,
+                         std::vector<D2DLinkUnit *> &links) {
+    for (sc_object *object : objects) {
+        if (auto *link = dynamic_cast<D2DLinkUnit *>(object))
+            links.push_back(link);
+        CollectD2DLinkUnits(object->get_child_objects(), links);
+    }
+}
+
+std::string MoeSwizzleDirection(Directions direction) {
+    switch (direction) {
+    case EAST:
+        return "x+";
+    case WEST:
+        return "x-";
+    case NORTH:
+        return "y+";
+    case SOUTH:
+        return "y-";
+    default:
+        throw std::runtime_error(
+            "MoE Swizzle port-time link direction is not physical");
+    }
+}
+
+std::vector<D2DDirectionalDataServiceTrace>
+CollectMoeSwizzlePortTimeTraces() {
+    if (g_d2d_links.size() != 8)
+        throw std::runtime_error(
+            "MoE Swizzle port-time requires exact eight 2x2 directed links");
+    std::vector<D2DLinkUnit *> units;
+    CollectD2DLinkUnits(sc_get_top_level_objects(), units);
+    if (units.size() != g_d2d_links.size())
+        throw std::runtime_error(
+            "MoE Swizzle port-time link instance count drifted");
+    std::set<int> indices;
+    std::vector<D2DDirectionalDataServiceTrace> traces;
+    traces.reserve(units.size());
+    for (const D2DLinkUnit *unit : units) {
+        if (unit->link_idx < 0 ||
+            unit->link_idx >= static_cast<int>(g_d2d_links.size()) ||
+            !indices.insert(unit->link_idx).second)
+            throw std::runtime_error(
+                "MoE Swizzle port-time link index is missing or duplicated");
+        const D2DLink &link = g_d2d_links.at(unit->link_idx);
+        if (link.local_die < 0 || link.local_die > 3 ||
+            link.remote_die < 0 || link.remote_die > 3 ||
+            link.local_port < 0 ||
+            link.local_port >= static_cast<int>(g_die_ports.ports.size()))
+            throw std::runtime_error(
+                "MoE Swizzle port-time physical link binding is invalid");
+        traces.push_back(D2DDirectionalDataServiceTrace{
+            static_cast<uint16_t>(link.local_die),
+            static_cast<uint16_t>(link.remote_die),
+            MoeSwizzleDirection(g_die_ports.ports.at(link.local_port).dir),
+            unit->DataServiceIntervalsComplete(),
+            unit->DataServiceIntervals()});
+    }
+    return traces;
+}
+
+MoeSwizzleRuntimeManifestCounts CountMoeSwizzleRuntimeManifest(
+    const ProgramArtifact &artifact,
+    const frontend::LinkedProgramManifestDto &manifest) {
+    MoeSwizzleRuntimeManifestCounts result;
+    for (const ProgramCore &core : artifact.cores) {
+        for (const ExternalRecord &record : core.records) {
+            const OpcodeManifestEntry *entry = LookupOpcode(record.opcode);
+            if (entry == nullptr)
+                throw std::runtime_error(
+                    "calibration manifest contains an unknown opcode");
+            if (entry->category == OpcodeCategory::COMPUTE)
+                ++result.compute_record_count;
+            switch (record.opcode) {
+            case Opcode::MATMUL:
+            case Opcode::MOE_MATMUL:
+                ++result.group_gemm_primitives;
+                break;
+            case Opcode::SWIGLU: {
+                ++result.swiglu_primitives;
+                const auto *operands =
+                    std::get_if<ComputeOperands>(&record.operands);
+                if (operands == nullptr || operands->parameters.size() != 1)
+                    throw std::runtime_error(
+                        "SWIGLU calibration record operands are not canonical");
+                if (result.swiglu_primitives != 1)
+                    break;
+                if (operands->datatype == ExternalDataType::FP16)
+                    ++result.swiglu_fp16_primitives;
+                result.swiglu_runtime_core = core.core_id;
+                result.swiglu_flattened_elements = operands->parameters[0];
+                result.swiglu_input_bytes =
+                    result.swiglu_flattened_elements * 4;
+                result.swiglu_output_bytes =
+                    result.swiglu_flattened_elements * 2;
+                break;
+            }
+            case Opcode::DTE_SEND:
+            case Opcode::DTE_RECV:
+                ++result.dte_launch_count;
+                ++result.dte_record_count;
+                ++result.endpoint_session_count;
+                break;
+            case Opcode::DTE_ISSUE:
+                ++result.dte_launch_count;
+                ++result.dte_record_count;
+                break;
+            case Opcode::EVENT_SET:
+            case Opcode::EVENT_WAIT:
+                ++result.event_record_count;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
+        const frontend::CommandFragmentDto *fragment =
+            std::get_if<frontend::CommandFragmentDto>(&linked);
+        if (fragment == nullptr)
+            fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+        for (const frontend::BufferAbiDto &buffer : fragment->buffer_abi) {
+            if (!buffer.alias_of.has_value()) ++result.physical_root_count;
+        }
+    }
+    return result;
+}
 } // namespace
 
 int sc_main(int argc, char *argv[]) {
@@ -353,6 +560,38 @@ int sc_main(int argc, char *argv[]) {
         return 2;
     }
     const bool program_io_requested = program_io_any;
+    const bool moe_swizzle_calibration_requested =
+        !g_flag_moe_swizzle_calibration_kind.empty();
+    if (g_flag_moe_swizzle_runtime_markers && !program_io_requested) {
+        LOG_ERROR(CONFIG)
+            << "--moe-swizzle-runtime-markers requires validated "
+               "--linked-manifest and --program-io inputs";
+        return 2;
+    }
+    if (moe_swizzle_calibration_requested &&
+        (!g_flag_moe_swizzle_runtime_markers || !program_io_requested ||
+         g_flag_moe_swizzle_calibration_core < 0 ||
+         g_flag_moe_swizzle_calibration_core > UINT16_MAX ||
+         g_flag_moe_swizzle_calibration_sample < 0 ||
+         g_flag_moe_swizzle_calibration_sample > 2 ||
+         g_flag_moe_swizzle_calibration_repeat < 0 ||
+         g_flag_moe_swizzle_calibration_repeat > 1)) {
+        LOG_ERROR(CONFIG)
+            << "isolated MoE Swizzle calibration requires runtime markers, "
+               "validated ProgramIo, core uint16, sample [0,2], repeat [0,1]";
+        return 2;
+    }
+    if (!moe_swizzle_calibration_requested &&
+        (g_flag_moe_swizzle_calibration_shape != "none" ||
+         !g_flag_moe_swizzle_calibration_tool_sha256.empty() ||
+         !g_flag_moe_swizzle_calibration_hardware_sha256.empty() ||
+         !g_flag_moe_swizzle_calibration_simulation_sha256.empty() ||
+         !g_flag_moe_swizzle_calibration_mapping_sha256.empty())) {
+        LOG_ERROR(CONFIG)
+            << "calibration metadata flags require "
+               "--moe-swizzle-calibration-kind";
+        return 2;
+    }
     const unsigned memory_probe_count =
         (!g_flag_p5_memory_probe.empty() ? 1U : 0U) +
         (!g_flag_p6_memory_probe.empty() ? 1U : 0U) +
@@ -464,6 +703,9 @@ int sc_main(int argc, char *argv[]) {
         int fails = RunP2pSessionRuntimeSelfTest();
         return fails == 0 ? 0 : 1;
     }
+
+    if (g_flag_moe_swizzle_runtime_capture_selftest)
+        return RunMoeSwizzleRuntimeCaptureSelfTest();
 
     if (g_flag_p5_memory_probe_selftest) {
         int fails = RunP5MemoryProbeSelfTest();
@@ -659,13 +901,18 @@ int sc_main(int argc, char *argv[]) {
         p8_double_buffer_probe_spec;
     std::optional<frontend::program_io::ResolvedContract>
         program_io_resolved;
+    std::optional<std::map<uint16_t, uint16_t>>
+        moe_swizzle_runtime_core_to_die;
+    std::optional<MoeSwizzleRuntimeManifestCounts>
+        moe_swizzle_runtime_manifest_counts;
     try {
         if (program_mode) {
             ValidatePlatformConfigInputs(
                 g_flag_hardware_config, g_flag_simulation_config,
                 g_flag_mapping_config);
             program_bytes = ReadProgramFile(g_flag_program);
-            (void)DecodeProgramArtifact(program_bytes);
+            const ProgramArtifact decoded_program =
+                DecodeProgramArtifact(program_bytes);
             if (program_io_requested) {
                 const std::string manifest = ReadRegularTextFile(
                     "linked Program manifest", g_flag_linked_manifest);
@@ -674,6 +921,38 @@ int sc_main(int argc, char *argv[]) {
                 program_io_resolved =
                     frontend::program_io::ParseAndResolve(
                         sidecar, manifest, program_bytes);
+                if (g_flag_moe_swizzle_runtime_markers) {
+                    const frontend::LinkedProgramManifestDto parsed =
+                        frontend::ProgramArtifactFinalizer::Parse(manifest);
+                    const ProgramArtifact finalized =
+                        frontend::ProgramArtifactFinalizer{}.Finalize(parsed);
+                    if (EncodeProgramArtifact(finalized) != program_bytes)
+                        throw std::runtime_error(
+                            "MoE Swizzle marker manifest/artifact bytes drifted");
+                    std::map<uint16_t, uint16_t> exact;
+                    std::set<uint16_t> dies;
+                    for (const auto &binding : parsed.core_bindings) {
+                        if (binding.runtime_core_id > UINT16_MAX ||
+                            binding.logical_core.die_id > 3)
+                            throw std::runtime_error(
+                                "MoE Swizzle marker core binding exceeds 2x2 mesh");
+                        const uint16_t runtime_core =
+                            static_cast<uint16_t>(binding.runtime_core_id);
+                        const uint16_t die = static_cast<uint16_t>(
+                            binding.logical_core.die_id);
+                        if (!exact.emplace(runtime_core, die).second)
+                            throw std::runtime_error(
+                                "MoE Swizzle marker runtime core binding conflicts");
+                        dies.insert(die);
+                    }
+                    if (!moe_swizzle_calibration_requested &&
+                        dies != std::set<uint16_t>{0, 1, 2, 3})
+                        throw std::runtime_error(
+                            "MoE Swizzle marker manifest must bind all 2x2 dies");
+                    moe_swizzle_runtime_core_to_die = std::move(exact);
+                    moe_swizzle_runtime_manifest_counts =
+                        CountMoeSwizzleRuntimeManifest(decoded_program, parsed);
+                }
                 PrintProgramIoStatus(
                     "resolved",
                     ProgramIoModeName(program_io_resolved->mode),
@@ -892,6 +1171,123 @@ int sc_main(int argc, char *argv[]) {
     const uint64_t makespan_cycles =
         sc_time_stamp().value() / sc_time(CYCLE, SC_NS).value();
     std::cout << "[SIM_RESULT] makespan_cycles=" << makespan_cycles << "\n";
+    if (g_flag_moe_swizzle_runtime_markers &&
+        !moe_swizzle_calibration_requested) {
+        try {
+            if (!moe_swizzle_runtime_core_to_die.has_value())
+                throw std::logic_error(
+                    "MoE Swizzle runtime marker lost validated core bindings");
+            std::vector<P2pEndpointLifetimeEvent> lifetime_events;
+            std::vector<MoeSwizzleRuntimeInterval> runtime_intervals;
+            std::map<uint16_t, uint64_t> runtime_core_session_capacity;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || worker->executor == nullptr)
+                    continue;
+                if (!worker->executor->P2pLifetimeEventsComplete())
+                    throw std::runtime_error(
+                        "MoE Swizzle P2P lifetime event capture is incomplete");
+                const auto &one = worker->executor->P2pLifetimeEvents();
+                lifetime_events.insert(
+                    lifetime_events.end(), one.begin(), one.end());
+                if (!worker->executor->MoeSwizzleRuntimeIntervalsComplete())
+                    throw std::runtime_error(
+                        "MoE Swizzle runtime interval capture is incomplete");
+                const auto &core_intervals =
+                    worker->executor->MoeSwizzleRuntimeIntervals();
+                runtime_intervals.insert(runtime_intervals.end(),
+                                         core_intervals.begin(),
+                                         core_intervals.end());
+            }
+            for (const auto &[runtime_core, die] :
+                 *moe_swizzle_runtime_core_to_die) {
+                (void)die;
+                if (runtime_core >= TOTAL_CORES)
+                    throw std::runtime_error(
+                        "MoE Swizzle manifest core is outside runtime");
+                WorkerCore *worker = monitor->workerCores[runtime_core];
+                if (worker == nullptr || worker->executor == nullptr ||
+                    worker->executor->P2pMaxSessions() != 3)
+                    throw std::runtime_error(
+                        "MoE Swizzle endpoint capacity per core must be exact 3");
+                runtime_core_session_capacity.emplace(
+                    runtime_core, worker->executor->P2pMaxSessions());
+            }
+            const auto markers = ReplayMoeSwizzleSessionMarkers(
+                lifetime_events, *moe_swizzle_runtime_core_to_die,
+                runtime_core_session_capacity, 4);
+            for (const MoeSwizzleSessionMarker &marker : markers)
+                std::cout << FormatMoeSwizzleSessionMarker(marker) << "\n";
+            const auto port_markers = BuildMoeSwizzlePortTimeMarkers(
+                CollectMoeSwizzlePortTimeTraces(), makespan_cycles);
+            for (const MoeSwizzlePortTimeMarker &marker : port_markers)
+                std::cout << FormatMoeSwizzlePortTimeMarker(marker) << "\n";
+            if (!moe_swizzle_runtime_manifest_counts.has_value())
+                throw std::logic_error(
+                    "MoE Swizzle runtime marker lost validated manifest counts");
+            const auto interval_markers =
+                BuildMoeSwizzleRuntimeIntervalMarkers(
+                    runtime_intervals, lifetime_events,
+                    *moe_swizzle_runtime_core_to_die, 4,
+                    sc_time_stamp().value(),
+                    sc_time(CYCLE, SC_NS).value(),
+                    *moe_swizzle_runtime_manifest_counts);
+            for (const MoeSwizzleOverlapMarker &marker :
+                 interval_markers.overlap)
+                std::cout << FormatMoeSwizzleOverlapMarker(marker) << "\n";
+            std::cout << FormatMoeSwizzleSetupMarker(interval_markers.setup)
+                      << "\n";
+        } catch (const std::exception &error) {
+            LOG_ERROR(SYSTEM)
+                << "MoE Swizzle runtime marker export failed: "
+                << error.what();
+            return 2;
+        }
+    }
+    if (moe_swizzle_calibration_requested) {
+        try {
+            std::vector<MoeSwizzleRuntimeInterval> intervals;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || worker->executor == nullptr)
+                    continue;
+                if (!worker->executor->MoeSwizzleCalibrationIntervalsComplete())
+                    throw std::runtime_error(
+                        "isolated calibration interval capture is incomplete");
+                const auto &one =
+                    worker->executor->MoeSwizzleRuntimeIntervals();
+                intervals.insert(intervals.end(), one.begin(), one.end());
+            }
+            std::vector<uint64_t> hop_cycles;
+            for (const auto &marker : BuildMoeSwizzlePortTimeMarkers(
+                     CollectMoeSwizzlePortTimeTraces(), makespan_cycles))
+                hop_cycles.push_back(marker.busy_cycles);
+            MoeSwizzleCalibrationRequest request{
+                ParseMoeSwizzleCalibrationKind(
+                    g_flag_moe_swizzle_calibration_kind),
+                static_cast<uint16_t>(g_flag_moe_swizzle_calibration_core),
+                static_cast<uint8_t>(g_flag_moe_swizzle_calibration_sample),
+                static_cast<uint8_t>(g_flag_moe_swizzle_calibration_repeat),
+                ParseMoeSwizzleCalibrationShape(
+                    g_flag_moe_swizzle_calibration_shape),
+                g_flag_moe_swizzle_calibration_tool_sha256,
+                g_flag_moe_swizzle_calibration_hardware_sha256,
+                g_flag_moe_swizzle_calibration_simulation_sha256,
+                g_flag_moe_swizzle_calibration_mapping_sha256,
+            };
+            std::cout << FormatMoeSwizzleCalibrationMarker(
+                             BuildMoeSwizzleCalibrationMarker(
+                                 request, intervals, hop_cycles,
+                                 *moe_swizzle_runtime_manifest_counts,
+                                 sc_time(CYCLE, SC_NS).value()))
+                      << "\n";
+        } catch (const std::exception &error) {
+            LOG_ERROR(SYSTEM)
+                << "isolated MoE Swizzle calibration export failed: "
+                << error.what();
+            return 2;
+        }
+    }
     if (program_mode) {
         if (!program_helper)
             throw std::logic_error(

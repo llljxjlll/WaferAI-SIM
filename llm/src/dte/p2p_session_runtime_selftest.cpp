@@ -1187,6 +1187,107 @@ void TestBoundsAndUnknowns(Checks &checks) {
     (void)first;
 }
 
+void TestLifetimeStatsAndDedicatedMarker(Checks &checks) {
+    P2pEndpointSessionRuntime sender(0, 3, 64, 8, 4);
+    P2pEndpointSessionRuntime receiver(1, 3, 64, 8, 4);
+    const auto tx0 = sender.IssueSend(SyncSpec(101, 8, 1), Pattern(8, 1));
+    const auto tx1 = sender.IssueSend(SyncSpec(102, 8, 1), Pattern(8, 2));
+    const auto rx0 = receiver.PostReceive(AsyncSpec(201, 11, 8, 0));
+    const auto rx1 = receiver.PostReceive(AsyncSpec(202, 12, 8, 0));
+    checks.Check(sender.LifetimeStats().tx_opened == 2 &&
+                     sender.LifetimeStats().tx_active == 2 &&
+                     sender.LifetimeStats().tx_peak == 2 &&
+                     sender.LifetimeStats().rx_opened == 0,
+                 "TX lifetime counters observe real session insertion");
+    checks.Check(receiver.LifetimeStats().rx_opened == 2 &&
+                     receiver.LifetimeStats().rx_active == 2 &&
+                     receiver.LifetimeStats().rx_peak == 2 &&
+                     receiver.LifetimeStats().tx_opened == 0,
+                 "RX lifetime counters observe real session insertion");
+    checks.Check(sender.Abort(tx0.handle) && sender.Abort(tx1.handle) &&
+                     receiver.Abort(rx0.handle) && receiver.Abort(rx1.handle),
+                 "fixture retires all observed sessions through production teardown");
+    checks.Check(sender.LifetimeStats().tx_retired == 2 &&
+                     sender.LifetimeStats().tx_active == 0 &&
+                     receiver.LifetimeStats().rx_retired == 2 &&
+                     receiver.LifetimeStats().rx_active == 0,
+                 "retirement counters close exact TX/RX lifetimes");
+
+    const std::string marker = FormatMoeSwizzleSessionMarker(
+        MoeSwizzleSessionMarker{0, 3, 2, 6,
+                                sender.LifetimeStats().tx_peak,
+                                receiver.LifetimeStats().rx_peak, 4, 4});
+    checks.Check(marker ==
+                     "[MOE_SWIZZLE_SESSION] die=0 capacity_per_core=3 "
+                     "active_core_count=2 aggregate_capacity=6 "
+                     "send_peak=2 recv_peak=2 "
+                     "opens=4 retires=4",
+                 "dedicated marker formatter has strict parser field order");
+    checks.Reject(
+        [] {
+            (void)FormatMoeSwizzleSessionMarker(
+                MoeSwizzleSessionMarker{0, 3, 1, 3, 1, 1, 2, 1});
+        },
+        "dedicated marker rejects unretired session evidence");
+}
+
+void TestManifestBoundDieSessionReplay(Checks &checks) {
+    const auto event = [](uint64_t ticks, uint64_t sequence, uint16_t core,
+                          P2pEndpointDirection direction, int8_t delta) {
+        return P2pEndpointLifetimeEvent{ticks, 0, sequence, core,
+                                        direction, delta};
+    };
+    const std::vector<P2pEndpointLifetimeEvent> events = {
+        event(1, 1, 10, P2pEndpointDirection::TX, 1),
+        event(2, 2, 10, P2pEndpointDirection::TX, 1),
+        event(3, 3, 10, P2pEndpointDirection::RX, 1),
+        event(5, 4, 10, P2pEndpointDirection::TX, -1),
+        event(6, 5, 10, P2pEndpointDirection::TX, -1),
+        event(8, 6, 10, P2pEndpointDirection::RX, -1),
+        event(4, 1, 11, P2pEndpointDirection::TX, 1),
+        event(4, 2, 11, P2pEndpointDirection::RX, 1),
+        event(6, 3, 11, P2pEndpointDirection::RX, -1),
+        event(7, 4, 11, P2pEndpointDirection::TX, 1),
+        event(8, 5, 11, P2pEndpointDirection::TX, -1),
+        event(9, 6, 11, P2pEndpointDirection::TX, -1),
+    };
+    const auto markers = ReplayMoeSwizzleSessionMarkers(
+        events, {{10, 0}, {11, 0}, {12, 1}, {13, 2}, {14, 3}},
+        {{10, 3}, {11, 3}, {12, 3}, {13, 3}, {14, 3}}, 4);
+    checks.Check(markers.size() == 4 && markers[0].send_peak == 3 &&
+                     markers[0].recv_peak == 2 &&
+                     markers[0].capacity_per_core == 3 &&
+                     markers[0].active_core_count == 2 &&
+                     markers[0].aggregate_capacity == 6 &&
+                     markers[0].opens == 6 && markers[0].retires == 6,
+                 "manifest-bound replay observes exact two-core die concurrency");
+    checks.Check(markers[0].send_peak != 2 && markers[0].send_peak != 4,
+                 "die peak is neither max nor sum of endpoint-local peaks");
+    checks.Reject(
+        [&] {
+            (void)ReplayMoeSwizzleSessionMarkers(
+                events, {{10, 0}, {12, 1}, {13, 2}, {14, 3}},
+                {{10, 3}, {12, 3}, {13, 3}, {14, 3}}, 4);
+        },
+        "lifetime event without manifest runtime-core binding");
+    checks.Reject(
+        [&] {
+            (void)ReplayMoeSwizzleSessionMarkers(
+                events, {{10, 0}, {11, 0}, {12, 1}, {13, 2}, {14, 3}},
+                {{10, 3}, {11, 2}, {12, 3}, {13, 3}, {14, 3}}, 4);
+        },
+        "manifest-bound runtime cores require one exact endpoint capacity");
+    std::vector<P2pEndpointLifetimeEvent> underflow = {
+        event(1, 1, 10, P2pEndpointDirection::TX, -1)};
+    checks.Reject(
+        [&] {
+            (void)ReplayMoeSwizzleSessionMarkers(
+                underflow, {{10, 0}, {12, 1}, {13, 2}, {14, 3}},
+                {{10, 3}, {12, 3}, {13, 3}, {14, 3}}, 4);
+        },
+        "die replay retirement underflow");
+}
+
 } // namespace
 
 int RunP2pSessionRuntimeSelfTest() {
@@ -1207,5 +1308,7 @@ int RunP2pSessionRuntimeSelfTest() {
     TestLifetimeRequestIdentity(checks);
     TestFailureAbortTransitions(checks);
     TestBoundsAndUnknowns(checks);
+    TestLifetimeStatsAndDedicatedMarker(checks);
+    TestManifestBoundDieSessionReplay(checks);
     return checks.Finish();
 }

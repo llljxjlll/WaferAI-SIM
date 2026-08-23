@@ -32,6 +32,9 @@ std::vector<HBMStackConfig> g_hbm_stacks;
 std::vector<HBMChannelConfig> g_hbm_channels;
 
 namespace frontend::program_io {
+void RunExactMoeCalibrationDynamicRootByteClosureSelfTest();
+void RunExactFourStreamUnfusedTerminalReuseSelfTest();
+
 struct HBMRuntimeSelfTestPeer {
     static void Add(HBMRuntime *runtime, int stack_id, int channel_id,
                     std::unique_ptr<HBMBackend> backend) {
@@ -681,7 +684,9 @@ int RunSelftest() {
     TestInt32SramDType();
     TestSeedAndProbe();
     TestHbmSeedProbeAndRollback();
-    std::cout << "ProgramIo C++ selftest: 5/5 PASS\n";
+    io::RunExactFourStreamUnfusedTerminalReuseSelfTest();
+    io::RunExactMoeCalibrationDynamicRootByteClosureSelfTest();
+    std::cout << "ProgramIo C++ selftest: 7/7 PASS\n";
     return 0;
 }
 

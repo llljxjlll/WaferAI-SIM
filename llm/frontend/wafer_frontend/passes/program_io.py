@@ -64,6 +64,21 @@ from ..schema.program_io import (
     ProgramSramTarget,
 )
 from ..schema.train_n6 import TrainLinkedProgram
+from ..schema.swizzle_standard import SwizzleStandardLinkedProgram
+from ..schema.swizzle_ir2 import admits_wang_4rank_packed_layout
+from ..schema.swizzle_unfused_standard import (
+    UnfusedComparisonStandardLinkedProgram,
+)
+from .swizzle_program_io import (
+    swizzle_semantic_uses,
+    swizzle_terminal_abi_ids,
+    swizzle_terminal_value_ids,
+)
+from .unfused_comparison_program_io import (
+    unfused_comparison_semantic_uses,
+    unfused_comparison_terminal_abi_ids,
+    unfused_comparison_terminal_value_ids,
+)
 
 
 _READ_ROLES = {
@@ -156,6 +171,8 @@ LinkedProgramSource = (
     | LiteMoeDp4InferLinkedProgram
     | LiteMoeDp4TrainForwardLinkedProgram
     | LiteMoeDp4BackwardLinkedProgram
+    | SwizzleStandardLinkedProgram
+    | UnfusedComparisonStandardLinkedProgram
 )
 
 
@@ -171,6 +188,8 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     LiteMoeDp4InferLinkedProgram,
     LiteMoeDp4TrainForwardLinkedProgram,
     LiteMoeDp4BackwardLinkedProgram,
+    SwizzleStandardLinkedProgram,
+    UnfusedComparisonStandardLinkedProgram,
 )
 
 
@@ -249,6 +268,10 @@ def _semantic_uses(
     source: LinkedProgramSource,
     abis: dict[str, BufferABI],
 ) -> dict[str, tuple[_SemanticUse, ...]]:
+    if type(source) is SwizzleStandardLinkedProgram:
+        return swizzle_semantic_uses(source, abis)  # type: ignore[return-value]
+    if type(source) is UnfusedComparisonStandardLinkedProgram:
+        return unfused_comparison_semantic_uses(source, abis)  # type: ignore[return-value]
     if type(source) in (
         LiteMoeLinkedProgram,
         LiteMoeDp4InferLinkedProgram,
@@ -1067,6 +1090,10 @@ def _lite_loss_gradient_seed_overrides(
 
 
 def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
+    if type(source) is SwizzleStandardLinkedProgram:
+        return swizzle_terminal_value_ids(source)
+    if type(source) is UnfusedComparisonStandardLinkedProgram:
+        return unfused_comparison_terminal_value_ids(source)
     if type(source) is S2LiteDp4TreeArLinkedProgram:
         return set()
     if type(source) is LiteMoeBackwardLinkedProgram:
@@ -1348,6 +1375,15 @@ def _state_access_is_permitted(
 def _resolved_state_abis(
     source: LinkedProgramSource,
 ) -> tuple[_ResolvedStateAbi, ...]:
+    if type(source) in (SwizzleStandardLinkedProgram, UnfusedComparisonStandardLinkedProgram):
+        if source.manifest.state_operand_bindings or any(
+            _leaf(linked).state_abi for linked in source.manifest.fragments
+        ):
+            raise SchemaError(
+                "Swizzle/UNFUSED standard V1 forbids persistent StateABI",
+                path="source.manifest.fragments",
+            )
+        return ()
     by_id: dict[str, StateABI] = {}
     by_binding: dict[str, StateABI] = {}
     for linked in source.manifest.fragments:
@@ -1642,7 +1678,10 @@ def build_deterministic_timing_state_overrides(
             "source must be a supported linked program carrier",
             path="source",
         )
-    source.validate("source")
+    if type(source) in (SwizzleStandardLinkedProgram, UnfusedComparisonStandardLinkedProgram):
+        source.validate_against("source")
+    else:
+        source.validate("source")
     return _deterministic_timing_state_overrides(
         _resolved_state_abis(source)
     )
@@ -2049,7 +2088,10 @@ def build_timing_program_io(
             "source must be a supported linked program carrier",
             path="source",
         )
-    source.validate("source")
+    if type(source) in (SwizzleStandardLinkedProgram, UnfusedComparisonStandardLinkedProgram):
+        source.validate_against("source")
+    else:
+        source.validate("source")
     resolved = _resolved_abis(source)
     resolved_state = _resolved_state_abis(source)
     _validate_lite_train_state_update(source, resolved, resolved_state)
@@ -2147,7 +2189,27 @@ def build_timing_program_io(
                     path=f"{path}[{state_ref!r}]",
                 )
 
-    terminal_values = _terminal_value_ids(source)
+    terminal_abi_ids: set[str] | None
+    packed_swizzle = (
+        type(source) is SwizzleStandardLinkedProgram
+        and admits_wang_4rank_packed_layout(source.projection)
+    )
+    if packed_swizzle or type(source) is UnfusedComparisonStandardLinkedProgram:
+        terminal_abi_ids = (
+            swizzle_terminal_abi_ids(source)
+            if packed_swizzle
+            else unfused_comparison_terminal_abi_ids(source)
+        )
+        resolved_terminal = tuple(
+            item for item in resolved if item.abi.id in terminal_abi_ids
+        )
+        terminal_values = {item.abi.value_id for item in resolved_terminal}
+    else:
+        terminal_abi_ids = None
+        terminal_values = _terminal_value_ids(source)
+        resolved_terminal = tuple(
+            item for item in resolved if item.abi.value_id in terminal_values
+        )
     hbm_state_terminals = type(source) in (
         LiteMoeBackwardLinkedProgram,
         LiteMoeDp4BackwardLinkedProgram,
@@ -2158,10 +2220,12 @@ def build_timing_program_io(
             "timing ProgramIo requires at least one IR1 terminal value",
             path="source.lowering_context.ir1.values",
         )
-    resolved_terminal = tuple(
-        item for item in resolved if item.abi.value_id in terminal_values
-    )
     if (
+        (
+            terminal_abi_ids is not None
+            and {item.abi.id for item in resolved_terminal} != terminal_abi_ids
+        )
+        or
         {item.abi.value_id for item in resolved_terminal} != terminal_values
         or any(
             item.abi.ownership is not BufferOwnership.OWNED
@@ -2179,12 +2243,41 @@ def build_timing_program_io(
             resolved_terminal,
         )
 
+    reused_owned_roots = set()
+    if packed_swizzle or (
+        type(source) is UnfusedComparisonStandardLinkedProgram
+        and len(source.manifest.core_streams) == 4
+    ):
+        roots = tuple(
+            item
+            for item in resolved
+            if item.abi.ownership is not BufferOwnership.ALIASED
+        )
+        reused_owned_roots = {
+            item.abi.id
+            for item in roots
+            if item.abi.ownership is BufferOwnership.OWNED
+            and any(
+                other is not item
+                and other.runtime_core_id == item.runtime_core_id
+                and other.abi.region_ref == item.abi.region_ref
+                and item.abi.region_offset_bytes
+                < other.abi.region_offset_bytes + other.abi.size_bytes
+                and other.abi.region_offset_bytes
+                < item.abi.region_offset_bytes + item.abi.size_bytes
+                and other.abi.lifetime_end_exclusive
+                <= item.abi.lifetime_start
+                for other in roots
+            )
+        }
+
     initialization_blobs_by_abi = {
         item.abi.id: ProgramBlob.create(
             sram_seeds.get(item.abi.id, bytes(item.abi.size_bytes))
         )
         for item in resolved
         if item.abi.ownership is not BufferOwnership.ALIASED
+        and item.abi.id not in reused_owned_roots
     }
     probe_payloads_by_abi = {
         item.abi.id: bytes(item.abi.size_bytes)
@@ -2229,6 +2322,7 @@ def build_timing_program_io(
         _initialization(item, initialization_blobs_by_abi[item.abi.id])
         for item in resolved
         if item.abi.ownership is not BufferOwnership.ALIASED
+        and item.abi.id not in reused_owned_roots
     )
     state_initializations = tuple(
         _state_initialization(item, seed_blobs[state_ref])

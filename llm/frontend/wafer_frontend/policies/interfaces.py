@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from ..schema.action import FusionPlan, StandaloneCollectivePlan
+from ..schema.swizzle_plan import FusedPlan
 from ..schema.common import ProfileKey
 from ..schema.global_action import GlobalActionDAG
 from ..schema.ir1 import FusedOpSkeleton, IR1, PhysicalNode
@@ -22,7 +23,7 @@ class InterDiePolicy(Protocol):
         ir1: IR1,
         fused_op: FusedOpSkeleton,
         profile: ProfileKey,
-    ) -> FusionPlan: ...
+    ) -> FusedPlan: ...
 
 
 class StandaloneCollectivePolicy(Protocol):

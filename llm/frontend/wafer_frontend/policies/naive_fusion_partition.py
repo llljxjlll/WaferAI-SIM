@@ -10,6 +10,7 @@ from ..schema.ir0 import (
     EdgeKind,
     FusionCandidate,
     FusionImpl,
+    FusionPattern,
     GemmPartition,
     GemmWorkload,
     OpKind,
@@ -128,6 +129,11 @@ def _validate_candidate(
         )
 
     contract = candidate.semantic_contract
+    if contract.pattern is not FusionPattern.GEMM_RS:
+        _fail(
+            "naive fusion only accepts GEMM_RS candidates",
+            f"{path}.semantic_contract.pattern",
+        )
     if contract.tile_domain != ("M", "N"):
         _fail("tile_domain must be exactly ('M', 'N')", f"{path}.semantic_contract.tile_domain")
     if contract.reduction_axes != (2,):
@@ -192,6 +198,8 @@ class NaiveFusionPartition:
         for index, candidate in enumerate(ir1.fusion_candidates):
             candidate_path = f"ir1.fusion_candidates[{index}]"
             overlap = claimed_members.intersection(candidate.members)
+            if candidate.semantic_contract.pattern is not FusionPattern.GEMM_RS:
+                continue
             if overlap:
                 _fail(
                     "fusion candidates must not share member nodes",

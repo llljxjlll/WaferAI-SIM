@@ -372,6 +372,19 @@ void WorkerCoreExecutor::send_logic() {
                 }
                 LOG_INFO(PRIM) << "Core " << cid << " end send primitive "
                                << GetEnumSendType(prim->type);
+                if (prim->type == SEND_DONE) {
+                    if (moe_swizzle_pending_fixed_interval_kinds.size() != 1 ||
+                        moe_swizzle_pending_fixed_interval_kinds.front() !=
+                            MoeSwizzleRuntimeIntervalKind::TERMINAL_DONE_FIXED)
+                        throw std::logic_error(
+                            "SEND_DONE terminal interval state is not exact");
+                    FinalizeMoeSwizzlePendingFixedIntervals(
+                        static_cast<uint16_t>(cid),
+                        moe_swizzle_pending_fixed_interval_start,
+                        sc_time_stamp().value(),
+                        &moe_swizzle_pending_fixed_interval_kinds,
+                        &moe_swizzle_runtime_intervals);
+                }
                 break;
             }
         }
@@ -609,6 +622,20 @@ void WorkerCoreExecutor::send_para_logic() {
                         "Recv_prim" +
                         GetEnumRecvType(
                             dynamic_cast<Recv_prim *>(prim)->type)));
+            }
+            if (typeid(*prim) == typeid(Send_prim) &&
+                static_cast<Send_prim *>(prim)->type == SEND_DONE) {
+                if (moe_swizzle_pending_fixed_interval_kinds.size() != 1 ||
+                    moe_swizzle_pending_fixed_interval_kinds.front() !=
+                        MoeSwizzleRuntimeIntervalKind::TERMINAL_DONE_FIXED)
+                    throw std::logic_error(
+                        "parallel SEND_DONE terminal interval state is not exact");
+                FinalizeMoeSwizzlePendingFixedIntervals(
+                    static_cast<uint16_t>(cid),
+                    moe_swizzle_pending_fixed_interval_start,
+                    sc_time_stamp().value(),
+                    &moe_swizzle_pending_fixed_interval_kinds,
+                    &moe_swizzle_runtime_intervals);
             }
         }
 
@@ -1126,6 +1153,24 @@ void WorkerCoreExecutor::task_logic() {
     while (true) {
         PrimBase *p = prim_queue.front();
 
+        const bool group_gemm =
+            dynamic_cast<Matmul_f *>(p) != nullptr ||
+            dynamic_cast<matmul_forward_moe *>(p) != nullptr;
+        const uint64_t group_gemm_execution_start = sc_time_stamp().value();
+        if (group_gemm) {
+            if (!moe_swizzle_pending_group_gemm_dispatch_start.has_value() ||
+                *moe_swizzle_pending_group_gemm_dispatch_start >=
+                    group_gemm_execution_start)
+                throw std::logic_error(
+                    "GroupGEMM setup phase lacks a positive dispatch interval");
+            moe_swizzle_runtime_intervals.push_back(
+                {static_cast<uint16_t>(cid),
+                 MoeSwizzleRuntimeIntervalKind::GROUP_GEMM_SETUP,
+                 *moe_swizzle_pending_group_gemm_dispatch_start,
+                 group_gemm_execution_start});
+            moe_swizzle_pending_group_gemm_dispatch_start.reset();
+        }
+
         int delay = 0;
         TaskCoreContext context = generate_context(this);
 
@@ -1160,6 +1205,17 @@ void WorkerCoreExecutor::task_logic() {
             wait(sc_time(delay, SC_NS));
         } else {
             wait(sc_time(delay, SC_NS));
+        }
+
+        if (group_gemm) {
+            const uint64_t group_gemm_execution_end = sc_time_stamp().value();
+            if (group_gemm_execution_end <= group_gemm_execution_start)
+                throw std::logic_error(
+                    "GroupGEMM execution phase must consume positive time");
+            moe_swizzle_runtime_intervals.push_back(
+                {static_cast<uint16_t>(cid),
+                 MoeSwizzleRuntimeIntervalKind::GROUP_GEMM_EXECUTION,
+                 group_gemm_execution_start, group_gemm_execution_end});
         }
 
         LOG_INFO(PRIM) << "Core " << cid << " end compute primitive "

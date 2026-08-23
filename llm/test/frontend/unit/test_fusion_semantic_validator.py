@@ -18,6 +18,7 @@ from llm.frontend.wafer_frontend.schema.ir0 import (
     EffectKind,
     FusionImpl,
     FusionOrigin,
+    FusionPattern,
     GraphEdge,
     IR0,
     MeshAxis,
@@ -38,6 +39,14 @@ def _graph(*, tp: int = 2, layers: int = 1) -> IR0:
         build_ir0(from_data(ExperimentSpec, raw, path="spec"))
     ).entries[0].graph
 
+def _gemm_rs_candidates(graph: IR0):
+    return tuple(
+        candidate
+        for candidate in graph.fusion_candidates
+        if candidate.semantic_contract.pattern is FusionPattern.GEMM_RS
+    )
+
+
 
 def _rebuild(graph: IR0, **updates: object) -> IR0:
     fields: dict[str, object] = {
@@ -57,11 +66,11 @@ def _rebuild(graph: IR0, **updates: object) -> IR0:
     return IR0.create(**fields)  # type: ignore[arg-type]
 
 
-def _replace_candidate(graph: IR0, index: int, replacement: object) -> IR0:
+def _replace_candidate(graph: IR0, original: object, replacement: object) -> IR0:
     return _rebuild(
         graph,
         fusion_candidates=tuple(
-            replacement if current == index else candidate
+            replacement if candidate is original else candidate
             for current, candidate in enumerate(graph.fusion_candidates)
         ),
     )
@@ -128,7 +137,7 @@ def _edges_from_values(graph: IR0, values: tuple[object, ...]) -> tuple[GraphEdg
 
 class FusionSemanticValidatorTest(unittest.TestCase):
     def test_current_tp1_tp2_and_l2_graphs_pass(self) -> None:
-        for tp, layers, candidates in ((1, 1, 0), (2, 1, 2), (2, 2, 4)):
+        for tp, layers, candidates in ((1, 1, 0), (2, 1, 4), (2, 2, 8)):
             with self.subTest(tp=tp, layers=layers):
                 graph = _graph(tp=tp, layers=layers)
                 self.assertEqual(len(graph.fusion_candidates), candidates)
@@ -137,7 +146,7 @@ class FusionSemanticValidatorTest(unittest.TestCase):
 
     def test_contract_fields_and_numerical_policy_are_exact(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
         contract = candidate.semantic_contract
         cases = (
             (replace(contract, tile_domain=("N", "M")), "tile_domain"),
@@ -154,7 +163,7 @@ class FusionSemanticValidatorTest(unittest.TestCase):
                 changed = replace(candidate, semantic_contract=replacement)
                 with self.assertRaisesRegex(SchemaError, message):
                     FusionSemanticValidator.validate(
-                        _replace_candidate(graph, 0, changed)
+                        _replace_candidate(graph, candidate, changed)
                     )
 
         rs = next(node for node in graph.nodes if node.id == candidate.members[1])
@@ -167,12 +176,12 @@ class FusionSemanticValidatorTest(unittest.TestCase):
 
     def test_member_order_directness_boundary_order_origin_and_impl_are_exact(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
 
         reversed_members = replace(candidate, members=tuple(reversed(candidate.members)))
-        with self.assertRaisesRegex(SchemaError, "ordered row-GEMM"):
+        with self.assertRaisesRegex(SchemaError, "sole partial output|ordered"):
             FusionSemanticValidator.validate(
-                _replace_candidate(graph, 0, reversed_members)
+                _replace_candidate(graph, candidate, reversed_members)
             )
 
         swapped_boundary = replace(
@@ -181,19 +190,19 @@ class FusionSemanticValidatorTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(SchemaError, "input order"):
             FusionSemanticValidator.validate(
-                _replace_candidate(graph, 0, swapped_boundary)
+                _replace_candidate(graph, candidate, swapped_boundary)
             )
 
         wrong_output = replace(
             candidate,
-            boundary_outputs=graph.fusion_candidates[1].boundary_outputs,
+            boundary_outputs=_gemm_rs_candidates(graph)[1].boundary_outputs,
         )
         with self.assertRaisesRegex(SchemaError, "boundary_outputs"):
             FusionSemanticValidator.validate(
-                _replace_candidate(graph, 0, wrong_output)
+                _replace_candidate(graph, candidate, wrong_output)
             )
 
-        down_rs = graph.fusion_candidates[1]
+        down_rs = _gemm_rs_candidates(graph)[1]
         disconnected_members = (candidate.members[0], down_rs.members[1])
         boundary_inputs, boundary_outputs = _boundaries(graph, disconnected_members)
         disconnected = replace(
@@ -204,24 +213,24 @@ class FusionSemanticValidatorTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(SchemaError, "sole partial output"):
             FusionSemanticValidator.validate(
-                _replace_candidate(graph, 0, disconnected)
+                _replace_candidate(graph, candidate, disconnected)
             )
 
         declared = replace(candidate, origin=FusionOrigin.DECLARED)
         with self.assertRaisesRegex(SchemaError, "DISCOVERED"):
-            FusionSemanticValidator.validate(_replace_candidate(graph, 0, declared))
+            FusionSemanticValidator.validate(_replace_candidate(graph, candidate, declared))
 
         selected = replace(candidate, impl=FusionImpl.NAIVE)
         with self.assertRaisesRegex(SchemaError, "implementation"):
-            FusionSemanticValidator.validate(_replace_candidate(graph, 0, selected))
+            FusionSemanticValidator.validate(_replace_candidate(graph, candidate, selected))
 
     def test_member_stage_phase_and_mesh_scope_are_closed(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
         rs = next(node for node in graph.nodes if node.id == candidate.members[1])
         for replacement, message in (
-            (replace(rs, stage=1), "share instance, stage, phase and mesh"),
-            (replace(rs, phase=OpPhase.DGRAD), "share instance, stage, phase and mesh"),
+            (replace(rs, stage=1), r"share instance, stage, phase.*mesh"),
+            (replace(rs, phase=OpPhase.DGRAD), r"share instance, stage, phase.*mesh"),
         ):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(SchemaError, message):
@@ -248,7 +257,7 @@ class FusionSemanticValidatorTest(unittest.TestCase):
 
     def test_partial_nonlinear_external_consumer_effect_and_alias_are_rejected(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
         gemm = next(node for node in graph.nodes if node.id == candidate.members[0])
         rs = next(node for node in graph.nodes if node.id == candidate.members[1])
         partial = next(value for value in graph.values if value.id == gemm.outputs[0])
@@ -321,7 +330,7 @@ class FusionSemanticValidatorTest(unittest.TestCase):
 
     def test_generic_convexity_is_required(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
         gemm_id, rs_id = candidate.members
         norm = next(node for node in graph.nodes if node.id.endswith(".swiglu"))
         source = next(value for value in graph.values if value.id == norm.inputs[0])

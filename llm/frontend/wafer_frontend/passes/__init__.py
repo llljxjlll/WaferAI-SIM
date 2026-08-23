@@ -76,6 +76,7 @@ from .load_fabric import (
     physical_fabric_from_data,
     validate_identity_mapping_text,
 )
+from .meshslice_2d_placement import place_meshslice_2d_ir1
 from .group_registry import build_group_registry, validate_group_against
 from .global_action import build_global_action_dag
 from .global_action_dag import (
@@ -203,6 +204,7 @@ __all__ = [
     "lower_profile",
     "lower_stage4",
     "link_bundle",
+    "place_meshslice_2d_ir1",
     "link_profile",
     "link_stage4",
     "hbm_address_spaces_from_data",
@@ -303,6 +305,17 @@ from .lite_moe_dp4_link_program import (
     link_lite_moe_dp4_infer_program,
     link_lite_moe_dp4_train_forward_program,
 )
+from .build_moe_swizzle_scale import (
+    MOE_SWIZZLE_C4_EXPERT_HISTOGRAM,
+    MOE_SWIZZLE_SCALE_POINTS,
+    build_moe_swizzle_scale_truth,
+    validate_moe_swizzle_c0_oracle,
+)
+from .build_moe_swizzle_execution import (
+    build_moe_swizzle_execution,
+    validate_moe_swizzle_c0_execution,
+    validate_moe_swizzle_execution,
+)
 from .lite_moe_dp4 import __all__ as _lite_moe_dp4_all
 from .lite_moe_dp4_execution import __all__ as _lite_moe_dp4_execution_all
 from .lite_moe_dp4_train_forward import __all__ as _lite_moe_dp4_train_forward_all
@@ -319,4 +332,58 @@ __all__ += [
     *_lite_moe_dp4_n6_all,
     *_lite_moe_dp4_lower_program_all,
     *_lite_moe_dp4_link_program_all,
+    "MOE_SWIZZLE_C4_EXPERT_HISTOGRAM",
+    "MOE_SWIZZLE_SCALE_POINTS",
+    "build_moe_swizzle_scale_truth",
+    "validate_moe_swizzle_c0_oracle",
+    "build_moe_swizzle_execution",
+    "validate_moe_swizzle_c0_execution",
+    "validate_moe_swizzle_execution",
+]
+from .discover_fusion import (
+    DISCOVER_FUSION_SCHEMA_VERSION,
+    discover_fusion_candidates,
+    with_discovered_fusion_candidates,
+)
+
+__all__ += [
+    "DISCOVER_FUSION_SCHEMA_VERSION",
+    "discover_fusion_candidates",
+    "with_discovered_fusion_candidates",
+]
+from .project_swizzle_ir2 import *
+from .project_swizzle_ir2 import __all__ as _project_swizzle_ir2_all
+from .project_swizzle_plan import *
+from .project_swizzle_plan import __all__ as _project_swizzle_plan_all
+
+__all__ += [
+    name
+    for name in (*_project_swizzle_ir2_all, *_project_swizzle_plan_all)
+    if name not in __all__
+]
+from .project_unfused_comparison import *
+from .project_unfused_comparison import __all__ as _project_unfused_comparison_all
+
+__all__ += [
+    name for name in _project_unfused_comparison_all
+    if name not in __all__
+]
+
+from .build_moe_swizzle_program_io import (
+    build_moe_swizzle_program_io,
+    validate_moe_swizzle_program_io_against,
+)
+
+__all__ += [
+    "build_moe_swizzle_program_io",
+    "validate_moe_swizzle_program_io_against",
+]
+from .build_moe_swizzle_calibration_program_io import (
+    build_moe_swizzle_calibration_program_io,
+    validate_moe_swizzle_calibration_program_io_against,
+)
+
+__all__ += [
+    "build_moe_swizzle_calibration_program_io",
+    "validate_moe_swizzle_calibration_program_io_against",
 ]

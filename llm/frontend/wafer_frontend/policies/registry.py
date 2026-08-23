@@ -404,6 +404,7 @@ def production_registry() -> PolicyRegistry:
         NAIVE_INTRADIE_POLICY_SCHEMA_VERSION,
         NaiveIntraDiePolicy,
     )
+    from .swizzle_defaults import SWIZZLE_POLICY_SCHEMA_VERSION, production_swizzle_policy
 
     registry = PolicyRegistry()
     for kind, name, interface, stage in (
@@ -442,6 +443,18 @@ def production_registry() -> PolicyRegistry:
         implementation_id="wafer_frontend.policy.inter_die.naive",
         implementation_schema_version="wafer_frontend.naive_inter_die_policy/v1",
         capability_ids=shared_capabilities,
+    )
+    registry.activate(
+        RegistryKind.INTER_DIE,
+        "swizzle_topo",
+        production_swizzle_policy,
+        implementation_id="wafer_frontend.policy.inter_die.swizzle_topo",
+        implementation_schema_version=SWIZZLE_POLICY_SCHEMA_VERSION,
+        capability_ids=(
+            "o1.swizzle.ag_gemm",
+            "o1.swizzle.gemm_ar",
+            "o1.swizzle.gemm_rs",
+        ),
     )
     registry.activate(
         RegistryKind.STANDALONE_COLLECTIVE,

@@ -96,7 +96,7 @@ def _rebuild(graph: IR0, **changes: object) -> IR0:
 class TrainForwardIr0Test(unittest.TestCase):
     def test_tiny_dp2_tp2_topology_and_typed_boundary(self) -> None:
         graph = build_train_forward_ir0(_tiny_train_spec())
-        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha11")
+        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha12")
         self.assertIs(graph.job, JobKind.TRAIN)
         self.assertEqual(
             (
@@ -107,7 +107,7 @@ class TrainForwardIr0Test(unittest.TestCase):
                 len(graph.persistent_states),
                 len(graph.state_accesses),
             ),
-            (34, 51, 37, 4, 30, 30),
+            (34, 51, 37, 8, 30, 30),
         )
         self.assertTrue(
             all(

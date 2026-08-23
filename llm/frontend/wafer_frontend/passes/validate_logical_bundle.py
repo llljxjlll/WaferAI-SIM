@@ -279,7 +279,7 @@ class DenseLogicalBundleValidator:
         actual_collectives = sum(
             node.kind is OpKind.COLLECTIVE for node in graph.nodes
         )
-        expected_candidates = 2 * layers if distributed else 0
+        expected_candidates = 4 * layers if distributed else 0
         expected_edges = (17 * layers + 2) if distributed else (13 * layers + 2)
         if template.infer_output is InferOutput.GREEDY_SAMPLE:
             expected_edges += 1
@@ -329,7 +329,6 @@ class DenseLogicalBundleValidator:
         ):
             _fail("embedding topology/model/profile is not exact", f"{path}.nodes[0]")
 
-        expected_candidate_ids: list[str] = []
         for layer in range(layers):
             prefix = f"{instance_id}.layer{layer}"
             layer_input_id = (
@@ -469,16 +468,6 @@ class DenseLogicalBundleValidator:
             ):
                 _fail("attention model/profile/KV provenance does not match its layer", f"{path}.nodes")
 
-            if distributed:
-                expected_candidate_ids.extend(
-                    (
-                        f"{prefix}.candidate.o_rs1",
-                        f"{prefix}.candidate.down_rs2",
-                    )
-                )
-
-        if tuple(candidate.id for candidate in graph.fusion_candidates) != tuple(expected_candidate_ids):
-            _fail("fusion candidate IDs/order are not the canonical per-layer set", f"{path}.fusion_candidates")
 
         final_norm = nodes[f"{instance_id}.final_norm"]
         lm_head = nodes[f"{instance_id}.lm_head"]

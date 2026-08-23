@@ -615,11 +615,371 @@ struct ManifestClosure {
     std::map<std::string, const BufferAbiDto *> abis;
     std::map<std::string, const StateAbiDto *> state_abis;
     std::map<std::string, std::set<Opcode>> state_directions;
+    bool exact_moe_swizzle = false;
+    bool exact_moe_calibration = false;
 };
+
+using MoeTimingSentinelRange =
+    std::tuple<uint32_t, std::string, uint64_t, uint64_t>;
+
+std::set<MoeTimingSentinelRange> ExactMoeTimingSentinelRanges(
+    const LinkedProgramManifestDto &manifest,
+    const ManifestClosure &closure) {
+    using RecordKey = std::tuple<std::string, LogicalCoreDto, uint64_t>;
+    std::map<RecordKey, const RelocatableRecordDto *> records;
+    for (const LinkedFragmentDto &linked : manifest.fragments) {
+        const CommandFragmentDto &fragment = Leaf(linked);
+        for (const CoreFragmentStreamDto &stream : fragment.core_streams)
+            for (std::size_t index = 0; index < stream.records.size(); ++index)
+                records.emplace(
+                    std::make_tuple(fragment.id, stream.logical_core, index),
+                    &stream.records[index]);
+    }
+
+    std::map<std::string, const BufferAbiDto *> roots_by_binding;
+    std::map<std::string, const BufferAbiDto *> roots_by_storage;
+    for (const auto &entry : closure.abis) {
+        const BufferAbiDto &abi = *entry.second;
+        if (abi.alias_of) continue;
+        if (!roots_by_binding.emplace(abi.binding_id, &abi).second ||
+            !roots_by_storage.emplace(abi.storage_id, &abi).second)
+            Fail("linked_program_manifest.fragments",
+                 "MoE timing sentinel roots require unique binding/storage identities");
+    }
+
+    std::set<std::string> compute_outputs;
+    std::set<std::string> dte_sources;
+    std::vector<const BufferAbiDto *> terminal_compute_outputs;
+    for (const AddressOperandBindingDto &binding :
+         manifest.address_operand_bindings) {
+        const auto record = records.find(std::make_tuple(
+            binding.fragment_id, binding.logical_core,
+            binding.fragment_record_index));
+        if (record == records.end())
+            Fail("linked_program_manifest.address_operand_bindings",
+                 "MoE timing sentinel binding references an unknown record");
+        const bool compute_output =
+            (record->second->opcode == Opcode::MATMUL ||
+             record->second->opcode == Opcode::SWIGLU) &&
+            binding.operand_id ==
+                SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+        const bool dte_source =
+            (record->second->opcode == Opcode::DTE_SEND ||
+             record->second->opcode == Opcode::DTE_ISSUE) &&
+            binding.operand_id == SemanticOperandId::SOURCE_ADDRESS;
+        if (!compute_output && !dte_source) continue;
+        if (binding.buffer_abi_ids.size() != 1)
+            Fail("linked_program_manifest.address_operand_bindings",
+                 "MoE compute/DTE sentinel operand requires one exact BufferABI");
+        const auto abi = closure.abis.find(binding.buffer_abi_ids.front());
+        if (abi == closure.abis.end())
+            Fail("linked_program_manifest.address_operand_bindings",
+                 "MoE compute/DTE sentinel operand references an unknown BufferABI");
+        const std::string &root_binding = abi->second->alias_of
+            ? *abi->second->alias_of : abi->second->binding_id;
+        const auto root = roots_by_binding.find(root_binding);
+        if (root == roots_by_binding.end() ||
+            root->second->storage_id != abi->second->storage_id)
+            Fail("linked_program_manifest.address_operand_bindings",
+                 "MoE compute/DTE sentinel operand lacks one exact physical root");
+        (compute_output ? compute_outputs : dte_sources)
+            .insert(root->second->storage_id);
+        if (compute_output &&
+            (abi->second->layout ==
+                 "moe_swizzle_terminal_combined_subview/v1" ||
+             abi->second->layout ==
+                 "moe_swizzle_terminal_tape_subview/v1"))
+            terminal_compute_outputs.push_back(abi->second);
+    }
+
+    std::set<std::string> actual_storage;
+    for (const std::string &storage : compute_outputs)
+        if (dte_sources.count(storage) != 0)
+            actual_storage.insert(storage);
+    const bool has_tape = std::any_of(
+        roots_by_binding.begin(), roots_by_binding.end(),
+        [](const auto &entry) {
+            return entry.second->layout ==
+                "moe_swizzle_terminal_tape_root/v1";
+        });
+    std::set<std::string> expected_storage;
+    for (const auto &entry : roots_by_binding) {
+        const BufferAbiDto &root = *entry.second;
+        if (root.layout == "moe_swizzle_combine_output_root/v1" ||
+            (has_tape &&
+             root.layout == "moe_swizzle_swiglu_output_root/v1"))
+            expected_storage.insert(root.storage_id);
+    }
+    if (actual_storage != expected_storage)
+        Fail("linked_program_manifest.fragments",
+             "MoE timing sentinel roots do not exactly match compute-to-DTE storage");
+
+    struct DesiredPhysicalRange {
+        const BufferAbiDto *carrier = nullptr;
+        uint64_t start = 0;
+        uint64_t end = 0;
+    };
+    using PhysicalKey = std::pair<LogicalCoreDto, std::string>;
+    std::map<PhysicalKey, std::vector<DesiredPhysicalRange>> desired;
+    std::map<PhysicalKey, std::vector<const BufferAbiDto *>> seeded;
+    for (const auto &entry : roots_by_binding) {
+        const BufferAbiDto &root = *entry.second;
+        const PhysicalKey key{root.logical_core, root.region_ref};
+        if (actual_storage.count(root.storage_id) != 0)
+            desired[key].push_back(
+                {&root, root.region_offset_bytes,
+                 root.region_offset_bytes + root.size_bytes});
+        if (root.ownership == BufferOwnershipDto::BORROWED)
+            seeded[key].push_back(&root);
+    }
+    for (const BufferAbiDto *output : terminal_compute_outputs) {
+        if (!output->alias_of)
+            Fail("linked_program_manifest.address_operand_bindings",
+                 "MoE terminal compute output must be an exact alias");
+        const auto root = roots_by_binding.find(*output->alias_of);
+        const std::string expected_layout =
+            output->layout ==
+                    "moe_swizzle_terminal_combined_subview/v1"
+                ? "moe_swizzle_terminal_combined_root/v1"
+                : "moe_swizzle_terminal_tape_root/v1";
+        if (root == roots_by_binding.end() ||
+            root->second->ownership != BufferOwnershipDto::OWNED ||
+            root->second->layout != expected_layout ||
+            root->second->storage_id != output->storage_id ||
+            dte_sources.count(output->storage_id) != 0)
+            Fail("linked_program_manifest.address_operand_bindings",
+                 "MoE terminal compute output lacks one exact non-DTE terminal root");
+        std::vector<std::pair<uint64_t, uint64_t>> terminal_views;
+        const uint64_t output_end =
+            output->region_offset_bytes + output->size_bytes;
+        for (const auto &candidate_entry : closure.abis) {
+            const BufferAbiDto &candidate = *candidate_entry.second;
+            if (candidate.id == output->id ||
+                candidate.ownership != BufferOwnershipDto::ALIASED ||
+                candidate.alias_of != output->alias_of ||
+                candidate.storage_id != output->storage_id ||
+                candidate.layout != output->layout ||
+                candidate.region_offset_bytes < output->region_offset_bytes ||
+                candidate.region_offset_bytes + candidate.size_bytes >
+                    output_end)
+                continue;
+            terminal_views.emplace_back(
+                candidate.region_offset_bytes,
+                candidate.region_offset_bytes + candidate.size_bytes);
+        }
+        std::sort(terminal_views.begin(), terminal_views.end());
+        uint64_t cursor = output->region_offset_bytes;
+        for (const auto &view : terminal_views) {
+            if (view.first > cursor) break;
+            cursor = std::max(cursor, view.second);
+        }
+        if (cursor != output_end)
+            Fail("linked_program_manifest.fragments",
+                 "MoE terminal compute output is not exactly covered by terminal probe subviews");
+        desired[{output->logical_core, output->region_ref}].push_back(
+            {root->second, output->region_offset_bytes, output_end});
+    }
+
+    std::set<MoeTimingSentinelRange> result;
+    for (const auto &entry : desired) {
+        const auto borrowed = seeded.find(entry.first);
+        std::vector<uint64_t> boundaries;
+        for (const DesiredPhysicalRange &range : entry.second) {
+            boundaries.push_back(range.start);
+            boundaries.push_back(range.end);
+        }
+        if (borrowed != seeded.end())
+            for (const BufferAbiDto *root : borrowed->second) {
+                boundaries.push_back(root->region_offset_bytes);
+                boundaries.push_back(
+                    root->region_offset_bytes + root->size_bytes);
+            }
+        std::sort(boundaries.begin(), boundaries.end());
+        boundaries.erase(
+            std::unique(boundaries.begin(), boundaries.end()),
+            boundaries.end());
+        for (std::size_t index = 1; index < boundaries.size(); ++index) {
+            const uint64_t start = boundaries[index - 1];
+            const uint64_t end = boundaries[index];
+            std::vector<const BufferAbiDto *> candidates;
+            for (const DesiredPhysicalRange &range : entry.second)
+                if (range.start <= start && end <= range.end)
+                    candidates.push_back(range.carrier);
+            const bool already_seeded =
+                borrowed != seeded.end() && std::any_of(
+                    borrowed->second.begin(), borrowed->second.end(),
+                    [&](const BufferAbiDto *root) {
+                        return root->region_offset_bytes <= start &&
+                            end <= root->region_offset_bytes + root->size_bytes;
+                    });
+            if (candidates.empty() || already_seeded) continue;
+            const BufferAbiDto *carrier = *std::min_element(
+                candidates.begin(), candidates.end(),
+                [](const BufferAbiDto *left, const BufferAbiDto *right) {
+                    return left->id < right->id;
+                });
+            const Allocation *allocation = nullptr;
+            for (const auto &candidate : closure.allocations)
+                if (candidate.second.abi->id == carrier->id) {
+                    if (allocation != nullptr)
+                        Fail("linked_program_manifest.fragments",
+                             "MoE timing sentinel carrier allocation is not unique");
+                    allocation = &candidate.second;
+                }
+            if (allocation == nullptr || carrier->ownership !=
+                    BufferOwnershipDto::OWNED)
+                Fail("linked_program_manifest.fragments",
+                     "MoE timing sentinel segment lacks one exact OWNED carrier");
+            if (!result.emplace(
+                    allocation->runtime_core_id, carrier->id,
+                    start - carrier->region_offset_bytes, end - start).second)
+                Fail("linked_program_manifest.fragments",
+                     "MoE timing sentinel physical segment is not unique");
+        }
+    }
+    return result;
+}
+
+struct CalibrationRootRange {
+    std::string layout;
+    uint64_t offset_bytes = 0;
+    uint64_t length_bytes = 0;
+};
+
+bool HasExactCalibrationRootByteClosure(
+    const std::map<std::string, uint64_t> &root_sizes,
+    const std::vector<CalibrationRootRange> &initializations,
+    const std::vector<CalibrationRootRange> &probes) {
+    static const std::string input0 =
+        "moe_swizzle_calibration_input_0_root/v1";
+    static const std::string input1 =
+        "moe_swizzle_calibration_input_1_root/v1";
+    static const std::string output =
+        "moe_swizzle_calibration_output_root/v1";
+    static const std::string scratch =
+        "moe_swizzle_calibration_scratch_root/v1";
+    const bool group_gemm = root_sizes.size() == 3 &&
+        root_sizes.count(input0) == 1 && root_sizes.count(input1) == 1 &&
+        root_sizes.count(output) == 1;
+    const bool single_input =
+        ((root_sizes.size() == 2 && root_sizes.count(input0) == 1 &&
+          root_sizes.count(output) == 1) ||
+         (root_sizes.size() == 3 && root_sizes.count(input0) == 1 &&
+          root_sizes.count(output) == 1 && root_sizes.count(scratch) == 1));
+    if (static_cast<unsigned>(group_gemm) +
+            static_cast<unsigned>(single_input) != 1 ||
+        initializations.size() != (group_gemm ? 3U : 2U) ||
+        probes.size() != 1)
+        return false;
+
+    const auto exact_ranges = [&root_sizes](
+        const std::vector<CalibrationRootRange> &ranges,
+        const std::set<std::string> &expected_layouts) {
+        std::set<std::string> actual_layouts;
+        for (const CalibrationRootRange &range : ranges) {
+            const auto root = root_sizes.find(range.layout);
+            if (root == root_sizes.end() || range.offset_bytes != 0 ||
+                range.length_bytes != root->second ||
+                !actual_layouts.emplace(range.layout).second)
+                return false;
+        }
+        return actual_layouts == expected_layouts;
+    };
+    std::set<std::string> initialization_layouts{input0, output};
+    if (group_gemm) initialization_layouts.insert(input1);
+    return exact_ranges(initializations, initialization_layouts) &&
+           exact_ranges(probes, {output});
+}
+
+bool IsExactMoeTerminalSubview(const BufferAbiDto &view,
+                               const BufferAbiDto &root) {
+    if (view.ownership != BufferOwnershipDto::ALIASED ||
+        !view.alias_of || *view.alias_of != root.binding_id ||
+        root.ownership != BufferOwnershipDto::OWNED || root.alias_of ||
+        !(view.logical_core == root.logical_core) ||
+        view.region_ref != root.region_ref ||
+        view.storage_id != root.storage_id || view.dtype != root.dtype ||
+        view.alignment_bytes != 64 || root.alignment_bytes != 64 ||
+        view.region_offset_bytes < root.region_offset_bytes ||
+        view.size_bytes > root.size_bytes -
+            (view.region_offset_bytes - root.region_offset_bytes))
+        return false;
+    const bool combined =
+        root.layout == "moe_swizzle_terminal_combined_root/v1" &&
+        view.layout == "moe_swizzle_terminal_combined_subview/v1";
+    const bool tape =
+        root.layout == "moe_swizzle_terminal_tape_root/v1" &&
+        view.layout == "moe_swizzle_terminal_tape_subview/v1";
+    return combined || tape;
+}
+
+bool AllowsExactMoeTerminalReuse(
+    const LinkedProgramManifestDto &manifest,
+    const Allocation &probe,
+    const Allocation &earlier,
+    uint64_t probe_start,
+    uint64_t probe_end) {
+    if (manifest.producer_pass != "moe_swizzle_standard_linker" ||
+        manifest.core_streams.size() != 16 || probe.abi == nullptr ||
+        earlier.abi == nullptr)
+        return false;
+    const BufferAbiDto &terminal = *probe.abi;
+    const BufferAbiDto &prior = *earlier.abi;
+    const bool terminal_layout =
+        terminal.layout == "moe_swizzle_terminal_combined_root/v1" ||
+        terminal.layout == "moe_swizzle_terminal_tape_root/v1";
+    return terminal_layout &&
+           terminal.ownership == BufferOwnershipDto::OWNED &&
+           !terminal.alias_of &&
+           prior.ownership != BufferOwnershipDto::ALIASED &&
+           !prior.alias_of &&
+           probe.runtime_core_id == earlier.runtime_core_id &&
+           probe.region_definition->symbol.id ==
+               earlier.region_definition->symbol.id &&
+           probe_start >= probe.absolute_start &&
+           probe_end <= probe.absolute_start + probe.size_bytes &&
+           prior.lifetime_end_exclusive <= terminal.lifetime_start;
+}
+
+bool AllowsExactFourStreamUnfusedTerminalReuse(
+    const LinkedProgramManifestDto &manifest,
+    const Allocation &probe,
+    const Allocation &earlier,
+    uint64_t probe_start,
+    uint64_t probe_end) {
+    static constexpr std::string_view kProducer =
+        "unfused_comparison_standard_linker";
+    static constexpr std::string_view kLayout =
+        "unfused_comparison_storage/v1";
+    if (manifest.producer_pass != kProducer ||
+        manifest.core_streams.size() != 4 || probe.abi == nullptr ||
+        earlier.abi == nullptr)
+        return false;
+    const BufferAbiDto &terminal = *probe.abi;
+    const BufferAbiDto &borrowed = *earlier.abi;
+    return terminal.ownership == BufferOwnershipDto::OWNED &&
+           !terminal.alias_of.has_value() && terminal.layout == kLayout &&
+           borrowed.ownership == BufferOwnershipDto::BORROWED &&
+           !borrowed.alias_of.has_value() && borrowed.layout == kLayout &&
+           probe.runtime_core_id == earlier.runtime_core_id &&
+           probe.region_definition->symbol.id ==
+               earlier.region_definition->symbol.id &&
+           probe_start == probe.absolute_start &&
+           probe_end == probe.absolute_start + probe.size_bytes &&
+           earlier.absolute_start == probe.absolute_start &&
+           earlier.size_bytes == probe.size_bytes &&
+           borrowed.lifetime_end_exclusive == terminal.lifetime_start;
+}
 
 ManifestClosure BuildManifestClosure(const LinkedProgramManifestDto &manifest,
                                      const ProgramArtifact &artifact) {
     ManifestClosure result;
+    result.exact_moe_swizzle =
+        manifest.producer_pass == "moe_swizzle_standard_linker" &&
+        manifest.core_streams.size() == 16;
+    result.exact_moe_calibration =
+        manifest.producer_pass ==
+            "moe_swizzle_calibration_standard_linker";
     std::map<std::string, const StateAbiDto *> state_by_binding;
     for (const LinkedFragmentDto &linked : manifest.fragments) {
         for (const BufferAbiDto &abi : Leaf(linked).buffer_abi) {
@@ -763,12 +1123,29 @@ ManifestClosure BuildManifestClosure(const LinkedProgramManifestDto &manifest,
                 const uint64_t size = LiteralU64(
                     record, "size_bytes",
                     "linked_program_manifest.fragments.SRAM_ALLOC_AT");
+                const uint64_t lifetime = LiteralU64(
+                    record, "lifetime",
+                    "linked_program_manifest.fragments.SRAM_ALLOC_AT");
+                const bool exact_moe_terminal =
+                    result.exact_moe_swizzle && !abi.alias_of &&
+                    abi.ownership == BufferOwnershipDto::OWNED &&
+                    (abi.layout ==
+                         "moe_swizzle_terminal_combined_root/v1" ||
+                     abi.layout ==
+                         "moe_swizzle_terminal_tape_root/v1");
+                const uint64_t expected_lifetime =
+                    (exact_moe_terminal ||
+                     (result.exact_moe_calibration &&
+                      abi.layout ==
+                          "moe_swizzle_calibration_output_root/v1"))
+                        ? 2 : 0;
                 if (label.symbol.kind != ProgramSymbolKind::SRAM_LABEL ||
                     label.symbol.source_ref != abi.storage_id ||
                     region.symbol.kind != ProgramSymbolKind::SRAM_REGION ||
                     region.symbol.source_ref != abi.region_ref ||
                     !(abi.logical_core == stream.logical_core) ||
                     offset != abi.region_offset_bytes || size != abi.size_bytes ||
+                    lifetime != expected_lifetime ||
                     offset > region.size_bytes ||
                     size > region.size_bytes - offset ||
                     region.value >
@@ -776,7 +1153,7 @@ ManifestClosure BuildManifestClosure(const LinkedProgramManifestDto &manifest,
                             region.size_bytes ||
                     region.value > std::numeric_limits<uint64_t>::max() - offset)
                     Fail("linked_program_manifest.fragments",
-                         "SRAM_ALLOC_AT does not exactly preserve symbol, core, BufferABI and region span");
+                         "SRAM_ALLOC_AT does not exactly preserve symbol, core, BufferABI, region span and lifetime");
                 const AllocationKey key{runtime->second, label.symbol.id};
                 if (!result.allocations.emplace(
                         key,
@@ -792,13 +1169,49 @@ ManifestClosure BuildManifestClosure(const LinkedProgramManifestDto &manifest,
     }
 
     std::set<std::string> storage_ids;
-    for (const auto &entry : result.abis)
+    std::map<std::string, const BufferAbiDto *>
+        calibration_borrowed_by_storage;
+    for (const auto &entry : result.abis) {
         storage_ids.insert(entry.second->storage_id);
+        if (result.exact_moe_calibration &&
+            entry.second->ownership == BufferOwnershipDto::BORROWED &&
+            !entry.second->alias_of &&
+            !calibration_borrowed_by_storage.emplace(
+                entry.second->storage_id, entry.second).second)
+            Fail("linked_program_manifest.fragments",
+                 "isolated MoE calibration borrowed storage root is not unique");
+    }
+    std::map<std::string, std::size_t> calibration_borrowed_label_counts;
+    if (result.exact_moe_calibration)
+        for (const ProgramSymbolDefinitionDto &definition :
+             manifest.program_symbol_definitions) {
+            if (definition.symbol.kind != ProgramSymbolKind::SRAM_LABEL)
+                continue;
+            const auto root = calibration_borrowed_by_storage.find(
+                definition.symbol.source_ref);
+            if (root == calibration_borrowed_by_storage.end())
+                continue;
+            if (definition.logical_cores !=
+                    std::vector<LogicalCoreDto>{root->second->logical_core} ||
+                definition.value != 0 || definition.size_bytes != 0)
+                Fail("linked_program_manifest.program_symbol_definitions",
+                     "isolated MoE calibration borrowed label must preserve exact root core/storage and zero value/size");
+            ++calibration_borrowed_label_counts[root->first];
+        }
+    for (const auto &entry : calibration_borrowed_by_storage) {
+        if (calibration_borrowed_label_counts[entry.first] != 1)
+            Fail("linked_program_manifest.program_symbol_definitions",
+                 "isolated MoE calibration borrowed root label cardinality changed");
+    }
     std::set<AllocationKey> expected;
     for (const ProgramSymbolDefinitionDto &definition :
          manifest.program_symbol_definitions) {
         if (definition.symbol.kind != ProgramSymbolKind::SRAM_LABEL ||
             storage_ids.count(definition.symbol.source_ref) == 0)
+            continue;
+        if (result.exact_moe_calibration &&
+            calibration_borrowed_by_storage.count(
+                definition.symbol.source_ref) == 1)
             continue;
         for (const LogicalCoreDto &core : definition.logical_cores) {
             const auto runtime = runtime_by_core.find(core);
@@ -810,16 +1223,10 @@ ManifestClosure BuildManifestClosure(const LinkedProgramManifestDto &manifest,
     }
     std::set<AllocationKey> actual;
     for (const auto &entry : result.allocations) actual.insert(entry.first);
-    if (actual != expected)
-        Fail("linked_program_manifest.fragments",
-             "storage-backed SRAM_LABEL definitions require exact per-core SRAM_ALLOC_AT coverage");
     std::set<std::string> all_abi_ids;
     for (const auto &entry : result.abis)
         if (entry.second->ownership != BufferOwnershipDto::ALIASED)
             all_abi_ids.insert(entry.first);
-    if (allocated_abi_ids != all_abi_ids)
-        Fail("linked_program_manifest.fragments",
-             "every non-aliased BufferABI requires one exact SRAM_ALLOC_AT");
     for (const StateOperandBindingDto &binding :
          manifest.state_operand_bindings) {
         if (binding.operand_id != SemanticOperandId::HBM_ADDRESS)
@@ -842,6 +1249,97 @@ ManifestClosure BuildManifestClosure(const LinkedProgramManifestDto &manifest,
         result.state_directions.at(binding.state_abi_id)
             .insert(record->second->opcode);
     }
+    if (result.exact_moe_swizzle || result.exact_moe_calibration) {
+        for (const auto &entry : result.abis) {
+            const BufferAbiDto &root = *entry.second;
+            if (root.ownership != BufferOwnershipDto::BORROWED ||
+                root.alias_of)
+                continue;
+            std::vector<const BufferAbiDto *> aliases;
+            for (const auto &candidate : result.abis) {
+                const BufferAbiDto &alias = *candidate.second;
+                if (alias.alias_of ==
+                        std::optional<std::string>(root.binding_id) &&
+                    alias.storage_id == root.storage_id &&
+                    alias.region_offset_bytes == root.region_offset_bytes)
+                    aliases.push_back(&alias);
+            }
+            std::vector<std::pair<std::size_t,
+                                  const ProgramSymbolDefinitionDto *>>
+                absolute_candidates;
+            for (std::size_t index = 0;
+                 index < manifest.program_symbol_definitions.size(); ++index) {
+                const ProgramSymbolDefinitionDto &definition =
+                    manifest.program_symbol_definitions[index];
+                if (definition.symbol.kind !=
+                        ProgramSymbolKind::ABSOLUTE_ADDRESS ||
+                    std::find(definition.logical_cores.begin(),
+                              definition.logical_cores.end(),
+                              root.logical_core) ==
+                        definition.logical_cores.end())
+                    continue;
+                const bool whole_alias_match = std::any_of(
+                    aliases.begin(), aliases.end(),
+                    [&definition](const BufferAbiDto *alias) {
+                        return definition.symbol.source_ref ==
+                               alias->binding_id;
+                    });
+                const bool calibration_root_match =
+                    result.exact_moe_calibration &&
+                    definition.symbol.source_ref == root.binding_id;
+                if (whole_alias_match || calibration_root_match)
+                    absolute_candidates.emplace_back(index, &definition);
+            }
+            std::sort(
+                absolute_candidates.begin(), absolute_candidates.end(),
+                [](const auto &left, const auto &right) {
+                    return left.second->symbol.id < right.second->symbol.id;
+                });
+            const ProgramSymbolDefinitionDto *region = nullptr;
+            for (const ProgramSymbolDefinitionDto &definition :
+                 manifest.program_symbol_definitions)
+                if (definition.symbol.kind ==
+                        ProgramSymbolKind::SRAM_REGION &&
+                    definition.symbol.source_ref == root.region_ref &&
+                    (!result.exact_moe_calibration ||
+                     std::find(definition.logical_cores.begin(),
+                               definition.logical_cores.end(),
+                               root.logical_core) !=
+                         definition.logical_cores.end())) {
+                    if (region != nullptr)
+                        Fail("linked_program_manifest.program_symbol_definitions",
+                             "MoE borrowed root resolves to multiple SRAM regions");
+                    region = &definition;
+                }
+            const auto runtime = runtime_by_core.find(root.logical_core);
+            if ((result.exact_moe_swizzle && aliases.empty()) ||
+                absolute_candidates.empty() || region == nullptr ||
+                runtime == runtime_by_core.end())
+                Fail("linked_program_manifest.fragments",
+                     "MoE borrowed root lacks exact external ABS/region/core closure");
+            const auto chosen = absolute_candidates.front();
+            const AllocationKey key{runtime->second,
+                                    chosen.second->symbol.id};
+            if (!result.allocations.emplace(
+                    key,
+                    Allocation{runtime->second, chosen.first,
+                               chosen.second, region, &root,
+                               root.region_offset_bytes, root.size_bytes,
+                               chosen.second->value})
+                     .second ||
+                !allocated_abi_ids.insert(root.id).second)
+                Fail("linked_program_manifest.fragments",
+                     "MoE borrowed root external allocation is not unique");
+            expected.emplace(key);
+            actual.emplace(key);
+        }
+    }
+    if (actual != expected)
+        Fail("linked_program_manifest.fragments",
+             "storage-backed roots require exact allocation/external-address coverage");
+    if (allocated_abi_ids != all_abi_ids)
+        Fail("linked_program_manifest.fragments",
+             "every non-aliased BufferABI requires one exact allocation closure");
     for (const auto &entry : result.state_directions)
         if (entry.second.empty())
             Fail("linked_program_manifest.state_operand_bindings",
@@ -906,28 +1404,43 @@ const Allocation &ValidateEntry(const Entry &entry,
     const auto allocation = closure.allocations.find(
         {target.runtime_core_id, target.program_symbol_ref});
     const auto abi = closure.abis.find(target.buffer_abi_id);
-    if (allocation == closure.allocations.end() || abi == closure.abis.end() ||
-        allocation->second.abi != abi->second)
+    if (allocation == closure.allocations.end() || abi == closure.abis.end())
         Fail(path, "core/label does not resolve to the exact BufferABI allocation");
     const Allocation &result = allocation->second;
+    const BufferAbiDto &target_buffer = *abi->second;
     const BufferAbiDto &buffer = *result.abi;
+    const bool exact_moe_alias = closure.exact_moe_swizzle &&
+        IsExactMoeTerminalSubview(target_buffer, buffer);
+    if (result.abi != abi->second && !exact_moe_alias)
+        Fail(path,
+             "core/label does not resolve to the exact BufferABI root/subview");
     if (target.finalized_symbol_index != result.label_definition_index ||
         target.expected_symbol_name != result.label_definition->name ||
-        target.storage_id != buffer.storage_id ||
-        target.value_id != buffer.value_id ||
-        !SameSidecarSlice(target.tensor_slice, buffer.tensor_slice) ||
-        target.dtype != SidecarDType(buffer.dtype) ||
-        target.layout != buffer.layout)
+        target.storage_id != target_buffer.storage_id ||
+        target.value_id != target_buffer.value_id ||
+        !SameSidecarSlice(target.tensor_slice, target_buffer.tensor_slice) ||
+        target.dtype != SidecarDType(target_buffer.dtype) ||
+        target.layout != target_buffer.layout)
         Fail(path,
              "symbol/index/name and BufferABI tensor metadata must match exactly");
     if (TightTensorBytes(target.tensor_slice, target.dtype,
-                         path + ".target.tensor_slice") != buffer.size_bytes)
+                         path + ".target.tensor_slice") !=
+            target_buffer.size_bytes)
         Fail(path,
              "BufferABI size must equal its tight dense tensor byte span");
     if (target.finalized_symbol_index >= artifact.symbols.size())
         Fail(path + ".finalized_symbol_index", "exceeds ProgramArtifact symbols");
     const ProgramSymbol &symbol = artifact.symbols[target.finalized_symbol_index];
-    if (symbol.kind != ProgramSymbolKind::SRAM_LABEL ||
+    const bool exact_moe_external =
+        (closure.exact_moe_swizzle || closure.exact_moe_calibration) &&
+        buffer.ownership == BufferOwnershipDto::BORROWED &&
+        !buffer.alias_of &&
+        result.label_definition->symbol.kind ==
+            ProgramSymbolKind::ABSOLUTE_ADDRESS;
+    if ((!exact_moe_external &&
+         symbol.kind != ProgramSymbolKind::SRAM_LABEL) ||
+        (exact_moe_external &&
+         symbol.kind != ProgramSymbolKind::ABSOLUTE_ADDRESS) ||
         symbol.name_string_index >= artifact.strings.size() ||
         artifact.strings[symbol.name_string_index] != target.expected_symbol_name)
         Fail(path, "finalized ProgramArtifact symbol identity disagrees");
@@ -1083,6 +1596,101 @@ void RequireBoundary(const char *operation) {
 
 } // namespace
 
+void RunExactMoeCalibrationDynamicRootByteClosureSelfTest() {
+    const std::map<std::string, uint64_t> roots{
+        {"moe_swizzle_calibration_input_0_root/v1", 128},
+        {"moe_swizzle_calibration_input_1_root/v1", 512},
+        {"moe_swizzle_calibration_output_root/v1", 32},
+    };
+    const std::vector<CalibrationRootRange> initializations{
+        {"moe_swizzle_calibration_input_0_root/v1", 0, 128},
+        {"moe_swizzle_calibration_input_1_root/v1", 0, 512},
+        {"moe_swizzle_calibration_output_root/v1", 0, 32},
+    };
+    const std::vector<CalibrationRootRange> probes{
+        {"moe_swizzle_calibration_output_root/v1", 0, 32},
+    };
+    if (!HasExactCalibrationRootByteClosure(roots, initializations, probes))
+        throw Error("isolated M2 GroupGEMM root-byte closure selftest rejected the canonical witness");
+    auto wrong_length = initializations;
+    wrong_length[1].length_bytes = 511;
+    if (HasExactCalibrationRootByteClosure(roots, wrong_length, probes))
+        throw Error("isolated M2 GroupGEMM root-byte closure selftest accepted a wrong length");
+    auto wrong_layout = initializations;
+    wrong_layout[1].layout =
+        "moe_swizzle_calibration_scratch_root/v1";
+    if (HasExactCalibrationRootByteClosure(roots, wrong_layout, probes))
+        throw Error("isolated M2 GroupGEMM root-byte closure selftest accepted a wrong layout");
+}
+
+void RunExactFourStreamUnfusedTerminalReuseSelfTest() {
+    LinkedProgramManifestDto manifest;
+    manifest.producer_pass = "unfused_comparison_standard_linker";
+    manifest.core_streams.resize(4);
+
+    ProgramSymbolDefinitionDto region;
+    region.symbol.id = "region";
+
+    BufferAbiDto terminal;
+    terminal.ownership = BufferOwnershipDto::OWNED;
+    terminal.layout = "unfused_comparison_storage/v1";
+    terminal.lifetime_start = 7;
+    terminal.lifetime_end_exclusive = 11;
+
+    BufferAbiDto borrowed;
+    borrowed.ownership = BufferOwnershipDto::BORROWED;
+    borrowed.layout = "unfused_comparison_storage/v1";
+    borrowed.lifetime_start = 0;
+    borrowed.lifetime_end_exclusive = terminal.lifetime_start;
+
+    auto allows = [&](const LinkedProgramManifestDto &candidate_manifest,
+                      const BufferAbiDto &candidate_terminal,
+                      const BufferAbiDto &candidate_borrowed,
+                      uint64_t probe_start = 128,
+                      uint64_t probe_end = 192) {
+        Allocation probe;
+        probe.runtime_core_id = 2;
+        probe.region_definition = &region;
+        probe.abi = &candidate_terminal;
+        probe.size_bytes = 64;
+        probe.absolute_start = 128;
+        Allocation earlier = probe;
+        earlier.abi = &candidate_borrowed;
+        return AllowsExactFourStreamUnfusedTerminalReuse(
+            candidate_manifest, probe, earlier, probe_start, probe_end);
+    };
+    if (!allows(manifest, terminal, borrowed))
+        throw Error("exact four-stream UNFUSED terminal reuse selftest rejected the canonical witness");
+
+    auto expect_rejected = [&](bool accepted, const char *tamper) {
+        if (accepted)
+            throw Error(std::string("exact four-stream UNFUSED terminal reuse selftest accepted ") +
+                        tamper);
+    };
+    LinkedProgramManifestDto wrong_producer = manifest;
+    wrong_producer.producer_pass = "swizzle_standard_linker";
+    expect_rejected(allows(wrong_producer, terminal, borrowed),
+                    "wrong producer");
+
+    BufferAbiDto wrong_layout = terminal;
+    wrong_layout.layout = "row_major";
+    expect_rejected(allows(manifest, wrong_layout, borrowed),
+                    "wrong layout");
+
+    BufferAbiDto wrong_ownership = borrowed;
+    wrong_ownership.ownership = BufferOwnershipDto::OWNED;
+    expect_rejected(allows(manifest, terminal, wrong_ownership),
+                    "wrong ownership");
+
+    expect_rejected(allows(manifest, terminal, borrowed, 129, 192),
+                    "partial probe span");
+
+    BufferAbiDto overlapping_lifetime = borrowed;
+    overlapping_lifetime.lifetime_end_exclusive = terminal.lifetime_start + 1;
+    expect_rejected(allows(manifest, terminal, overlapping_lifetime),
+                    "overlapping lifetime");
+}
+
 std::string Sha256Hex(std::string_view bytes) { return Sha256Impl(bytes); }
 
 std::string Sha256Hex(const std::vector<uint8_t> &bytes) {
@@ -1213,6 +1821,21 @@ ResolvedContract Resolve(const Contract &contract,
         const std::string manifest_digest = CanonicalDigest(manifest_json);
         const LinkedProgramManifestDto manifest =
             ProgramArtifactFinalizer::Parse(linked_manifest_json);
+        const bool exact_moe_contract =
+            contract.producer_pass == "build_moe_swizzle_program_io";
+        const bool exact_moe_manifest =
+            manifest.producer_pass == "moe_swizzle_standard_linker";
+        const bool exact_moe_calibration_contract =
+            contract.producer_pass ==
+                "build_moe_swizzle_calibration_program_io";
+        const bool exact_moe_calibration_manifest =
+            manifest.producer_pass ==
+                "moe_swizzle_calibration_standard_linker";
+        if (exact_moe_contract != exact_moe_manifest ||
+            exact_moe_calibration_contract !=
+                exact_moe_calibration_manifest)
+            Fail("program_io_contract.producer_pass",
+                 "MoE ProgramIo producer requires its exact linked manifest and vice versa");
         if (contract.source_linked_manifest_id != manifest.id ||
             contract.source_linked_manifest_digest != manifest_digest)
             Fail("program_io_contract.source_linked_manifest_id",
@@ -1230,7 +1853,194 @@ ResolvedContract Resolve(const Contract &contract,
         const ManifestClosure closure = BuildManifestClosure(manifest, artifact);
         std::map<std::string, const Blob *> blobs;
         for (const Blob &blob : contract.blobs) blobs.emplace(blob.id, &blob);
+        if (exact_moe_calibration_contract) {
+            std::map<std::string, uint64_t> root_sizes;
+            for (const auto &entry : closure.abis) {
+                const BufferAbiDto &abi = *entry.second;
+                if (abi.layout.rfind("moe_swizzle_calibration_", 0) != 0)
+                    continue;
+                if (abi.alias_of ||
+                    !root_sizes.emplace(abi.layout, abi.size_bytes).second)
+                    Fail("linked_program_manifest.fragments",
+                         "isolated MoE calibration root layouts must be unique non-aliases");
+            }
+            std::vector<CalibrationRootRange> initialization_ranges;
+            for (const Initialization &entry : contract.initializations) {
+                const auto *target = std::get_if<SramTarget>(&entry.target);
+                const auto abi = target == nullptr
+                    ? closure.abis.end()
+                    : closure.abis.find(target->buffer_abi_id);
+                if (target == nullptr || abi == closure.abis.end() ||
+                    target->layout != abi->second->layout)
+                    Fail("program_io_contract.initializations",
+                         "isolated MoE calibration inputs must identify exact SRAM roots");
+                initialization_ranges.push_back(
+                    {target->layout, entry.offset_bytes, entry.length_bytes});
+            }
+            std::vector<CalibrationRootRange> probe_ranges;
+            for (const OutputProbe &entry : contract.output_probes) {
+                const auto *target = std::get_if<SramTarget>(&entry.target);
+                const auto abi = target == nullptr
+                    ? closure.abis.end()
+                    : closure.abis.find(target->buffer_abi_id);
+                if (target == nullptr || abi == closure.abis.end() ||
+                    target->layout != abi->second->layout)
+                    Fail("program_io_contract.output_probes",
+                         "isolated MoE calibration output must identify its exact SRAM root");
+                probe_ranges.push_back(
+                    {target->layout, entry.offset_bytes, entry.length_bytes});
+            }
+            if (contract.mode != Mode::TIMING ||
+                !HasExactCalibrationRootByteClosure(
+                    root_sizes, initialization_ranges, probe_ranges))
+                Fail("program_io_contract",
+                     "isolated MoE calibration ProgramIo root byte closure changed");
+            const OutputProbe &terminal_probe =
+                contract.output_probes.front();
+            const auto *terminal_probe_target =
+                std::get_if<SramTarget>(&terminal_probe.target);
+            const Initialization *terminal_sentinel = nullptr;
+            for (const Initialization &entry : contract.initializations)
+                if (entry.purpose == Purpose::TIMING_PARTIAL) {
+                    if (terminal_sentinel != nullptr)
+                        Fail("program_io_contract.initializations",
+                             "isolated MoE calibration requires one exact terminal sentinel");
+                    terminal_sentinel = &entry;
+                }
+            const auto same_terminal_target = [](
+                const SramTarget &left, const SramTarget &right) {
+                return left.kind == right.kind &&
+                    left.runtime_core_id == right.runtime_core_id &&
+                    left.program_symbol_ref == right.program_symbol_ref &&
+                    left.finalized_symbol_index ==
+                        right.finalized_symbol_index &&
+                    left.expected_symbol_name ==
+                        right.expected_symbol_name &&
+                    left.buffer_abi_id == right.buffer_abi_id &&
+                    left.storage_id == right.storage_id &&
+                    left.value_id == right.value_id &&
+                    left.tensor_slice.value_id ==
+                        right.tensor_slice.value_id &&
+                    left.tensor_slice.offset == right.tensor_slice.offset &&
+                    left.tensor_slice.shape == right.tensor_slice.shape &&
+                    left.dtype == right.dtype && left.layout == right.layout;
+            };
+            const auto *terminal_sentinel_target =
+                terminal_sentinel == nullptr
+                    ? nullptr
+                    : std::get_if<SramTarget>(
+                          &terminal_sentinel->target);
+            if (terminal_probe_target == nullptr ||
+                terminal_sentinel_target == nullptr ||
+                !same_terminal_target(*terminal_sentinel_target,
+                                      *terminal_probe_target) ||
+                terminal_sentinel->offset_bytes !=
+                    terminal_probe.offset_bytes ||
+                terminal_sentinel->length_bytes !=
+                    terminal_probe.length_bytes ||
+                terminal_sentinel->blob_ref != terminal_probe.blob_ref)
+                Fail("program_io_contract.initializations",
+                     "isolated MoE calibration terminal sentinel must exactly match its after-program probe");
+        }
+        if (exact_moe_contract) {
+            std::size_t borrowed_roots = 0;
+            std::size_t combined_aliases = 0;
+            bool has_tape_aliases = false;
+            std::map<std::string, const BufferAbiDto *> roots_by_binding;
+            for (const auto &entry : closure.abis) {
+                const BufferAbiDto &abi = *entry.second;
+                if (!abi.alias_of &&
+                    !roots_by_binding.emplace(abi.binding_id, &abi).second)
+                    Fail("linked_program_manifest.fragments",
+                         "MoE ProgramIo root bindings must be unique");
+                if (!abi.alias_of &&
+                    abi.ownership == BufferOwnershipDto::BORROWED)
+                    ++borrowed_roots;
+                if (abi.alias_of && abi.layout ==
+                        "moe_swizzle_terminal_combined_subview/v1")
+                    ++combined_aliases;
+                if (abi.alias_of && abi.layout ==
+                        "moe_swizzle_terminal_tape_subview/v1")
+                    has_tape_aliases = true;
+            }
+            if (combined_aliases <= 16)
+                Fail("linked_program_manifest.fragments",
+                     "MoE ProgramIo requires terminal aliases beyond the root carrier set");
+            const std::size_t terminal_probes = combined_aliases - 16;
+            std::map<std::string, std::size_t> expected_probe_layouts{
+                {"moe_swizzle_terminal_combined_subview/v1",
+                 terminal_probes},
+            };
+            if (has_tape_aliases)
+                expected_probe_layouts.emplace(
+                    "moe_swizzle_terminal_tape_subview/v1",
+                    terminal_probes);
 
+            const std::set<MoeTimingSentinelRange> expected_sentinels =
+                ExactMoeTimingSentinelRanges(manifest, closure);
+            std::set<MoeTimingSentinelRange> actual_sentinels;
+            std::size_t hbm_initializations = 0;
+            std::size_t sram_initializations = 0;
+            for (const Initialization &entry : contract.initializations) {
+                if (std::holds_alternative<HbmTarget>(entry.target)) {
+                    ++hbm_initializations;
+                    continue;
+                }
+                ++sram_initializations;
+                if (entry.purpose != Purpose::TIMING_PARTIAL) continue;
+                const auto *target = std::get_if<SramTarget>(&entry.target);
+                const auto blob = blobs.find(entry.blob_ref);
+                if (target == nullptr || blob == blobs.end() ||
+                    blob->second->bytes.size() != entry.length_bytes ||
+                    std::any_of(blob->second->bytes.begin(),
+                                blob->second->bytes.end(),
+                                [](uint8_t byte) { return byte != 0; }) ||
+                    !actual_sentinels.emplace(
+                        target->runtime_core_id, target->buffer_abi_id,
+                        entry.offset_bytes, entry.length_bytes).second)
+                    Fail("program_io_contract.initializations",
+                         "MoE timing sentinels require unique exact zero-filled physical segments");
+            }
+            std::map<std::string, std::size_t> probe_layouts;
+            std::set<std::string> probed_abis;
+            for (const OutputProbe &entry : contract.output_probes) {
+                const auto *target = std::get_if<SramTarget>(&entry.target);
+                const auto abi = target == nullptr
+                    ? closure.abis.end()
+                    : closure.abis.find(target->buffer_abi_id);
+                const BufferAbiDto *view = abi == closure.abis.end()
+                    ? nullptr : abi->second;
+                const auto root = view == nullptr || !view->alias_of
+                    ? roots_by_binding.end()
+                    : roots_by_binding.find(*view->alias_of);
+                const bool exact_alias_span =
+                    root != roots_by_binding.end() &&
+                    view->region_ref == root->second->region_ref &&
+                    view->storage_id == root->second->storage_id &&
+                    view->region_offset_bytes >=
+                        root->second->region_offset_bytes &&
+                    entry.offset_bytes == view->region_offset_bytes -
+                        root->second->region_offset_bytes &&
+                    entry.length_bytes == view->size_bytes;
+                if (target == nullptr || view == nullptr ||
+                    target->layout != view->layout || !exact_alias_span ||
+                    !probed_abis.insert(view->id).second)
+                    Fail("program_io_contract.output_probes",
+                         "MoE terminal probes must exactly and uniquely cover typed terminal subviews");
+                ++probe_layouts[target->layout];
+            }
+            if (contract.mode != Mode::TIMING ||
+                contract.initializations.size() !=
+                    closure.state_abis.size() + borrowed_roots +
+                        expected_sentinels.size() ||
+                hbm_initializations != closure.state_abis.size() ||
+                sram_initializations !=
+                    borrowed_roots + expected_sentinels.size() ||
+                actual_sentinels != expected_sentinels ||
+                probe_layouts != expected_probe_layouts)
+                Fail("program_io_contract",
+                     "MoE ProgramIo manifest-derived initialization/probe quotient changed");
+        }
         ResolvedContract result;
         result.id = contract.id;
         result.mode = contract.mode;
@@ -1382,7 +2192,11 @@ ResolvedContract Resolve(const Contract &contract,
                         allocation.region_definition->symbol.id)
                     continue;
                 if (absolute < other.absolute_start + other.size_bytes &&
-                    other.absolute_start < end)
+                    other.absolute_start < end &&
+                    !AllowsExactFourStreamUnfusedTerminalReuse(
+                        manifest, allocation, other, absolute, end) &&
+                    !AllowsExactMoeTerminalReuse(
+                        manifest, allocation, other, absolute, end))
                     Fail(path + ".capture",
                          "after-program probe rejects physical allocation reuse/aliasing");
             }

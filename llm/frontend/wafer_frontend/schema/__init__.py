@@ -1258,3 +1258,84 @@ __all__ += [
     *_lite_moe_dp4_backward_all,
     *_lite_moe_dp4_n6_all,
 ]
+from .swizzle import *
+from .swizzle import __all__ as _swizzle_all
+
+__all__ += [name for name in _swizzle_all if name not in __all__]
+from .swizzle_plan import *
+from .swizzle_plan import __all__ as _swizzle_plan_all
+from .swizzle_ir2 import *
+from .swizzle_ir2 import __all__ as _swizzle_ir2_all
+
+__all__ += [
+    name for name in (*_swizzle_plan_all, *_swizzle_ir2_all)
+    if name not in __all__
+]
+from .swizzle_abi import *
+from .swizzle_abi import __all__ as _swizzle_abi_all
+from .swizzle_operand_abi import *
+from .swizzle_operand_abi import __all__ as _swizzle_operand_abi_all
+from .swizzle_lowering import *
+from .swizzle_lowering import __all__ as _swizzle_lowering_all
+from .swizzle_standard import *
+from .swizzle_standard import __all__ as _swizzle_standard_all
+from .swizzle_evidence import *
+from .swizzle_evidence import __all__ as _swizzle_evidence_all
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    *_swizzle_abi_all,
+    *_swizzle_operand_abi_all,
+    *_swizzle_lowering_all,
+    *_swizzle_standard_all,
+    *_swizzle_evidence_all,
+)))
+from .swizzle_moe import *
+from .swizzle_moe import __all__ as _swizzle_moe_all
+from .swizzle_moe_placement import *
+from .swizzle_moe_placement import __all__ as _swizzle_moe_placement_all
+from .swizzle_moe_scale import *
+from .swizzle_moe_scale import __all__ as _swizzle_moe_scale_all
+from .swizzle_moe_calibration import *
+from .swizzle_moe_calibration import __all__ as _swizzle_moe_calibration_all
+from .swizzle_moe_calibration_program import *
+from .swizzle_moe_calibration_program import (
+    __all__ as _swizzle_moe_calibration_program_all,
+)
+from .swizzle_moe_execution import *
+from .swizzle_moe_execution import __all__ as _swizzle_moe_execution_all
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    *_swizzle_moe_all,
+    *_swizzle_moe_placement_all,
+    *_swizzle_moe_scale_all,
+    *_swizzle_moe_calibration_all,
+    *_swizzle_moe_calibration_program_all,
+    *_swizzle_moe_execution_all,
+)))
+from .swizzle_unfused import *
+from .swizzle_unfused import __all__ as _swizzle_unfused_all
+from .swizzle_unfused_abi import *
+from .swizzle_unfused_abi import __all__ as _swizzle_unfused_abi_all
+from .swizzle_unfused_lowering import *
+from .swizzle_unfused_lowering import __all__ as _swizzle_unfused_lowering_all
+from .swizzle_unfused_standard import *
+from .swizzle_unfused_standard import __all__ as _swizzle_unfused_standard_all
+from .swizzle_scale import *
+from .swizzle_scale import __all__ as _swizzle_scale_all
+from .swizzle_performance_evidence import *
+from .swizzle_performance_evidence import __all__ as _swizzle_performance_evidence_all
+from .swizzle_calibration import *
+from .swizzle_calibration import __all__ as _swizzle_calibration_all
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    *_swizzle_unfused_all,
+    *_swizzle_unfused_abi_all,
+    *_swizzle_unfused_lowering_all,
+    *_swizzle_unfused_standard_all,
+    *_swizzle_scale_all,
+    *_swizzle_performance_evidence_all,
+    *_swizzle_calibration_all,
+)))

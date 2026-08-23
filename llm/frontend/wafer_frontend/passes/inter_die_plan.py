@@ -6,6 +6,9 @@ from ..errors import SchemaError
 from ..policies.interfaces import InterDiePolicy, StandaloneCollectivePolicy
 from ..policies.naive_inter_die import DirectAllGatherPolicy, NaiveInterDiePolicy
 from ..schema.action import FusionPlan, StandaloneCollectivePlan
+from ..schema.swizzle_plan import FusedPlan
+from ..policies.swizzle_defaults import production_swizzle_policy
+from ..policies.swizzle_topo import SwizzlePlanner
 from ..schema.ir0 import CollectiveKind, CollectiveWorkload, OpKind
 from ..schema.common import ProfileKey
 from ..schema.ir1 import IR1, PhysicalNode
@@ -15,6 +18,7 @@ from ..schema.n4 import (
     InterDiePlanBundle,
     InterDiePlannedProfile,
     InterDiePlanningContext,
+    FusedInterDieContract,
     Stage4FusionPartitionedIR1,
     Stage4InterDiePlannedIR1,
     TrainFusionPartitionedIR1,
@@ -69,7 +73,7 @@ def plan_ir1(
     context: InterDiePlanningContext,
     fused_policy: InterDiePolicy | None = None,
     standalone_policy: StandaloneCollectivePolicy | None = None,
-) -> tuple[tuple[FusionPlan, ...], tuple[StandaloneCollectivePlan, ...]]:
+) -> tuple[tuple[FusedPlan, ...], tuple[StandaloneCollectivePlan, ...]]:
     """Plan one real fusion-partitioned IR-1 without fabricating an N4 wrapper."""
 
     if type(graph) is not IR1:
@@ -86,14 +90,31 @@ def plan_ir1(
             "must be produced by fusion_partition",
             path="ir1.producer_pass",
         )
+    standalone_nodes = _unfused_all_gathers(graph)
 
-    selected_fused_policy: InterDiePolicy = (
-        NaiveInterDiePolicy() if fused_policy is None else fused_policy
+    if fused_policy is None:
+        selected_fused_policy: InterDiePolicy = (
+            NaiveInterDiePolicy()
+            if context.fused_contract is FusedInterDieContract.DIRECT_NAIVE_V1
+            else production_swizzle_policy()
+        )
+    else:
+        selected_fused_policy = fused_policy
+    expected_policy_type = (
+        NaiveInterDiePolicy
+        if context.fused_contract is FusedInterDieContract.DIRECT_NAIVE_V1
+        else SwizzlePlanner
     )
+    if type(selected_fused_policy) in (NaiveInterDiePolicy, SwizzlePlanner) and type(
+        selected_fused_policy
+    ) is not expected_policy_type:
+        raise SchemaError(
+            "fused policy implementation disagrees with planning context",
+            path="fused_policy",
+        )
     selected_standalone_policy: StandaloneCollectivePolicy = (
         DirectAllGatherPolicy() if standalone_policy is None else standalone_policy
     )
-    standalone_nodes = _unfused_all_gathers(graph)
     if not graph.fused_op_skeletons and not standalone_nodes:
         return (), ()
     profiles = _profiles_by_instance(graph)
@@ -180,7 +201,9 @@ def plan_bundle(
     context.validate("inter_die_planning_context")
 
     selected_fused_policy: InterDiePolicy = (
-        NaiveInterDiePolicy() if fused_policy is None else fused_policy
+        (NaiveInterDiePolicy() if context.fused_contract is FusedInterDieContract.DIRECT_NAIVE_V1 else production_swizzle_policy())
+        if fused_policy is None
+        else fused_policy
     )
     selected_standalone_policy: StandaloneCollectivePolicy = (
         DirectAllGatherPolicy() if standalone_policy is None else standalone_policy

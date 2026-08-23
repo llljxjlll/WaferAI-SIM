@@ -9,8 +9,12 @@
 #include "prims/dte_endpoint_prims.h"
 #pragma GCC diagnostic pop
 
+#include "systemc.h"
+
+#include <algorithm>
 #include <exception>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -272,6 +276,161 @@ bool P2pEndpointResidual::Empty() const noexcept {
            early_data_bytes == 0;
 }
 
+std::string FormatMoeSwizzleSessionMarker(
+    const MoeSwizzleSessionMarker &marker) {
+    if (marker.die > 3)
+        throw std::invalid_argument(
+            "MoE Swizzle session marker die exceeds 2x2 mesh");
+    if (marker.opens != marker.retires)
+        throw std::invalid_argument(
+            "MoE Swizzle session marker requires balanced lifetime counts");
+    if (marker.capacity_per_core == 0 || marker.active_core_count == 0 ||
+        marker.aggregate_capacity % marker.capacity_per_core != 0 ||
+        marker.aggregate_capacity / marker.capacity_per_core !=
+            marker.active_core_count ||
+        marker.send_peak > marker.aggregate_capacity ||
+        marker.recv_peak > marker.aggregate_capacity ||
+        marker.send_peak > marker.opens || marker.recv_peak > marker.opens)
+        throw std::invalid_argument(
+            "MoE Swizzle session marker capacity/peak is inconsistent");
+    std::ostringstream output;
+    output << "[MOE_SWIZZLE_SESSION] die=" << marker.die
+           << " capacity_per_core=" << marker.capacity_per_core
+           << " active_core_count=" << marker.active_core_count
+           << " aggregate_capacity=" << marker.aggregate_capacity
+           << " send_peak=" << marker.send_peak
+           << " recv_peak=" << marker.recv_peak
+           << " opens=" << marker.opens
+           << " retires=" << marker.retires;
+    return output.str();
+}
+
+std::vector<MoeSwizzleSessionMarker> ReplayMoeSwizzleSessionMarkers(
+    const std::vector<P2pEndpointLifetimeEvent> &events,
+    const std::map<uint16_t, uint16_t> &runtime_core_to_die,
+    const std::map<uint16_t, uint64_t> &runtime_core_capacity,
+    uint16_t die_count) {
+    if (die_count == 0 || die_count > 4)
+        throw std::invalid_argument(
+            "MoE Swizzle session replay requires one to four dies");
+    for (const auto &binding : runtime_core_to_die) {
+        if (binding.second >= die_count)
+            throw std::invalid_argument(
+                "MoE Swizzle runtime core binding exceeds die count");
+    }
+    if (runtime_core_capacity.size() != runtime_core_to_die.size())
+        throw std::invalid_argument(
+            "MoE Swizzle session capacity/core binding coverage drifted");
+    std::optional<uint64_t> common_capacity;
+    for (const auto &[core, die] : runtime_core_to_die) {
+        (void)die;
+        const auto found = runtime_core_capacity.find(core);
+        if (found == runtime_core_capacity.end() || found->second == 0)
+            throw std::invalid_argument(
+                "MoE Swizzle session core capacity is missing/zero");
+        if (!common_capacity.has_value()) common_capacity = found->second;
+        if (*common_capacity != found->second)
+            throw std::invalid_argument(
+                "MoE Swizzle session per-core capacities disagree");
+    }
+
+    std::vector<P2pEndpointLifetimeEvent> by_core = events;
+    std::sort(by_core.begin(), by_core.end(),
+              [](const auto &left, const auto &right) {
+                  return std::tie(left.local_core, left.local_sequence) <
+                         std::tie(right.local_core, right.local_sequence);
+              });
+    std::map<uint16_t, uint64_t> expected_sequence;
+    std::map<uint16_t, std::pair<uint64_t, uint64_t>> last_time;
+    for (const P2pEndpointLifetimeEvent &event : by_core) {
+        if (event.delta != 1 && event.delta != -1)
+            throw std::invalid_argument(
+                "MoE Swizzle lifetime event delta must be +1 or -1");
+        if (runtime_core_to_die.find(event.local_core) ==
+            runtime_core_to_die.end())
+            throw std::invalid_argument(
+                "MoE Swizzle lifetime event lacks manifest core binding");
+        const uint64_t expected = ++expected_sequence[event.local_core];
+        if (event.local_sequence != expected)
+            throw std::invalid_argument(
+                "MoE Swizzle lifetime event sequence is not contiguous");
+        const auto now =
+            std::make_pair(event.simulation_ticks, event.delta_cycle);
+        auto prior = last_time.find(event.local_core);
+        if (prior != last_time.end() && now < prior->second)
+            throw std::invalid_argument(
+                "MoE Swizzle lifetime event time moves backwards");
+        last_time[event.local_core] = now;
+    }
+
+    std::vector<P2pEndpointLifetimeEvent> ordered = events;
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto &left, const auto &right) {
+                  return std::tie(left.simulation_ticks, left.delta_cycle,
+                                  left.local_sequence, left.local_core,
+                                  left.direction) <
+                         std::tie(right.simulation_ticks, right.delta_cycle,
+                                  right.local_sequence, right.local_core,
+                                  right.direction);
+              });
+    struct DieState {
+        uint64_t tx_active = 0;
+        uint64_t rx_active = 0;
+        MoeSwizzleSessionMarker marker;
+    };
+    std::vector<DieState> states(die_count);
+    for (uint16_t die = 0; die < die_count; ++die)
+        states[die].marker.die = die;
+    for (const auto &[core, die] : runtime_core_to_die) {
+        MoeSwizzleSessionMarker &marker = states.at(die).marker;
+        marker.capacity_per_core = runtime_core_capacity.at(core);
+        ++marker.active_core_count;
+        if (marker.aggregate_capacity >
+            UINT64_MAX - runtime_core_capacity.at(core))
+            throw std::overflow_error(
+                "MoE Swizzle die session capacity overflows u64");
+        marker.aggregate_capacity += runtime_core_capacity.at(core);
+    }
+    for (const P2pEndpointLifetimeEvent &event : ordered) {
+        const uint16_t die = runtime_core_to_die.at(event.local_core);
+        DieState &state = states.at(die);
+        uint64_t &active = event.direction == P2pEndpointDirection::TX
+                               ? state.tx_active
+                               : state.rx_active;
+        uint64_t &peak = event.direction == P2pEndpointDirection::TX
+                             ? state.marker.send_peak
+                             : state.marker.recv_peak;
+        if (event.delta > 0) {
+            ++active;
+            ++state.marker.opens;
+            peak = std::max(peak, active);
+        } else {
+            if (active == 0)
+                throw std::invalid_argument(
+                    "MoE Swizzle lifetime replay underflowed a die");
+            --active;
+            ++state.marker.retires;
+        }
+    }
+    std::vector<MoeSwizzleSessionMarker> result;
+    result.reserve(die_count);
+    for (const DieState &state : states) {
+        if (state.tx_active != 0 || state.rx_active != 0 ||
+            state.marker.opens != state.marker.retires)
+            throw std::invalid_argument(
+                "MoE Swizzle session replay has unretired lifetimes");
+        if (state.marker.active_core_count == 0)
+            throw std::invalid_argument(
+                "MoE Swizzle session replay requires a bound core per die");
+        if (state.marker.send_peak > state.marker.aggregate_capacity ||
+            state.marker.recv_peak > state.marker.aggregate_capacity)
+            throw std::invalid_argument(
+                "MoE Swizzle session peak exceeds die aggregate capacity");
+        result.push_back(state.marker);
+    }
+    return result;
+}
+
 P2pEndpointSessionRuntime::P2pEndpointSessionRuntime(
     uint16_t local_core, size_t max_sessions, size_t max_rx_buffered_bytes,
     uint16_t max_transport_tag, uint32_t topology_cores)
@@ -297,6 +456,27 @@ P2pEndpointSessionRuntime::P2pEndpointSessionRuntime(
             "P2P lifetime REQUEST identity bound overflows size_t");
     max_seen_request_identities_ =
         static_cast<size_t>(topology_cores) * max_transport_tag;
+}
+
+void P2pEndpointSessionRuntime::RecordLifetimeEvent(
+    P2pEndpointDirection direction, int8_t delta) noexcept {
+    if (!lifetime_events_complete_)
+        return;
+    if (lifetime_event_sequence_ == UINT64_MAX) {
+        lifetime_events_complete_ = false;
+        return;
+    }
+    const uint64_t sequence = lifetime_event_sequence_ + 1;
+    try {
+        lifetime_events_.push_back(P2pEndpointLifetimeEvent{
+            static_cast<uint64_t>(sc_time_stamp().value()),
+            static_cast<uint64_t>(sc_delta_count()), sequence, local_core_,
+            direction, delta});
+    } catch (...) {
+        lifetime_events_complete_ = false;
+        return;
+    }
+    lifetime_event_sequence_ = sequence;
 }
 
 uint64_t P2pEndpointSessionRuntime::CandidateRound() const {
@@ -377,6 +557,12 @@ P2pTxIssue P2pEndpointSessionRuntime::IssueSend(
         allocated_transport_tags_.erase(transport_tag);
         throw;
     }
+
+    ++lifetime_stats_.tx_opened;
+    ++lifetime_stats_.tx_active;
+    lifetime_stats_.tx_peak =
+        std::max(lifetime_stats_.tx_peak, lifetime_stats_.tx_active);
+    RecordLifetimeEvent(P2pEndpointDirection::TX, 1);
 
     last_round_ = round;
     ++next_transport_tag_;
@@ -535,6 +721,11 @@ P2pRxPostResult P2pEndpointSessionRuntime::PostReceive(
             token_to_fsm_.erase(mapped);
         throw;
     }
+    ++lifetime_stats_.rx_opened;
+    ++lifetime_stats_.rx_active;
+    lifetime_stats_.rx_peak =
+        std::max(lifetime_stats_.rx_peak, lifetime_stats_.rx_active);
+    RecordLifetimeEvent(P2pEndpointDirection::RX, 1);
     last_round_ = round;
 
     Session &session = sessions_.at(prim.fsm_id);
@@ -786,20 +977,7 @@ bool P2pEndpointSessionRuntime::Abort(
     auto session = sessions_.find(handle.fsm_id);
     if (session == sessions_.end() || !(session->second.handle == handle))
         return false;
-    if (session->second.flow.has_value() &&
-        inbound_.find(*session->second.flow) != inbound_.end())
-        CleanupInbound(*session->second.flow);
-    if (session->second.handle.completion == DteEndpointCompletion::ASYNC) {
-        auto token = token_to_fsm_.find(session->second.handle.token);
-        if (token != token_to_fsm_.end() &&
-            token->second == session->second.handle.fsm_id)
-            token_to_fsm_.erase(token);
-    }
-    if (session->second.handle.direction == P2pEndpointDirection::TX &&
-        session->second.flow.has_value())
-        allocated_transport_tags_.erase(
-            session->second.flow->transport_tag);
-    sessions_.erase(session);
+    RetireSession(session);
     return true;
 }
 
@@ -980,6 +1158,8 @@ void P2pEndpointSessionRuntime::RetireSession(
     std::map<uint32_t, Session>::iterator session) {
     if (session == sessions_.end())
         throw std::logic_error("cannot retire missing P2P session");
+    const P2pEndpointDirection direction =
+        session->second.handle.direction;
     if (session->second.flow.has_value() &&
         inbound_.find(*session->second.flow) != inbound_.end())
         CleanupInbound(*session->second.flow);
@@ -995,6 +1175,21 @@ void P2pEndpointSessionRuntime::RetireSession(
         allocated_transport_tags_.erase(
             session->second.flow->transport_tag);
     sessions_.erase(session);
+    if (direction == P2pEndpointDirection::TX) {
+        if (lifetime_stats_.tx_active == 0)
+            lifetime_events_complete_ = false;
+        else
+            --lifetime_stats_.tx_active;
+        ++lifetime_stats_.tx_retired;
+        RecordLifetimeEvent(P2pEndpointDirection::TX, -1);
+    } else {
+        if (lifetime_stats_.rx_active == 0)
+            lifetime_events_complete_ = false;
+        else
+            --lifetime_stats_.rx_active;
+        ++lifetime_stats_.rx_retired;
+        RecordLifetimeEvent(P2pEndpointDirection::RX, -1);
+    }
 }
 
 void P2pEndpointSessionRuntime::CleanupInbound(

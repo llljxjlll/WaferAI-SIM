@@ -26,6 +26,7 @@ from ..schema.ir0 import (
     FusionImpl,
     FusionOrigin,
     FusionSemanticContract,
+    FusionPattern,
     GemmPartition,
     GemmWorkload,
     GraphEdge,
@@ -68,6 +69,7 @@ from ..schema.persistent_state import (
     StateKind,
 )
 
+from .discover_fusion import with_discovered_fusion_candidates
 
 def _unsupported(message: str, *, path: str) -> None:
     raise UnsupportedFeatureError(message, path=path)
@@ -892,6 +894,7 @@ def _expand_dense_graph(
                     boundary_inputs=boundary_inputs,
                     boundary_outputs=(value_id(output_name),),
                     semantic_contract=FusionSemanticContract(
+                        pattern=FusionPattern.GEMM_RS,
                         tile_domain=("M", "N"),
                         reduction_axes=(2,),
                         input_layouts=tuple(
@@ -1418,13 +1421,14 @@ def _expand_dense_graph(
         nodes=tuple(nodes),
         values=tuple(values),
         edges=edges,
-        fusion_candidates=tuple(candidates),
+        fusion_candidates=(),
         persistent_states=tuple(persistent_states),
         state_accesses=tuple(state_accesses),
         profile=profile,
         train=train,
     )
     graph.validate("expanded_graph")
+    graph = with_discovered_fusion_candidates(graph)
     return graph
 
 

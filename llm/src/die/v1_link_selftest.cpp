@@ -530,6 +530,56 @@ bool EndpointBehavioralExact(const EndpointBehavioralProbe &probe,
     return exact;
 }
 
+void TestMoeSwizzleDirectionalPortTime() {
+    std::vector<D2DDirectionalDataServiceTrace> traces = {
+        {0, 1, "x+", true, {{1, 5}, {3, 7}, {9, 10}}},
+        {1, 0, "x-", true, {{2, 4}}},
+        {2, 3, "x+", true, {}}, {3, 2, "x-", true, {}},
+        {0, 2, "y+", true, {}}, {2, 0, "y-", true, {}},
+        {1, 3, "y+", true, {}}, {3, 1, "y-", true, {}},
+    };
+    const auto markers = BuildMoeSwizzlePortTimeMarkers(traces, 100);
+    auto find = [&](uint16_t source, uint16_t destination) {
+        return std::find_if(markers.begin(), markers.end(),
+                            [&](const MoeSwizzlePortTimeMarker &marker) {
+            return marker.source_die == source &&
+                   marker.destination_die == destination;
+        });
+    };
+    const auto forward = find(0, 1);
+    const auto reverse = find(1, 0);
+    const auto idle = find(2, 3);
+    check(markers.size() == 8 && forward != markers.end() &&
+              forward->busy_cycles == 7 && forward->busy_cycles != 9,
+          "MoE port-time merges overlapping DATA intervals instead of using a first-last envelope");
+    check(reverse != markers.end() && reverse->busy_cycles == 2 &&
+              idle != markers.end() && idle->busy_cycles == 0,
+          "MoE port-time keeps reverse direction independent and emits zero-service directed edges");
+    check(forward != markers.end() &&
+              FormatMoeSwizzlePortTimeMarker(*forward) ==
+                  "[MOE_SWIZZLE_PORT_TIME] source_die=0 destination_die=1 "
+                  "direction=x+ busy_cycles=7 window_cycles=100",
+          "MoE port-time formatter has strict parser field order");
+    bool missing_rejected = false;
+    try {
+        std::vector<D2DDirectionalDataServiceTrace> missing = traces;
+        missing.pop_back();
+        (void)BuildMoeSwizzlePortTimeMarkers(missing, 100);
+    } catch (const std::invalid_argument &) {
+        missing_rejected = true;
+    }
+    bool incomplete_rejected = false;
+    try {
+        std::vector<D2DDirectionalDataServiceTrace> incomplete = traces;
+        incomplete[0].complete = false;
+        (void)BuildMoeSwizzlePortTimeMarkers(incomplete, 100);
+    } catch (const std::invalid_argument &) {
+        incomplete_rejected = true;
+    }
+    check(missing_rejected && incomplete_rejected,
+          "MoE port-time rejects missing directed edges and unobservable service intervals");
+}
+
 } // namespace
 
 int RunD2DLinkSelfTest() {
@@ -537,6 +587,7 @@ int RunD2DLinkSelfTest() {
     g_total = 0;
     std::cout << "==== D2D V1 link self-test ====" << std::endl;
     ResetD2DLinkStats();
+    TestMoeSwizzleDirectionalPortTime();
 
     // 干净序列（含连续 2 包 + 空洞）；4 个 latency 各一个探针，同一脚本便于比对 latency
     std::vector<std::pair<int, int>> dscript = {
@@ -781,6 +832,20 @@ int RunD2DLinkSelfTest() {
               endpoint_bounded->link->UpstreamBlocked() == 0 &&
               endpoint_bounded->link->residual() == 0,
           "P5 endpoint bounded SAF streams payload larger than SAF capacity through finite backpressure and drains");
+    check(b_ctrl->link->DataServiceIntervals().empty() &&
+              b_ctrl->link->DataServiceIntervalsComplete(),
+          "MoE port-time excludes independent CTRL service from DATA busy cycles");
+    auto service_busy = [](const D2DLinkUnit *link) {
+        uint64_t result = 0;
+        for (const D2DDataServiceInterval &interval :
+             link->DataServiceIntervals())
+            result += interval.end_cycle_exclusive - interval.start_cycle;
+        return result;
+    };
+    check(service_busy(b_rate->link) == b_rate->data_out.size() &&
+              service_busy(endpoint_behavioral->link) ==
+                  endpoint_behavioral->input_wires.size() * 3,
+          "MoE port-time uses actual cycle grants and behavioral DATA service intervals");
 
     // 期望交付 id 序列（burst：base .. base+burst-1）
     auto expect_ids = [](int base, int burst) {

@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 enum class DteEndpointCompletion : uint8_t;
@@ -122,6 +123,47 @@ struct P2pEndpointResidual {
     bool Empty() const noexcept;
 };
 
+struct P2pEndpointLifetimeStats {
+    uint64_t tx_opened = 0;
+    uint64_t rx_opened = 0;
+    uint64_t tx_retired = 0;
+    uint64_t rx_retired = 0;
+    size_t tx_active = 0;
+    size_t rx_active = 0;
+    size_t tx_peak = 0;
+    size_t rx_peak = 0;
+};
+
+struct P2pEndpointLifetimeEvent {
+    uint64_t simulation_ticks = 0;
+    uint64_t delta_cycle = 0;
+    uint64_t local_sequence = 0;
+    uint16_t local_core = 0;
+    P2pEndpointDirection direction = P2pEndpointDirection::TX;
+    int8_t delta = 0;
+};
+
+// This carrier is intentionally die-level. Endpoint-local peaks cannot be
+// summed after the run to reconstruct a simultaneous per-die peak.
+struct MoeSwizzleSessionMarker {
+    uint16_t die = 0;
+    uint64_t capacity_per_core = 0;
+    uint64_t active_core_count = 0;
+    uint64_t aggregate_capacity = 0;
+    uint64_t send_peak = 0;
+    uint64_t recv_peak = 0;
+    uint64_t opens = 0;
+    uint64_t retires = 0;
+};
+
+std::string FormatMoeSwizzleSessionMarker(
+    const MoeSwizzleSessionMarker &marker);
+std::vector<MoeSwizzleSessionMarker> ReplayMoeSwizzleSessionMarkers(
+    const std::vector<P2pEndpointLifetimeEvent> &events,
+    const std::map<uint16_t, uint16_t> &runtime_core_to_die,
+    const std::map<uint16_t, uint64_t> &runtime_core_capacity,
+    uint16_t die_count);
+
 // One instance belongs to exactly one core. It never exposes a peer runtime or
 // a payload side channel: callers must carry P2pTxIssue::messages through Msg
 // transport and feed them to ReceiveRequest/ReceiveData on the destination.
@@ -173,6 +215,15 @@ public:
     P2pEndpointPhase Phase(const P2pEndpointHandle &handle) const;
     bool IsAdmitted(const P2pEndpointHandle &handle) const;
     P2pEndpointResidual Residual() const noexcept;
+    const P2pEndpointLifetimeStats &LifetimeStats() const noexcept {
+        return lifetime_stats_;
+    }
+    const std::vector<P2pEndpointLifetimeEvent> &LifetimeEvents() const noexcept {
+        return lifetime_events_;
+    }
+    bool LifetimeEventsComplete() const noexcept {
+        return lifetime_events_complete_;
+    }
     bool Drained() const noexcept { return Residual().Empty(); }
 
     uint16_t LocalCore() const noexcept { return local_core_; }
@@ -234,6 +285,8 @@ private:
     const Session &RequireToken(uint32_t token) const;
     Session &RequireToken(uint32_t token);
     void RetireSession(std::map<uint32_t, Session>::iterator session);
+    void RecordLifetimeEvent(P2pEndpointDirection direction,
+                             int8_t delta) noexcept;
     void CleanupInbound(const P2pFlowKey &flow) noexcept;
     std::optional<P2pEndpointHandle> AbortAckFlow(
         const P2pFlowKey &flow, uint32_t fsm_hint,
@@ -251,6 +304,10 @@ private:
     uint64_t last_round_ = 0;
     size_t reserved_rx_bytes_ = 0;
     size_t early_data_bytes_ = 0;
+    P2pEndpointLifetimeStats lifetime_stats_;
+    uint64_t lifetime_event_sequence_ = 0;
+    std::vector<P2pEndpointLifetimeEvent> lifetime_events_;
+    bool lifetime_events_complete_ = true;
 
     P2pPayloadReassembler reassembler_;
     std::map<uint32_t, Session> sessions_;

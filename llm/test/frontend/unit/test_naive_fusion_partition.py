@@ -9,7 +9,7 @@ from llm.frontend.wafer_frontend.policies.naive_fusion_partition import (
     NaiveFusionPartition,
 )
 from llm.frontend.wafer_frontend.schema.experiment import ExperimentSpec
-from llm.frontend.wafer_frontend.schema.ir0 import GemmPartition, OpPhase
+from llm.frontend.wafer_frontend.schema.ir0 import FusionPattern, GemmPartition, OpPhase
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
 from llm.frontend.wafer_frontend.schema.placement import PlacementContext
 from llm.frontend.wafer_frontend.schema.serde import canonical_digest, from_data
@@ -81,6 +81,14 @@ def _boundaries(graph: IR1, members: tuple[str, ...]) -> tuple[tuple[str, ...], 
     return inputs, outputs
 
 
+def _gemm_rs_candidates(graph: IR1):
+    return tuple(
+        candidate
+        for candidate in graph.fusion_candidates
+        if candidate.semantic_contract.pattern is FusionPattern.GEMM_RS
+    )
+
+
 class NaiveFusionPartitionTest(unittest.TestCase):
     def test_tp1_tp2_and_l2_select_all_candidates_in_source_order(self) -> None:
         policy = NaiveFusionPartition()
@@ -90,11 +98,12 @@ class NaiveFusionPartitionTest(unittest.TestCase):
                 source_digest = canonical_digest(graph)
                 result = policy.run(graph)
                 self.assertEqual(len(result), expected_count)
+                selected = _gemm_rs_candidates(graph)
                 self.assertEqual(
                     tuple(skeleton.fusion_ref for skeleton in result),
-                    tuple(candidate.id for candidate in graph.fusion_candidates),
+                    tuple(candidate.id for candidate in selected),
                 )
-                for candidate, skeleton in zip(graph.fusion_candidates, result):
+                for candidate, skeleton in zip(selected, result, strict=True):
                     self.assertEqual(skeleton.member_node_ids, candidate.members)
                     self.assertEqual(skeleton.boundary_inputs, candidate.boundary_inputs)
                     self.assertEqual(skeleton.boundary_outputs, candidate.boundary_outputs)
@@ -115,20 +124,21 @@ class NaiveFusionPartitionTest(unittest.TestCase):
 
     def test_overlapping_candidates_fail_closed(self) -> None:
         graph = _graph()
+        candidate = _gemm_rs_candidates(graph)[0]
         duplicate = replace(
-            graph.fusion_candidates[0],
-            id=f"{graph.fusion_candidates[0].id}.overlap",
+            candidate,
+            id=f"{candidate.id}.overlap",
         )
         forged = _rebuild(
             graph,
-            fusion_candidates=(graph.fusion_candidates[0], duplicate),
+            fusion_candidates=(candidate, duplicate),
         )
         with self.assertRaisesRegex(SchemaError, "share member"):
             NaiveFusionPartition().run(forged)
 
     def test_member_stage_and_phase_scope_fail_closed(self) -> None:
         graph = _graph()
-        rs_id = graph.fusion_candidates[0].members[1]
+        rs_id = _gemm_rs_candidates(graph)[0].members[1]
         rs = next(node for node in graph.nodes if node.id == rs_id)
         for replacement in (
             replace(rs, stage=rs.stage + 1),
@@ -142,7 +152,7 @@ class NaiveFusionPartitionTest(unittest.TestCase):
 
     def test_non_direct_members_fail_closed(self) -> None:
         graph = _graph()
-        first, second = graph.fusion_candidates
+        first, second = _gemm_rs_candidates(graph)
         members = (first.members[0], second.members[1])
         boundary_inputs, boundary_outputs = _boundaries(graph, members)
         disconnected = replace(
@@ -158,7 +168,7 @@ class NaiveFusionPartitionTest(unittest.TestCase):
 
     def test_sequence_parallel_gemm_cannot_enter_fusion_candidate(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
         gemm = next(node for node in graph.nodes if node.id == candidate.members[0])
         logical_m, logical_n, logical_k = gemm.workload.logical_shape
         replacement = replace(
@@ -175,7 +185,7 @@ class NaiveFusionPartitionTest(unittest.TestCase):
 
     def test_boundary_and_contract_must_remain_exact(self) -> None:
         graph = _graph()
-        candidate = graph.fusion_candidates[0]
+        candidate = _gemm_rs_candidates(graph)[0]
         cases = (
             (
                 replace(
@@ -199,7 +209,7 @@ class NaiveFusionPartitionTest(unittest.TestCase):
             with self.subTest(message=message):
                 forged = _rebuild(
                     graph,
-                    fusion_candidates=(changed,) + graph.fusion_candidates[1:],
+                    fusion_candidates=(changed,),
                 )
                 with self.assertRaisesRegex(SchemaError, message):
                     NaiveFusionPartition().run(forged)

@@ -2389,6 +2389,81 @@ void Run() {
     unknown["unknown"] = 1;
     ExpectFailure([&] { ProgramArtifactFinalizer::Parse(unknown.dump()); },
                   "unknown top-level field");
+    const std::array<const char *, 14> moe_input_kinds{{
+        "moe_swizzle_scale_spec",
+        "moe_swizzle_scale_oracle",
+        "moe_swizzle_execution",
+        "moe_swizzle_decision",
+        "moe_swizzle_workload_selection",
+        "moe_swizzle_workload_projection",
+        "moe_swizzle_workload_state_abi",
+        "moe_swizzle_workload_value_bridge",
+        "moe_swizzle_workload_abi",
+        "moe_swizzle_hardware_facts",
+        "moe_swizzle_overlay",
+        "moe_swizzle_projection",
+        "moe_swizzle_core_address_abi",
+        "moe_swizzle_operand_abi",
+    }};
+    for (const char *kind : moe_input_kinds) {
+        Json parsed_input = valid;
+        parsed_input["input_digests"][0]["kind"] = kind;
+        RefreshManifestIds(parsed_input);
+        static_cast<void>(
+            ProgramArtifactFinalizer::Parse(parsed_input.dump()));
+    }
+    Json unknown_moe_input = valid;
+    unknown_moe_input["input_digests"][0]["kind"] =
+        "moe_swizzle_unknown";
+    RefreshManifestIds(unknown_moe_input);
+    ExpectFailure(
+        [&] {
+            ProgramArtifactFinalizer::Parse(unknown_moe_input.dump());
+        },
+        "unknown MoE Swizzle input kind");
+
+    Json moe_fragment = valid;
+    moe_fragment["fragments"][0]["kind"] = "moe_swizzle";
+    moe_fragment["fragments"][0]["producer_pass"] =
+        "moe_swizzle_standard_lowering";
+    RefreshManifestIds(moe_fragment);
+    const auto moe_fragment_dto =
+        ProgramArtifactFinalizer::Parse(moe_fragment.dump());
+    Require(
+        std::get<CommandFragmentDto>(
+            moe_fragment_dto.fragments.front()).kind ==
+            FragmentKindDto::MOE_SWIZZLE,
+        "MoE Swizzle FragmentKind parser changed");
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(moe_fragment.dump()); },
+        "MoE Swizzle fragment under a foreign top producer");
+
+    Json moe_wrong_kind = valid;
+    moe_wrong_kind["fragments"][0]["producer_pass"] =
+        "moe_swizzle_standard_lowering";
+    RefreshManifestIds(moe_wrong_kind);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(moe_wrong_kind.dump()); },
+        "MoE Swizzle producer on a foreign fragment kind");
+
+    Json unadmitted_moe_top = moe_fragment;
+    unadmitted_moe_top["producer_pass"] =
+        "moe_swizzle_standard_linker";
+    RefreshManifestIds(unadmitted_moe_top);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(unadmitted_moe_top.dump()); },
+        "MoE Swizzle top before dedicated exact admission");
+
+    Json unknown_moe_fragment = valid;
+    unknown_moe_fragment["fragments"][0]["kind"] =
+        "moe_swizzle_unknown";
+    RefreshManifestIds(unknown_moe_fragment);
+    ExpectFailure(
+        [&] {
+            ProgramArtifactFinalizer::Parse(
+                unknown_moe_fragment.dump());
+        },
+        "unknown MoE Swizzle fragment kind");
     Json missing = valid;
     missing["fragments"][0]["core_streams"][0]["records"][0]["operands"][0].erase("name");
     ExpectFailure([&] { ProgramArtifactFinalizer::Parse(missing.dump()); },
@@ -4123,6 +4198,484 @@ void RunLiteMoeDp4ProducedManifest(const std::string &mode) {
               << " fragments=" << dto.fragments.size() << '\n';
 }
 
+void RunSwizzleProducedManifest(bool require_scale = false) {
+    const std::string text((std::istreambuf_iterator<char>(std::cin)),
+                           std::istreambuf_iterator<char>());
+    const frontend::LinkedProgramManifestDto dto =
+        ProgramArtifactFinalizer::Parse(text);
+    const ProgramArtifactFinalizer finalizer;
+    const ProgramArtifact first = finalizer.Finalize(dto);
+    const ProgramArtifact second = finalizer.Finalize(
+        ProgramArtifactFinalizer::Parse(text));
+    const std::vector<uint8_t> bytes = EncodeProgramArtifact(first);
+    Require(EncodeProgramArtifact(second) == bytes &&
+                finalizer.FinalizeEncoded(text) == bytes,
+            "Swizzle finalization is not deterministic across two parses");
+    Require(dto.producer_pass == "swizzle_standard_linker" &&
+                dto.input_digests.size() == 9 &&
+                dto.fragments.size() == 1 &&
+                std::holds_alternative<CommandFragmentDto>(
+                    dto.fragments.front()) &&
+                std::get<CommandFragmentDto>(dto.fragments.front()).kind ==
+                    FragmentKindDto::SWIZZLE,
+            "Swizzle stdin is not a dedicated typed-wrapper manifest");
+    std::size_t records = 0;
+    for (const ProgramCore &core : first.cores)
+        records += core.records.size();
+    const bool scale = records == 180 || records == 188 ||
+        records == 244 || records == 316 || records == 324 ||
+        records == 444;
+    const std::string pattern =
+        records == 38 ? "ag_gemm" :
+        records == 44 ? "gemm_rs" :
+        records == 50 ? "gemm_ar" :
+        records == 104 ? "meshslice_2d_os" :
+        records == 180 ? "scale_ag_c8_u1" :
+        records == 188 ? "scale_ag_c8_u2" :
+        records == 244 ? "scale_rs_c8" :
+        records == 316 ? "scale_ag_c16_u1" :
+        records == 324 ? "scale_ag_c16_u2" :
+        records == 444 ? "scale_rs_c16" : "";
+    Require(!pattern.empty(),
+            "Swizzle stdin does not match a frozen production quotient");
+    Require(scale == require_scale,
+            "Swizzle stdin scale class does not match the selected gate");
+
+    Json unknown_input = Json::parse(text);
+    unknown_input["input_digests"][0]["kind"] = "swizzle_unknown";
+    RefreshManifestIds(unknown_input);
+    ExpectFailure(
+        [&] { ProgramArtifactFinalizer::Parse(unknown_input.dump()); },
+        "restable unknown Swizzle ManifestInputKind");
+
+    Json wrong_schema = Json::parse(text);
+    bool changed_schema = false;
+    for (Json &digest : wrong_schema["input_digests"])
+        if (digest["kind"] == "swizzle_operand_abi") {
+            digest["schema_version"] =
+                "wafer_frontend.swizzle_operand_abi/v1alpha0";
+            changed_schema = true;
+        }
+    Require(changed_schema, "Swizzle stdin lacks operand ABI digest");
+    RefreshManifestIds(wrong_schema);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(wrong_schema.dump()); },
+        "restable Swizzle typed input schema");
+
+    Json bad_producer = Json::parse(text);
+    bad_producer["fragments"][0]["producer_pass"] = "lowering";
+    RefreshManifestIds(bad_producer);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_producer.dump()); },
+        "restable Swizzle fragment producer");
+
+    Json bad_ownership = Json::parse(text);
+    bool changed_ownership = false;
+    for (Json &abi : bad_ownership["fragments"][0]["buffer_abi"])
+        if (abi["ownership"] == "borrowed") {
+            abi["ownership"] = "owned";
+            changed_ownership = true;
+            break;
+        }
+    Require(changed_ownership,
+            "Swizzle stdin lacks a borrowed BufferABI");
+    RefreshManifestIds(bad_ownership);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_ownership.dump()); },
+        "restable Swizzle BufferABI ownership");
+
+    Json bad_fsm = Json::parse(text);
+    bool changed_fsm = false;
+    for (Json &definition :
+         bad_fsm["runtime_symbol_definitions"])
+        if (definition["symbol"]["kind"] == "dte_fsm") {
+            definition["source_action_id"] =
+                "restabled_wrong_swizzle_action";
+            changed_fsm = true;
+            break;
+        }
+    Require(changed_fsm, "Swizzle stdin lacks a DTE_FSM");
+    RefreshManifestIds(bad_fsm);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_fsm.dump()); },
+        "restable Swizzle DTE_FSM endpoint");
+
+    Json bad_terminal = Json::parse(text);
+    const std::size_t expected_cores =
+        scale || pattern == "meshslice_2d_os" ? 4 : 2;
+    Require(bad_terminal["envelope"]["terminal_cores"].size() ==
+                expected_cores &&
+                bad_terminal["envelope"]["expected_done_cores"].size() ==
+                expected_cores,
+            "Swizzle stdin lacks its exact terminal cores");
+    bad_terminal["envelope"]["terminal_cores"].erase(expected_cores - 1);
+    bad_terminal["envelope"]["expected_done_cores"].erase(
+        expected_cores - 1);
+    RefreshManifestIds(bad_terminal);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_terminal.dump()); },
+        "restable Swizzle terminal envelope");
+
+    if (pattern == "meshslice_2d_os" || scale) {
+        Json bad_quotient = Json::parse(text);
+        bool changed_wait = false;
+        for (Json &stream :
+             bad_quotient["fragments"][0]["core_streams"])
+            for (Json &record : stream["records"])
+                if (!changed_wait && record["opcode"] == 0xc0) {
+                    record["opcode"] = 0xc2;
+                    changed_wait = true;
+                }
+        Require(changed_wait, "MeshSlice stdin lacks DTE_WAIT");
+        RefreshManifestIds(bad_quotient);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_quotient.dump()); },
+            "restable MeshSlice opcode quotient");
+    }
+
+    if (scale) {
+        Json bad_literal = Json::parse(text);
+        bool changed_literal = false;
+        for (Json &stream :
+             bad_literal["fragments"][0]["core_streams"])
+            for (Json &record : stream["records"])
+                if (!changed_literal && record["opcode"] == 0x01) {
+                    Json &parameters =
+                        record["operands"].back()["literal_value"];
+                    parameters[1] =
+                        parameters[1].get<std::uint64_t>() + 1;
+                    changed_literal = true;
+                }
+        Require(changed_literal, "scale Swizzle stdin lacks MATMUL");
+        RefreshManifestIds(bad_literal);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_literal.dump()); },
+            "restable scale Swizzle literal quotient");
+
+        Json bad_alias = Json::parse(text);
+        bool changed_alias = false;
+        for (Json &abi : bad_alias["fragments"][0]["buffer_abi"])
+            if (!changed_alias &&
+                abi["layout"] ==
+                    "swizzle_standard_terminal_subview/v1") {
+                abi["layout"] = "swizzle_standard_storage_subview/v1";
+                changed_alias = true;
+            }
+        Require(changed_alias,
+                "scale Swizzle stdin lacks a terminal subview");
+        RefreshManifestIds(bad_alias);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_alias.dump()); },
+            "restable scale Swizzle terminal alias");
+    }
+
+    if (pattern == "gemm_rs" || pattern == "gemm_ar" ||
+        pattern.find("scale_rs_") == 0) {
+        Json bad_reduce_order = Json::parse(text);
+        bool changed_reduce = false;
+        for (Json &binding :
+             bad_reduce_order["address_operand_bindings"])
+            if (binding["buffer_abi_ids"].size() == 2) {
+                std::swap(binding["buffer_abi_ids"][0],
+                          binding["buffer_abi_ids"][1]);
+                std::swap(binding["tensor_slices"][0],
+                          binding["tensor_slices"][1]);
+                changed_reduce = true;
+                break;
+            }
+        Require(changed_reduce,
+                "Swizzle RS/AR stdin lacks ordered reduce inputs");
+        RefreshManifestIds(bad_reduce_order, false);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_reduce_order.dump()); },
+            "restable Swizzle ordered reduce span");
+    }
+
+    std::cout << "swizzle_" << pattern
+              << "_bytes=" << bytes.size()
+              << " sha256=" << Sha256(bytes)
+              << " cores=" << first.cores.size()
+              << " records=" << records
+              << " relocations=" << first.relocations.size() << '\n';
+}
+
+void RunUnfusedComparisonProducedManifest(bool require_scale = false) {
+    const std::string text((std::istreambuf_iterator<char>(std::cin)),
+                           std::istreambuf_iterator<char>());
+    const frontend::LinkedProgramManifestDto dto =
+        ProgramArtifactFinalizer::Parse(text);
+    const ProgramArtifactFinalizer finalizer;
+    const ProgramArtifact first = finalizer.Finalize(dto);
+    const ProgramArtifact second = finalizer.Finalize(
+        ProgramArtifactFinalizer::Parse(text));
+    const std::vector<uint8_t> bytes = EncodeProgramArtifact(first);
+    Require(EncodeProgramArtifact(second) == bytes &&
+                finalizer.FinalizeEncoded(text) == bytes,
+            "UNFUSED comparison finalization is not deterministic across two parses");
+    Require(dto.producer_pass ==
+                "unfused_comparison_standard_linker" &&
+                dto.input_digests.size() == 8 &&
+                dto.fragments.size() == 1 &&
+                std::holds_alternative<CommandFragmentDto>(
+                    dto.fragments.front()) &&
+                std::get<CommandFragmentDto>(dto.fragments.front()).kind ==
+                    FragmentKindDto::UNFUSED_COMPARISON &&
+                std::get<CommandFragmentDto>(dto.fragments.front()).kind !=
+                    FragmentKindDto::SWIZZLE,
+            "UNFUSED stdin is not its dedicated typed-wrapper manifest");
+    std::size_t records = 0;
+    for (const ProgramCore &core : first.cores)
+        records += core.records.size();
+    const bool scale = records == 68 || records == 104;
+    const std::string pattern =
+        records == 22 ? "ag_gemm" :
+        records == 36 ? "gemm_rs" :
+        records == 42 ? "gemm_ar" :
+        records == 68 ? "scale_ag" :
+        records == 104 ? "scale_rs" : "";
+    Require(!pattern.empty(),
+            "UNFUSED stdin does not match a frozen production quotient");
+    Require(scale == require_scale,
+            "UNFUSED stdin scale class does not match the selected gate");
+
+    Json unknown_input = Json::parse(text);
+    unknown_input["input_digests"][0]["kind"] =
+        "unfused_comparison_unknown";
+    RefreshManifestIds(unknown_input);
+    ExpectFailure(
+        [&] { ProgramArtifactFinalizer::Parse(unknown_input.dump()); },
+        "restable unknown UNFUSED ManifestInputKind");
+
+    Json wrong_schema = Json::parse(text);
+    bool changed_schema = false;
+    for (Json &digest : wrong_schema["input_digests"])
+        if (digest["kind"] == "unfused_comparison_operand_abi") {
+            digest["schema_version"] =
+                "wafer_frontend.unfused_comparison_operand_abi/v1alpha0";
+            changed_schema = true;
+        }
+    Require(changed_schema, "UNFUSED stdin lacks operand ABI digest");
+    RefreshManifestIds(wrong_schema);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(wrong_schema.dump()); },
+        "restable UNFUSED typed input schema");
+
+    Json bad_producer = Json::parse(text);
+    bad_producer["fragments"][0]["producer_pass"] = "lowering";
+    RefreshManifestIds(bad_producer);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_producer.dump()); },
+        "restable UNFUSED fragment producer");
+
+    Json bad_ownership = Json::parse(text);
+    bool changed_ownership = false;
+    for (Json &abi : bad_ownership["fragments"][0]["buffer_abi"])
+        if (abi["ownership"] == "borrowed") {
+            abi["ownership"] = "owned";
+            changed_ownership = true;
+            break;
+        }
+    Require(changed_ownership,
+            "UNFUSED stdin lacks a borrowed BufferABI");
+    RefreshManifestIds(bad_ownership);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_ownership.dump()); },
+        "restable UNFUSED BufferABI ownership");
+
+    Json bad_fsm = Json::parse(text);
+    bool changed_fsm = false;
+    for (Json &definition : bad_fsm["runtime_symbol_definitions"])
+        if (definition["symbol"]["kind"] == "dte_fsm") {
+            definition["source_action_id"] =
+                "restabled_wrong_unfused_action";
+            changed_fsm = true;
+            break;
+        }
+    Require(changed_fsm, "UNFUSED stdin lacks a DTE_FSM");
+    RefreshManifestIds(bad_fsm);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_fsm.dump()); },
+        "restable UNFUSED DTE_FSM endpoint");
+
+    Json bad_terminal = Json::parse(text);
+    const std::size_t expected_cores = scale ? 4 : 2;
+    Require(bad_terminal["envelope"]["terminal_cores"].size() ==
+                expected_cores &&
+                bad_terminal["envelope"]["expected_done_cores"].size() ==
+                expected_cores,
+            "UNFUSED stdin lacks its exact terminal cores");
+    bad_terminal["envelope"]["terminal_cores"].erase(expected_cores - 1);
+    bad_terminal["envelope"]["expected_done_cores"].erase(
+        expected_cores - 1);
+    RefreshManifestIds(bad_terminal);
+    ExpectFailure(
+        [&] { finalizer.FinalizeJson(bad_terminal.dump()); },
+        "restable UNFUSED terminal envelope");
+
+    if (pattern == "ag_gemm" || pattern == "gemm_rs") {
+        const auto rewrite_address_slices =
+            [](Json &manifest,
+               const std::map<std::string, Json> &slices) {
+                for (Json &binding :
+                     manifest["address_operand_bindings"]) {
+                    for (std::size_t index = 0;
+                         index < binding["buffer_abi_ids"].size();
+                         ++index) {
+                        const std::string abi_id =
+                            binding["buffer_abi_ids"][index]
+                                .get<std::string>();
+                        const auto found = slices.find(abi_id);
+                        if (found != slices.end())
+                            binding["tensor_slices"][index] =
+                                found->second;
+                    }
+                }
+            };
+        const auto terminal_root =
+            [](const Json &abi) {
+                return abi["ownership"] == "owned" &&
+                    abi["alias_of"].is_null() &&
+                    abi["layout"] ==
+                        "unfused_comparison_storage/v1" &&
+                    abi["tensor_slice"]["shape"].size() == 2;
+            };
+
+        Json old_replicated_output = Json::parse(text);
+        std::set<std::string> terminal_bindings;
+        const Json full_shape =
+            pattern == "ag_gemm"
+                ? Json::array({8, 48})
+                : Json::array({8, 16});
+        std::map<std::string, Json> replicated_slices;
+        std::size_t replicated_roots = 0;
+        for (Json &abi :
+             old_replicated_output["fragments"][0]["buffer_abi"]) {
+            if (!terminal_root(abi))
+                continue;
+            ++replicated_roots;
+            terminal_bindings.insert(
+                abi["binding_id"].get<std::string>());
+            abi["tensor_slice"]["offset"] =
+                Json::array({0, 0});
+            abi["tensor_slice"]["shape"] = full_shape;
+            replicated_slices.emplace(
+                abi["id"].get<std::string>(),
+                abi["tensor_slice"]);
+        }
+        for (Json &abi :
+             old_replicated_output["fragments"][0]["buffer_abi"]) {
+            if (abi["alias_of"].is_null() ||
+                terminal_bindings.count(
+                    abi["alias_of"].get<std::string>()) == 0)
+                continue;
+            abi["tensor_slice"]["offset"] =
+                Json::array({0, 0});
+            abi["tensor_slice"]["shape"] = full_shape;
+            replicated_slices.emplace(
+                abi["id"].get<std::string>(),
+                abi["tensor_slice"]);
+        }
+        Require(replicated_roots == 2,
+                "UNFUSED S0 stdin lacks two rank-local terminal roots");
+        rewrite_address_slices(
+            old_replicated_output, replicated_slices);
+        RefreshManifestIds(old_replicated_output);
+        ExpectFailure(
+            [&] {
+                finalizer.FinalizeJson(
+                    old_replicated_output.dump());
+            },
+            "restable UNFUSED old full-output-per-rank terminal");
+
+        Json wrong_rank_slice = Json::parse(text);
+        std::map<std::string, Json> wrong_slices;
+        std::size_t changed_rank_slices = 0;
+        for (Json &abi :
+             wrong_rank_slice["fragments"][0]["buffer_abi"]) {
+            if (!terminal_root(abi))
+                continue;
+            abi["tensor_slice"]["offset"] =
+                Json::array({0, 0});
+            wrong_slices.emplace(
+                abi["id"].get<std::string>(),
+                abi["tensor_slice"]);
+            ++changed_rank_slices;
+        }
+        Require(changed_rank_slices == 2,
+                "UNFUSED S0 stdin lacks exact rank terminal slices");
+        rewrite_address_slices(wrong_rank_slice, wrong_slices);
+        RefreshManifestIds(wrong_rank_slice);
+        ExpectFailure(
+            [&] {
+                finalizer.FinalizeJson(wrong_rank_slice.dump());
+            },
+            "restable UNFUSED duplicate rank terminal slice");
+    }
+
+    if (scale) {
+        Json bad_quotient = Json::parse(text);
+        bool changed_wait = false;
+        for (Json &stream :
+             bad_quotient["fragments"][0]["core_streams"])
+            for (Json &record : stream["records"])
+                if (!changed_wait && record["opcode"] == 0xc0) {
+                    record["opcode"] = 0xc2;
+                    changed_wait = true;
+                }
+        Require(changed_wait, "scale UNFUSED stdin lacks DTE_WAIT");
+        RefreshManifestIds(bad_quotient);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_quotient.dump()); },
+            "restable scale UNFUSED opcode quotient");
+
+        Json bad_literal = Json::parse(text);
+        bool changed_literal = false;
+        for (Json &stream :
+             bad_literal["fragments"][0]["core_streams"])
+            for (Json &record : stream["records"])
+                if (!changed_literal && record["opcode"] == 0x01) {
+                    Json &parameters =
+                        record["operands"].back()["literal_value"];
+                    parameters[1] =
+                        parameters[1].get<std::uint64_t>() + 1;
+                    changed_literal = true;
+                }
+        Require(changed_literal, "scale UNFUSED stdin lacks MATMUL");
+        RefreshManifestIds(bad_literal);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_literal.dump()); },
+            "restable scale UNFUSED literal quotient");
+    }
+
+    if (pattern != "ag_gemm" && pattern != "scale_ag") {
+        Json bad_reduce_order = Json::parse(text);
+        bool changed_reduce = false;
+        for (Json &binding :
+             bad_reduce_order["address_operand_bindings"])
+            if (binding["buffer_abi_ids"].size() == 2) {
+                std::swap(binding["buffer_abi_ids"][0],
+                          binding["buffer_abi_ids"][1]);
+                std::swap(binding["tensor_slices"][0],
+                          binding["tensor_slices"][1]);
+                changed_reduce = true;
+                break;
+            }
+        Require(changed_reduce,
+                "UNFUSED RS/AR stdin lacks ordered reduce inputs");
+        RefreshManifestIds(bad_reduce_order, false);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_reduce_order.dump()); },
+            "restable UNFUSED ordered reduce span");
+    }
+
+    std::cout << "unfused_comparison_" << pattern
+              << "_bytes=" << bytes.size()
+              << " sha256=" << Sha256(bytes)
+              << " cores=" << first.cores.size()
+              << " records=" << records
+              << " relocations=" << first.relocations.size() << '\n';
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -4165,10 +4718,23 @@ int main(int argc, char **argv) {
                    std::string(argv[1]) ==
                        "--lite-moe-dp4-backward-stdin") {
             RunLiteMoeDp4ProducedManifest("backward");
+        } else if (argc == 2 &&
+                   std::string(argv[1]) == "--swizzle-stdin") {
+            RunSwizzleProducedManifest(false);
+        } else if (argc == 2 &&
+                   std::string(argv[1]) == "--swizzle-scale-stdin") {
+            RunSwizzleProducedManifest(true);
+        } else if (argc == 2 &&
+                   std::string(argv[1]) ==
+                       "--unfused-comparison-stdin") {
+            RunUnfusedComparisonProducedManifest(false);
+        } else if (argc == 2 &&
+                   std::string(argv[1]) == "--unfused-scale-stdin") {
+            RunUnfusedComparisonProducedManifest(true);
         } else {
             throw std::runtime_error(
                 "usage: program_finalizer_selftest "
-                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-dp4-tree-ar-stdin|--lite-moe-backward-stdin|--lite-moe-dp4-infer-stdin|--lite-moe-dp4-train-forward-stdin|--lite-moe-dp4-backward-stdin]");
+                "[--stdin|--pd1-stdin|--stage2-stdin|--stage4-pdr-stdin|--train-stdin|--lite-rooted-ar-stdin|--lite-dp4-tree-ar-stdin|--lite-moe-backward-stdin|--lite-moe-dp4-infer-stdin|--lite-moe-dp4-train-forward-stdin|--lite-moe-dp4-backward-stdin|--swizzle-stdin|--swizzle-scale-stdin|--unfused-comparison-stdin|--unfused-scale-stdin]");
         }
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

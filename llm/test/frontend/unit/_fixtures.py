@@ -26,6 +26,7 @@ from llm.frontend.wafer_frontend.schema.ir0 import (
     FusionImpl,
     FusionOrigin,
     FusionSemanticContract,
+    FusionPattern,
     GemmPartition,
     GemmWorkload,
     GraphEdge,
@@ -307,6 +308,7 @@ def valid_ir0() -> IR0:
         boundary_inputs=("v_in",),
         boundary_outputs=("v_out",),
         semantic_contract=FusionSemanticContract(
+            pattern=FusionPattern.GEMM_RS,
             tile_domain=("M", "N"),
             reduction_axes=(1,),
             input_layouts=("MK",),

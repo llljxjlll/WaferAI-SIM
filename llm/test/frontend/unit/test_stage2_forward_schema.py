@@ -129,7 +129,7 @@ def _ce() -> CrossEntropyForwardWorkload:
 
 class Stage2ForwardSchemaTest(unittest.TestCase):
     def test_versions_and_strict_round_trips(self) -> None:
-        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha11")
+        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha12")
         self.assertEqual(IR1_SCHEMA_VERSION, "wafer_frontend.ir1/v1alpha14")
         public_schema = importlib.import_module("llm.frontend.wafer_frontend.schema")
         for name in (

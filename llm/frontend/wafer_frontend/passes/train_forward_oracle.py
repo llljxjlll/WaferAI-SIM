@@ -109,7 +109,7 @@ def build_train_forward_oracle(spec: ExperimentSpec) -> TrainForwardOracle:
             node_count=(11 + (4 if tp > 1 else 0)) * model.L + 4,
             value_count=(18 + (4 if tp > 1 else 0)) * model.L + 7,
             edge_count=(13 + (4 if tp > 1 else 0)) * model.L + 3,
-            fusion_candidate_count=2 * model.L if tp > 1 else 0,
+            fusion_candidate_count=4 * model.L if tp > 1 else 0,
             collective_node_count=collective_count,
             parameter_declaration_count=parameter_count * tp,
             kv_declaration_count=0,

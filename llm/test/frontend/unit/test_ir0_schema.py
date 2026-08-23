@@ -63,7 +63,7 @@ def rebuild(ir0: IR0, **updates: object) -> IR0:
 class IR0SchemaTest(unittest.TestCase):
     def test_canonical_round_trip_and_stable_id(self) -> None:
         ir0 = valid_ir0()
-        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha11")
+        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha12")
         decoded = loads_dataclass(IR0, canonical_json(ir0), path="ir0")
         self.assertEqual(decoded, ir0)
         self.assertEqual(decoded.id, valid_ir0().id)
@@ -225,9 +225,8 @@ class IR0SchemaTest(unittest.TestCase):
         ):
             with self.assertRaises(SchemaError):
                 invalid.validate("collective")
-        for unsupported in (CollectiveKind.ALL_REDUCE, CollectiveKind.ALL_TO_ALL):
-            with self.assertRaises(UnsupportedFeatureError):
-                replace(rs, collective=unsupported).validate("collective")
+        with self.assertRaises(UnsupportedFeatureError):
+            replace(rs, collective=CollectiveKind.ALL_TO_ALL).validate("collective")
 
     def test_attention_workload_and_ir0_require_explicit_kv_state(self) -> None:
         base = valid_ir0()

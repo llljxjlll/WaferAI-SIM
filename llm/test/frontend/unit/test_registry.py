@@ -17,6 +17,7 @@ from llm.frontend.wafer_frontend.policies.naive_inter_die import (
 from llm.frontend.wafer_frontend.policies.naive_intra_die import (
     NaiveIntraDiePolicy,
 )
+from llm.frontend.wafer_frontend.policies.swizzle_topo import SwizzlePlanner
 from llm.frontend.wafer_frontend.policies.registry import (
     POLICY_SELECTION_SCHEMA_VERSION,
     PolicyRegistry,
@@ -48,7 +49,7 @@ def _activate(
 
 
 class RegistryTest(unittest.TestCase):
-    def test_default_registry_activates_only_naive_production_policies(self) -> None:
+    def test_default_registry_activates_naive_and_swizzle_production_policies(self) -> None:
         registry = default_registry()
         expected_active_types = (
             (RegistryKind.INTER_DIE, "naive", NaiveInterDiePolicy),
@@ -72,8 +73,23 @@ class RegistryTest(unittest.TestCase):
                 )
                 self.assertIsInstance(registry.create(kind, name), implementation_type)
 
+        swizzle = registry.registration(RegistryKind.INTER_DIE, "swizzle_topo")
+        self.assertIs(swizzle.state, RegistrationState.ACTIVE)
+        self.assertEqual(swizzle.available_stage, "O1")
+        self.assertEqual(
+            swizzle.capability_ids,
+            (
+                "o1.swizzle.ag_gemm",
+                "o1.swizzle.gemm_ar",
+                "o1.swizzle.gemm_rs",
+            ),
+        )
+        self.assertIsInstance(
+            registry.create(RegistryKind.INTER_DIE, "swizzle_topo"),
+            SwizzlePlanner,
+        )
+
         for kind, name, stage in (
-            (RegistryKind.INTER_DIE, "swizzle_topo", "O1"),
             (RegistryKind.INTRA_DIE, "optimized", "O2"),
         ):
             with self.subTest(kind=kind, name=name):

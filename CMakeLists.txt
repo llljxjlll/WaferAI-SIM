@@ -581,6 +581,58 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "\\[PROGRAM_IO E1-T\\] PASS"
         FAIL_REGULAR_EXPRESSION "\\[PROTO_WAIT\\]")
 
+    set(swizzle_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_swizzle_runtime.py")
+    add_test(NAME swizzle_runtime_comparison
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}:${CMAKE_SOURCE_DIR}/llm/test/frontend/integration
+            ${PYTHON_EXECUTABLE} -B ${swizzle_runtime_runner}
+            --mode suite
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --hardware ${CMAKE_SOURCE_DIR}/notes/frontend/examples/hardware_2x1.json
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${program_runtime_dir}
+            --report ${program_runtime_dir}/swizzle-runtime-comparison-report.json
+            --timeout 600)
+    set_tests_properties(swizzle_runtime_comparison PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 1200
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;swizzle;runtime;comparison;interop"
+        PASS_REGULAR_EXPRESSION
+            "\\[SWIZZLE RUNTIME COMPARISON\\] PASS: timing_execution=1 functional_execution=0 cases=3 branches=6 repeat=2"
+        FAIL_REGULAR_EXPRESSION
+            "\\[PROTO_WAIT\\]|Swizzle runtime first failure|Traceback")
+
+    set(swizzle_scale_runtime_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_swizzle_scale_runtime.py")
+    add_test(NAME swizzle_scale_runtime_comparison
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${CMAKE_SOURCE_DIR}:${CMAKE_SOURCE_DIR}/llm/test/frontend/integration
+            ${PYTHON_EXECUTABLE} -B ${swizzle_scale_runtime_runner}
+            --npusim $<TARGET_FILE:npusim>
+            --finalizer $<TARGET_FILE:npusim_program_finalizer>
+            --resolver $<TARGET_FILE:npusim_program_io_selftest>
+            --hardware ${CMAKE_SOURCE_DIR}/notes/frontend/examples/hardware_2x2.json
+            --simulation ${CMAKE_SOURCE_DIR}/llm/test/sram/simulation.json
+            --mapping ${CMAKE_SOURCE_DIR}/llm/test/default/mapping.spec
+            --runtime-root ${program_runtime_dir}
+            --evidence-root ${program_runtime_dir}/swizzle-scale-runtime-evidence
+            --report ${program_runtime_dir}/swizzle-scale-runtime-report.json
+            --timeout 600)
+    set_tests_properties(swizzle_scale_runtime_comparison PROPERTIES
+        WORKING_DIRECTORY "${program_runtime_dir}"
+        TIMEOUT 1800
+        RUN_SERIAL TRUE
+        LABELS "frontend;program;swizzle;scale;runtime;comparison;interop"
+        PASS_REGULAR_EXPRESSION
+            "\\[SWIZZLE SCALE RUNTIME\\] PASS: performance_benefit=0 measurement_complete=0 cases=3 branches=6 repeat=2"
+        FAIL_REGULAR_EXPRESSION
+            "\\[PROTO_WAIT\\]|Swizzle scale runtime first failure|Traceback")
+
     set(stage1a_state_runtime_runner
         "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_stage1a_state_cases.py")
     foreach(stage1a_case IN ITEMS p1 k1 pd1)

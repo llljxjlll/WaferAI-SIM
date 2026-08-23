@@ -86,3 +86,47 @@ __all__ += [
     *_lite_moe_dp4_linker_all,
     *_lite_moe_dp4_backward_linker_all,
 ]
+from .swizzle import *
+from .swizzle import __all__ as _swizzle_all
+from .swizzle_abi import *
+from .swizzle_abi import __all__ as _swizzle_abi_all
+from .swizzle_linker import *
+from .swizzle_linker import __all__ as _swizzle_linker_all
+from .swizzle_standard import *
+from .swizzle_standard import __all__ as _swizzle_standard_all
+
+__all__ += [
+    name
+    for name in (
+        *_swizzle_all,
+        *_swizzle_abi_all,
+        *_swizzle_linker_all,
+        *_swizzle_standard_all,
+    )
+    if name not in __all__
+]
+from .swizzle_unfused import *
+from .swizzle_unfused import __all__ as _swizzle_unfused_all
+from .swizzle_unfused_standard import *
+from .swizzle_unfused_standard import __all__ as _swizzle_unfused_standard_all
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    *_swizzle_unfused_all,
+    *_swizzle_unfused_standard_all,
+)))
+from .swizzle_meshslice_standard import *
+from .swizzle_meshslice_standard import __all__ as _swizzle_meshslice_standard_all
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    *_swizzle_meshslice_standard_all,
+)))
+from .moe_swizzle_calibration_standard import (
+    build_moe_swizzle_calibration_standard_linked_program,
+)
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    "build_moe_swizzle_calibration_standard_linked_program",
+)))

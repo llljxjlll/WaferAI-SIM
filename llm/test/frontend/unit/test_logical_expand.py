@@ -17,6 +17,7 @@ from llm.frontend.wafer_frontend.schema.ir0 import (
     CollectiveKind,
     CollectiveWorkload,
     EffectKind,
+    FusionPattern,
     GemmPartition,
     GemmWorkload,
     LogicalRole,
@@ -366,7 +367,7 @@ class LogicalExpandTest(unittest.TestCase):
         )
         self.assertEqual(sum(work.rank_logical_payload_bytes for work in collectives), 32768)
         self.assertEqual(sum(work.group_logical_payload_bytes for work in collectives), 65536)
-        self.assertEqual(len(graph.fusion_candidates), 2)
+        self.assertEqual(len(graph.fusion_candidates), 4)
         self.assertTrue(
             all(
                 candidate.semantic_contract.numerical_policy
@@ -405,9 +406,19 @@ class LogicalExpandTest(unittest.TestCase):
 
         expected_candidates = (
             (
+                (nodes["ag1"].id, nodes["qkv"].id),
+                (values["norm1_out"].id, values["w_qkv"].id),
+                (values["qkv_out"].id,),
+            ),
+            (
                 (nodes["o"].id, nodes["rs1"].id),
                 (values["attention_out"].id, values["w_o"].id),
                 (values["rs1_out"].id,),
+            ),
+            (
+                (nodes["ag2"].id, nodes["gate_up"].id),
+                (values["norm2_out"].id, values["w_gate_up"].id),
+                (values["gate_up_out"].id,),
             ),
             (
                 (nodes["down"].id, nodes["rs2"].id),
@@ -424,7 +435,12 @@ class LogicalExpandTest(unittest.TestCase):
         )
         for candidate in graph.fusion_candidates:
             self.assertEqual(candidate.semantic_contract.tile_domain, ("M", "N"))
-            self.assertEqual(candidate.semantic_contract.reduction_axes, (2,))
+            self.assertEqual(
+                candidate.semantic_contract.reduction_axes,
+                ()
+                if candidate.semantic_contract.pattern is FusionPattern.AG_GEMM
+                else (2,),
+            )
             self.assertIs(
                 candidate.semantic_contract.numerical_policy,
                 NumericalPolicy.BITWISE,
@@ -473,7 +489,7 @@ class LogicalExpandTest(unittest.TestCase):
         self.assertEqual(
             sum(node.kind is OpKind.COLLECTIVE for node in graph.nodes), 8
         )
-        self.assertEqual(len(graph.fusion_candidates), 4)
+        self.assertEqual(len(graph.fusion_candidates), 8)
 
         values = {value.id: value for value in graph.values}
         layer0_output = values["P0.layer0.output"]

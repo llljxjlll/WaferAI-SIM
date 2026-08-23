@@ -255,6 +255,14 @@ FragmentKindDto ParseFragmentKind(const Json &value,
         return FragmentKindDto::MOE_TRANSFER;
     if (raw == "s2_lite_rooted_ar")
         return FragmentKindDto::S2_LITE_ROOTED_AR;
+    if (raw == "swizzle")
+        return FragmentKindDto::SWIZZLE;
+    if (raw == "moe_swizzle")
+        return FragmentKindDto::MOE_SWIZZLE;
+    if (raw == "moe_swizzle_calibration")
+        return FragmentKindDto::MOE_SWIZZLE_CALIBRATION;
+    if (raw == "unfused_comparison")
+        return FragmentKindDto::UNFUSED_COMPARISON;
     Fail(path, "unknown FragmentKind");
 }
 
@@ -380,6 +388,62 @@ ManifestInputKindDto ParseInputKind(const Json &value,
     if (raw == "global_action_dag") return ManifestInputKindDto::GLOBAL_ACTION_DAG;
     if (raw == "command_fragment") return ManifestInputKindDto::COMMAND_FRAGMENT;
     if (raw == "region_manifest") return ManifestInputKindDto::REGION_MANIFEST;
+    if (raw == "swizzle_decision")
+        return ManifestInputKindDto::SWIZZLE_DECISION;
+    if (raw == "swizzle_candidate")
+        return ManifestInputKindDto::SWIZZLE_CANDIDATE;
+    if (raw == "swizzle_fusion_plan")
+        return ManifestInputKindDto::SWIZZLE_FUSION_PLAN;
+    if (raw == "swizzle_projection")
+        return ManifestInputKindDto::SWIZZLE_PROJECTION;
+    if (raw == "swizzle_lowered_program")
+        return ManifestInputKindDto::SWIZZLE_LOWERED_PROGRAM;
+    if (raw == "swizzle_core_address_abi")
+        return ManifestInputKindDto::SWIZZLE_CORE_ADDRESS_ABI;
+    if (raw == "swizzle_operand_abi")
+        return ManifestInputKindDto::SWIZZLE_OPERAND_ABI;
+    if (raw == "moe_swizzle_scale_spec")
+        return ManifestInputKindDto::MOE_SWIZZLE_SCALE_SPEC;
+    if (raw == "moe_swizzle_scale_oracle")
+        return ManifestInputKindDto::MOE_SWIZZLE_SCALE_ORACLE;
+    if (raw == "moe_swizzle_execution")
+        return ManifestInputKindDto::MOE_SWIZZLE_EXECUTION;
+    if (raw == "moe_swizzle_decision")
+        return ManifestInputKindDto::MOE_SWIZZLE_DECISION;
+    if (raw == "moe_swizzle_workload_selection")
+        return ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_SELECTION;
+    if (raw == "moe_swizzle_workload_projection")
+        return ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_PROJECTION;
+    if (raw == "moe_swizzle_workload_state_abi")
+        return ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_STATE_ABI;
+    if (raw == "moe_swizzle_workload_value_bridge")
+        return ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_VALUE_BRIDGE;
+    if (raw == "moe_swizzle_workload_abi")
+        return ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_ABI;
+    if (raw == "moe_swizzle_hardware_facts")
+        return ManifestInputKindDto::MOE_SWIZZLE_HARDWARE_FACTS;
+    if (raw == "moe_swizzle_overlay")
+        return ManifestInputKindDto::MOE_SWIZZLE_OVERLAY;
+    if (raw == "moe_swizzle_projection")
+        return ManifestInputKindDto::MOE_SWIZZLE_PROJECTION;
+    if (raw == "moe_swizzle_core_address_abi")
+        return ManifestInputKindDto::MOE_SWIZZLE_CORE_ADDRESS_ABI;
+    if (raw == "moe_swizzle_operand_abi")
+        return ManifestInputKindDto::MOE_SWIZZLE_OPERAND_ABI;
+    if (raw == "moe_swizzle_calibration_source")
+        return ManifestInputKindDto::MOE_SWIZZLE_CALIBRATION_SOURCE;
+    if (raw == "unfused_comparison_baseline")
+        return ManifestInputKindDto::UNFUSED_COMPARISON_BASELINE;
+    if (raw == "unfused_comparison_plan")
+        return ManifestInputKindDto::UNFUSED_COMPARISON_PLAN;
+    if (raw == "unfused_comparison_projection")
+        return ManifestInputKindDto::UNFUSED_COMPARISON_PROJECTION;
+    if (raw == "unfused_comparison_lowered")
+        return ManifestInputKindDto::UNFUSED_COMPARISON_LOWERED;
+    if (raw == "unfused_comparison_core_abi")
+        return ManifestInputKindDto::UNFUSED_COMPARISON_CORE_ABI;
+    if (raw == "unfused_comparison_operand_abi")
+        return ManifestInputKindDto::UNFUSED_COMPARISON_OPERAND_ABI;
     Fail(path, "unknown ManifestInputKind");
 }
 
@@ -1172,6 +1236,60 @@ std::string_view InputKindKey(ManifestInputKindDto kind) {
     case ManifestInputKindDto::GLOBAL_ACTION_DAG: return "global_action_dag";
     case ManifestInputKindDto::COMMAND_FRAGMENT: return "command_fragment";
     case ManifestInputKindDto::REGION_MANIFEST: return "region_manifest";
+    case ManifestInputKindDto::SWIZZLE_DECISION: return "swizzle_decision";
+    case ManifestInputKindDto::SWIZZLE_CANDIDATE: return "swizzle_candidate";
+    case ManifestInputKindDto::SWIZZLE_FUSION_PLAN:
+        return "swizzle_fusion_plan";
+    case ManifestInputKindDto::SWIZZLE_PROJECTION:
+        return "swizzle_projection";
+    case ManifestInputKindDto::SWIZZLE_LOWERED_PROGRAM:
+        return "swizzle_lowered_program";
+    case ManifestInputKindDto::SWIZZLE_CORE_ADDRESS_ABI:
+        return "swizzle_core_address_abi";
+    case ManifestInputKindDto::SWIZZLE_OPERAND_ABI:
+        return "swizzle_operand_abi";
+    case ManifestInputKindDto::MOE_SWIZZLE_SCALE_SPEC:
+        return "moe_swizzle_scale_spec";
+    case ManifestInputKindDto::MOE_SWIZZLE_SCALE_ORACLE:
+        return "moe_swizzle_scale_oracle";
+    case ManifestInputKindDto::MOE_SWIZZLE_EXECUTION:
+        return "moe_swizzle_execution";
+    case ManifestInputKindDto::MOE_SWIZZLE_DECISION:
+        return "moe_swizzle_decision";
+    case ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_SELECTION:
+        return "moe_swizzle_workload_selection";
+    case ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_PROJECTION:
+        return "moe_swizzle_workload_projection";
+    case ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_STATE_ABI:
+        return "moe_swizzle_workload_state_abi";
+    case ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_VALUE_BRIDGE:
+        return "moe_swizzle_workload_value_bridge";
+    case ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_ABI:
+        return "moe_swizzle_workload_abi";
+    case ManifestInputKindDto::MOE_SWIZZLE_HARDWARE_FACTS:
+        return "moe_swizzle_hardware_facts";
+    case ManifestInputKindDto::MOE_SWIZZLE_OVERLAY:
+        return "moe_swizzle_overlay";
+    case ManifestInputKindDto::MOE_SWIZZLE_PROJECTION:
+        return "moe_swizzle_projection";
+    case ManifestInputKindDto::MOE_SWIZZLE_CORE_ADDRESS_ABI:
+        return "moe_swizzle_core_address_abi";
+    case ManifestInputKindDto::MOE_SWIZZLE_OPERAND_ABI:
+        return "moe_swizzle_operand_abi";
+    case ManifestInputKindDto::MOE_SWIZZLE_CALIBRATION_SOURCE:
+        return "moe_swizzle_calibration_source";
+    case ManifestInputKindDto::UNFUSED_COMPARISON_BASELINE:
+        return "unfused_comparison_baseline";
+    case ManifestInputKindDto::UNFUSED_COMPARISON_PLAN:
+        return "unfused_comparison_plan";
+    case ManifestInputKindDto::UNFUSED_COMPARISON_PROJECTION:
+        return "unfused_comparison_projection";
+    case ManifestInputKindDto::UNFUSED_COMPARISON_LOWERED:
+        return "unfused_comparison_lowered";
+    case ManifestInputKindDto::UNFUSED_COMPARISON_CORE_ABI:
+        return "unfused_comparison_core_abi";
+    case ManifestInputKindDto::UNFUSED_COMPARISON_OPERAND_ABI:
+        return "unfused_comparison_operand_abi";
     }
     Fail("linked_program_manifest.input_digests", "unknown input kind");
 }
@@ -1730,7 +1848,7 @@ ExternalRecord FinalizeRecord(
     const std::map<std::string, RuntimeEntry> &runtime_symbols,
     ProgramArtifact &artifact,
     uint64_t core_index, uint64_t instruction_index,
-    const std::string &path) {
+    const std::string &path, bool allow_persistent_alloc) {
     ExternalRecord result;
     result.opcode = record.opcode;
     auto relocation = [&](SemanticOperandId id) -> const AddressRelocationDto & {
@@ -1819,7 +1937,9 @@ ExternalRecord FinalizeRecord(
         const uint64_t lifetime = LiteralU64(record.operands[5], path + ".operands[5]");
         const bool spillable = LiteralBool(record.operands[6], path + ".operands[6]");
         if (size == 0 || alignment == 0 ||
-            (alignment & (alignment - 1)) != 0 || lifetime != 0)
+            (alignment & (alignment - 1)) != 0 ||
+            (lifetime != 0 &&
+             (!allow_persistent_alloc || lifetime != 2)))
             Fail(path, "invalid SRAM_ALLOC_AT size/alignment/lifetime");
         if (offset > region.definition->size_bytes ||
             size > region.definition->size_bytes - offset)
@@ -1835,7 +1955,9 @@ ExternalRecord FinalizeRecord(
         operands.region_offset_bytes = offset;
         operands.size_bytes = size;
         operands.alignment_bytes = alignment;
-        operands.lifetime = SramLifetime::TASK;
+        operands.lifetime = lifetime == 2
+            ? SramLifetime::PERSISTENT
+            : SramLifetime::TASK;
         operands.spillable = spillable;
         result.operands = operands;
         AppendRelocation(artifact, core_index, instruction_index,
@@ -2822,7 +2944,11 @@ std::set<std::string> ValidateActionSequence(
     const std::vector<const RelocatableRecordDto *> &records,
     const std::string &path,
     bool s3_lite_backward_link,
-    bool s3_lite_dp4_train_forward_link) {
+    bool s3_lite_dp4_train_forward_link,
+    bool moe_swizzle_link,
+    bool moe_swizzle_c1_matmul_bind,
+    bool moe_calibration_link,
+    const std::set<std::string> &moe_terminal_labels) {
     std::set<std::string> completed;
     std::set<std::string> allocated_once;
     std::set<std::string> freed_once;
@@ -2866,7 +2992,11 @@ std::set<std::string> ValidateActionSequence(
                    opcode == Opcode::SGD_UPDATE;
         };
         bool valid_body = false;
-        if (s3_lite_backward_link && suffix == cursor + 3 &&
+        if (moe_calibration_link && suffix == cursor &&
+            !action_allocated_labels.empty() &&
+            action_allocated_labels.size() <= 2)
+            valid_body = true;
+        else if (s3_lite_backward_link && suffix == cursor + 3 &&
             records[cursor]->opcode == Opcode::SRAM_BIND &&
             records[cursor + 1]->opcode == Opcode::SGD_UPDATE &&
             records[cursor + 2]->opcode == Opcode::LSU_STORE) {
@@ -2881,7 +3011,8 @@ std::set<std::string> ValidateActionSequence(
             const Opcode compute_opcode = records[cursor + 1]->opcode;
             const uint64_t expected_inputs =
                 compute_opcode == Opcode::CROSS_ENTROPY_BACKWARD ? 3 :
-                (s3_lite_backward_link &&
+                ((s3_lite_backward_link || moe_calibration_link ||
+                  moe_swizzle_c1_matmul_bind) &&
                  compute_opcode == Opcode::MATMUL) ? 2 :
                 (compute_opcode == Opcode::RESIDUAL ||
                  compute_opcode == Opcode::EMBEDDING_LOOKUP ||
@@ -2894,9 +3025,16 @@ std::set<std::string> ValidateActionSequence(
                      "compute SRAM_BIND input_count does not match its exact opcode ABI");
             valid_body = true;
         }
-        else if (s3_lite_backward_link && suffix == cursor + 2 &&
+        else if ((s3_lite_backward_link || moe_calibration_link) &&
+                 suffix == cursor + 2 &&
                  records[cursor]->opcode == Opcode::DTE_RECV &&
                  records[cursor + 1]->opcode == Opcode::DTE_WAIT)
+            valid_body = true;
+        else if (moe_calibration_link && suffix == cursor + 3 &&
+                 records[cursor]->opcode == Opcode::DTE_ISSUE &&
+                 records[cursor + 1]->opcode == Opcode::DTE_WAIT &&
+                 (records[cursor + 2]->opcode == Opcode::EVENT_SET ||
+                  records[cursor + 2]->opcode == Opcode::EVENT_WAIT))
             valid_body = true;
         else if (suffix == cursor + 2 &&
                  records[cursor]->opcode == Opcode::DTE_ISSUE &&
@@ -2917,7 +3055,12 @@ std::set<std::string> ValidateActionSequence(
                          opcode == Opcode::DTE_WAIT ||
                          opcode == Opcode::LOCAL_REDUCE ||
                          opcode == Opcode::LSU_LOAD ||
-                         opcode == Opcode::LSU_STORE;
+                         opcode == Opcode::LSU_STORE ||
+                         ((moe_swizzle_link || moe_calibration_link) &&
+                          opcode == Opcode::MATMUL) ||
+                         (moe_calibration_link &&
+                          (opcode == Opcode::EVENT_SET ||
+                           opcode == Opcode::EVENT_WAIT));
         } else if (suffix > cursor) {
             valid_body = std::all_of(
                 records.begin() + static_cast<std::ptrdiff_t>(cursor),
@@ -2954,6 +3097,11 @@ std::set<std::string> ValidateActionSequence(
     }
     std::set<std::string> retired = freed_once;
     retired.insert(terminal_tape_labels.begin(), terminal_tape_labels.end());
+    for (const std::string &label : moe_terminal_labels) {
+        if (active.erase(label) != 1 || !retired.insert(label).second)
+            Fail(path,
+                 "MoE terminal SRAM label is not one exact live allocation");
+    }
     if (!active.empty() || allocated_once != retired ||
         (s3_lite_dp4_train_forward_link && terminal_tape_labels.size() != 2) ||
         (!s3_lite_dp4_train_forward_link && !terminal_tape_labels.empty()))
@@ -3038,6 +3186,13 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::vector<const ManifestInputDigestDto *> train_inputs;
         std::vector<const ManifestInputDigestDto *> s3_lite_inputs;
         std::vector<const ManifestInputDigestDto *> rooted_ar_inputs;
+        std::map<ManifestInputKindDto, const ManifestInputDigestDto *>
+            swizzle_inputs;
+        std::map<ManifestInputKindDto,
+                 std::vector<const ManifestInputDigestDto *>>
+            moe_swizzle_inputs;
+        std::map<ManifestInputKindDto, const ManifestInputDigestDto *>
+            unfused_inputs;
         std::map<ManifestInputKindDto, std::set<std::string>>
             train_lineage_ids;
         for (const ManifestInputDigestDto &digest : manifest.input_digests) {
@@ -3069,6 +3224,22 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         const bool train_link = !train_inputs.empty();
         const bool s3_lite_link = !s3_lite_inputs.empty();
         const bool rooted_ar_link = !rooted_ar_inputs.empty();
+        const bool swizzle_link =
+            manifest.producer_pass == "swizzle_standard_linker";
+        const bool moe_swizzle_link =
+            manifest.producer_pass == "moe_swizzle_standard_linker";
+        bool moe_swizzle_c1_matmul_bind = false;
+        const bool moe_calibration_link =
+            manifest.producer_pass ==
+                "moe_swizzle_calibration_standard_linker";
+        const bool unfused_link =
+            manifest.producer_pass ==
+                "unfused_comparison_standard_linker";
+        bool unfused_s0_ag = false;
+        bool unfused_s0_rs = false;
+        bool unfused_s0_ar = false;
+        const bool scale_swizzle_alias_link =
+            swizzle_link && manifest.core_streams.size() == 4;
         const bool dp4_rooted_ar_link =
             rooted_ar_link &&
             rooted_ar_inputs.front()->schema_version ==
@@ -3093,6 +3264,696 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             (s3_lite_link &&
              s3_lite_inputs.front()->schema_version ==
                 "wafer_frontend.s3_lite_moe_backward_lowered_program/v1alpha1");
+        if (swizzle_link) {
+            const std::map<ManifestInputKindDto, std::string>
+                swizzle_schemas{
+                    {ManifestInputKindDto::IR1,
+                     "wafer_frontend.ir1/v1alpha14"},
+                    {ManifestInputKindDto::SWIZZLE_DECISION,
+                     "wafer_frontend.swizzle_decision/v1alpha1"},
+                    {ManifestInputKindDto::SWIZZLE_CANDIDATE,
+                     "wafer_frontend.swizzle_candidate/v1alpha1"},
+                    {ManifestInputKindDto::SWIZZLE_FUSION_PLAN,
+                     "wafer_frontend.swizzle_fusion_plan/v1alpha1"},
+                    {ManifestInputKindDto::SWIZZLE_PROJECTION,
+                     "wafer_frontend.swizzle_ir2/v1alpha1"},
+                    {ManifestInputKindDto::SWIZZLE_LOWERED_PROGRAM,
+                     "wafer_frontend.swizzle_lowered_program/v1alpha1"},
+                    {ManifestInputKindDto::SWIZZLE_CORE_ADDRESS_ABI,
+                     "wafer_frontend.swizzle_core_address_abi/v1alpha1"},
+                    {ManifestInputKindDto::SWIZZLE_OPERAND_ABI,
+                     "wafer_frontend.swizzle_operand_abi/v1alpha1"},
+                    {ManifestInputKindDto::COMMAND_FRAGMENT,
+                     std::string(kCommandFragmentSchemaVersion)},
+                };
+            if (train_link || s3_lite_link || rooted_ar_link ||
+                manifest.input_digests.size() != swizzle_schemas.size())
+                Fail("linked_program_manifest.input_digests",
+                     "Swizzle standard linker requires exactly nine exclusive typed inputs");
+            for (const ManifestInputDigestDto &digest :
+                 manifest.input_digests) {
+                const auto expected_schema =
+                    swizzle_schemas.find(digest.kind);
+                if (expected_schema == swizzle_schemas.end() ||
+                    digest.schema_version != expected_schema->second ||
+                    !swizzle_inputs.emplace(digest.kind, &digest).second)
+                    Fail("linked_program_manifest.input_digests",
+                         "Swizzle standard input kind/schema/cardinality changed");
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            if (swizzle_inputs.size() != swizzle_schemas.size() ||
+                swizzle_inputs.at(ManifestInputKindDto::IR1)->artifact_id !=
+                    manifest.source_ir1_id ||
+                swizzle_inputs.at(
+                    ManifestInputKindDto::SWIZZLE_PROJECTION)->artifact_id !=
+                    manifest.source_projection_id ||
+                swizzle_inputs.at(
+                    ManifestInputKindDto::SWIZZLE_CORE_ADDRESS_ABI)
+                        ->artifact_id != manifest.source_schedule_set_id ||
+                manifest.source_global_dag_id !=
+                    manifest.source_projection_id)
+                Fail("linked_program_manifest.input_digests",
+                     "Swizzle standard source provenance is not exact");
+        }
+        if (moe_swizzle_link) {
+            const std::map<ManifestInputKindDto, std::string>
+                moe_swizzle_schemas{
+                    {ManifestInputKindDto::IR1,
+                     "wafer_frontend.ir1/v1alpha14"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_SCALE_SPEC,
+                     "wafer_frontend.moe_swizzle_scale_spec/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_SCALE_ORACLE,
+                     "wafer_frontend.moe_swizzle_scale_oracle/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_EXECUTION,
+                     "wafer_frontend.moe_swizzle_execution/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_DECISION,
+                     "wafer_frontend.moe_swizzle_decision/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_SELECTION,
+                     "wafer_frontend.moe_swizzle_workload_selection/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_PROJECTION,
+                     "wafer_frontend.moe_swizzle_workload_projection/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_STATE_ABI,
+                     "wafer_frontend.moe_swizzle_state_abi/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_VALUE_BRIDGE,
+                     "wafer_frontend.moe_swizzle_workload_value_bridge/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_ABI,
+                     "wafer_frontend.moe_swizzle_workload_abi/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_HARDWARE_FACTS,
+                     "wafer_frontend.moe_hardware_facts/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_OVERLAY,
+                     "wafer_frontend.moe_swizzle_overlay/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_PROJECTION,
+                     "wafer_frontend.moe_swizzle_ir2/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_CORE_ADDRESS_ABI,
+                     "wafer_frontend.moe_swizzle_core_address_abi/v1alpha1"},
+                    {ManifestInputKindDto::MOE_SWIZZLE_OPERAND_ABI,
+                     "wafer_frontend.moe_swizzle_operand_abi/v1alpha1"},
+                    {ManifestInputKindDto::COMMAND_FRAGMENT,
+                     std::string(kCommandFragmentSchemaVersion)},
+                };
+            if (train_link || s3_lite_link || rooted_ar_link || swizzle_link ||
+                unfused_link || manifest.input_digests.size() != 17)
+                Fail("linked_program_manifest.input_digests",
+                     "MoE Swizzle linker requires exactly sixteen exclusive kinds and seventeen typed digests");
+            for (const ManifestInputDigestDto &digest :
+                 manifest.input_digests) {
+                const auto expected_schema =
+                    moe_swizzle_schemas.find(digest.kind);
+                if (expected_schema == moe_swizzle_schemas.end() ||
+                    digest.schema_version != expected_schema->second)
+                    Fail("linked_program_manifest.input_digests",
+                         "MoE Swizzle input kind/schema changed");
+                moe_swizzle_inputs[digest.kind].push_back(&digest);
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            for (const auto &entry : moe_swizzle_schemas) {
+                const std::size_t expected_count =
+                    entry.first == ManifestInputKindDto::MOE_SWIZZLE_DECISION
+                        ? 2
+                        : 1;
+                if (moe_swizzle_inputs[entry.first].size() != expected_count)
+                    Fail("linked_program_manifest.input_digests",
+                         "MoE Swizzle input kind cardinality changed");
+            }
+            if (moe_swizzle_inputs[ManifestInputKindDto::IR1].front()
+                        ->artifact_id != manifest.source_ir1_id ||
+                moe_swizzle_inputs[
+                    ManifestInputKindDto::MOE_SWIZZLE_PROJECTION].front()
+                        ->artifact_id != manifest.source_projection_id ||
+                moe_swizzle_inputs[
+                    ManifestInputKindDto::MOE_SWIZZLE_WORKLOAD_PROJECTION]
+                        .front()->artifact_id !=
+                    manifest.source_global_dag_id ||
+                moe_swizzle_inputs[
+                    ManifestInputKindDto::MOE_SWIZZLE_CORE_ADDRESS_ABI].front()
+                        ->artifact_id != manifest.source_schedule_set_id)
+                Fail("linked_program_manifest.input_digests",
+                     "MoE Swizzle standard source provenance is not exact");
+            if (manifest.fragments.size() != 1 ||
+                std::holds_alternative<RegionManifestDto>(
+                    manifest.fragments.front()))
+                Fail("linked_program_manifest.fragments",
+                     "MoE Swizzle requires one exact unwrapped whole-workload leaf");
+            const CommandFragmentDto &moe_leaf =
+                Leaf(manifest.fragments.front());
+            if (moe_leaf.kind != FragmentKindDto::MOE_SWIZZLE ||
+                moe_leaf.producer_pass !=
+                    "moe_swizzle_standard_lowering" ||
+                moe_leaf.source_global_dag_id !=
+                    manifest.source_global_dag_id ||
+                moe_swizzle_inputs[
+                    ManifestInputKindDto::COMMAND_FRAGMENT].front()
+                        ->artifact_id != moe_leaf.id)
+                Fail("linked_program_manifest.fragments",
+                     "MoE Swizzle leaf kind/producer/global/command digest changed");
+            std::map<Opcode, std::size_t> opcodes;
+            std::size_t records = 0;
+            std::set<std::vector<uint64_t>> swiglu_parameters;
+            std::set<uint64_t> bind_input_counts;
+            std::size_t bind_address_bindings = 0;
+            for (const CoreFragmentStreamDto &stream :
+                 moe_leaf.core_streams) {
+                records += stream.records.size();
+                for (const RelocatableRecordDto &record : stream.records) {
+                    ++opcodes[record.opcode];
+                    if (record.opcode == Opcode::SWIGLU)
+                        swiglu_parameters.insert(LiteralU64Array(
+                            record.operands.back(),
+                            "moe_swizzle.swiglu.parameters"));
+                    if (record.opcode == Opcode::SRAM_BIND) {
+                        const uint64_t input_count = LiteralU64(
+                            record.operands.front(),
+                            "moe_swizzle.bind.input_count");
+                        bind_input_counts.insert(input_count);
+                        bind_address_bindings += input_count + 1U;
+                    }
+                }
+            }
+            const std::size_t state_loads = opcodes.count(Opcode::LSU_LOAD)
+                ? opcodes.at(Opcode::LSU_LOAD) : 0U;
+            const std::size_t bind_records = opcodes.count(Opcode::SRAM_BIND)
+                ? opcodes.at(Opcode::SRAM_BIND) : 0U;
+            const bool scaled_state = state_loads >= 96 &&
+                state_loads % 96 == 0;
+            const std::size_t token_alias_count = scaled_state
+                ? state_loads / 3 + 16 : 0U;
+            const bool full_compute_bind = bind_records == 64;
+            const bool legacy_swiglu_bind = bind_records == 16;
+            const auto expected_opcodes = [=](bool train) {
+                std::map<Opcode, std::size_t> result{
+                    {Opcode::MATMUL, 48},
+                    {Opcode::SWIGLU, 16},
+                    {Opcode::DTE_SEND, 24},
+                    {Opcode::DTE_RECV, 24},
+                    {Opcode::LSU_LOAD, state_loads},
+                    {Opcode::SRAM_BIND, bind_records},
+                    {Opcode::SRAM_FREE, 92},
+                    {Opcode::SRAM_ALLOC_AT, train ? 116U : 100U},
+                    {Opcode::DTE_WAIT,
+                     train ? token_alias_count + 8U : 24U},
+                };
+                if (train)
+                    result.emplace(Opcode::DTE_ISSUE,
+                                   token_alias_count - 16U);
+                return result;
+            };
+            const bool infer = scaled_state &&
+                (full_compute_bind || legacy_swiglu_bind) &&
+                opcodes == expected_opcodes(false);
+            const bool train = scaled_state &&
+                (full_compute_bind || legacy_swiglu_bind) &&
+                opcodes == expected_opcodes(true);
+            if (static_cast<unsigned>(infer) +
+                    static_cast<unsigned>(train) != 1)
+                Fail("linked_program_manifest.fragments",
+                     "MoE Swizzle opcode quotient does not identify one exact supported workload");
+            moe_swizzle_c1_matmul_bind = full_compute_bind;
+
+            const std::size_t expected_records =
+                (infer ? 328U : 312U + 2U * token_alias_count) +
+                state_loads + bind_records;
+            const std::size_t expected_claims = expected_records -
+                opcodes.at(Opcode::SRAM_ALLOC_AT) - bind_records -
+                opcodes.at(Opcode::SRAM_FREE) -
+                (train ? opcodes.at(Opcode::DTE_ISSUE) : 0U);
+            const std::size_t expected_roots = infer ? 108 : 124;
+            const std::size_t expected_owned = infer ? 100 : 116;
+            const std::size_t expected_tape_aliases = train
+                ? 2U * (token_alias_count - 16U) : 0U;
+            const std::size_t expected_aliases = infer
+                ? 120U + 4U * token_alias_count
+                : 104U + 5U * token_alias_count +
+                      expected_tape_aliases;
+            const std::size_t expected_runtime =
+                infer ? 112U : 96U + token_alias_count;
+            const std::size_t expected_program = infer
+                ? 297U + state_loads
+                : 313U + state_loads +
+                      2U * (token_alias_count - 16U);
+            const std::size_t expected_addresses =
+                2U * opcodes.at(Opcode::SRAM_ALLOC_AT) +
+                opcodes.at(Opcode::SRAM_FREE) + state_loads +
+                opcodes.at(Opcode::DTE_SEND) +
+                opcodes.at(Opcode::DTE_RECV) +
+                2U * (train ? opcodes.at(Opcode::DTE_ISSUE) : 0U) +
+                3U * opcodes.at(Opcode::MATMUL) +
+                2U * opcodes.at(Opcode::SWIGLU) +
+                bind_address_bindings;
+            const std::size_t expected_state_bindings = state_loads;
+            const std::size_t expected_terminal_roots = infer ? 8 : 24;
+
+            std::map<BufferOwnershipDto, std::size_t> ownerships;
+            std::map<std::string, std::size_t> root_layouts;
+            std::map<std::string, std::size_t> alias_layouts;
+            for (const BufferAbiDto &abi : moe_leaf.buffer_abi) {
+                ++ownerships[abi.ownership];
+                if (abi.alignment_bytes != 64)
+                    Fail("command_fragment.buffer_abi",
+                         "MoE Swizzle BufferABI alignment changed");
+                if (abi.alias_of)
+                    ++alias_layouts[abi.layout];
+                else
+                    ++root_layouts[abi.layout];
+            }
+            const std::map<BufferOwnershipDto, std::size_t>
+                expected_ownerships{
+                    {BufferOwnershipDto::BORROWED, 8},
+                    {BufferOwnershipDto::OWNED, expected_owned},
+                    {BufferOwnershipDto::ALIASED, expected_aliases},
+                };
+            std::map<std::string, std::size_t> expected_root_layouts{
+                {"moe_swizzle_boundary_input_root/v1", 8},
+                {"moe_swizzle_combine_output_root/v1", 12},
+                {"moe_swizzle_dispatch_operand_root/v1", 16},
+                {"moe_swizzle_state_stage.down_root/v1", 16},
+                {"moe_swizzle_state_stage.gate_root/v1", 16},
+                {"moe_swizzle_state_stage.up_root/v1", 16},
+                {"moe_swizzle_swiglu_output_root/v1", 16},
+                {"moe_swizzle_terminal_combined_root/v1", 8},
+            };
+            std::map<std::string, std::size_t> expected_alias_layouts{
+                {"moe_swizzle_boundary_input_subview/v1", 12},
+                {"moe_swizzle_combine_output_subview/v1", 12},
+                {"moe_swizzle_dispatch_operand_subview/v1", 64},
+                {"moe_swizzle_state_stage.down_subview/v1",
+                 token_alias_count},
+                {"moe_swizzle_state_stage.gate_subview/v1",
+                 token_alias_count},
+                {"moe_swizzle_state_stage.up_subview/v1",
+                 token_alias_count},
+                {"moe_swizzle_swiglu_output_subview/v1",
+                 infer ? 32U : token_alias_count + 16U},
+                {"moe_swizzle_terminal_combined_subview/v1",
+                 token_alias_count},
+            };
+            if (train) {
+                expected_root_layouts.emplace(
+                    "moe_swizzle_terminal_tape_root/v1", 16);
+                expected_alias_layouts.emplace(
+                    "moe_swizzle_terminal_tape_subview/v1",
+                    expected_tape_aliases);
+            }
+
+            std::map<RuntimeSymbolKindDto, std::size_t> runtime_kinds;
+            for (const RuntimeSymbolDefinitionDto &definition :
+                 manifest.runtime_symbol_definitions)
+                ++runtime_kinds[definition.symbol.kind];
+            const std::map<RuntimeSymbolKindDto, std::size_t>
+                expected_runtime_kinds = infer
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 16},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 24},
+                          {RuntimeSymbolKindDto::DTE_FSM, 24},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 48},
+                      }
+                    : std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 16},
+                          {RuntimeSymbolKindDto::DTE_TOKEN,
+                           token_alias_count + 8U},
+                          {RuntimeSymbolKindDto::DTE_FSM, 24},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 48},
+                      };
+            std::map<ProgramSymbolKind, std::size_t> program_kinds;
+            for (const ProgramSymbolDefinitionDto &definition :
+                 manifest.program_symbol_definitions)
+                ++program_kinds[definition.symbol.kind];
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS,
+                     expected_program - expected_owned - 1U},
+                    {ProgramSymbolKind::SRAM_LABEL, expected_owned},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            const ProgramControlEnvelopeDto &envelope = manifest.envelope;
+            const std::size_t lifecycle_records =
+                opcodes.at(Opcode::SRAM_ALLOC_AT) +
+                opcodes.at(Opcode::SRAM_BIND) +
+                opcodes.at(Opcode::SRAM_FREE);
+            if (records != expected_records ||
+                moe_leaf.claimed_action_ids.size() != expected_claims ||
+                expected_claims != records - lifecycle_records -
+                    (train ? opcodes.at(Opcode::DTE_ISSUE) : 0U) ||
+                swiglu_parameters != std::set<std::vector<uint64_t>>{
+                    {state_loads * 2U / 3U}} ||
+                bind_input_counts != (full_compute_bind
+                    ? std::set<uint64_t>{1, 2}
+                    : std::set<uint64_t>{1}) ||
+                moe_leaf.core_streams.size() != 16 ||
+                moe_leaf.buffer_abi.size() != expected_roots + expected_aliases ||
+                ownerships != expected_ownerships ||
+                root_layouts != expected_root_layouts ||
+                alias_layouts != expected_alias_layouts ||
+                moe_leaf.state_abi.size() != 12 ||
+                opcodes.at(Opcode::SRAM_ALLOC_AT) != expected_owned ||
+                opcodes.at(Opcode::SRAM_FREE) !=
+                    expected_owned - expected_terminal_roots ||
+                opcodes.at(Opcode::SRAM_BIND) !=
+                    opcodes.at(Opcode::SWIGLU) +
+                        (full_compute_bind ? opcodes.at(Opcode::MATMUL) : 0U) ||
+                opcodes.at(Opcode::LSU_LOAD) !=
+                    manifest.state_operand_bindings.size() ||
+                manifest.fragment_interfaces.size() != 1 ||
+                manifest.core_bindings.size() != 16 ||
+                manifest.core_streams.size() != 16 ||
+                manifest.runtime_symbol_definitions.size() != expected_runtime ||
+                runtime_kinds != expected_runtime_kinds ||
+                manifest.program_symbol_definitions.size() != expected_program ||
+                program_kinds != expected_program_kinds ||
+                manifest.address_operand_bindings.size() != expected_addresses ||
+                manifest.state_operand_bindings.size() !=
+                    expected_state_bindings ||
+                !manifest.core_groups.empty() ||
+                envelope.active_cores.size() != 16 ||
+                envelope.start_events.size() != 16 ||
+                envelope.terminal_cores.size() !=
+                    (infer ? 8U : 16U) ||
+                envelope.expected_ack_cores != envelope.active_cores ||
+                envelope.expected_done_cores != envelope.terminal_cores ||
+                envelope.empty_core_ack_policy !=
+                    EmptyCoreAckPolicy::INCLUDE_EMPTY ||
+                envelope.failure_policy != ProgramFailurePolicy::ABORT_ALL)
+                Fail("linked_program_manifest",
+                     "MoE Swizzle exact production quotient or envelope changed");
+        }
+        if (moe_calibration_link) {
+            const std::map<ManifestInputKindDto, std::string>
+                calibration_schemas{
+                    {ManifestInputKindDto::MOE_SWIZZLE_CALIBRATION_SOURCE,
+                     "wafer_frontend.moe_swizzle_calibration_program_source/v1alpha1"},
+                    {ManifestInputKindDto::COMMAND_FRAGMENT,
+                     std::string(kCommandFragmentSchemaVersion)},
+                };
+            if (train_link || s3_lite_link || rooted_ar_link ||
+                swizzle_link || moe_swizzle_link || unfused_link ||
+                manifest.input_digests.size() !=
+                    calibration_schemas.size())
+                Fail("linked_program_manifest.input_digests",
+                     "isolated MoE calibration requires two exclusive typed inputs");
+            std::map<ManifestInputKindDto,
+                     const ManifestInputDigestDto *> inputs;
+            for (const ManifestInputDigestDto &digest :
+                 manifest.input_digests) {
+                const auto schema = calibration_schemas.find(digest.kind);
+                if (schema == calibration_schemas.end() ||
+                    digest.schema_version != schema->second ||
+                    !inputs.emplace(digest.kind, &digest).second)
+                    Fail("linked_program_manifest.input_digests",
+                         "isolated MoE calibration input schema/cardinality changed");
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            const std::string &source_id =
+                inputs.at(
+                    ManifestInputKindDto::MOE_SWIZZLE_CALIBRATION_SOURCE)
+                    ->artifact_id;
+            if (manifest.source_projection_id != source_id ||
+                manifest.source_schedule_set_id != source_id ||
+                manifest.source_global_dag_id != source_id ||
+                manifest.fragments.size() != 1 ||
+                std::holds_alternative<RegionManifestDto>(
+                    manifest.fragments.front()))
+                Fail("linked_program_manifest",
+                     "isolated MoE calibration source/leaf lineage changed");
+            const CommandFragmentDto &leaf =
+                Leaf(manifest.fragments.front());
+            if (leaf.kind !=
+                    FragmentKindDto::MOE_SWIZZLE_CALIBRATION ||
+                leaf.producer_pass !=
+                    "moe_swizzle_calibration_standard_lowering" ||
+                leaf.source_global_dag_id != source_id ||
+                leaf.id !=
+                    inputs.at(ManifestInputKindDto::COMMAND_FRAGMENT)
+                        ->artifact_id)
+                Fail("linked_program_manifest.fragments",
+                     "isolated MoE calibration leaf provenance changed");
+            std::map<Opcode, std::size_t> opcodes;
+            std::size_t records = 0;
+            for (const CoreFragmentStreamDto &stream :
+                 leaf.core_streams)
+                for (const RelocatableRecordDto &record : stream.records) {
+                    ++records;
+                    ++opcodes[record.opcode];
+                }
+            const auto once = [](std::initializer_list<Opcode> values) {
+                std::map<Opcode, std::size_t> result;
+                for (Opcode value : values) result.emplace(value, 1);
+                return result;
+            };
+            const std::set<std::map<Opcode, std::size_t>>
+                exact_skeletons{
+                    once({Opcode::MATMUL, Opcode::SRAM_BIND,
+                          Opcode::SRAM_ALLOC_AT}),
+                    once({Opcode::SWIGLU, Opcode::SRAM_BIND,
+                          Opcode::SRAM_ALLOC_AT}),
+                    once({Opcode::DTE_SEND, Opcode::DTE_RECV,
+                          Opcode::DTE_WAIT, Opcode::SRAM_ALLOC_AT}),
+                    once({Opcode::DTE_ISSUE, Opcode::DTE_WAIT,
+                          Opcode::SRAM_ALLOC_AT}),
+                    once({Opcode::DTE_ISSUE, Opcode::DTE_WAIT,
+                          Opcode::EVENT_SET, Opcode::EVENT_WAIT,
+                          Opcode::SRAM_ALLOC_AT}),
+                };
+            const std::map<Opcode, std::size_t> sram_free_opcodes{
+                {Opcode::DTE_ISSUE, 1},
+                {Opcode::DTE_WAIT, 1},
+                {Opcode::SRAM_ALLOC_AT, 2},
+                {Opcode::SRAM_FREE, 1},
+            };
+            std::map<BufferOwnershipDto, std::size_t> ownerships;
+            std::set<std::string> buffer_layouts;
+            for (const BufferAbiDto &abi : leaf.buffer_abi) {
+                ++ownerships[abi.ownership];
+                buffer_layouts.insert(abi.layout);
+                if (abi.alias_of || abi.alignment_bytes != 64)
+                    Fail("command_fragment.buffer_abi",
+                         "isolated MoE calibration requires non-alias 64-byte-aligned roots");
+            }
+            const bool group_gemm = opcodes.count(Opcode::MATMUL) == 1;
+            const bool swiglu_group = opcodes.count(Opcode::SWIGLU) == 1;
+            const bool sram_free = opcodes == sram_free_opcodes;
+            const std::size_t input_count = group_gemm ? 2 : 1;
+            std::set<std::string> expected_buffer_layouts{
+                "moe_swizzle_calibration_input_0_root/v1",
+                "moe_swizzle_calibration_output_root/v1",
+            };
+            if (group_gemm)
+                expected_buffer_layouts.insert(
+                    "moe_swizzle_calibration_input_1_root/v1");
+            if (sram_free)
+                expected_buffer_layouts.insert(
+                    "moe_swizzle_calibration_scratch_root/v1");
+            const std::map<BufferOwnershipDto, std::size_t>
+                expected_ownerships{
+                    {BufferOwnershipDto::BORROWED, input_count},
+                    {BufferOwnershipDto::OWNED, sram_free ? 2U : 1U},
+                };
+            if (group_gemm || swiglu_group) {
+                const std::vector<RelocatableRecordDto> &sequence =
+                    leaf.core_streams.front().records;
+                const Opcode compute_opcode =
+                    group_gemm ? Opcode::MATMUL : Opcode::SWIGLU;
+                if (sequence.size() != 3 ||
+                    sequence[0].opcode != Opcode::SRAM_ALLOC_AT ||
+                    sequence[1].opcode != Opcode::SRAM_BIND ||
+                    sequence[2].opcode != compute_opcode ||
+                    LiteralU64(sequence[1].operands.front(),
+                               "isolated calibration SRAM_BIND input_count") !=
+                        input_count)
+                    Fail("linked_program_manifest.fragments",
+                         "isolated MoE calibration compute sequence changed");
+                std::vector<std::string> labels;
+                for (std::size_t index = 0; index < input_count; ++index)
+                    labels.push_back(AddressSymbolRef(
+                        sequence[1], static_cast<SemanticOperandId>(
+                            static_cast<uint16_t>(
+                                SemanticOperandId::SRAM_BIND_INPUT_0) +
+                            index)));
+                labels.push_back(AddressSymbolRef(
+                    sequence[1], SemanticOperandId::SRAM_BIND_OUTPUT));
+                if (std::any_of(labels.begin(), labels.end(),
+                                [](const std::string &label) {
+                                    return label.empty();
+                                }) ||
+                    std::set<std::string>(labels.begin(), labels.end()).size() !=
+                        labels.size())
+                    Fail("linked_program_manifest.fragments",
+                         "isolated MoE calibration compute labels must be present and distinct");
+                std::map<std::string, const ProgramSymbolDefinitionDto *>
+                    definitions;
+                for (const ProgramSymbolDefinitionDto &definition :
+                     manifest.program_symbol_definitions)
+                    definitions.emplace(definition.symbol.id, &definition);
+                std::map<std::string, const BufferAbiDto *> roots_by_layout;
+                for (const BufferAbiDto &abi : leaf.buffer_abi)
+                    roots_by_layout.emplace(abi.layout, &abi);
+                for (std::size_t index = 0; index < labels.size(); ++index) {
+                    const auto definition = definitions.find(labels[index]);
+                    const std::string layout = index < input_count
+                        ? "moe_swizzle_calibration_input_" +
+                              std::to_string(index) + "_root/v1"
+                        : "moe_swizzle_calibration_output_root/v1";
+                    const auto root = roots_by_layout.find(layout);
+                    if (definition == definitions.end() ||
+                        root == roots_by_layout.end() ||
+                        definition->second->symbol.kind !=
+                            ProgramSymbolKind::SRAM_LABEL ||
+                        definition->second->symbol.source_ref !=
+                            root->second->storage_id)
+                        Fail("linked_program_manifest.fragments",
+                             "isolated MoE calibration compute label does not match its exact BufferABI root");
+                }
+            }
+            if (sram_free) {
+                const std::vector<RelocatableRecordDto> &sequence =
+                    leaf.core_streams.front().records;
+                if (sequence.size() != 5 ||
+                    sequence[0].opcode != Opcode::SRAM_ALLOC_AT ||
+                    sequence[1].opcode != Opcode::SRAM_ALLOC_AT ||
+                    sequence[2].opcode != Opcode::DTE_ISSUE ||
+                    sequence[3].opcode != Opcode::DTE_WAIT ||
+                    sequence[4].opcode != Opcode::SRAM_FREE)
+                    Fail("linked_program_manifest.fragments",
+                         "isolated SRAM_FREE terminal/scratch sequence changed");
+                const std::string output_label = AddressSymbolRef(
+                    sequence[0], SemanticOperandId::LABEL_SYMBOL);
+                const std::string scratch_label = AddressSymbolRef(
+                    sequence[1], SemanticOperandId::LABEL_SYMBOL);
+                const std::string freed_label = AddressSymbolRef(
+                    sequence[4], SemanticOperandId::SYMBOL);
+                std::map<std::string, const ProgramSymbolDefinitionDto *>
+                    definitions;
+                for (const ProgramSymbolDefinitionDto &definition :
+                     manifest.program_symbol_definitions)
+                    definitions.emplace(definition.symbol.id, &definition);
+                const auto output = definitions.find(output_label);
+                const auto scratch = definitions.find(scratch_label);
+                const BufferAbiDto *output_root = nullptr;
+                const BufferAbiDto *scratch_root = nullptr;
+                for (const BufferAbiDto &abi : leaf.buffer_abi) {
+                    if (abi.layout ==
+                        "moe_swizzle_calibration_output_root/v1")
+                        output_root = &abi;
+                    if (abi.layout ==
+                        "moe_swizzle_calibration_scratch_root/v1")
+                        scratch_root = &abi;
+                }
+                if (output_label.empty() || scratch_label.empty() ||
+                    output_label == scratch_label ||
+                    freed_label != scratch_label || output == definitions.end() ||
+                    scratch == definitions.end() || output_root == nullptr ||
+                    scratch_root == nullptr ||
+                    output->second->symbol.kind !=
+                        ProgramSymbolKind::SRAM_LABEL ||
+                    scratch->second->symbol.kind !=
+                        ProgramSymbolKind::SRAM_LABEL ||
+                    output->second->symbol.source_ref !=
+                        output_root->storage_id ||
+                    scratch->second->symbol.source_ref !=
+                        scratch_root->storage_id ||
+                    output_root->storage_id == scratch_root->storage_id)
+                    Fail("linked_program_manifest.fragments",
+                         "isolated SRAM_FREE must free one distinct scratch while preserving terminal output");
+            }
+            const bool p2p = opcodes.count(Opcode::DTE_SEND) == 1;
+            const bool event = opcodes.count(Opcode::EVENT_SET) == 1;
+            const bool compute = group_gemm ||
+                opcodes.count(Opcode::SWIGLU) == 1;
+            const std::size_t core_count = p2p || event ? 2 : 1;
+            const std::size_t expected_runtime = p2p || event ? 6 :
+                compute ? 1 : 2;
+            const std::size_t expected_program = group_gemm ? 7 :
+                sram_free ? 7 : p2p ? 5 : 5;
+            const std::size_t expected_addresses = group_gemm ? 8 :
+                swiglu_group ? 6 : sram_free ? 7 : 4;
+            const std::size_t expected_records = sram_free ? 5 :
+                opcodes.size();
+            const std::size_t expected_claims = sram_free ? 2 : core_count;
+            const ProgramControlEnvelopeDto &envelope = manifest.envelope;
+            if ((exact_skeletons.count(opcodes) != 1 && !sram_free) ||
+                records != expected_records ||
+                leaf.claimed_action_ids.size() != expected_claims ||
+                leaf.buffer_abi.size() != input_count + 1 +
+                    (sram_free ? 1U : 0U) ||
+                ownerships != expected_ownerships ||
+                buffer_layouts != expected_buffer_layouts ||
+                leaf.core_streams.size() != core_count ||
+                leaf.state_abi.size() != 0 ||
+                manifest.fragment_interfaces.size() != 1 ||
+                manifest.core_bindings.size() != core_count ||
+                manifest.core_streams.size() != core_count ||
+                manifest.runtime_symbol_definitions.size() !=
+                    expected_runtime ||
+                manifest.program_symbol_definitions.size() !=
+                    expected_program ||
+                manifest.address_operand_bindings.size() !=
+                    expected_addresses ||
+                !manifest.state_operand_bindings.empty() ||
+                !manifest.core_groups.empty() ||
+                envelope.active_cores.size() != core_count ||
+                envelope.start_events.size() != core_count ||
+                envelope.terminal_cores.size() != 1 ||
+                envelope.expected_ack_cores != envelope.active_cores ||
+                envelope.expected_done_cores != envelope.terminal_cores ||
+                envelope.empty_core_ack_policy !=
+                    EmptyCoreAckPolicy::INCLUDE_EMPTY ||
+                envelope.failure_policy !=
+                    ProgramFailurePolicy::ABORT_ALL)
+                Fail("linked_program_manifest",
+                     "isolated MoE calibration execution skeleton changed");
+        }
+        if (unfused_link) {
+            const std::map<ManifestInputKindDto, std::string>
+                unfused_schemas{
+                    {ManifestInputKindDto::IR1,
+                     "wafer_frontend.ir1/v1alpha14"},
+                    {ManifestInputKindDto::UNFUSED_COMPARISON_BASELINE,
+                     "wafer_frontend.swizzle_candidate/v1alpha1"},
+                    {ManifestInputKindDto::UNFUSED_COMPARISON_PLAN,
+                     "wafer_frontend.unfused_comparison_plan/v1alpha1"},
+                    {ManifestInputKindDto::UNFUSED_COMPARISON_PROJECTION,
+                     "wafer_frontend.unfused_comparison_projection/v1alpha1"},
+                    {ManifestInputKindDto::UNFUSED_COMPARISON_LOWERED,
+                     "wafer_frontend.unfused_comparison_lowered/v1alpha1"},
+                    {ManifestInputKindDto::UNFUSED_COMPARISON_CORE_ABI,
+                     "wafer_frontend.unfused_comparison_core_abi/v1alpha1"},
+                    {ManifestInputKindDto::UNFUSED_COMPARISON_OPERAND_ABI,
+                     "wafer_frontend.unfused_comparison_operand_abi/v1alpha1"},
+                    {ManifestInputKindDto::COMMAND_FRAGMENT,
+                     std::string(kCommandFragmentSchemaVersion)},
+                };
+            if (train_link || s3_lite_link || rooted_ar_link ||
+                swizzle_link ||
+                manifest.input_digests.size() != unfused_schemas.size())
+                Fail("linked_program_manifest.input_digests",
+                     "UNFUSED comparison linker requires exactly eight exclusive typed inputs");
+            for (const ManifestInputDigestDto &digest :
+                 manifest.input_digests) {
+                const auto expected_schema =
+                    unfused_schemas.find(digest.kind);
+                if (expected_schema == unfused_schemas.end() ||
+                    digest.schema_version != expected_schema->second ||
+                    !unfused_inputs.emplace(digest.kind, &digest).second)
+                    Fail("linked_program_manifest.input_digests",
+                         "UNFUSED comparison input kind/schema/cardinality changed");
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            if (unfused_inputs.size() != unfused_schemas.size() ||
+                unfused_inputs.at(ManifestInputKindDto::IR1)->artifact_id !=
+                    manifest.source_ir1_id ||
+                unfused_inputs.at(
+                    ManifestInputKindDto::UNFUSED_COMPARISON_PROJECTION)
+                        ->artifact_id != manifest.source_projection_id ||
+                unfused_inputs.at(
+                    ManifestInputKindDto::UNFUSED_COMPARISON_CORE_ABI)
+                        ->artifact_id != manifest.source_schedule_set_id ||
+                manifest.source_global_dag_id !=
+                    manifest.source_projection_id)
+                Fail("linked_program_manifest.input_digests",
+                     "UNFUSED comparison source provenance is not exact");
+        }
         if (s3_lite_link) {
             const ManifestInputDigestDto &s3 = *s3_lite_inputs.front();
             if (s3.schema_version !=
@@ -3217,7 +4078,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::map<Opcode, std::size_t> s3_dp4_opcodes;
         std::map<std::string, std::size_t> s3_dp4_producers;
         std::size_t s3_dp4_claims = 0;
-        if (!train_link && !s3_lite_link && !rooted_ar_link) {
+        if (!train_link && !s3_lite_link && !rooted_ar_link &&
+            !swizzle_link && !moe_swizzle_link && !moe_calibration_link &&
+            !unfused_link) {
             for (const auto &entry : upstream_inputs)
                 expected_inputs.emplace(entry.first, entry.second.first,
                                         entry.second.second);
@@ -3414,6 +4277,817 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     region->fusion_plan_id,
                     "wafer_frontend.fusion_plan/v1alpha10");
             }
+        }
+        if (swizzle_link) {
+            const bool exact_leaf = manifest.fragments.size() == 1 &&
+                std::holds_alternative<CommandFragmentDto>(
+                    manifest.fragments.front());
+            if (!exact_leaf)
+                Fail("linked_program_manifest.fragments",
+                     "Swizzle standard linker requires one unwrapped fragment");
+            const CommandFragmentDto &fragment =
+                std::get<CommandFragmentDto>(manifest.fragments.front());
+            if (fragment.kind != FragmentKindDto::SWIZZLE ||
+                fragment.producer_pass != "swizzle_standard_lowering" ||
+                fragment.source_global_dag_id !=
+                    manifest.source_projection_id ||
+                fragment.id !=
+                    swizzle_inputs.at(
+                        ManifestInputKindDto::COMMAND_FRAGMENT)->artifact_id)
+                Fail("linked_program_manifest.fragments",
+                     "Swizzle fragment kind/producer/source/digest provenance changed");
+            std::map<Opcode, std::size_t> opcodes;
+            for (const CoreFragmentStreamDto &stream :
+                 fragment.core_streams)
+                for (const RelocatableRecordDto &record : stream.records)
+                    ++opcodes[record.opcode];
+            const std::map<Opcode, std::size_t> ag_opcodes{
+                {Opcode::MATMUL, 4},
+                {Opcode::DTE_SEND, 2},
+                {Opcode::DTE_RECV, 2},
+                {Opcode::DTE_WAIT, 2},
+                {Opcode::EVENT_SET, 2},
+                {Opcode::EVENT_WAIT, 2},
+                {Opcode::SRAM_ALLOC_AT, 10},
+                {Opcode::SRAM_BIND, 4},
+                {Opcode::SRAM_FREE, 10},
+            };
+            const std::map<Opcode, std::size_t> rs_opcodes{
+                {Opcode::MATMUL, 4},
+                {Opcode::DTE_SEND, 2},
+                {Opcode::DTE_RECV, 2},
+                {Opcode::DTE_WAIT, 4},
+                {Opcode::DTE_ISSUE, 2},
+                {Opcode::LOCAL_REDUCE, 2},
+                {Opcode::SRAM_ALLOC_AT, 12},
+                {Opcode::SRAM_BIND, 4},
+                {Opcode::SRAM_FREE, 12},
+            };
+            const std::map<Opcode, std::size_t> ar_opcodes{
+                {Opcode::MATMUL, 4},
+                {Opcode::DTE_SEND, 4},
+                {Opcode::DTE_RECV, 4},
+                {Opcode::DTE_WAIT, 4},
+                {Opcode::LOCAL_REDUCE, 2},
+                {Opcode::EVENT_SET, 2},
+                {Opcode::EVENT_WAIT, 2},
+                {Opcode::SRAM_ALLOC_AT, 12},
+                {Opcode::SRAM_BIND, 4},
+                {Opcode::SRAM_FREE, 12},
+            };
+            const std::map<Opcode, std::size_t> meshslice_opcodes{
+                {Opcode::MATMUL, 8},
+                {Opcode::DTE_SEND, 16},
+                {Opcode::DTE_RECV, 16},
+                {Opcode::DTE_WAIT, 16},
+                {Opcode::SRAM_ALLOC_AT, 20},
+                {Opcode::SRAM_BIND, 8},
+                {Opcode::SRAM_FREE, 20},
+            };
+            auto scale_ag_opcodes = [](std::size_t matmuls,
+                                       std::size_t transports,
+                                       std::size_t allocations) {
+                return std::map<Opcode, std::size_t>{
+                    {Opcode::MATMUL, matmuls},
+                    {Opcode::DTE_SEND, transports},
+                    {Opcode::DTE_RECV, transports},
+                    {Opcode::DTE_WAIT, transports},
+                    {Opcode::EVENT_SET, 6},
+                    {Opcode::EVENT_WAIT, 6},
+                    {Opcode::SRAM_ALLOC_AT, allocations},
+                    {Opcode::SRAM_BIND, matmuls},
+                    {Opcode::SRAM_FREE, allocations},
+                };
+            };
+            auto scale_rs_opcodes = [](std::size_t matmuls,
+                                       std::size_t transports,
+                                       std::size_t issues,
+                                       std::size_t allocations) {
+                return std::map<Opcode, std::size_t>{
+                    {Opcode::MATMUL, matmuls},
+                    {Opcode::DTE_SEND, transports},
+                    {Opcode::DTE_RECV, transports},
+                    {Opcode::DTE_WAIT, transports + issues},
+                    {Opcode::DTE_ISSUE, issues},
+                    {Opcode::LOCAL_REDUCE, transports},
+                    {Opcode::EVENT_SET, 6},
+                    {Opcode::EVENT_WAIT, 6},
+                    {Opcode::SRAM_ALLOC_AT, allocations},
+                    {Opcode::SRAM_BIND, matmuls},
+                    {Opcode::SRAM_FREE, allocations},
+                };
+            };
+            const bool ag = opcodes == ag_opcodes;
+            const bool rs = opcodes == rs_opcodes;
+            const bool ar = opcodes == ar_opcodes;
+            const bool meshslice = opcodes == meshslice_opcodes;
+            const bool scale_ag32_a16 =
+                opcodes == scale_ag_opcodes(32, 24, 16);
+            const bool scale_ag32_a20 =
+                opcodes == scale_ag_opcodes(32, 24, 20);
+            const bool scale_ag64_a20 =
+                opcodes == scale_ag_opcodes(64, 48, 20);
+            const bool scale_ag64_a16 =
+                opcodes == scale_ag_opcodes(64, 48, 16);
+            const bool scale_rs32_a28 =
+                opcodes == scale_rs_opcodes(32, 24, 8, 28);
+            const bool scale_rs64_a40 =
+                opcodes == scale_rs_opcodes(64, 48, 16, 40);
+            const bool scale_ag32 = scale_ag32_a16 || scale_ag32_a20;
+            const bool scale_ag64 = scale_ag64_a16 || scale_ag64_a20;
+            const bool scale_rs32 = scale_rs32_a28;
+            const bool scale_rs64 = scale_rs64_a40;
+            const bool scale =
+                scale_ag32 || scale_ag64 || scale_rs32 || scale_rs64;
+            if (static_cast<unsigned>(ag) +
+                    static_cast<unsigned>(rs) +
+                    static_cast<unsigned>(ar) +
+                    static_cast<unsigned>(meshslice) +
+                    static_cast<unsigned>(scale_ag32_a16) +
+                    static_cast<unsigned>(scale_ag32_a20) +
+                    static_cast<unsigned>(scale_ag64_a20) +
+                    static_cast<unsigned>(scale_ag64_a16) +
+                    static_cast<unsigned>(scale_rs32_a28) +
+                    static_cast<unsigned>(scale_rs64_a40) != 1)
+                Fail("linked_program_manifest.fragments",
+                     "Swizzle opcode quotient does not identify exactly one supported pattern");
+            const std::size_t expected_records =
+                ag ? 38 : rs ? 44 : ar ? 50 : meshslice ? 104 :
+                scale_ag32_a16 ? 180 : scale_ag32_a20 ? 188 :
+                scale_ag64_a20 ? 324 : scale_ag64_a16 ? 316 :
+                scale_rs32 ? 244 : 444;
+            const std::size_t expected_buffers =
+                ag ? 10 : (rs || ar) ? 14 : meshslice ? 20 :
+                scale_ag32 ? 72 : scale_ag64 ? 136 :
+                scale_rs32 ? 104 : 192;
+            const std::size_t expected_owned =
+                ag ? 6 : (rs || ar) ? 8 : meshslice ? 4 :
+                scale_ag32_a16 ? 8 : scale_ag32_a20 ? 12 :
+                scale_ag64_a20 ? 12 : scale_ag64_a16 ? 8 :
+                scale_rs32 ? 20 : 32;
+            const std::size_t expected_borrowed =
+                meshslice ? 16 : scale ? 8 : 4;
+            const std::size_t exact_aliased =
+                ag ? 0 : (rs || ar) ? 2 : meshslice ? 0 :
+                scale_ag32_a16 ? 56 : scale_ag32_a20 ? 52 :
+                scale_ag64_a20 ? 116 : scale_ag64_a16 ? 120 :
+                scale_rs32 ? 76 : 152;
+            const std::size_t expected_fragment_runtime =
+                meshslice ? 64 : scale_ag32 ? 114 : scale_ag64 ? 210 :
+                scale_rs32 ? 122 : scale_rs64 ? 226 : 0;
+            const std::size_t expected_fragment_program =
+                meshslice ? 41 : scale_ag32_a16 ? 85 :
+                scale_ag32_a20 ? 89 : scale_ag64_a20 ? 153 :
+                scale_ag64_a16 ? 149 : scale_rs32 ? 145 :
+                scale_rs64 ? 265 : 0;
+            const std::size_t expected_runtime =
+                ag ? 16 : rs ? 12 : ar ? 24 : meshslice ? 68 :
+                scale_ag32 ? 118 : scale_ag64 ? 214 :
+                scale_rs32 ? 126 : 230;
+            const std::size_t expected_program =
+                ag ? 21 : (rs || ar) ? 29 : meshslice ? 41 :
+                expected_fragment_program;
+            const std::size_t expected_addresses =
+                ag ? 54 : (rs || ar) ? 68 : meshslice ? 132 :
+                scale_ag32_a16 ? 256 : scale_ag32_a20 ? 268 :
+                scale_ag64_a20 ? 476 : scale_ag64_a16 ? 464 :
+                scale_rs32 ? 356 : 664;
+            const std::size_t expected_claims =
+                ag ? 12 : rs ? 14 : ar ? 20 : meshslice ? 56 :
+                scale_ag32 ? 108 : scale_ag64 ? 212 :
+                scale_rs32 ? 140 : 276;
+            const std::size_t expected_cores =
+                (meshslice || scale) ? 4 : 2;
+            std::map<BufferOwnershipDto, std::size_t> ownerships;
+            for (const BufferAbiDto &abi : fragment.buffer_abi) {
+                ++ownerships[abi.ownership];
+                if (abi.schedule_id != manifest.source_schedule_set_id)
+                    Fail("command_fragment.buffer_abi",
+                         "Swizzle BufferABI schedule provenance changed");
+            }
+            std::map<BufferOwnershipDto, std::size_t>
+                expected_ownerships{
+                    {BufferOwnershipDto::OWNED, expected_owned},
+                    {BufferOwnershipDto::BORROWED, expected_borrowed},
+                };
+            if (exact_aliased != 0)
+                expected_ownerships.emplace(
+                    BufferOwnershipDto::ALIASED, exact_aliased);
+            std::map<RuntimeSymbolKindDto, std::size_t> runtime_kinds;
+            for (const RuntimeSymbolDefinitionDto &definition :
+                 manifest.runtime_symbol_definitions)
+                ++runtime_kinds[definition.symbol.kind];
+            const std::map<RuntimeSymbolKindDto, std::size_t>
+                expected_runtime_kinds = scale_ag32
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 6},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 24},
+                          {RuntimeSymbolKindDto::DTE_FSM, 24},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 60},
+                      }
+                    : scale_ag64
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 6},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 48},
+                          {RuntimeSymbolKindDto::DTE_FSM, 48},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 108},
+                      }
+                    : scale_rs32
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 6},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 32},
+                          {RuntimeSymbolKindDto::DTE_FSM, 24},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 60},
+                      }
+                    : scale_rs64
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 6},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 64},
+                          {RuntimeSymbolKindDto::DTE_FSM, 48},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 108},
+                      }
+                    : ag
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 2},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 2},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 2},
+                          {RuntimeSymbolKindDto::DTE_FSM, 2},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 8},
+                      }
+                    : rs
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 2},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 4},
+                          {RuntimeSymbolKindDto::DTE_FSM, 2},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 4},
+                      }
+                    : ar
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 2},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 2},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 4},
+                          {RuntimeSymbolKindDto::DTE_FSM, 4},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 12},
+                      }
+                    : std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 16},
+                          {RuntimeSymbolKindDto::DTE_FSM, 16},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 32},
+                      };
+            std::map<ProgramSymbolKind, std::size_t> program_kinds;
+            for (const ProgramSymbolDefinitionDto &definition :
+                 manifest.program_symbol_definitions)
+                ++program_kinds[definition.symbol.kind];
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_scale_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS,
+                     scale_ag32 ? 68U : scale_ag64 ? 132U :
+                     scale_rs32 ? 116U : 224U},
+                    {ProgramSymbolKind::SRAM_LABEL,
+                     scale_ag32_a16 || scale_ag64_a16 ? 16U :
+                     scale_ag32_a20 || scale_ag64_a20 ? 20U :
+                     scale_rs32 ? 28U : 40U},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            if (scale) {
+                std::set<std::vector<uint64_t>> matmul_parameters;
+                std::set<uint64_t> send_lengths;
+                std::set<uint64_t> recv_lengths;
+                std::set<uint64_t> issue_payload_bits;
+                std::set<uint64_t> issue_sizes;
+                std::set<uint64_t> reduce_elements;
+                std::set<uint64_t> reduce_strides;
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams) {
+                    for (const RelocatableRecordDto &record : stream.records) {
+                        switch (record.opcode) {
+                        case Opcode::MATMUL:
+                            matmul_parameters.insert(LiteralU64Array(
+                                record.operands.back(),
+                                "swizzle_scale.matmul.parameters"));
+                            break;
+                        case Opcode::DTE_SEND:
+                            send_lengths.insert(LiteralU64(
+                                record.operands[7],
+                                "swizzle_scale.send.length_bytes"));
+                            break;
+                        case Opcode::DTE_RECV:
+                            recv_lengths.insert(LiteralU64(
+                                record.operands[6],
+                                "swizzle_scale.recv.length_bytes"));
+                            break;
+                        case Opcode::DTE_ISSUE:
+                            issue_payload_bits.insert(LiteralU64(
+                                record.operands[2],
+                                "swizzle_scale.issue.payload_bits"));
+                            issue_sizes.insert(LiteralU64(
+                                record.operands[3],
+                                "swizzle_scale.issue.size_bytes"));
+                            break;
+                        case Opcode::LOCAL_REDUCE:
+                            reduce_elements.insert(LiteralU64(
+                                record.operands[7],
+                                "swizzle_scale.reduce.element_count"));
+                            reduce_strides.insert(LiteralU64(
+                                record.operands[8],
+                                "swizzle_scale.reduce.input_stride_bytes"));
+                            break;
+                        default: break;
+                        }
+                    }
+                }
+                const auto one_vector = [](std::initializer_list<uint64_t> value) {
+                    return std::set<std::vector<uint64_t>>{
+                        std::vector<uint64_t>(value)};
+                };
+                const auto one_u64 = [](uint64_t value) {
+                    return std::set<uint64_t>{value};
+                };
+                bool exact_literals = false;
+                if (scale_ag32 || scale_ag64) {
+                    exact_literals =
+                        matmul_parameters == one_vector({1, 4, 64, 48}) &&
+                        send_lengths == one_u64(512) &&
+                        recv_lengths == one_u64(512) &&
+                        issue_sizes.empty() && issue_payload_bits.empty() &&
+                        reduce_elements.empty() && reduce_strides.empty();
+                } else {
+                    const bool rs_small =
+                        matmul_parameters == one_vector({1, 4, 16, 64}) &&
+                        send_lengths == one_u64(512) &&
+                        recv_lengths == one_u64(512) &&
+                        issue_payload_bits == one_u64(4096) &&
+                        issue_sizes == one_u64(512) &&
+                        reduce_elements == one_u64(256) &&
+                        reduce_strides == one_u64(512);
+                    const bool rs_large = scale_rs32 &&
+                        matmul_parameters == one_vector({1, 8, 16, 64}) &&
+                        send_lengths == one_u64(1024) &&
+                        recv_lengths == one_u64(1024) &&
+                        issue_payload_bits == one_u64(8192) &&
+                        issue_sizes == one_u64(1024) &&
+                        reduce_elements == one_u64(512) &&
+                        reduce_strides == one_u64(1024);
+                    exact_literals = rs_small || rs_large;
+                }
+                if (!exact_literals)
+                    Fail("linked_program_manifest.fragments",
+                         "Swizzle scale record literals changed");
+            }
+            std::size_t records = 0;
+            for (const CoreFragmentStreamDto &stream :
+                 fragment.core_streams)
+                records += stream.records.size();
+            const ProgramControlEnvelopeDto &envelope =
+                manifest.envelope;
+            if (((meshslice || scale) &&
+                 (fragment.runtime_symbols.size() !=
+                      expected_fragment_runtime ||
+                  fragment.program_symbols.size() !=
+                      expected_fragment_program)) ||
+                fragment.core_streams.size() != expected_cores ||
+                records != expected_records ||
+                fragment.claimed_action_ids.size() != expected_claims ||
+                fragment.buffer_abi.size() != expected_buffers ||
+                ownerships != expected_ownerships ||
+                !fragment.state_abi.empty() ||
+                manifest.fragments.size() != 1 ||
+                manifest.fragment_interfaces.size() != 1 ||
+                manifest.core_bindings.size() != expected_cores ||
+                manifest.core_streams.size() != expected_cores ||
+                manifest.runtime_symbol_definitions.size() !=
+                    expected_runtime ||
+                runtime_kinds != expected_runtime_kinds ||
+                manifest.program_symbol_definitions.size() !=
+                    expected_program ||
+                (scale && program_kinds !=
+                    expected_scale_program_kinds) ||
+                manifest.address_operand_bindings.size() !=
+                    expected_addresses ||
+                !manifest.state_operand_bindings.empty() ||
+                envelope.active_cores.size() != expected_cores ||
+                envelope.start_events.size() != expected_cores ||
+                envelope.terminal_cores.size() != expected_cores ||
+                envelope.expected_ack_cores != envelope.active_cores ||
+                envelope.expected_done_cores != envelope.terminal_cores ||
+                envelope.empty_core_ack_policy !=
+                    EmptyCoreAckPolicy::INCLUDE_EMPTY ||
+                envelope.failure_policy != ProgramFailurePolicy::ABORT_ALL)
+                Fail("linked_program_manifest",
+                     "Swizzle standard production quotient or envelope changed");
+        }
+        if (unfused_link) {
+            const bool exact_leaf = manifest.fragments.size() == 1 &&
+                std::holds_alternative<CommandFragmentDto>(
+                    manifest.fragments.front());
+            if (!exact_leaf)
+                Fail("linked_program_manifest.fragments",
+                     "UNFUSED comparison linker requires one unwrapped fragment");
+            const CommandFragmentDto &fragment =
+                std::get<CommandFragmentDto>(manifest.fragments.front());
+            if (fragment.kind != FragmentKindDto::UNFUSED_COMPARISON ||
+                fragment.producer_pass !=
+                    "unfused_comparison_standard_lowering" ||
+                fragment.source_global_dag_id !=
+                    manifest.source_projection_id ||
+                fragment.id !=
+                    unfused_inputs.at(
+                        ManifestInputKindDto::COMMAND_FRAGMENT)->artifact_id)
+                Fail("linked_program_manifest.fragments",
+                     "UNFUSED comparison fragment kind/producer/source/digest provenance changed");
+            std::map<Opcode, std::size_t> opcodes;
+            std::size_t records = 0;
+            for (const CoreFragmentStreamDto &stream :
+                 fragment.core_streams) {
+                records += stream.records.size();
+                for (const RelocatableRecordDto &record : stream.records)
+                    ++opcodes[record.opcode];
+            }
+            const std::map<Opcode, std::size_t> ag_opcodes{
+                {Opcode::MATMUL, 2},
+                {Opcode::DTE_SEND, 2},
+                {Opcode::DTE_RECV, 2},
+                {Opcode::DTE_WAIT, 2},
+                {Opcode::SRAM_ALLOC_AT, 6},
+                {Opcode::SRAM_BIND, 2},
+                {Opcode::SRAM_FREE, 6},
+            };
+            const std::map<Opcode, std::size_t> rs_opcodes{
+                {Opcode::MATMUL, 2},
+                {Opcode::DTE_SEND, 2},
+                {Opcode::DTE_ISSUE, 2},
+                {Opcode::DTE_RECV, 2},
+                {Opcode::DTE_WAIT, 4},
+                {Opcode::LOCAL_REDUCE, 2},
+                {Opcode::SRAM_ALLOC_AT, 10},
+                {Opcode::SRAM_BIND, 2},
+                {Opcode::SRAM_FREE, 10},
+            };
+            const std::map<Opcode, std::size_t> ar_opcodes{
+                {Opcode::MATMUL, 2},
+                {Opcode::DTE_SEND, 4},
+                {Opcode::DTE_ISSUE, 2},
+                {Opcode::DTE_RECV, 4},
+                {Opcode::DTE_WAIT, 6},
+                {Opcode::LOCAL_REDUCE, 2},
+                {Opcode::EVENT_SET, 2},
+                {Opcode::EVENT_WAIT, 2},
+                {Opcode::SRAM_ALLOC_AT, 8},
+                {Opcode::SRAM_BIND, 2},
+                {Opcode::SRAM_FREE, 8},
+            };
+            const std::map<Opcode, std::size_t> scale_ag_opcodes{
+                {Opcode::MATMUL, 4},
+                {Opcode::DTE_SEND, 12},
+                {Opcode::DTE_RECV, 12},
+                {Opcode::DTE_WAIT, 12},
+                {Opcode::SRAM_ALLOC_AT, 12},
+                {Opcode::SRAM_BIND, 4},
+                {Opcode::SRAM_FREE, 12},
+            };
+            const std::map<Opcode, std::size_t> scale_rs_opcodes{
+                {Opcode::MATMUL, 4},
+                {Opcode::DTE_SEND, 12},
+                {Opcode::DTE_ISSUE, 4},
+                {Opcode::DTE_RECV, 12},
+                {Opcode::DTE_WAIT, 16},
+                {Opcode::LOCAL_REDUCE, 12},
+                {Opcode::SRAM_ALLOC_AT, 20},
+                {Opcode::SRAM_BIND, 4},
+                {Opcode::SRAM_FREE, 20},
+            };
+            const bool ag = opcodes == ag_opcodes;
+            const bool rs = opcodes == rs_opcodes;
+            const bool ar = opcodes == ar_opcodes;
+            const bool scale_ag = opcodes == scale_ag_opcodes;
+            const bool scale_rs = opcodes == scale_rs_opcodes;
+            const bool scale = scale_ag || scale_rs;
+            if (static_cast<unsigned>(ag) +
+                    static_cast<unsigned>(rs) +
+                    static_cast<unsigned>(ar) +
+                    static_cast<unsigned>(scale_ag) +
+                    static_cast<unsigned>(scale_rs) != 1)
+                Fail("linked_program_manifest.fragments",
+                     "UNFUSED comparison opcode quotient does not identify exactly one supported pattern");
+            unfused_s0_ag = ag;
+            unfused_s0_rs = rs;
+            unfused_s0_ar = ar;
+            const std::size_t expected_records =
+                ag ? 22 : rs ? 36 : ar ? 42 : scale_ag ? 68 : 104;
+            const std::size_t expected_buffers =
+                ag ? 16 : rs ? 26 : ar ? 28 : scale_ag ? 40 : 60;
+            const std::size_t expected_owned =
+                ag ? 2 : rs ? 6 : ar ? 4 : scale_ag ? 4 : 12;
+            const std::size_t expected_borrowed = scale ? 8 : 4;
+            const std::size_t expected_aliased =
+                ag ? 10 : rs ? 16 : ar ? 20 : scale_ag ? 28 : 40;
+            const std::size_t expected_fragment_runtime =
+                ag ? 8 : rs ? 10 : ar ? 24 : scale_ag ? 48 : 52;
+            const std::size_t expected_fragment_program =
+                scale_ag ? 41 : scale_rs ? 73 : 0;
+            const std::size_t expected_runtime =
+                ag ? 10 : rs ? 12 : ar ? 26 : scale_ag ? 52 : 56;
+            const std::size_t expected_program =
+                ag ? 17 : rs ? 27 : ar ? 29 : expected_fragment_program;
+            const std::size_t expected_addresses =
+                ag ? 32 : rs ? 52 : ar ? 50 : scale_ag ? 80 : 136;
+            const std::size_t expected_claims =
+                ag ? 8 : rs ? 12 : ar ? 20 : scale_ag ? 40 : 56;
+            std::map<BufferOwnershipDto, std::size_t> ownerships;
+            for (const BufferAbiDto &abi : fragment.buffer_abi) {
+                ++ownerships[abi.ownership];
+                if (abi.schedule_id != manifest.source_schedule_set_id)
+                    Fail("command_fragment.buffer_abi",
+                         "UNFUSED comparison BufferABI schedule provenance changed");
+            }
+            const std::map<BufferOwnershipDto, std::size_t>
+                expected_ownerships{
+                    {BufferOwnershipDto::OWNED, expected_owned},
+                    {BufferOwnershipDto::BORROWED, expected_borrowed},
+                    {BufferOwnershipDto::ALIASED, expected_aliased},
+                };
+            std::map<RuntimeSymbolKindDto, std::size_t> runtime_kinds;
+            for (const RuntimeSymbolDefinitionDto &definition :
+                 manifest.runtime_symbol_definitions)
+                ++runtime_kinds[definition.symbol.kind];
+            const std::map<RuntimeSymbolKindDto, std::size_t>
+                expected_runtime_kinds = scale_ag
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::DTE_FSM, 12},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 12},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 24},
+                      }
+                    : scale_rs
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 4},
+                          {RuntimeSymbolKindDto::DTE_FSM, 12},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 16},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 24},
+                      }
+                    : ag
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 2},
+                          {RuntimeSymbolKindDto::DTE_FSM, 2},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 2},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 4},
+                      }
+                    : rs
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 2},
+                          {RuntimeSymbolKindDto::DTE_FSM, 2},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 4},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 4},
+                      }
+                    : std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 2},
+                          {RuntimeSymbolKindDto::DTE_FSM, 4},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 6},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 12},
+                          {RuntimeSymbolKindDto::EVENT_TAG, 2},
+                      };
+            std::map<ProgramSymbolKind, std::size_t> program_kinds;
+            for (const ProgramSymbolDefinitionDto &definition :
+                 manifest.program_symbol_definitions)
+                ++program_kinds[definition.symbol.kind];
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS,
+                     ag ? 10U : rs ? 16U : ar ? 20U :
+                     scale_ag ? 28U : 52U},
+                    {ProgramSymbolKind::SRAM_LABEL,
+                     ag ? 6U : rs ? 10U : ar ? 8U :
+                     scale_ag ? 12U : 20U},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            if (scale) {
+                std::set<std::vector<uint64_t>> matmul_parameters;
+                std::set<uint64_t> send_lengths;
+                std::set<uint64_t> recv_lengths;
+                std::set<uint64_t> issue_payload_bits;
+                std::set<uint64_t> issue_sizes;
+                std::set<uint64_t> reduce_elements;
+                std::set<uint64_t> reduce_strides;
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams) {
+                    for (const RelocatableRecordDto &record : stream.records) {
+                        switch (record.opcode) {
+                        case Opcode::MATMUL:
+                            matmul_parameters.insert(LiteralU64Array(
+                                record.operands.back(),
+                                "unfused_scale.matmul.parameters"));
+                            break;
+                        case Opcode::DTE_SEND:
+                            send_lengths.insert(LiteralU64(
+                                record.operands[7],
+                                "unfused_scale.send.length_bytes"));
+                            break;
+                        case Opcode::DTE_RECV:
+                            recv_lengths.insert(LiteralU64(
+                                record.operands[6],
+                                "unfused_scale.recv.length_bytes"));
+                            break;
+                        case Opcode::DTE_ISSUE:
+                            issue_payload_bits.insert(LiteralU64(
+                                record.operands[2],
+                                "unfused_scale.issue.payload_bits"));
+                            issue_sizes.insert(LiteralU64(
+                                record.operands[3],
+                                "unfused_scale.issue.size_bytes"));
+                            break;
+                        case Opcode::LOCAL_REDUCE:
+                            reduce_elements.insert(LiteralU64(
+                                record.operands[7],
+                                "unfused_scale.reduce.element_count"));
+                            reduce_strides.insert(LiteralU64(
+                                record.operands[8],
+                                "unfused_scale.reduce.input_stride_bytes"));
+                            break;
+                        default: break;
+                        }
+                    }
+                }
+                const auto one_vector = [](std::initializer_list<uint64_t> value) {
+                    return std::set<std::vector<uint64_t>>{
+                        std::vector<uint64_t>(value)};
+                };
+                const auto one_u64 = [](uint64_t value) {
+                    return std::set<uint64_t>{value};
+                };
+                const bool s1 = scale_ag
+                    ? matmul_parameters == one_vector({1, 32, 64, 48}) &&
+                      send_lengths == one_u64(1024) &&
+                      recv_lengths == one_u64(1024) &&
+                      issue_sizes.empty() && issue_payload_bits.empty() &&
+                      reduce_elements.empty() && reduce_strides.empty()
+                    : matmul_parameters == one_vector({1, 32, 16, 64}) &&
+                      send_lengths == one_u64(1024) &&
+                      recv_lengths == one_u64(1024) &&
+                      issue_payload_bits == one_u64(8192) &&
+                      issue_sizes == one_u64(1024) &&
+                      reduce_elements == one_u64(512) &&
+                      reduce_strides == one_u64(1024);
+                const bool s2 = scale_ag
+                    ? matmul_parameters == one_vector({1, 64, 64, 48}) &&
+                      send_lengths == one_u64(2048) &&
+                      recv_lengths == one_u64(2048) &&
+                      issue_sizes.empty() && issue_payload_bits.empty() &&
+                      reduce_elements.empty() && reduce_strides.empty()
+                    : matmul_parameters == one_vector({1, 64, 16, 64}) &&
+                      send_lengths == one_u64(2048) &&
+                      recv_lengths == one_u64(2048) &&
+                      issue_payload_bits == one_u64(16384) &&
+                      issue_sizes == one_u64(2048) &&
+                      reduce_elements == one_u64(1024) &&
+                      reduce_strides == one_u64(2048);
+                if (!s1 && !s2)
+                    Fail("linked_program_manifest.fragments",
+                         "UNFUSED scale record literals changed");
+
+                std::vector<Opcode> expected_sequence;
+                if (scale_ag) {
+                    for (std::size_t wave = 0; wave < 3; ++wave) {
+                        expected_sequence.push_back(Opcode::DTE_SEND);
+                        expected_sequence.push_back(Opcode::DTE_RECV);
+                        expected_sequence.push_back(Opcode::DTE_WAIT);
+                    }
+                    expected_sequence.push_back(Opcode::MATMUL);
+                } else {
+                    expected_sequence = {
+                        Opcode::MATMUL,
+                        Opcode::DTE_ISSUE,
+                        Opcode::DTE_WAIT,
+                    };
+                    for (std::size_t wave = 0; wave < 3; ++wave) {
+                        expected_sequence.push_back(Opcode::DTE_SEND);
+                        expected_sequence.push_back(Opcode::DTE_RECV);
+                        expected_sequence.push_back(Opcode::DTE_WAIT);
+                        expected_sequence.push_back(Opcode::LOCAL_REDUCE);
+                    }
+                }
+                std::vector<LogicalCoreDto> round_robin_cores;
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams)
+                    round_robin_cores.push_back(stream.logical_core);
+                std::sort(round_robin_cores.begin(),
+                          round_robin_cores.end());
+                if (round_robin_cores.size() != 4 ||
+                    std::adjacent_find(round_robin_cores.begin(),
+                                       round_robin_cores.end()) !=
+                        round_robin_cores.end())
+                    Fail("linked_program_manifest.fragments",
+                         "UNFUSED scale requires four distinct round-robin cores");
+
+                std::map<std::string, LogicalCoreDto> runtime_core_targets;
+                for (const RuntimeSymbolDefinitionDto &definition :
+                     manifest.runtime_symbol_definitions) {
+                    if (definition.symbol.kind !=
+                        RuntimeSymbolKindDto::RUNTIME_CORE)
+                        continue;
+                    if (definition.logical_cores.size() != 1 ||
+                        !runtime_core_targets.emplace(
+                            definition.symbol.id,
+                            definition.logical_cores.front()).second)
+                        Fail("linked_program_manifest.runtime_symbol_definitions",
+                             "UNFUSED scale runtime core target is not exact");
+                }
+                const auto peer_core = [&](const RelocatableRecordDto &record,
+                                           std::size_t operand_index)
+                    -> LogicalCoreDto {
+                    if (record.operands.size() <= operand_index ||
+                        !record.operands[operand_index].symbol_ref.has_value())
+                        Fail("linked_program_manifest.fragments",
+                             "UNFUSED scale transport lacks its peer symbol");
+                    const auto target = runtime_core_targets.find(
+                        *record.operands[operand_index].symbol_ref);
+                    if (target == runtime_core_targets.end())
+                        Fail("linked_program_manifest.fragments",
+                             "UNFUSED scale transport peer is unresolved");
+                    return target->second;
+                };
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams) {
+                    std::vector<const RelocatableRecordDto *> sequence;
+                    for (const RelocatableRecordDto &record : stream.records) {
+                        if (record.opcode == Opcode::MATMUL ||
+                            record.opcode == Opcode::DTE_SEND ||
+                            record.opcode == Opcode::DTE_RECV ||
+                            record.opcode == Opcode::DTE_WAIT ||
+                            record.opcode == Opcode::DTE_ISSUE ||
+                            record.opcode == Opcode::LOCAL_REDUCE)
+                            sequence.push_back(&record);
+                    }
+                    if (sequence.size() != expected_sequence.size() ||
+                        !std::equal(
+                            sequence.begin(), sequence.end(),
+                            expected_sequence.begin(),
+                            [](const RelocatableRecordDto *record,
+                               Opcode opcode) {
+                                return record->opcode == opcode;
+                            }))
+                        Fail("linked_program_manifest.fragments",
+                             "UNFUSED scale command stream is not capacity-safe round-robin");
+                    const auto core_position = std::lower_bound(
+                        round_robin_cores.begin(), round_robin_cores.end(),
+                        stream.logical_core);
+                    const std::size_t rank = static_cast<std::size_t>(
+                        core_position - round_robin_cores.begin());
+                    for (std::size_t wave = 0; wave < 3; ++wave) {
+                        const std::size_t base =
+                            scale_ag ? wave * 3 : 3 + wave * 4;
+                        const LogicalCoreDto send_peer =
+                            peer_core(*sequence[base], 9);
+                        const LogicalCoreDto recv_peer =
+                            peer_core(*sequence[base + 1], 8);
+                        const LogicalCoreDto expected_peer =
+                            round_robin_cores[rank ^ (wave + 1)];
+                        if (!(send_peer == expected_peer) ||
+                            !(recv_peer == expected_peer))
+                            Fail("linked_program_manifest.fragments",
+                                 "UNFUSED scale transport peer order is not exact XOR round-robin");
+                    }
+                }
+            }
+            const ProgramControlEnvelopeDto &envelope =
+                manifest.envelope;
+            const std::size_t expected_cores = scale ? 4 : 2;
+            if (fragment.core_streams.size() != expected_cores ||
+                records != expected_records ||
+                fragment.claimed_action_ids.size() != expected_claims ||
+                fragment.buffer_abi.size() != expected_buffers ||
+                ownerships != expected_ownerships ||
+                fragment.runtime_symbols.size() !=
+                    expected_fragment_runtime ||
+                (scale && fragment.program_symbols.size() !=
+                    expected_fragment_program) ||
+                !fragment.state_abi.empty() ||
+                manifest.fragment_interfaces.size() != 1 ||
+                manifest.core_bindings.size() != expected_cores ||
+                manifest.core_streams.size() != expected_cores ||
+                manifest.runtime_symbol_definitions.size() !=
+                    expected_runtime ||
+                runtime_kinds != expected_runtime_kinds ||
+                manifest.program_symbol_definitions.size() !=
+                    expected_program ||
+                program_kinds != expected_program_kinds ||
+                manifest.address_operand_bindings.size() !=
+                    expected_addresses ||
+                !manifest.state_operand_bindings.empty() ||
+                envelope.active_cores.size() != expected_cores ||
+                envelope.start_events.size() != expected_cores ||
+                envelope.terminal_cores.size() != expected_cores ||
+                envelope.expected_ack_cores != envelope.active_cores ||
+                envelope.expected_done_cores != envelope.terminal_cores ||
+                envelope.empty_core_ack_policy !=
+                    EmptyCoreAckPolicy::INCLUDE_EMPTY ||
+                envelope.failure_policy != ProgramFailurePolicy::ABORT_ALL)
+                Fail("linked_program_manifest",
+                     "UNFUSED comparison production quotient or envelope changed");
         }
         if (s3_lite_backward_link) {
             const std::map<std::vector<Opcode>, std::size_t>
@@ -3732,13 +5406,99 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                    fragment.kind == FragmentKindDto::STATE_IO ||
                    fragment.kind == FragmentKindDto::STATE_TRANSFER ||
                    fragment.kind == FragmentKindDto::MOE_TRANSFER ||
-                   fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR);
+                   fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR ||
+                   fragment.kind == FragmentKindDto::SWIZZLE ||
+                   fragment.kind == FragmentKindDto::MOE_SWIZZLE ||
+                   fragment.kind ==
+                       FragmentKindDto::MOE_SWIZZLE_CALIBRATION ||
+                   fragment.kind == FragmentKindDto::UNFUSED_COMPARISON);
             const bool rooted_fragment =
                 fragment.kind == FragmentKindDto::S2_LITE_ROOTED_AR;
             if (rooted_fragment !=
                 (fragment.producer_pass == "s2_lite_rooted_ar_lowering"))
                 Fail("linked_program_manifest.fragments",
                      "S2_LITE_ROOTED_AR kind is reserved for its exact producer");
+            const bool swizzle_fragment =
+                fragment.kind == FragmentKindDto::SWIZZLE;
+            if (swizzle_fragment !=
+                    (fragment.producer_pass ==
+                     "swizzle_standard_lowering") ||
+                (swizzle_fragment && (!swizzle_link || wrapped)))
+                Fail("linked_program_manifest.fragments",
+                     "SWIZZLE kind is reserved for its exact dedicated linker and producer");
+            const bool moe_swizzle_fragment =
+                fragment.kind == FragmentKindDto::MOE_SWIZZLE;
+            if (moe_swizzle_fragment !=
+                    (fragment.producer_pass ==
+                     "moe_swizzle_standard_lowering") ||
+                (moe_swizzle_fragment &&
+                 (!moe_swizzle_link || wrapped)))
+                Fail("linked_program_manifest.fragments",
+                     "MOE_SWIZZLE kind is reserved for its exact dedicated linker and producer");
+            if (moe_swizzle_fragment) {
+                static const std::set<Opcode> allowed_opcodes{
+                    Opcode::SRAM_ALLOC_AT,
+                    Opcode::SRAM_BIND,
+                    Opcode::SRAM_FREE,
+                    Opcode::MATMUL,
+                    Opcode::SWIGLU,
+                    Opcode::LSU_LOAD,
+                    Opcode::DTE_SEND,
+                    Opcode::DTE_RECV,
+                    Opcode::DTE_WAIT,
+                    Opcode::DTE_ISSUE,
+                    Opcode::LOCAL_REDUCE,
+                    Opcode::EVENT_SET,
+                    Opcode::EVENT_WAIT,
+                };
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams)
+                    for (const RelocatableRecordDto &record :
+                         stream.records)
+                        if (allowed_opcodes.count(record.opcode) != 1)
+                            Fail("linked_program_manifest.fragments",
+                                 "MOE_SWIZZLE opcode is outside its producer-scoped ISA subset");
+            }
+            const bool moe_calibration_fragment =
+                fragment.kind ==
+                    FragmentKindDto::MOE_SWIZZLE_CALIBRATION;
+            if (moe_calibration_fragment !=
+                    (fragment.producer_pass ==
+                     "moe_swizzle_calibration_standard_lowering") ||
+                (moe_calibration_fragment &&
+                 (!moe_calibration_link || wrapped)))
+                Fail("linked_program_manifest.fragments",
+                     "MOE_SWIZZLE_CALIBRATION kind is reserved for its exact dedicated linker and producer");
+            if (moe_calibration_fragment) {
+                static const std::set<Opcode> allowed_opcodes{
+                    Opcode::MATMUL,
+                    Opcode::SWIGLU,
+                    Opcode::DTE_SEND,
+                    Opcode::DTE_RECV,
+                    Opcode::DTE_WAIT,
+                    Opcode::DTE_ISSUE,
+                    Opcode::SRAM_ALLOC_AT,
+                    Opcode::SRAM_BIND,
+                    Opcode::SRAM_FREE,
+                    Opcode::EVENT_SET,
+                    Opcode::EVENT_WAIT,
+                };
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams)
+                    for (const RelocatableRecordDto &record :
+                         stream.records)
+                        if (allowed_opcodes.count(record.opcode) != 1)
+                            Fail("linked_program_manifest.fragments",
+                                 "isolated MoE calibration opcode is outside its exact producer subset");
+            }
+            const bool unfused_fragment =
+                fragment.kind == FragmentKindDto::UNFUSED_COMPARISON;
+            if (unfused_fragment !=
+                    (fragment.producer_pass ==
+                     "unfused_comparison_standard_lowering") ||
+                (unfused_fragment && (!unfused_link || wrapped)))
+                Fail("linked_program_manifest.fragments",
+                     "UNFUSED_COMPARISON kind is reserved for its exact dedicated linker and producer");
             const bool valid_source_global_dag = rooted_ar_link
                 ? (rooted_fragment
                        ? fragment.source_global_dag_id ==
@@ -3866,9 +5626,18 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                "command_fragment.buffer_abi",
                                [](const BufferAbiDto &item) { return item.id; });
             for (const BufferAbiDto &abi : fragment.buffer_abi) {
+                const bool exact_moe_terminal_half_alignment =
+                    moe_swizzle_fragment && abi.alias_of &&
+                    abi.ownership == BufferOwnershipDto::ALIASED &&
+                    abi.layout ==
+                        "moe_swizzle_terminal_combined_subview/v1" &&
+                    abi.alignment_bytes == 64 &&
+                    abi.size_bytes == 32 &&
+                    abi.region_offset_bytes % 32 == 0;
                 if (abi.size_bytes == 0 || abi.alignment_bytes == 0 ||
                     (abi.alignment_bytes & (abi.alignment_bytes - 1)) != 0 ||
-                    abi.region_offset_bytes % abi.alignment_bytes != 0 ||
+                    (abi.region_offset_bytes % abi.alignment_bytes != 0 &&
+                     !exact_moe_terminal_half_alignment) ||
                     abi.lifetime_start >= abi.lifetime_end_exclusive ||
                     abi.tensor_slice.value_id != abi.value_id ||
                     abi.storage_id.empty() || abi.region_ref.empty())
@@ -3887,10 +5656,13 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     Fail("command_fragment.buffer_abi",
                          "one schedule binding has conflicting BufferABI values");
             }
-            if ((fragment.kind == FragmentKindDto::STATE_IO) !=
-                !fragment.state_abi.empty())
+            const bool state_io_fragment =
+                fragment.kind == FragmentKindDto::STATE_IO;
+            if ((state_io_fragment && fragment.state_abi.empty()) ||
+                (!state_io_fragment && !moe_swizzle_fragment &&
+                 !fragment.state_abi.empty()))
                 Fail("command_fragment.state_abi",
-                     "STATE_IO fragments require StateABI and all other fragments forbid it");
+                     "STATE_IO requires StateABI; only the dedicated MOE_SWIZZLE producer may additionally carry it");
             RequireCanonicalBy(fragment.state_abi,
                                "command_fragment.state_abi",
                                [](const StateAbiDto &item) { return item.id; });
@@ -3920,6 +5692,42 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         }
         std::map<std::string, std::set<uint64_t>>
             s3_backward_wgrad_alias_offsets;
+        std::map<std::string, std::vector<std::pair<uint64_t, uint64_t>>>
+            scale_terminal_alias_spans;
+        std::map<std::string, std::size_t> scale_storage_alias_counts;
+        std::map<std::string, const BufferAbiDto *> scale_subview_roots;
+        std::map<std::string, std::size_t> moe_subview_alias_counts;
+        std::map<std::string, const BufferAbiDto *> moe_subview_roots;
+        const auto has_root_layout = [](const std::string &layout,
+                                        std::string_view prefix) {
+            constexpr std::string_view suffix = "_root/v1";
+            return layout.size() > prefix.size() + suffix.size() &&
+                layout.compare(0, prefix.size(), prefix) == 0 &&
+                layout.compare(layout.size() - suffix.size(),
+                               suffix.size(), suffix) == 0;
+        };
+        const auto is_moe_calibration_root_layout =
+            [&](const std::string &layout) {
+                return has_root_layout(
+                    layout, "moe_swizzle_calibration_");
+            };
+        const auto is_moe_root_layout =
+            [&](const std::string &layout) {
+                return has_root_layout(layout, "moe_swizzle_") &&
+                    !is_moe_calibration_root_layout(layout);
+            };
+        std::map<std::string, std::size_t>
+            unfused_s0_terminal_alias_counts;
+        std::map<std::string, const BufferAbiDto *>
+            unfused_s0_terminal_roots;
+        auto tensor_bytes = [](const TensorSliceDto &slice,
+                               BufferDTypeDto dtype,
+                               const std::string &path) {
+            uint64_t elements = 1;
+            for (uint64_t extent : slice.shape)
+                elements = CheckedMultiply(elements, extent, path);
+            return CheckedMultiply(elements, ElementBytes(dtype), path);
+        };
         for (const auto &entry : known_buffer_abi) {
             const BufferAbiDto &abi = *entry.second;
             const bool aliased = abi.ownership == BufferOwnershipDto::ALIASED;
@@ -3948,6 +5756,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     abi.lifetime_end_exclusive;
             const bool exact_full_alias =
                 common_geometry &&
+                root.layout != "swizzle_standard_terminal_root/v1" &&
+                root.layout != "swizzle_standard_storage_root/v1" &&
+                !is_moe_root_layout(root.layout) &&
+                !is_moe_calibration_root_layout(root.layout) &&
                 root.region_offset_bytes == abi.region_offset_bytes &&
                 root.size_bytes == abi.size_bytes &&
                 root.layout == abi.layout &&
@@ -3971,12 +5783,329 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 abi.region_offset_bytes - root.region_offset_bytes <= 2048 &&
                 (abi.region_offset_bytes - root.region_offset_bytes) % 2048 ==
                     0;
-            if (!exact_full_alias && !exact_backward_wgrad_slice)
+            const bool exact_unfused_value_view =
+                unfused_link && common_geometry &&
+                root.layout == "unfused_comparison_storage/v1" &&
+                root.region_offset_bytes <= abi.region_offset_bytes &&
+                abi.region_offset_bytes - root.region_offset_bytes <=
+                    root.size_bytes &&
+                abi.size_bytes <=
+                    root.size_bytes -
+                        (abi.region_offset_bytes -
+                         root.region_offset_bytes) &&
+                root.tensor_slice.offset.size() == 1 &&
+                root.tensor_slice.shape.size() == 1;
+            const bool exact_scale_unfused_value_view =
+                unfused_link && manifest.core_streams.size() == 4 &&
+                common_geometry &&
+                root.layout == "unfused_comparison_storage/v1" &&
+                root.region_offset_bytes <= abi.region_offset_bytes &&
+                CheckedAdd(abi.region_offset_bytes, abi.size_bytes,
+                           "command_fragment.buffer_abi.unfused_scale_view") <=
+                    CheckedAdd(root.region_offset_bytes, root.size_bytes,
+                               "command_fragment.buffer_abi.unfused_scale_root") &&
+                tensor_bytes(abi.tensor_slice, abi.dtype,
+                             "command_fragment.buffer_abi.unfused_scale_view") ==
+                    abi.size_bytes;
+            const std::vector<uint64_t> unfused_s0_terminal_shape =
+                unfused_s0_ag
+                    ? std::vector<uint64_t>{8, 24}
+                    : std::vector<uint64_t>{4, 16};
+            const std::vector<uint64_t> zero_terminal_offset{0, 0};
+            const bool exact_unfused_s0_terminal_view =
+                unfused_link && manifest.core_streams.size() == 2 &&
+                (unfused_s0_ag || unfused_s0_rs) &&
+                !unfused_s0_ar && common_geometry &&
+                root.ownership == BufferOwnershipDto::OWNED &&
+                !root.alias_of &&
+                root.layout == "unfused_comparison_storage/v1" &&
+                root.dtype == BufferDTypeDto::FP16 &&
+                root.tensor_slice.value_id == root.value_id &&
+                root.tensor_slice.shape == unfused_s0_terminal_shape &&
+                root.tensor_slice.offset.size() == 2 &&
+                abi.layout ==
+                    (unfused_s0_ag ? "MQKV_feature_tp" : "MH_shard_tp") &&
+                abi.tensor_slice.offset == zero_terminal_offset &&
+                abi.tensor_slice.shape == unfused_s0_terminal_shape &&
+                root.region_offset_bytes == abi.region_offset_bytes &&
+                root.size_bytes == abi.size_bytes &&
+                tensor_bytes(
+                    root.tensor_slice, root.dtype,
+                    "command_fragment.buffer_abi.unfused_s0_terminal_root") ==
+                    root.size_bytes &&
+                tensor_bytes(
+                    abi.tensor_slice, abi.dtype,
+                    "command_fragment.buffer_abi.unfused_s0_terminal_alias") ==
+                    abi.size_bytes;
+            const bool scale_physical_subview =
+                scale_swizzle_alias_link && common_geometry &&
+                root.region_offset_bytes <= abi.region_offset_bytes &&
+                CheckedAdd(abi.region_offset_bytes, abi.size_bytes,
+                           "command_fragment.buffer_abi.scale_subview") <=
+                    CheckedAdd(root.region_offset_bytes, root.size_bytes,
+                               "command_fragment.buffer_abi.scale_root");
+            bool exact_scale_terminal_subview =
+                scale_physical_subview &&
+                root.layout == "swizzle_standard_terminal_root/v1" &&
+                abi.layout == "swizzle_standard_terminal_subview/v1" &&
+                root.ownership == BufferOwnershipDto::OWNED &&
+                root.value_id == abi.value_id &&
+                root.tensor_slice.value_id == abi.tensor_slice.value_id &&
+                root.tensor_slice.shape.size() == abi.tensor_slice.shape.size();
+            if (exact_scale_terminal_subview) {
+                for (std::size_t axis = 0;
+                     axis < root.tensor_slice.shape.size(); ++axis) {
+                    const uint64_t root_end = CheckedAdd(
+                        root.tensor_slice.offset[axis],
+                        root.tensor_slice.shape[axis],
+                        "command_fragment.buffer_abi.terminal_root");
+                    const uint64_t alias_end = CheckedAdd(
+                        abi.tensor_slice.offset[axis],
+                        abi.tensor_slice.shape[axis],
+                        "command_fragment.buffer_abi.terminal_subview");
+                    if (abi.tensor_slice.offset[axis] <
+                            root.tensor_slice.offset[axis] ||
+                        alias_end > root_end)
+                        exact_scale_terminal_subview = false;
+                }
+                exact_scale_terminal_subview =
+                    exact_scale_terminal_subview &&
+                    tensor_bytes(root.tensor_slice, root.dtype,
+                                 "command_fragment.buffer_abi.terminal_root") ==
+                        root.size_bytes &&
+                    tensor_bytes(abi.tensor_slice, abi.dtype,
+                                 "command_fragment.buffer_abi.terminal_subview") ==
+                        abi.size_bytes;
+            }
+            const bool exact_scale_storage_subview =
+                scale_physical_subview &&
+                root.layout == "swizzle_standard_storage_root/v1" &&
+                abi.layout == "swizzle_standard_storage_subview/v1" &&
+                tensor_bytes(abi.tensor_slice, abi.dtype,
+                             "command_fragment.buffer_abi.storage_subview") ==
+                    abi.size_bytes;
+            bool exact_moe_subview =
+                moe_swizzle_link &&
+                root.ownership != BufferOwnershipDto::ALIASED &&
+                !root.alias_of && root.schedule_id == abi.schedule_id &&
+                root.logical_core == abi.logical_core &&
+                root.region_ref == abi.region_ref &&
+                root.banks == abi.banks &&
+                root.storage_id == abi.storage_id &&
+                root.dtype == abi.dtype &&
+                root.lifetime_start <= abi.lifetime_start &&
+                root.lifetime_end_exclusive >=
+                    abi.lifetime_end_exclusive &&
+                abi.alignment_bytes <= root.alignment_bytes &&
+                root.alignment_bytes % abi.alignment_bytes == 0 &&
+                is_moe_root_layout(root.layout) &&
+                root.region_offset_bytes <= abi.region_offset_bytes &&
+                CheckedAdd(abi.region_offset_bytes, abi.size_bytes,
+                           "command_fragment.buffer_abi.moe_subview") <=
+                    CheckedAdd(root.region_offset_bytes, root.size_bytes,
+                               "command_fragment.buffer_abi.moe_root");
+            if (exact_moe_subview) {
+                constexpr std::string_view suffix = "_root/v1";
+                const std::string expected_layout =
+                    root.layout.substr(
+                        0, root.layout.size() - suffix.size()) +
+                    "_subview/v1";
+                exact_moe_subview = abi.layout == expected_layout;
+            }
+            if (!exact_full_alias && !exact_backward_wgrad_slice &&
+                !exact_unfused_value_view &&
+                !exact_scale_unfused_value_view &&
+                !exact_unfused_s0_terminal_view &&
+                !exact_scale_terminal_subview &&
+                !exact_scale_storage_subview &&
+                !exact_moe_subview)
                 Fail("command_fragment.buffer_abi",
                      "aliased BufferABI must preserve one enclosing canonical root geometry");
             if (exact_backward_wgrad_slice)
                 s3_backward_wgrad_alias_offsets[*abi.alias_of].insert(
                     abi.region_offset_bytes - root.region_offset_bytes);
+            if (exact_scale_terminal_subview) {
+                scale_terminal_alias_spans[*abi.alias_of].push_back(
+                    {abi.region_offset_bytes - root.region_offset_bytes,
+                     abi.size_bytes});
+                scale_subview_roots.emplace(*abi.alias_of, &root);
+            }
+            if (exact_scale_storage_subview) {
+                ++scale_storage_alias_counts[*abi.alias_of];
+                scale_subview_roots.emplace(*abi.alias_of, &root);
+            }
+            if (exact_moe_subview) {
+                ++moe_subview_alias_counts[*abi.alias_of];
+                const auto inserted =
+                    moe_subview_roots.emplace(*abi.alias_of, &root);
+                if (!inserted.second && inserted.first->second != &root)
+                    Fail("command_fragment.buffer_abi",
+                         "MoE subviews disagree on their canonical root");
+            }
+            if (exact_unfused_s0_terminal_view) {
+                ++unfused_s0_terminal_alias_counts[*abi.alias_of];
+                unfused_s0_terminal_roots.emplace(*abi.alias_of, &root);
+            }
+        }
+        if (unfused_s0_ag || unfused_s0_rs) {
+            const uint64_t expected_rank_bytes =
+                unfused_s0_ag ? 384 : 128;
+            const uint64_t expected_global_bytes =
+                unfused_s0_ag ? 768 : 256;
+            const std::size_t expected_aliases_per_root =
+                unfused_s0_ag ? 1 : 2;
+            const uint64_t expected_lifetime_start = 3;
+            const uint64_t expected_lifetime_end =
+                unfused_s0_ag ? 4 : 6;
+            const std::set<std::pair<
+                std::vector<uint64_t>, std::vector<uint64_t>>>
+                expected_slices = unfused_s0_ag
+                    ? std::set<std::pair<
+                          std::vector<uint64_t>,
+                          std::vector<uint64_t>>>{
+                          {{0, 0}, {8, 24}},
+                          {{0, 24}, {8, 24}},
+                      }
+                    : std::set<std::pair<
+                          std::vector<uint64_t>,
+                          std::vector<uint64_t>>>{
+                          {{0, 0}, {4, 16}},
+                          {{4, 0}, {4, 16}},
+                      };
+            uint64_t global_bytes = 0;
+            std::set<std::pair<
+                std::vector<uint64_t>, std::vector<uint64_t>>>
+                actual_slices;
+            std::set<std::string> terminal_values;
+            std::set<LogicalCoreDto> terminal_cores;
+            for (const auto &entry : unfused_s0_terminal_roots) {
+                const BufferAbiDto &root = *entry.second;
+                global_bytes = CheckedAdd(
+                    global_bytes, root.size_bytes,
+                    "command_fragment.buffer_abi.unfused_s0_terminal_bytes");
+                actual_slices.emplace(
+                    root.tensor_slice.offset, root.tensor_slice.shape);
+                terminal_values.insert(root.value_id);
+                terminal_cores.insert(root.logical_core);
+                const auto aliases =
+                    unfused_s0_terminal_alias_counts.find(entry.first);
+                if (root.size_bytes != expected_rank_bytes ||
+                    root.lifetime_start != expected_lifetime_start ||
+                    root.lifetime_end_exclusive !=
+                        expected_lifetime_end ||
+                    aliases ==
+                        unfused_s0_terminal_alias_counts.end() ||
+                    aliases->second != expected_aliases_per_root)
+                    Fail("command_fragment.buffer_abi",
+                         "UNFUSED S0 terminal root/alias quotient changed");
+            }
+            const std::set<LogicalCoreDto> expected_terminal_cores(
+                manifest.envelope.terminal_cores.begin(),
+                manifest.envelope.terminal_cores.end());
+            if (unfused_s0_terminal_roots.size() != 2 ||
+                unfused_s0_terminal_alias_counts.size() != 2 ||
+                global_bytes != expected_global_bytes ||
+                actual_slices != expected_slices ||
+                terminal_values.size() != 1 ||
+                terminal_cores != expected_terminal_cores)
+                Fail("command_fragment.buffer_abi",
+                     "UNFUSED S0 rank-local terminal slices do not exactly "
+                     "partition one global output");
+        }
+        std::vector<const BufferAbiDto *> scale_unfused_roots;
+        if (unfused_link && manifest.core_streams.size() == 4)
+            for (const auto &entry : known_buffer_abi)
+                if (!entry.second->alias_of &&
+                    entry.second->ownership != BufferOwnershipDto::ALIASED)
+                    scale_unfused_roots.push_back(entry.second);
+        for (std::size_t left_index = 0;
+             left_index < scale_unfused_roots.size(); ++left_index) {
+            const BufferAbiDto &left = *scale_unfused_roots[left_index];
+            for (std::size_t right_index = left_index + 1;
+                 right_index < scale_unfused_roots.size(); ++right_index) {
+                const BufferAbiDto &right = *scale_unfused_roots[right_index];
+                if (!(left.logical_core == right.logical_core) ||
+                    left.region_ref != right.region_ref)
+                    continue;
+                const bool physical_overlap =
+                    left.region_offset_bytes < CheckedAdd(
+                        right.region_offset_bytes, right.size_bytes,
+                        "command_fragment.buffer_abi.unfused_scale_right") &&
+                    right.region_offset_bytes < CheckedAdd(
+                        left.region_offset_bytes, left.size_bytes,
+                        "command_fragment.buffer_abi.unfused_scale_left");
+                const bool lifetime_overlap =
+                    left.lifetime_start < right.lifetime_end_exclusive &&
+                    right.lifetime_start < left.lifetime_end_exclusive;
+                if (physical_overlap && lifetime_overlap)
+                    Fail("command_fragment.buffer_abi",
+                         "UNFUSED scale storage intervals overlap while live");
+            }
+        }
+        for (const auto &entry : known_buffer_abi) {
+            const BufferAbiDto &root = *entry.second;
+            if (is_moe_calibration_root_layout(root.layout)) {
+                const bool exact_layout =
+                    root.layout ==
+                        "moe_swizzle_calibration_input_0_root/v1" ||
+                    root.layout ==
+                        "moe_swizzle_calibration_input_1_root/v1" ||
+                    root.layout ==
+                        "moe_swizzle_calibration_output_root/v1" ||
+                    root.layout ==
+                        "moe_swizzle_calibration_scratch_root/v1";
+                if (!moe_calibration_link || root.alias_of ||
+                    root.ownership == BufferOwnershipDto::ALIASED ||
+                    !exact_layout)
+                    Fail("command_fragment.buffer_abi",
+                         "MoE calibration root layout is reserved for its exact dedicated linker and non-alias roots");
+            }
+            if (is_moe_root_layout(root.layout)) {
+                if (!moe_swizzle_link || root.alias_of ||
+                    root.ownership == BufferOwnershipDto::ALIASED)
+                    Fail("command_fragment.buffer_abi",
+                         "MoE root layout is reserved for exact non-alias roots");
+                const auto tracked =
+                    moe_subview_roots.find(root.binding_id);
+                const auto aliases =
+                    moe_subview_alias_counts.find(root.binding_id);
+                if (tracked == moe_subview_roots.end() ||
+                    tracked->second != &root ||
+                    aliases == moe_subview_alias_counts.end() ||
+                    aliases->second == 0)
+                    Fail("command_fragment.buffer_abi",
+                         "MoE root requires one or more exact typed subviews");
+            }
+            if (root.alias_of ||
+                (root.layout != "swizzle_standard_terminal_root/v1" &&
+                 root.layout != "swizzle_standard_storage_root/v1"))
+                continue;
+            if (!scale_swizzle_alias_link)
+                Fail("command_fragment.buffer_abi",
+                     "fused scale root layout is reserved for a four-stream Swizzle standard manifest");
+            const auto tracked = scale_subview_roots.find(root.binding_id);
+            if (tracked == scale_subview_roots.end() || tracked->second != &root)
+                Fail("command_fragment.buffer_abi",
+                     "fused scale root requires exact typed subviews");
+            if (root.layout == "swizzle_standard_storage_root/v1") {
+                if (scale_storage_alias_counts[root.binding_id] == 0)
+                    Fail("command_fragment.buffer_abi",
+                         "fused storage root requires typed subviews");
+                continue;
+            }
+            auto spans = scale_terminal_alias_spans[root.binding_id];
+            std::sort(spans.begin(), spans.end());
+            uint64_t cursor = 0;
+            for (const auto &[offset, size] : spans) {
+                if (offset != cursor)
+                    Fail("command_fragment.buffer_abi",
+                         "fused terminal subviews must uniquely and contiguously cover their root");
+                cursor = CheckedAdd(cursor, size,
+                                    "command_fragment.buffer_abi.terminal_cover");
+            }
+            if (cursor != root.size_bytes)
+                Fail("command_fragment.buffer_abi",
+                     "fused terminal subviews must uniquely and contiguously cover their root");
         }
         if (s3_lite_backward_link &&
             (s3_backward_wgrad_alias_offsets.size() != 4 ||
@@ -4015,6 +6144,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::set<std::string> names;
         std::map<std::string, const ProgramSymbolDefinitionDto *>
             regions_by_ref;
+        std::map<std::pair<std::string, LogicalCoreDto>,
+                 const ProgramSymbolDefinitionDto *>
+            calibration_regions_by_ref_core;
         for (std::size_t index = 0;
              index < manifest.program_symbol_definitions.size(); ++index) {
             const ProgramSymbolDefinitionDto &definition =
@@ -4032,16 +6164,83 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     ? std::vector<LogicalCoreDto>{}
                     : std::vector<LogicalCoreDto>(uses->second.begin(),
                                                   uses->second.end());
-            if (definition.logical_cores != used_cores)
+            std::set<LogicalCoreDto> calibration_region_scope(
+                used_cores.begin(), used_cores.end());
+            if (moe_calibration_link &&
+                definition.symbol.kind == ProgramSymbolKind::SRAM_REGION)
+                for (const auto &entry : known_buffer_abi) {
+                    const BufferAbiDto &abi = *entry.second;
+                    if (!abi.alias_of &&
+                        abi.region_ref == definition.symbol.source_ref)
+                        calibration_region_scope.insert(abi.logical_core);
+                }
+            const bool calibration_exact_region_scope =
+                moe_calibration_link &&
+                definition.symbol.kind == ProgramSymbolKind::SRAM_REGION &&
+                definition.logical_cores == std::vector<LogicalCoreDto>(
+                    calibration_region_scope.begin(),
+                    calibration_region_scope.end());
+            const bool calibration_external_label =
+                moe_calibration_link &&
+                definition.symbol.kind == ProgramSymbolKind::SRAM_LABEL &&
+                used_cores.empty() && definition.logical_cores.size() == 1 &&
+                std::any_of(
+                    known_buffer_abi.begin(), known_buffer_abi.end(),
+                    [&](const auto &entry) {
+                        const BufferAbiDto &abi = *entry.second;
+                        return abi.ownership == BufferOwnershipDto::BORROWED &&
+                            !abi.alias_of &&
+                            abi.storage_id == definition.symbol.source_ref &&
+                            abi.logical_core == definition.logical_cores.front() &&
+                            definition.value == 0 && definition.size_bytes == 0;
+                    });
+            const bool calibration_scratch_absolute =
+                moe_calibration_link &&
+                definition.symbol.kind ==
+                    ProgramSymbolKind::ABSOLUTE_ADDRESS &&
+                used_cores.empty() && definition.logical_cores.size() == 1 &&
+                std::any_of(
+                    known_buffer_abi.begin(), known_buffer_abi.end(),
+                    [&](const auto &entry) {
+                        const BufferAbiDto &abi = *entry.second;
+                        return abi.ownership == BufferOwnershipDto::OWNED &&
+                            !abi.alias_of &&
+                            abi.layout ==
+                                "moe_swizzle_calibration_scratch_root/v1" &&
+                            abi.binding_id == definition.symbol.source_ref &&
+                            abi.logical_core == definition.logical_cores.front() &&
+                            abi.region_offset_bytes == definition.value &&
+                            abi.size_bytes == definition.size_bytes;
+                    });
+            if (definition.logical_cores != used_cores &&
+                !calibration_exact_region_scope && !calibration_external_label &&
+                !calibration_scratch_absolute)
                 Fail("program_symbol_definition[" +
                          definition.symbol.id + "].logical_cores",
                      "must exactly equal relocation execution scope");
             if (definition.symbol.kind == ProgramSymbolKind::SRAM_REGION) {
-                if (definition.size_bytes == 0 ||
-                    !regions_by_ref.emplace(definition.symbol.source_ref,
-                                            &definition).second)
+                bool exact_region = definition.size_bytes != 0;
+                if (moe_calibration_link) {
+                    bool unique_per_core =
+                        !definition.logical_cores.empty();
+                    for (const LogicalCoreDto &core :
+                         definition.logical_cores)
+                        unique_per_core =
+                            calibration_regions_by_ref_core.emplace(
+                                std::make_pair(
+                                    definition.symbol.source_ref, core),
+                                &definition).second && unique_per_core;
+                    exact_region = exact_region && unique_per_core;
+                    regions_by_ref.try_emplace(
+                        definition.symbol.source_ref, &definition);
+                } else {
+                    exact_region = exact_region &&
+                        regions_by_ref.emplace(
+                            definition.symbol.source_ref, &definition).second;
+                }
+                if (!exact_region)
                     Fail("program_symbol_definition",
-                         "SRAM_REGION source_ref must be unique and non-empty-sized");
+                         "SRAM_REGION source_ref/core must be unique and non-empty-sized");
             } else if (definition.symbol.kind ==
                        ProgramSymbolKind::SRAM_LABEL) {
                 if (definition.value != 0 || definition.size_bytes != 0)
@@ -4332,6 +6531,39 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             const LinkedCoreStreamDto &linked = *pending[core_index].linked;
             ProgramCore core;
             core.core_id = pending[core_index].runtime_id;
+            const std::set<std::string> moe_terminal_labels = [&]() {
+                std::set<std::string> result;
+                if (!moe_swizzle_link && !moe_calibration_link)
+                    return result;
+                std::set<std::string> terminal_storage_ids;
+                for (const auto &entry : known_buffer_abi) {
+                    const BufferAbiDto &abi = *entry.second;
+                    if (!abi.alias_of &&
+                        abi.ownership == BufferOwnershipDto::OWNED &&
+                        ((moe_swizzle_link &&
+                          (abi.layout ==
+                               "moe_swizzle_terminal_combined_root/v1" ||
+                           abi.layout ==
+                               "moe_swizzle_terminal_tape_root/v1")) ||
+                         (moe_calibration_link &&
+                          abi.layout ==
+                              "moe_swizzle_calibration_output_root/v1")) &&
+                        abi.logical_core == linked.logical_core)
+                        terminal_storage_ids.insert(abi.storage_id);
+                }
+                for (const ProgramSymbolDefinitionDto &definition :
+                     manifest.program_symbol_definitions)
+                    if (definition.symbol.kind ==
+                            ProgramSymbolKind::SRAM_LABEL &&
+                        terminal_storage_ids.count(
+                            definition.symbol.source_ref) == 1 &&
+                        std::find(definition.logical_cores.begin(),
+                                  definition.logical_cores.end(),
+                                  linked.logical_core) !=
+                            definition.logical_cores.end())
+                        result.insert(definition.symbol.id);
+                return result;
+            }();
             std::vector<const RelocatableRecordDto *> source_records;
             for (std::size_t instruction = 0;
                  instruction < linked.records.size(); ++instruction) {
@@ -4383,18 +6615,47 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                          reference.fragment_id,
                          reference.fragment_record_index});
                 }
+                const bool whole_terminal_alloc =
+                    moe_swizzle_link &&
+                    record.opcode == Opcode::SRAM_ALLOC_AT &&
+                    moe_terminal_labels.count(AddressSymbolRef(
+                        record, SemanticOperandId::LABEL_SYMBOL)) == 1;
                 core.records.push_back(FinalizeRecord(
                     record, record_relocations, record_runtime_relocations,
                     symbols, runtime_symbols, artifact, core_index,
                     instruction,
-                    "linked_program_manifest.core_streams.record"));
+                    "linked_program_manifest.core_streams.record",
+                    moe_calibration_link || whole_terminal_alloc));
                 source_records.push_back(&record);
             }
             const std::set<std::string> terminal_tape_labels =
-                ValidateActionSequence(
-                    source_records, "linked_program_manifest.core_streams",
-                    s3_lite_backward_link,
-                    s3_lite_dp4_train_forward_link);
+                [&]() {
+                    if (moe_swizzle_link || moe_calibration_link)
+                        for (const RelocatableRecordDto *record :
+                             source_records) {
+                            if (record->opcode != Opcode::SRAM_ALLOC_AT)
+                                continue;
+                            const std::string label = AddressSymbolRef(
+                                *record, SemanticOperandId::LABEL_SYMBOL);
+                            const uint64_t lifetime = LiteralU64(
+                                record->operands[5],
+                                "linked_program_manifest.core_streams.record.lifetime");
+                            const uint64_t expected_lifetime =
+                                moe_terminal_labels.count(label) == 1 ? 2 : 0;
+                            if (lifetime != expected_lifetime)
+                                Fail("linked_program_manifest.core_streams",
+                                     "MoE terminal roots must be PERSISTENT and every non-terminal root must be TASK");
+                        }
+                    return ValidateActionSequence(
+                        source_records,
+                        "linked_program_manifest.core_streams",
+                        s3_lite_backward_link,
+                        s3_lite_dp4_train_forward_link,
+                        moe_swizzle_link,
+                        moe_swizzle_c1_matmul_bind,
+                        moe_calibration_link,
+                        moe_terminal_labels);
+                }();
             std::size_t persistent_tape_allocations = 0;
             for (std::size_t index = 0; index < source_records.size(); ++index) {
                 if (source_records[index]->opcode != Opcode::SRAM_ALLOC_AT)
@@ -4510,19 +6771,31 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 if (abi->region_offset_bytes != next_offset)
                     Fail("linked_program_manifest.address_operand_bindings",
                          "multi-buffer witness must be contiguous and ordered");
-                const auto found_region = regions_by_ref.find(abi->region_ref);
-                if (found_region == regions_by_ref.end() ||
-                    !ContainsCore(found_region->second->logical_cores,
+                const ProgramSymbolDefinitionDto *found_region = nullptr;
+                if (moe_calibration_link) {
+                    const auto exact =
+                        calibration_regions_by_ref_core.find(
+                            std::make_pair(abi->region_ref,
+                                           binding.logical_core));
+                    if (exact != calibration_regions_by_ref_core.end())
+                        found_region = exact->second;
+                } else {
+                    const auto exact = regions_by_ref.find(abi->region_ref);
+                    if (exact != regions_by_ref.end())
+                        found_region = exact->second;
+                }
+                if (found_region == nullptr ||
+                    !ContainsCore(found_region->logical_cores,
                                   binding.logical_core) ||
-                    abi->region_offset_bytes > found_region->second->size_bytes ||
-                    abi->size_bytes > found_region->second->size_bytes -
+                    abi->region_offset_bytes > found_region->size_bytes ||
+                    abi->size_bytes > found_region->size_bytes -
                                               abi->region_offset_bytes)
                     Fail("linked_program_manifest.address_operand_bindings",
                          "BufferABI is outside its named SRAM region/core");
-                if (region && region != found_region->second)
+                if (region && region != found_region)
                     Fail("linked_program_manifest.address_operand_bindings",
                          "one address operand cannot span multiple regions");
-                region = found_region->second;
+                region = found_region;
                 if (next_offset > std::numeric_limits<uint64_t>::max() -
                                       abi->size_bytes)
                     Fail("linked_program_manifest.address_operand_bindings",
@@ -4548,12 +6821,159 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     definition.symbol.source_ref == abis.front()->binding_id ||
                     (abis.front()->alias_of &&
                      definition.symbol.source_ref == *abis.front()->alias_of);
-                if (!exact_symbol_source ||
+                constexpr std::string_view kSwizzleReduceSpanPrefix =
+                    "swizzle_standard_reduce_span_";
+                const std::string &source_ref =
+                    definition.symbol.source_ref;
+                const bool exact_swizzle_reduce_span_source =
+                    swizzle_link && owner_fragment != fragments.end() &&
+                    owner_fragment->second->kind ==
+                        FragmentKindDto::SWIZZLE &&
+                    record.opcode == Opcode::LOCAL_REDUCE &&
+                    binding.operand_id ==
+                        SemanticOperandId::SOURCE_ADDRESS &&
+                    abis.size() == 2 &&
+                    source_ref.size() ==
+                        kSwizzleReduceSpanPrefix.size() + 16 &&
+                    source_ref.compare(
+                        0, kSwizzleReduceSpanPrefix.size(),
+                        kSwizzleReduceSpanPrefix) == 0 &&
+                    std::all_of(
+                        source_ref.begin() +
+                            kSwizzleReduceSpanPrefix.size(),
+                        source_ref.end(), [](char c) {
+                            return std::isdigit(
+                                       static_cast<unsigned char>(c)) ||
+                                   (c >= 'a' && c <= 'f');
+                        });
+                constexpr std::string_view kUnfusedReduceSpanPrefix =
+                    "unfused_comparison_standard_reduce_span_";
+                const bool exact_unfused_reduce_span_source =
+                    unfused_link && owner_fragment != fragments.end() &&
+                    owner_fragment->second->kind ==
+                        FragmentKindDto::UNFUSED_COMPARISON &&
+                    record.opcode == Opcode::LOCAL_REDUCE &&
+                    binding.operand_id ==
+                        SemanticOperandId::SOURCE_ADDRESS &&
+                    abis.size() == 2 &&
+                    abis[0]->ownership == BufferOwnershipDto::ALIASED &&
+                    abis[1]->ownership == BufferOwnershipDto::ALIASED &&
+                    abis[0]->alias_of && abis[1]->alias_of &&
+                    abis[0]->alias_of == abis[1]->alias_of &&
+                    abis[0]->storage_id == abis[1]->storage_id &&
+                    abis[0]->region_ref == abis[1]->region_ref &&
+                    abis[0]->logical_core == abis[1]->logical_core &&
+                    source_ref.size() ==
+                        kUnfusedReduceSpanPrefix.size() + 16 &&
+                    source_ref.compare(
+                        0, kUnfusedReduceSpanPrefix.size(),
+                        kUnfusedReduceSpanPrefix) == 0 &&
+                    std::all_of(
+                        source_ref.begin() +
+                            kUnfusedReduceSpanPrefix.size(),
+                        source_ref.end(), [](char c) {
+                            return std::isdigit(
+                                       static_cast<unsigned char>(c)) ||
+                                   (c >= 'a' && c <= 'f');
+                        });
+                const bool exact_scale_unfused_reduce_span_source =
+                    unfused_link && manifest.core_streams.size() == 4 &&
+                    owner_fragment != fragments.end() &&
+                    owner_fragment->second->kind ==
+                        FragmentKindDto::UNFUSED_COMPARISON &&
+                    record.opcode == Opcode::LOCAL_REDUCE &&
+                    binding.operand_id ==
+                        SemanticOperandId::SOURCE_ADDRESS &&
+                    abis.size() == 2 &&
+                    abis[0]->ownership == BufferOwnershipDto::ALIASED &&
+                    abis[1]->ownership == BufferOwnershipDto::ALIASED &&
+                    abis[0]->alias_of && abis[1]->alias_of &&
+                    abis[0]->region_ref == abis[1]->region_ref &&
+                    abis[0]->logical_core == abis[1]->logical_core &&
+                    source_ref.size() ==
+                        kUnfusedReduceSpanPrefix.size() + 16 &&
+                    source_ref.compare(
+                        0, kUnfusedReduceSpanPrefix.size(),
+                        kUnfusedReduceSpanPrefix) == 0 &&
+                    std::all_of(
+                        source_ref.begin() +
+                            kUnfusedReduceSpanPrefix.size(),
+                        source_ref.end(), [](char c) {
+                            return std::isdigit(
+                                       static_cast<unsigned char>(c)) ||
+                                   (c >= 'a' && c <= 'f');
+                        });
+                const bool exact_unfused_s0_rs_reduce_span_source =
+                    unfused_s0_rs &&
+                    manifest.core_streams.size() == 2 &&
+                    owner_fragment != fragments.end() &&
+                    owner_fragment->second->kind ==
+                        FragmentKindDto::UNFUSED_COMPARISON &&
+                    record.opcode == Opcode::LOCAL_REDUCE &&
+                    binding.operand_id ==
+                        SemanticOperandId::SOURCE_ADDRESS &&
+                    abis.size() == 2 &&
+                    abis[0]->ownership ==
+                        BufferOwnershipDto::ALIASED &&
+                    abis[1]->ownership ==
+                        BufferOwnershipDto::ALIASED &&
+                    abis[0]->alias_of && abis[1]->alias_of &&
+                    abis[0]->alias_of != abis[1]->alias_of &&
+                    abis[0]->layout == "MH_shard_tp" &&
+                    abis[1]->layout == "MH_shard_tp" &&
+                    abis[0]->size_bytes == 128 &&
+                    abis[1]->size_bytes == 128 &&
+                    abis[0]->tensor_slice.offset ==
+                        std::vector<uint64_t>{0, 0} &&
+                    abis[1]->tensor_slice.offset ==
+                        std::vector<uint64_t>{0, 0} &&
+                    abis[0]->tensor_slice.shape ==
+                        std::vector<uint64_t>{4, 16} &&
+                    abis[1]->tensor_slice.shape ==
+                        std::vector<uint64_t>{4, 16} &&
+                    abis[0]->region_ref == abis[1]->region_ref &&
+                    abis[0]->logical_core == abis[1]->logical_core &&
+                    source_ref.size() ==
+                        kUnfusedReduceSpanPrefix.size() + 16 &&
+                    source_ref.compare(
+                        0, kUnfusedReduceSpanPrefix.size(),
+                        kUnfusedReduceSpanPrefix) == 0 &&
+                    std::all_of(
+                        source_ref.begin() +
+                            kUnfusedReduceSpanPrefix.size(),
+                        source_ref.end(), [](char c) {
+                            return (c >= 48 && c <= 57) ||
+                                   (c >= 97 && c <= 102);
+                        });
+                if ((!exact_symbol_source &&
+                     !exact_swizzle_reduce_span_source &&
+                     !exact_unfused_reduce_span_source &&
+                     !exact_unfused_s0_rs_reduce_span_source &&
+                     !exact_scale_unfused_reduce_span_source) ||
                     definition.value != region->value + span_offset ||
                     definition.size_bytes != span_size ||
                     relocation->addend < 0)
                     Fail("linked_program_manifest.address_operand_bindings",
-                         "absolute symbol must preserve root base/span with a non-negative addend");
+                         "absolute symbol must preserve root base/span with a non-negative addend"
+                         " (source=" + std::to_string(exact_symbol_source) +
+                         ", reduce=" +
+                         std::to_string(exact_unfused_reduce_span_source) +
+                         ", scale_reduce=" +
+                         std::to_string(
+                             exact_scale_unfused_reduce_span_source) +
+                         ", source_ref=" + definition.symbol.source_ref +
+                         ", binding_id=" + abis.front()->binding_id +
+                         ", alias_of=" +
+                         (abis.front()->alias_of
+                              ? *abis.front()->alias_of
+                              : std::string("<none>")) +
+                         ", value=" + std::to_string(definition.value) +
+                         ", expected_value=" +
+                         std::to_string(region->value + span_offset) +
+                         ", size=" + std::to_string(definition.size_bytes) +
+                         ", expected_size=" + std::to_string(span_size) +
+                         ", addend=" + std::to_string(relocation->addend) +
+                         ")");
 
                 uint64_t expected_addend = 0;
                 if (abis.size() == 1) {
@@ -5005,7 +7425,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     uses[0].fragment_id == uses[1].fragment_id &&
                     fragments.at(uses[0].fragment_id)->kind ==
                         FragmentKindDto::COARSE;
+                const bool swizzle_local =
+                    local && swizzle_link &&
+                    uses[0].fragment_id == uses[1].fragment_id &&
+                    fragments.at(uses[0].fragment_id)->kind ==
+                        FragmentKindDto::SWIZZLE;
+                const bool unfused_local =
+                    local && unfused_link &&
+                    uses[0].fragment_id == uses[1].fragment_id &&
+                    fragments.at(uses[0].fragment_id)->kind ==
+                        FragmentKindDto::UNFUSED_COMPARISON;
+                const bool moe_swizzle_local =
+                    local && moe_swizzle_link &&
+                    uses[0].fragment_id == uses[1].fragment_id &&
+                    fragments.at(uses[0].fragment_id)->kind ==
+                        FragmentKindDto::MOE_SWIZZLE;
+                const bool moe_calibration_local =
+                    local && moe_calibration_link &&
+                    uses[0].fragment_id == uses[1].fragment_id &&
+                    fragments.at(uses[0].fragment_id)->kind ==
+                        FragmentKindDto::MOE_SWIZZLE_CALIBRATION;
                 if (local && !rooted_local && !dp4_tape_local &&
+                    !swizzle_local && !unfused_local &&
+                    !moe_swizzle_local && !moe_calibration_local &&
                     definition.destination_action_id)
                     Fail("runtime_symbol_definition",
                          "local ISSUE/WAIT token must not name a destination action");
@@ -5029,6 +7471,15 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     (rooted_local && definition.destination_action_id !=
                         std::optional<std::string>(wait->action_id)) ||
                     (dp4_tape_local && definition.destination_action_id !=
+                        std::optional<std::string>(wait->action_id)) ||
+                    (swizzle_local &&
+                     definition.destination_action_id !=
+                        std::optional<std::string>(wait->action_id)) ||
+                    (unfused_local &&
+                     definition.destination_action_id !=
+                        std::optional<std::string>(wait->action_id)) ||
+                    (moe_swizzle_local &&
+                     definition.destination_action_id !=
                         std::optional<std::string>(wait->action_id)) ||
                     (local && producer->action_id != wait->action_id))
                     Fail("runtime_symbol_definition",

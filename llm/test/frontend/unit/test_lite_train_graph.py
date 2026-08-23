@@ -163,7 +163,7 @@ class S2LiteLmHeadTrainGraphTest(unittest.TestCase):
     def test_tp1_exact_topology_workloads_roles_and_state(self) -> None:
         result = _build()
         graph = result.graph
-        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha11")
+        self.assertEqual(IR0_SCHEMA_VERSION, "wafer_frontend.ir0/v1alpha12")
         self.assertEqual(
             S2_LITE_LM_HEAD_TRAIN_IR0_SCHEMA_VERSION,
             "wafer_frontend.s2_lite_lm_head_train_ir0/v1alpha1",

@@ -559,7 +559,6 @@ def _manifest_allocations(
                     alias.schedule_id,
                     alias.logical_core,
                     alias.region_ref,
-                    alias.alignment_bytes,
                     alias.banks,
                     alias.storage_id,
                     alias.dtype,
@@ -568,7 +567,6 @@ def _manifest_allocations(
                     root.schedule_id,
                     root.logical_core,
                     root.region_ref,
-                    root.alignment_bytes,
                     root.banks,
                     root.storage_id,
                     root.dtype,
@@ -601,8 +599,73 @@ def _manifest_allocations(
                 <= root.region_offset_bytes + root.size_bytes
                 and alias.layout == f"{root.layout}_view"
             )
+            unfused_comparison_subview_alias = (
+                manifest.producer_pass == "unfused_comparison_standard_linker"
+                and root.layout == "unfused_comparison_storage/v1"
+                and alias.region_offset_bytes >= root.region_offset_bytes
+                and alias.size_bytes > 0
+                and alias.region_offset_bytes + alias.size_bytes
+                <= root.region_offset_bytes + root.size_bytes
+                and alias.tensor_slice.value_id == alias.value_id
+            )
+            fused_terminal_subview_alias = (
+                manifest.producer_pass == "swizzle_standard_linker"
+                and root.layout == "swizzle_standard_terminal_root/v1"
+                and alias.layout == "swizzle_standard_terminal_subview/v1"
+                and root.ownership is BufferOwnership.OWNED
+                and alias.value_id == root.value_id
+                and alias.tensor_slice.value_id == root.tensor_slice.value_id
+                and alias.region_offset_bytes >= root.region_offset_bytes
+                and alias.size_bytes > 0
+                and alias.region_offset_bytes + alias.size_bytes
+                <= root.region_offset_bytes + root.size_bytes
+                and len(alias.tensor_slice.shape) == len(root.tensor_slice.shape)
+                and all(
+                    root_offset <= alias_offset
+                    and alias_offset + alias_extent
+                    <= root_offset + root_extent
+                    for root_offset, root_extent, alias_offset, alias_extent
+                    in zip(
+                        root.tensor_slice.offset,
+                        root.tensor_slice.shape,
+                        alias.tensor_slice.offset,
+                        alias.tensor_slice.shape,
+                        strict=True,
+                    )
+                )
+            )
+            fused_storage_subview_alias = (
+                manifest.producer_pass == "swizzle_standard_linker"
+                and root.layout == "swizzle_standard_storage_root/v1"
+                and alias.layout == "swizzle_standard_storage_subview/v1"
+                and alias.region_offset_bytes >= root.region_offset_bytes
+                and alias.size_bytes > 0
+                and alias.region_offset_bytes + alias.size_bytes
+                <= root.region_offset_bytes + root.size_bytes
+            )
+            moe_storage_subview_alias = (
+                manifest.producer_pass == "moe_swizzle_standard_linker"
+                and root.layout.startswith("moe_swizzle_")
+                and root.layout.endswith("_root/v1")
+                and alias.layout
+                == f"{root.layout.removesuffix('_root/v1')}_subview/v1"
+                and alias.alignment_bytes <= root.alignment_bytes
+                and root.alignment_bytes % alias.alignment_bytes == 0
+                and alias.region_offset_bytes >= root.region_offset_bytes
+                and alias.size_bytes > 0
+                and alias.region_offset_bytes + alias.size_bytes
+                <= root.region_offset_bytes + root.size_bytes
+            )
+            alignment_exact = alias.alignment_bytes == root.alignment_bytes
             if common_alias or not (
-                whole_root_alias or backward_subview_alias
+                moe_storage_subview_alias
+                or alignment_exact and (
+                whole_root_alias
+                or backward_subview_alias
+                or unfused_comparison_subview_alias
+                or fused_terminal_subview_alias
+                or fused_storage_subview_alias
+                )
             ):
                 raise SchemaError(
                     "aliased BufferABI must directly reuse its canonical root allocation",
@@ -725,14 +788,132 @@ def _manifest_allocations(
                     size_bytes,
                 )
 
+    # MOE_SWIZZLE BORROWED roots are external host-visible SRAM spans.  They
+    # deliberately have no ALLOC/FREE records, but still require one exact
+    # canonical label, region, runtime core and physical span for ProgramIo.
+    if manifest.producer_pass in (
+        "moe_swizzle_standard_linker",
+        "moe_swizzle_calibration_standard_linker",
+    ):
+        for abi in sorted(abis.values(), key=lambda item: item.id):
+            if (
+                abi.alias_of is not None
+                or abi.ownership is not BufferOwnership.BORROWED
+                or abi.id in allocated_abi_ids
+            ):
+                continue
+            root_alias_bindings = {
+                item.binding_id for item in abis.values()
+                if item.alias_of == abi.binding_id
+                and item.storage_id == abi.storage_id
+                and item.region_offset_bytes == abi.region_offset_bytes
+            }
+            if manifest.producer_pass == "moe_swizzle_calibration_standard_linker":
+                root_alias_bindings.add(abi.binding_id)
+            labels = tuple(sorted((
+                (index, definition)
+                for index, definition in enumerate(
+                    manifest.program_symbol_definitions
+                )
+                if definition.symbol.kind
+                is ProgramSymbolKind.ABSOLUTE_ADDRESS
+                and definition.symbol.source_ref in root_alias_bindings
+                and abi.logical_core in definition.logical_cores
+            ), key=lambda item: item[1].symbol.id))
+            regions = tuple(
+                definition
+                for definition in manifest.program_symbol_definitions
+                if definition.symbol.kind is ProgramSymbolKind.SRAM_REGION
+                and definition.symbol.source_ref == abi.region_ref
+                and abi.logical_core in definition.logical_cores
+            )
+            runtime_core_id = runtime_by_core.get(abi.logical_core)
+            if not labels or len(regions) != 1 or runtime_core_id is None:
+                raise SchemaError(
+                    "external MoE BORROWED root lacks exact label/region/core closure",
+                    path=f"{path}.fragments",
+                )
+            label_index, label_definition = labels[0]
+            region_definition = regions[0]
+            if (
+                any(
+                    item.value
+                    != region_definition.value + abi.region_offset_bytes
+                    for _index, item in labels
+                )
+                or label_definition.value
+                != region_definition.value + abi.region_offset_bytes
+                or abi.region_offset_bytes > region_definition.size_bytes
+                or abi.size_bytes
+                > region_definition.size_bytes - abi.region_offset_bytes
+            ):
+                raise SchemaError(
+                    "external MoE BORROWED root escapes its SRAM region",
+                    path=f"{path}.fragments",
+                )
+            key = (runtime_core_id, label_definition.symbol.id)
+            if key in allocations:
+                raise SchemaError(
+                    "external MoE BORROWED root duplicates an allocation",
+                    path=f"{path}.fragments",
+                )
+            allocated_abi_ids.add(abi.id)
+            allocations[key] = _Allocation(
+                runtime_core_id, label_definition.symbol.id, label_index,
+                label_definition, region_definition.symbol.id,
+                region_definition, abi, abi.region_offset_bytes, abi.size_bytes,
+            )
+
     storage_ids = {abi.storage_id for abi in abis.values()}
+    calibration_borrowed_storage_ids: set[str] = set()
+    if manifest.producer_pass == "moe_swizzle_calibration_standard_linker":
+        borrowed = tuple(
+            abi for abi in abis.values()
+            if abi.alias_of is None
+            and abi.ownership is BufferOwnership.BORROWED
+        )
+        calibration_borrowed_storage_ids = {
+            abi.storage_id for abi in borrowed
+        }
+        for abi in borrowed:
+            input_labels = tuple(
+                definition
+                for definition in manifest.program_symbol_definitions
+                if definition.symbol.kind is ProgramSymbolKind.SRAM_LABEL
+                and definition.symbol.source_ref == abi.storage_id
+                and definition.logical_cores == (abi.logical_core,)
+            )
+            direct_allocations = tuple(
+                allocation for allocation in allocations.values()
+                if allocation.abi.id == abi.id
+                and allocation.abi.ownership is BufferOwnership.BORROWED
+            )
+            if (
+                len(input_labels) != 1
+                or input_labels[0].value != 0
+                or input_labels[0].size_bytes != 0
+                or len(direct_allocations) != 1
+            ):
+                raise SchemaError(
+                    "calibration BORROWED input label lacks exact direct-ABS closure",
+                    path=f"{path}.fragments",
+                )
     expected_labels = {
         (runtime_by_core[core], definition.symbol.id)
         for definition in manifest.program_symbol_definitions
         if definition.symbol.kind is ProgramSymbolKind.SRAM_LABEL
         and definition.symbol.source_ref in storage_ids
+        and definition.symbol.source_ref not in calibration_borrowed_storage_ids
         for core in definition.logical_cores
     }
+    if manifest.producer_pass in (
+        "moe_swizzle_standard_linker",
+        "moe_swizzle_calibration_standard_linker",
+    ):
+        expected_labels.update(
+            key for key, allocation in allocations.items()
+            if allocation.abi.ownership is BufferOwnership.BORROWED
+        )
     if set(allocations) != expected_labels:
         raise SchemaError(
             "storage-backed SRAM_LABEL definitions must be covered by one exact per-core SRAM_ALLOC_AT",
@@ -785,6 +966,47 @@ def _validate_nonoverlap(
                 path=path,
             )
         previous = span
+
+
+def _validate_allocation_nonoverlap(
+    allocations: tuple[_Allocation, ...],
+    producer_pass: str,
+    core_stream_count: int,
+    path: str,
+) -> None:
+    """Admit lifetime-disjoint UNFUSED reuse only for the four-stream scale ABI."""
+
+    for index, left in enumerate(allocations):
+        for right in allocations[index + 1 :]:
+            physical_overlap = (
+                left.runtime_core_id == right.runtime_core_id
+                and left.region_symbol_ref == right.region_symbol_ref
+                and left.absolute_start
+                < right.absolute_start + right.size_bytes
+                and right.absolute_start
+                < left.absolute_start + left.size_bytes
+            )
+            if not physical_overlap:
+                continue
+            lifetime_disjoint = (
+                left.abi.lifetime_end_exclusive
+                <= right.abi.lifetime_start
+                or right.abi.lifetime_end_exclusive
+                <= left.abi.lifetime_start
+            )
+            if (
+                producer_pass
+                == "unfused_comparison_standard_linker"
+                and core_stream_count == 4
+                and lifetime_disjoint
+                or producer_pass == "moe_swizzle_standard_linker"
+                and lifetime_disjoint
+            ):
+                continue
+            raise SchemaError(
+                "physical allocation ranges overlap during live intervals",
+                path=path,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1016,17 +1238,10 @@ class ProgramIoContract:
                 manifest.program_symbol_definitions
             )
         }
-        _validate_nonoverlap(
-            [
-                (
-                    allocation.runtime_core_id,
-                    allocation.region_symbol_ref,
-                    allocation.absolute_start,
-                    allocation.absolute_start + allocation.size_bytes,
-                    allocation.label_symbol_ref,
-                )
-                for allocation in allocations.values()
-            ],
+        _validate_allocation_nonoverlap(
+            tuple(allocations.values()),
+            manifest.producer_pass,
+            len(manifest.core_streams),
             f"{path}.output_probes",
         )
         initialization_ranges: list[tuple[int, str, int, int, str]] = []
@@ -1042,7 +1257,27 @@ class ProgramIoContract:
                 (target.runtime_core_id, target.program_symbol_ref)
             )
             abi = abis.get(target.buffer_abi_id)
-            if allocation is None or abi is None or allocation.abi != abi:
+            moe_alias = (
+                allocation is not None
+                and abi is not None
+                and manifest.producer_pass == "moe_swizzle_standard_linker"
+                and abi.ownership is BufferOwnership.ALIASED
+                and abi.alias_of == allocation.abi.binding_id
+                and abi.storage_id == allocation.abi.storage_id
+                and abi.logical_core == allocation.abi.logical_core
+                and abi.region_ref == allocation.abi.region_ref
+                and abi.region_offset_bytes >= allocation.abi.region_offset_bytes
+                and abi.region_offset_bytes + abi.size_bytes
+                <= allocation.abi.region_offset_bytes + allocation.abi.size_bytes
+                and allocation.abi.layout.startswith("moe_swizzle_")
+                and allocation.abi.layout.endswith("_root/v1")
+                and abi.layout
+                == f"{allocation.abi.layout.removesuffix('_root/v1')}_subview/v1"
+            )
+            if (
+                allocation is None or abi is None
+                or allocation.abi != abi and not moe_alias
+            ):
                 raise SchemaError(
                     "core/label does not resolve to the exact BufferABI allocation",
                     path=entry_path,
@@ -1205,9 +1440,16 @@ class ProgramIoContract:
             allocation, abi, start, end = validate_sram_entry(
                 entry, target, entry_path
             )
-            if abi.ownership is not BufferOwnership.OWNED:
+            probe_owned = (
+                abi.ownership is BufferOwnership.OWNED
+                or manifest.producer_pass == "moe_swizzle_standard_linker"
+                and abi.ownership is BufferOwnership.ALIASED
+                and allocation.abi.ownership is BufferOwnership.OWNED
+                and abi.alias_of == allocation.abi.binding_id
+            )
+            if not probe_owned:
                 raise SchemaError(
-                    "output probe requires OWNED BufferABI",
+                    "output probe requires OWNED BufferABI or exact MoE terminal alias",
                     path=f"{entry_path}.target.buffer_abi_id",
                 )
             probe_ranges.append(
@@ -1226,8 +1468,8 @@ class ProgramIoContract:
         )
         _validate_nonoverlap(probe_ranges, f"{path}.output_probes")
 
-        # AFTER_PROGRAM is sound for the naive no-reuse allocator only when no
-        # distinct storage allocation ever aliases the probed physical span.
+        # AFTER_PROGRAM is sound with UNFUSED reuse only when every overlapping
+        # allocation finished before the probed terminal storage became live.
         all_allocations = tuple(allocations.values())
         for index, entry in enumerate(self.output_probes):
             sram_target = entry.target
@@ -1246,6 +1488,16 @@ class ProgramIoContract:
                     and other.region_symbol_ref == target.region_symbol_ref
                     and target_start < other.absolute_start + other.size_bytes
                     and other.absolute_start < target_end
+                    and not (
+                        manifest.producer_pass
+                        == "unfused_comparison_standard_linker"
+                        and other.abi.lifetime_end_exclusive
+                        <= target.abi.lifetime_start
+                        or manifest.producer_pass
+                        == "moe_swizzle_standard_linker"
+                        and other.abi.lifetime_end_exclusive
+                        <= target.abi.lifetime_start
+                    )
                 ):
                     raise SchemaError(
                         "after-program probe rejects physical allocation reuse/aliasing",

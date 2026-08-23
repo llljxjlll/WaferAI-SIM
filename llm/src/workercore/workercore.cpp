@@ -36,6 +36,7 @@
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 #include "prims/moe_prims.h"
+#include "prims/sram_lifecycle_prim.h"
 #include "prims/norm_prims.h"
 #include "prims/dte_endpoint_prims.h"
 #include "prims/pd_prims.h"
@@ -1768,6 +1769,13 @@ void WorkerCoreExecutor::collective_program_worker() {
 
 void WorkerCoreExecutor::worker_core_execute() {
     while (true) {
+        if (!moe_swizzle_pending_fixed_interval_kinds.empty())
+            FinalizeMoeSwizzlePendingFixedIntervals(
+                static_cast<uint16_t>(cid),
+                moe_swizzle_pending_fixed_interval_start,
+                sc_time_stamp().value(),
+                &moe_swizzle_pending_fixed_interval_kinds,
+                &moe_swizzle_runtime_intervals);
         PrimBase *p = nullptr;    // 下一个要执行的原语
         bool conf_delete = false; // 是否自动填充了一个recv_conf原语
 
@@ -1793,6 +1801,58 @@ void WorkerCoreExecutor::worker_core_execute() {
             p = prim_queue.front();
         }
 
+        std::vector<MoeSwizzleRuntimeIntervalKind> fixed_kinds;
+        if (auto *endpoint = dynamic_cast<Dte_endpoint_prim_base *>(p)) {
+            fixed_kinds.push_back(
+                MoeSwizzleRuntimeIntervalKind::DTE_LAUNCH);
+            fixed_kinds.push_back(
+                MoeSwizzleRuntimeIntervalKind::SESSION_OPEN);
+            if (endpoint->completion == DteEndpointCompletion::SYNC) {
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::DTE_SYNC);
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::SESSION_RETIRE);
+            }
+        } else if (auto *async_prim = dynamic_cast<Dte_async_prim *>(p)) {
+            if (async_prim->op == DteAsyncOp::ISSUE) {
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::DTE_LAUNCH);
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::LOCAL_COPY_FIXED);
+            } else if (async_prim->op == DteAsyncOp::WAIT ||
+                       async_prim->op == DteAsyncOp::FENCE) {
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::DTE_SYNC);
+                if (!p2p_async_handles.empty())
+                    fixed_kinds.push_back(
+                        MoeSwizzleRuntimeIntervalKind::SESSION_RETIRE);
+            }
+        } else if (auto *lifecycle = dynamic_cast<Sram_lifecycle *>(p)) {
+            if (lifecycle->op == SramLifecycleOp::ALLOC ||
+                lifecycle->op == SramLifecycleOp::ALLOC_AT)
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::SRAM_ALLOC_FIXED);
+            else if (lifecycle->op == SramLifecycleOp::FREE)
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::SRAM_FREE_FIXED);
+        } else if (dynamic_cast<Sram_bind_oneshot *>(p) != nullptr) {
+            fixed_kinds.push_back(MoeSwizzleRuntimeIntervalKind::SRAM_BIND);
+        } else if (auto *event = dynamic_cast<Event_control_prim *>(p)) {
+            fixed_kinds.push_back(
+                event->op == EventControlOp::SET
+                    ? MoeSwizzleRuntimeIntervalKind::EVENT_SET_FIXED
+                    : MoeSwizzleRuntimeIntervalKind::EVENT_WAIT_FIXED);
+        } else if (auto *send = dynamic_cast<Send_prim *>(p);
+                   send != nullptr && send->type == SEND_DONE) {
+            fixed_kinds.push_back(
+                MoeSwizzleRuntimeIntervalKind::TERMINAL_DONE_FIXED);
+        }
+        if (!fixed_kinds.empty()) {
+            moe_swizzle_pending_fixed_interval_kinds = std::move(fixed_kinds);
+            moe_swizzle_pending_fixed_interval_start =
+                sc_time_stamp().value();
+        }
+
         // NOTE:
         // send原语和recv原语和其他计算原语不同，需要涉及core中信号的处理，所以需要在core这个文件内部处理相关逻辑，否则会出现依赖问题。
         // 需要等待 switch_prim_block 将 prim_block 置为 false，然后再执行
@@ -1810,12 +1870,17 @@ void WorkerCoreExecutor::worker_core_execute() {
                                     Trace_event_util("group sync"));
         } else if (typeid(*p) == typeid(Event_control_prim)) {
             auto *event = static_cast<Event_control_prim *>(p);
+            const uint64_t marker_start = sc_time_stamp().value();
             const char *op = event->op == EventControlOp::SET
                 ? "event set" : "event wait";
             event_engine->add_event("Core " + ToHexString(cid),
                                     "Event_control_prim", "B",
                                     Trace_event_util(op));
             execute_event_control(event);
+            moe_swizzle_runtime_intervals.push_back(
+                {static_cast<uint16_t>(cid),
+                 MoeSwizzleRuntimeIntervalKind::EVENT_CONTROL,
+                 marker_start, sc_time_stamp().value()});
             event_engine->add_event("Core " + ToHexString(cid),
                                     "Event_control_prim", "E",
                                     Trace_event_util(op));
@@ -1880,11 +1945,40 @@ void WorkerCoreExecutor::worker_core_execute() {
                 Trace_event_util("P2P endpoint receive"));
         } else if (typeid(*p) == typeid(Dte_async_prim)) {
             auto *async_prim = static_cast<Dte_async_prim *>(p);
+            const uint64_t marker_start = sc_time_stamp().value();
             const std::string op = DteAsyncOpName(async_prim->op);
             event_engine->add_event(
                 "Core " + ToHexString(cid), "Dte_async_prim", "B",
                 Trace_event_util("Dte_async_prim " + op));
             execute_dte_async(async_prim);
+            const uint64_t marker_end = sc_time_stamp().value();
+            if (async_prim->op == DteAsyncOp::ISSUE) {
+                if (!moe_swizzle_local_dte_starts
+                         .emplace(async_prim->token, marker_start).second)
+                    throw std::logic_error(
+                        "MoE Swizzle DTE capture observed duplicate token issue");
+            } else if (async_prim->op == DteAsyncOp::WAIT ||
+                       async_prim->op == DteAsyncOp::CANCEL) {
+                const auto tracked = moe_swizzle_local_dte_starts.find(
+                    async_prim->token);
+                if (tracked != moe_swizzle_local_dte_starts.end()) {
+                    moe_swizzle_runtime_intervals.push_back(
+                        {static_cast<uint16_t>(cid),
+                         MoeSwizzleRuntimeIntervalKind::LOCAL_DTE,
+                         tracked->second, marker_end});
+                    moe_swizzle_local_dte_starts.erase(tracked);
+                }
+            } else if (async_prim->op == DteAsyncOp::FENCE) {
+                for (const auto &[token, start] :
+                     moe_swizzle_local_dte_starts) {
+                    (void)token;
+                    moe_swizzle_runtime_intervals.push_back(
+                        {static_cast<uint16_t>(cid),
+                         MoeSwizzleRuntimeIntervalKind::LOCAL_DTE,
+                         start, marker_end});
+                }
+                moe_swizzle_local_dte_starts.clear();
+            }
             event_engine->add_event(
                 "Core " + ToHexString(cid), "Dte_async_prim", "E",
                 Trace_event_util("Dte_async_prim " + op));
@@ -1992,10 +2086,40 @@ void WorkerCoreExecutor::worker_core_execute() {
                 (p->prim_type & COMP_PRIM) ? "Comp_prim" :
                 (p->prim_type & MEM_PRIM) ? "Mem_prim" :
                 (p->prim_type & COMM_PRIM) ? "Comm_prim" : "Sync_prim";
+            const uint64_t marker_start = sc_time_stamp().value();
+            const bool group_gemm =
+                dynamic_cast<Matmul_f *>(p) != nullptr ||
+                dynamic_cast<matmul_forward_moe *>(p) != nullptr;
+            const bool swiglu_group =
+                dynamic_cast<swiglu_forward *>(p) != nullptr;
+            if (group_gemm) {
+                if (moe_swizzle_pending_group_gemm_dispatch_start.has_value())
+                    throw std::logic_error(
+                        "GroupGEMM dispatch phase is already pending");
+                moe_swizzle_pending_group_gemm_dispatch_start = marker_start;
+            }
             ev_comp.notify(CYCLE, SC_NS);
             event_engine->add_event("Core " + ToHexString(cid), trace_category,
                                     "B", Trace_event_util(p->name));
             wait(prim_block.negedge_event());
+            const uint64_t marker_end = sc_time_stamp().value();
+
+            std::optional<MoeSwizzleRuntimeIntervalKind> marker_kind;
+            if (group_gemm)
+                marker_kind = MoeSwizzleRuntimeIntervalKind::MATMUL;
+            else if (swiglu_group)
+                marker_kind = MoeSwizzleRuntimeIntervalKind::SWIGLU_GROUP;
+            else if (const auto *collective =
+                         dynamic_cast<Collective_data_v1_prim *>(p);
+                     collective != nullptr &&
+                     collective->mode == CollectiveDataV1PrimMode::REDUCE)
+                marker_kind = MoeSwizzleRuntimeIntervalKind::LOCAL_REDUCE;
+            else if (dynamic_cast<Sram_lifecycle *>(p) != nullptr)
+                marker_kind = MoeSwizzleRuntimeIntervalKind::SRAM_LIFECYCLE;
+            if (marker_kind.has_value())
+                moe_swizzle_runtime_intervals.push_back(
+                    {static_cast<uint16_t>(cid), *marker_kind,
+                     marker_start, marker_end});
 
             // 发送信号让send发送最后一个包
             if (prim_queue.size() >= 2 &&

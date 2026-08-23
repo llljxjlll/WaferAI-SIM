@@ -24,7 +24,7 @@ from .persistent_state import (
 from .stage3_profile import Stage3ProfileMode, Stage3StaticProfile
 
 
-IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha11"
+IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha12"
 STATE_ACCESS_SCHEMA_VERSION = "wafer_frontend.state_access/v1alpha2"
 
 
@@ -262,6 +262,14 @@ class FusionImpl(str, Enum):
 class FusionOrigin(str, Enum):
     DECLARED = "declared"
     DISCOVERED = "discovered"
+
+
+class FusionPattern(str, Enum):
+    AG_GEMM = "ag_gemm"
+    GEMM_RS = "gemm_rs"
+    GEMM_AR = "gemm_ar"
+    MOE_DISPATCH_GEMM = "moe_dispatch_gemm"
+    MOE_GEMM_COMBINE = "moe_gemm_combine"
 
 
 class NumericalPolicy(str, Enum):
@@ -1270,9 +1278,11 @@ class CollectiveWorkload:
             self._validate_all_gather(path)
         elif self.collective is CollectiveKind.REDUCE_SCATTER:
             self._validate_reduce_scatter(path)
-        elif self.collective in (CollectiveKind.ALL_REDUCE, CollectiveKind.ALL_TO_ALL):
+        elif self.collective is CollectiveKind.ALL_REDUCE:
+            self._validate_all_reduce(path)
+        elif self.collective is CollectiveKind.ALL_TO_ALL:
             raise UnsupportedFeatureError(
-                "N2a workload schema supports only AllGather and ReduceScatter",
+                "N2a workload schema does not support AllToAll",
                 path=f"{path}.collective",
             )
         else:
@@ -1321,6 +1331,27 @@ class CollectiveWorkload:
             raise SchemaError("ReduceScatter rank output must be one participant shard", path=f"{path}.rank_output_bytes")
         if self.rank_logical_payload_bytes != expected or self.group_logical_payload_bytes != expected * self.participant_count:
             raise SchemaError("ReduceScatter logical payloads are inconsistent", path=f"{path}.rank_logical_payload_bytes")
+
+    def _validate_all_reduce(self, path: str) -> None:
+        self._require_reduce(path)
+        if self.reduce_op is not ReduceOp.SUM:
+            raise UnsupportedFeatureError("N2a AllReduce supports SUM only", path=f"{path}.reduce_op")
+        if self.scatter_tensor_axis is not None or self.gather_tensor_axis is not None:
+            raise SchemaError("AllReduce forbids scatter/gather tensor axes", path=path)
+        if (
+            self.rank_input_bytes != self.logical_tensor_bytes
+            or self.rank_output_bytes != self.logical_tensor_bytes
+        ):
+            raise SchemaError("AllReduce rank input/output must equal the logical tensor", path=path)
+        numerator = 2 * (self.participant_count - 1) * self.logical_tensor_bytes
+        if numerator % self.participant_count:
+            raise SchemaError("AllReduce payload must divide across participants", path=path)
+        expected_rank_payload = numerator // self.participant_count
+        if (
+            self.rank_logical_payload_bytes != expected_rank_payload
+            or self.group_logical_payload_bytes != expected_rank_payload * self.participant_count
+        ):
+            raise SchemaError("AllReduce logical payloads are inconsistent", path=f"{path}.rank_logical_payload_bytes")
 
 
 NodeWorkload = (
@@ -1452,12 +1483,18 @@ class GraphEdge:
 @dataclass(frozen=True, slots=True)
 class FusionSemanticContract:
     tile_domain: tuple[str, ...]
+    pattern: FusionPattern
     reduction_axes: tuple[int, ...]
     input_layouts: tuple[str, ...]
     output_layout: str
     numerical_policy: NumericalPolicy
 
     def validate(self, path: str) -> None:
+        if type(self.pattern) is not FusionPattern:
+            raise SchemaError(
+                "must be a FusionPattern",
+                path=f"{path}.pattern",
+            )
         for index, axis in enumerate(self.tile_domain):
             validate_nonempty(axis, f"{path}.tile_domain[{index}]")
         for index, axis in enumerate(self.reduction_axes):
