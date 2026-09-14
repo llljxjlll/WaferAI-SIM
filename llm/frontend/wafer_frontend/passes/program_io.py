@@ -23,6 +23,7 @@ from ..schema.artifact_manifest import (
 )
 from ..schema.common import DType
 from ..schema.global_action import ActionBufferUse, GlobalAction, LogicalCoreRef
+from ..schema.flexible_dense_backward import FlexibleDenseBackwardLinkedProgram
 from ..schema.ir0 import (
     CrossEntropyBackwardWorkload,
     CrossEntropyForwardWorkload,
@@ -270,6 +271,7 @@ LinkedProgramSource = (
     | LiteMoeDp4BackwardLinkedProgram
     | SwizzleStandardLinkedProgram
     | UnfusedComparisonStandardLinkedProgram
+    | FlexibleDenseBackwardLinkedProgram
 )
 
 
@@ -287,6 +289,7 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     LiteMoeDp4BackwardLinkedProgram,
     SwizzleStandardLinkedProgram,
     UnfusedComparisonStandardLinkedProgram,
+    FlexibleDenseBackwardLinkedProgram,
 )
 
 
@@ -376,6 +379,137 @@ def _semantic_uses_prevalidated(
     return _semantic_uses(source, abis)
 
 
+def _flexible_dense_backward_semantic_uses(
+    source: FlexibleDenseBackwardLinkedProgram,
+    abis: dict[str, BufferABI],
+) -> dict[str, tuple[_LiteSemanticUse, ...]]:
+    """Recover exact buffer directions from the linked backward records."""
+
+    fragments = {
+        _leaf(fragment).id: _leaf(fragment)
+        for fragment in source.manifest.fragments
+    }
+    record_order = {
+        (record.fragment_id, record.fragment_record_index, stream.logical_core): index
+        for stream in source.manifest.core_streams
+        for index, record in enumerate(stream.records)
+    }
+    semantic = {
+        (RecordOpcode.LSU_LOAD, SemanticOperandId.DESTINATION_ADDRESS): (
+            BufferAccess.WRITE,
+            BufferUseRole.DMA_DESTINATION,
+            0,
+        ),
+        (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (
+            BufferAccess.READ,
+            BufferUseRole.COMP_INPUT,
+            0,
+        ),
+        (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_DATA_ADDRESS): (
+            BufferAccess.READ,
+            BufferUseRole.COMP_INPUT,
+            1,
+        ),
+        (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (
+            BufferAccess.WRITE,
+            BufferUseRole.COMP_OUTPUT,
+            0,
+        ),
+        (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS): (
+            BufferAccess.READ,
+            BufferUseRole.REDUCE_INPUT,
+            0,
+        ),
+        (RecordOpcode.LOCAL_REDUCE, SemanticOperandId.DESTINATION_ADDRESS): (
+            BufferAccess.WRITE,
+            BufferUseRole.REDUCE_OUTPUT,
+            0,
+        ),
+        (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (
+            BufferAccess.READ,
+            BufferUseRole.COMP_INPUT,
+            0,
+        ),
+        (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS): (
+            BufferAccess.READ,
+            BufferUseRole.COMP_INPUT,
+            1,
+        ),
+        (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (
+            BufferAccess.WRITE,
+            BufferUseRole.COMP_OUTPUT,
+            0,
+        ),
+        (RecordOpcode.LSU_STORE, SemanticOperandId.SOURCE_ADDRESS): (
+            BufferAccess.READ,
+            BufferUseRole.DMA_SOURCE,
+            0,
+        ),
+    }
+    collected: dict[str, list[_LiteSemanticUse]] = {
+        abi_id: [] for abi_id in abis
+    }
+    use_index = 0
+    for binding in source.manifest.address_operand_bindings:
+        fragment = fragments[binding.fragment_id]
+        stream = next(
+            item
+            for item in fragment.core_streams
+            if item.logical_core == binding.logical_core
+        )
+        record = stream.records[binding.fragment_record_index]
+        rule = semantic.get((record.opcode, binding.operand_id))
+        if rule is None:
+            continue
+        order_index = record_order.get(
+            (
+                binding.fragment_id,
+                binding.fragment_record_index,
+                binding.logical_core,
+            )
+        )
+        if order_index is None:
+            raise SchemaError(
+                "backward address binding lacks one linked-core position",
+                path="source.manifest.address_operand_bindings",
+            )
+        access, role, operand_index = rule
+        for abi_id in binding.buffer_abi_ids:
+            if abi_id not in collected:
+                raise SchemaError(
+                    "backward address binding references unknown BufferABI",
+                    path="source.manifest.address_operand_bindings",
+                )
+            collected[abi_id].append(
+                _LiteSemanticUse(
+                    use_index,
+                    0,
+                    record,
+                    access,
+                    role,
+                    operand_index,
+                    order_index,
+                )
+            )
+            use_index += 1
+
+    result: dict[str, tuple[_LiteSemanticUse, ...]] = {}
+    for abi_id, uses in collected.items():
+        if not uses:
+            raise SchemaError(
+                "Flexible Dense backward BufferABI has no record semantic use",
+                path="source.manifest.fragments",
+            )
+        ordered = tuple(sorted(uses, key=lambda item: item.order_key))
+        if ordered[0].access is not BufferAccess.WRITE:
+            raise SchemaError(
+                "Flexible Dense backward owned buffer must be written first",
+                path="source.manifest.address_operand_bindings",
+            )
+        result[abi_id] = ordered
+    return result
+
+
 def _semantic_uses(
     source: LinkedProgramSource,
     abis: dict[str, BufferABI],
@@ -384,6 +518,8 @@ def _semantic_uses(
         return swizzle_semantic_uses(source, abis)  # type: ignore[return-value]
     if type(source) is UnfusedComparisonStandardLinkedProgram:
         return unfused_comparison_semantic_uses(source, abis)  # type: ignore[return-value]
+    if type(source) is FlexibleDenseBackwardLinkedProgram:
+        return _flexible_dense_backward_semantic_uses(source, abis)
     if type(source) in (
         LiteMoeLinkedProgram,
         LiteMoeDp4InferLinkedProgram,
@@ -1556,6 +1692,34 @@ def _resolved_state_abis(
                     path="source.source.intent.state_loads",
                 )
             uses[abi.id].append((action_order[unit.action_ref], StateUseAccess.READ))
+    elif type(source) is FlexibleDenseBackwardLinkedProgram:
+        fragments = {
+            _leaf(fragment).id: _leaf(fragment)
+            for fragment in source.manifest.fragments
+        }
+        for binding in source.manifest.state_operand_bindings:
+            fragment = fragments[binding.fragment_id]
+            stream = next(
+                item
+                for item in fragment.core_streams
+                if item.logical_core == binding.logical_core
+            )
+            opcode = stream.records[binding.fragment_record_index].opcode
+            access = (
+                StateUseAccess.READ
+                if opcode is RecordOpcode.LSU_LOAD
+                else StateUseAccess.WRITE
+                if opcode is RecordOpcode.LSU_STORE
+                else None
+            )
+            if access is None or binding.state_abi_id not in uses:
+                raise SchemaError(
+                    "Flexible Dense backward state binding is not load/store",
+                    path="source.manifest.state_operand_bindings",
+                )
+            uses[binding.state_abi_id].append(
+                (binding.fragment_record_index, access)
+            )
     elif type(source) in (
         LiteMoeBackwardLinkedProgram,
         LiteMoeDp4BackwardLinkedProgram,
@@ -1648,6 +1812,7 @@ def _resolved_state_abis(
             )
         )
     if type(source) not in (
+        FlexibleDenseBackwardLinkedProgram,
         LiteMoeLinkedProgram,
         LiteMoeBackwardLinkedProgram,
         LiteMoeDp4InferLinkedProgram,
@@ -2359,6 +2524,10 @@ def _build_timing_program_io_prevalidated(
             item for item in resolved if item.abi.id in terminal_abi_ids
         )
         terminal_values = {item.abi.value_id for item in resolved_terminal}
+    elif type(source) is FlexibleDenseBackwardLinkedProgram:
+        terminal_abi_ids = None
+        terminal_values = set()
+        resolved_terminal = ()
     else:
         terminal_abi_ids = None
         terminal_values = _terminal_value_ids(source)
@@ -2366,6 +2535,7 @@ def _build_timing_program_io_prevalidated(
             item for item in resolved if item.abi.value_id in terminal_values
         )
     hbm_state_terminals = type(source) in (
+        FlexibleDenseBackwardLinkedProgram,
         LiteMoeBackwardLinkedProgram,
         LiteMoeDp4BackwardLinkedProgram,
         S2LiteDp4TreeArLinkedProgram,

@@ -12,6 +12,10 @@ from llm.frontend.wafer_frontend.passes.load_fabric import (
     hbm_address_spaces_from_data,
     physical_fabric_from_data,
 )
+from llm.frontend.wafer_frontend.passes.program_io import (
+    build_deterministic_timing_state_overrides,
+    build_timing_program_io,
+)
 from llm.frontend.wafer_frontend.passes.workload_materialization import (
     materialize_workload_preflight,
 )
@@ -130,6 +134,19 @@ def _replace_binding(
 
 
 class DenseTrainingCompileSequenceTest(unittest.TestCase):
+    def test_one_by_one_builds_trainable_state_program_io(self) -> None:
+        linked = _sequence(1, 1).segments[0].linked_program
+        seeds, expected = build_deterministic_timing_state_overrides(linked)
+        self.assertEqual(len(seeds), 15)
+        self.assertFalse(expected)
+        contract = build_timing_program_io(
+            linked,
+            "0" * 64,
+            state_seed_overrides=seeds,
+        )
+        self.assertEqual(len(contract.initializations), 45)
+        self.assertEqual(len(contract.output_probes), 15)
+
     def test_one_by_one_real_linked_program_covers_all_parameters(self) -> None:
         sequence = _sequence(1, 1)
         self.assertEqual(len(sequence.segments), 2)

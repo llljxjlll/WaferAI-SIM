@@ -406,8 +406,8 @@ std::vector<std::string> SplitSequencePaths(const std::string &value,
         if (end == std::string::npos) break;
         begin = end + 1;
     }
-    if (result.size() != 3)
-        throw std::runtime_error(flag + " requires exactly three paths");
+    if (result.size() < 2)
+        throw std::runtime_error(flag + " requires at least two paths");
     return result;
 }
 
@@ -453,21 +453,53 @@ std::vector<DenseSequenceKvRange> DenseKvRanges(
                   return std::tie(left.kind, left.die_id, left.address) <
                          std::tie(right.kind, right.die_id, right.address);
               });
-    if (result.size() != 4 ||
-        std::any_of(result.begin(), result.end(),
-                    [](const DenseSequenceKvRange &range) {
-                        return range.die_id != 0 || range.size_bytes == 0;
-                    }))
-        throw std::runtime_error(
-            "Dense sequence runtime canary requires 1x1/TP1 and two layers");
+    return result;
+}
+
+std::vector<DenseSequenceKvRange> DenseTrainingStateRanges(
+    const std::string &manifest_text) {
+    const frontend::LinkedProgramManifestDto manifest =
+        frontend::ProgramArtifactFinalizer::Parse(manifest_text);
+    std::map<std::string, DenseSequenceKvRange> unique;
+    for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
+        const frontend::CommandFragmentDto *fragment =
+            std::get_if<frontend::CommandFragmentDto>(&linked);
+        if (fragment == nullptr)
+            fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+        for (const frontend::StateAbiDto &abi : fragment->state_abi) {
+            if (abi.kind != frontend::StateKindDto::TRAINABLE_PARAMETER)
+                continue;
+            DenseSequenceKvRange range{
+                abi.id, abi.kind, abi.die_id, abi.address, abi.size_bytes};
+            auto [it, inserted] = unique.emplace(abi.id, range);
+            if (!inserted &&
+                (it->second.kind != range.kind ||
+                 it->second.die_id != range.die_id ||
+                 it->second.address != range.address ||
+                 it->second.size_bytes != range.size_bytes))
+                throw std::runtime_error(
+                    "Dense training sequence has conflicting StateABI");
+        }
+    }
+    std::vector<DenseSequenceKvRange> result;
+    for (const auto &entry : unique) result.push_back(entry.second);
+    std::sort(result.begin(), result.end(),
+              [](const DenseSequenceKvRange &left,
+                 const DenseSequenceKvRange &right) {
+                  return std::tie(left.die_id, left.address, left.id) <
+                         std::tie(right.die_id, right.address, right.id);
+              });
     return result;
 }
 
 void ValidateDenseKvContinuity(
     const std::vector<std::vector<DenseSequenceKvRange>> &segments) {
-    if (segments.size() != 3)
-        throw std::runtime_error("Dense sequence requires three KV layouts");
+    if (segments.size() < 2 || segments[0].empty())
+        throw std::runtime_error("Dense sequence requires nonempty KV layouts");
     for (std::size_t segment = 1; segment < segments.size(); ++segment) {
+        if (segments[segment].size() != segments[0].size())
+            throw std::runtime_error(
+                "Dense sequence KV StateABI cardinality changed");
         for (std::size_t index = 0; index < segments[0].size(); ++index) {
             const auto &first = segments[0][index];
             const auto &next = segments[segment][index];
@@ -480,8 +512,65 @@ void ValidateDenseKvContinuity(
     }
 }
 
-void PrintDenseKvBoundary(
-    HBMRuntime &runtime, std::size_t segment,
+void ValidateDenseTrainingStateContinuity(
+    const std::vector<std::vector<DenseSequenceKvRange>> &segments) {
+    if (segments.size() != 2 || segments[0].empty() ||
+        segments[1].size() != segments[0].size())
+        throw std::runtime_error(
+            "Dense training sequence requires two matching state layouts");
+    for (std::size_t index = 0; index < segments[0].size(); ++index) {
+        const auto &first = segments[0][index];
+        const auto &next = segments[1][index];
+        if (first.kind != next.kind || first.die_id != next.die_id ||
+            first.address != next.address ||
+            first.size_bytes != next.size_bytes)
+            throw std::runtime_error(
+                "Dense training sequence state layout continuity failed");
+    }
+}
+
+struct DenseTrainingProgramWitness {
+    std::size_t matmul_records = 0;
+    std::size_t sgd_records = 0;
+    std::size_t store_records = 0;
+};
+
+DenseTrainingProgramWitness DenseTrainingWitness(
+    const std::string &manifest_text, std::size_t state_count) {
+    const frontend::LinkedProgramManifestDto manifest =
+        frontend::ProgramArtifactFinalizer::Parse(manifest_text);
+    DenseTrainingProgramWitness result;
+    for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
+        const frontend::CommandFragmentDto *fragment =
+            std::get_if<frontend::CommandFragmentDto>(&linked);
+        if (fragment == nullptr)
+            fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+        for (const auto &stream : fragment->core_streams) {
+            for (const auto &record : stream.records) {
+                if (record.opcode == Opcode::MATMUL)
+                    ++result.matmul_records;
+                else if (record.opcode == Opcode::SGD_UPDATE)
+                    ++result.sgd_records;
+                else if (record.opcode == Opcode::LSU_STORE)
+                    ++result.store_records;
+            }
+        }
+    }
+    if (result.matmul_records < state_count ||
+        result.sgd_records != state_count ||
+        result.store_records != state_count)
+        throw std::runtime_error(
+            "Dense training sequence lacks WGRAD/SGD/store record coverage");
+    return result;
+}
+
+struct DenseSequenceBoundary {
+    std::size_t bytes = 0;
+    std::string digest;
+};
+
+DenseSequenceBoundary ReadDenseStateBoundary(
+    HBMRuntime &runtime,
     const std::vector<DenseSequenceKvRange> &ranges) {
     std::vector<uint8_t> aggregate;
     for (const auto &range : ranges) {
@@ -498,14 +587,39 @@ void PrintDenseKvBoundary(
             });
         if (!present)
             throw std::runtime_error(
-                "Dense sequence KV output contains unwritten bytes");
+                "Dense sequence state contains unwritten bytes");
         aggregate.insert(aggregate.end(), snapshot.payload.begin(),
                          snapshot.payload.end());
     }
+    return DenseSequenceBoundary{
+        aggregate.size(), frontend::program_io::Sha256Hex(aggregate)};
+}
+
+void PrintDenseKvBoundary(
+    HBMRuntime &runtime, std::size_t segment,
+    const std::vector<DenseSequenceKvRange> &ranges) {
+    const DenseSequenceBoundary boundary =
+        ReadDenseStateBoundary(runtime, ranges);
     std::cout << "[DENSE_SEQUENCE_KV] index=" << segment
-              << " bytes=" << aggregate.size()
-              << " digest=" << frontend::program_io::Sha256Hex(aggregate)
+              << " bytes=" << boundary.bytes
+              << " digest=" << boundary.digest
               << " pass=1" << std::endl;
+}
+
+std::string PrintDenseTrainingStateBoundary(
+    HBMRuntime &runtime, std::size_t version,
+    const std::vector<DenseSequenceKvRange> &ranges,
+    const std::optional<std::string> &previous_digest) {
+    const DenseSequenceBoundary boundary =
+        ReadDenseStateBoundary(runtime, ranges);
+    const bool changed = previous_digest.has_value() &&
+                         *previous_digest != boundary.digest;
+    std::cout << "[DENSE_TRAINING_SEQUENCE_STATE] version=" << version
+              << " bytes=" << boundary.bytes
+              << " digest=" << boundary.digest
+              << " content_changed=" << (changed ? 1 : 0)
+              << " functional=0 pass=1" << std::endl;
+    return boundary.digest;
 }
 
 const char *ProgramIoModeName(frontend::program_io::Mode mode) {
@@ -1078,6 +1192,11 @@ int sc_main(int argc, char *argv[]) {
     std::vector<uint8_t> program_bytes;
     std::vector<std::vector<uint8_t>> sequence_program_bytes;
     std::vector<std::vector<DenseSequenceKvRange>> sequence_kv_ranges;
+    std::vector<std::vector<DenseSequenceKvRange>>
+        sequence_training_state_ranges;
+    std::vector<DenseTrainingProgramWitness>
+        sequence_training_witnesses;
+    bool dense_training_sequence = false;
     std::vector<frontend::program_io::ResolvedContract>
         sequence_program_io_resolved;
     std::optional<p5_probe::Spec> p5_memory_probe_spec;
@@ -1103,7 +1222,12 @@ int sc_main(int argc, char *argv[]) {
                     "--linked-manifest-sequence");
                 const auto sidecar_paths = SplitSequencePaths(
                     g_flag_program_io_sequence, "--program-io-sequence");
-                for (std::size_t index = 0; index < 3; ++index) {
+                if (manifest_paths.size() != program_paths.size() ||
+                    sidecar_paths.size() != program_paths.size())
+                    throw std::runtime_error(
+                        "Program sequence path lists must have equal length");
+                for (std::size_t index = 0;
+                     index < program_paths.size(); ++index) {
                     auto bytes = ReadProgramFile(program_paths[index]);
                     (void)DecodeProgramArtifact(bytes);
                     const std::string manifest = ReadRegularTextFile(
@@ -1116,7 +1240,31 @@ int sc_main(int argc, char *argv[]) {
                         throw std::runtime_error(
                             "Dense sequence manifest/artifact closure failed");
                     sequence_program_bytes.push_back(std::move(bytes));
-                    sequence_kv_ranges.push_back(DenseKvRanges(manifest));
+                    const auto kv_ranges = DenseKvRanges(manifest);
+                    const auto training_ranges =
+                        DenseTrainingStateRanges(manifest);
+                    if (index == 0) {
+                        if (kv_ranges.empty() == training_ranges.empty())
+                            throw std::runtime_error(
+                                "Program sequence must contain exactly one "
+                                "supported persistent-state family");
+                        dense_training_sequence = !training_ranges.empty();
+                    }
+                    if (dense_training_sequence) {
+                        if (!kv_ranges.empty() || training_ranges.empty())
+                            throw std::runtime_error(
+                                "Dense training sequence state family changed");
+                        sequence_training_state_ranges.push_back(
+                            training_ranges);
+                        sequence_training_witnesses.push_back(
+                            DenseTrainingWitness(
+                                manifest, training_ranges.size()));
+                    } else {
+                        if (kv_ranges.empty() || !training_ranges.empty())
+                            throw std::runtime_error(
+                                "Dense inference sequence state family changed");
+                        sequence_kv_ranges.push_back(kv_ranges);
+                    }
                     const std::string sidecar = ReadRegularTextFile(
                         "Dense sequence ProgramIo sidecar",
                         sidecar_paths[index]);
@@ -1125,7 +1273,11 @@ int sc_main(int argc, char *argv[]) {
                             sidecar, manifest,
                             sequence_program_bytes.back()));
                 }
-                ValidateDenseKvContinuity(sequence_kv_ranges);
+                if (dense_training_sequence)
+                    ValidateDenseTrainingStateContinuity(
+                        sequence_training_state_ranges);
+                else
+                    ValidateDenseKvContinuity(sequence_kv_ranges);
             } else {
                 program_bytes = ReadProgramFile(g_flag_program);
             }
@@ -1422,11 +1574,19 @@ int sc_main(int argc, char *argv[]) {
         }
     }
 
+    std::optional<std::string> dense_training_state_digest;
+    if (sequence_mode && dense_training_sequence) {
+        dense_training_state_digest = PrintDenseTrainingStateBoundary(
+            *monitor->hbmRuntime, 0,
+            sequence_training_state_ranges.front(), std::nullopt);
+    }
+
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
     sc_clock clk("clk", CYCLE, SC_NS);
 
     if (sequence_mode) {
-        for (std::size_t expected = 0; expected < 3; ++expected) {
+        for (std::size_t expected = 0;
+             expected < sequence_program_bytes.size(); ++expected) {
             sc_start();
             if (sequence_helper->completed_segments() != expected + 1)
                 throw std::runtime_error(
@@ -1440,9 +1600,30 @@ int sc_main(int argc, char *argv[]) {
             std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
                       << " probes=" << io_result.probes.size()
                       << " pass=1" << std::endl;
-            PrintDenseKvBoundary(
-                *monitor->hbmRuntime, expected, sequence_kv_ranges[expected]);
-            if (expected + 1 < 3)
+            if (dense_training_sequence) {
+                dense_training_state_digest =
+                    PrintDenseTrainingStateBoundary(
+                        *monitor->hbmRuntime, expected + 1,
+                        sequence_training_state_ranges[expected],
+                        dense_training_state_digest);
+                const auto &witness =
+                    sequence_training_witnesses[expected];
+                std::cout
+                    << "[DENSE_TRAINING_SEQUENCE_STEP] index=" << expected
+                    << " input_version=" << expected
+                    << " output_version=" << expected + 1
+                    << " trainable_states="
+                    << sequence_training_state_ranges[expected].size()
+                    << " matmul_records=" << witness.matmul_records
+                    << " sgd_records=" << witness.sgd_records
+                    << " store_records=" << witness.store_records
+                    << " functional=0 pass=1" << std::endl;
+            } else {
+                PrintDenseKvBoundary(
+                    *monitor->hbmRuntime, expected,
+                    sequence_kv_ranges[expected]);
+            }
+            if (expected + 1 < sequence_program_bytes.size())
                 sequence_program_io_applied =
                     frontend::program_io::ApplyBeforeSequenceSegment(
                         sequence_program_io_resolved[expected + 1],
