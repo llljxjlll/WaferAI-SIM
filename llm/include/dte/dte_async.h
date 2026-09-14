@@ -58,6 +58,14 @@ public:
     void CancelToken(uint32_t token);
     void BindMemoryBridge(DteMemoryBridge *bridge);
 
+    // Non-blocking controller-facing operations.  Fence watermarks are
+    // exclusive issue-sequence bounds: tokens issued later are never waited
+    // on or retired by TryFenceThrough().
+    bool TryRetireToken(uint32_t token);
+    uint64_t CaptureFenceWatermark() const { return next_issue_sequence_; }
+    bool TryFenceThrough(uint64_t issue_sequence_exclusive);
+    const sc_event &StateChangedEvent() const { return state_changed_; }
+
     size_t OutstandingCount() const { return records_.size(); }
     size_t OpenGroupCount() const { return open_groups_.size(); }
     bool HasToken(uint32_t token) const { return records_.count(token) != 0; }
@@ -111,7 +119,13 @@ private:
     uint64_t AppendToAggregationGroup(uint64_t group_id, uint32_t token);
     uint64_t FlushGroup(uint64_t group_id, const char *reason);
     void FlushAllOpenGroups(const char *reason);
+    void FlushOpenGroupsThrough(uint64_t issue_sequence_exclusive,
+                                const char *reason);
     void CancelStagedToken(uint32_t token);
+    bool IsComplete(const DteAsyncRecord &record) const;
+    void ReleaseCompletedToken(uint32_t token, bool trace_wait);
+    void WatchPhysicalCompletion(uint64_t xfer_id);
+    void WatchMemoryCompletion(uint32_t token);
     void WaitForCompletion(uint32_t token, bool trace_wait);
     void WaitAndRelease(uint32_t token, bool trace_wait);
     void timeoutWorker();
@@ -131,6 +145,7 @@ private:
     uint64_t next_issue_sequence_ = 0;
     uint64_t next_group_id_ = 0;
     sc_event aggregation_changed_;
+    sc_event state_changed_;
 };
 
 int RunDTEV3SelfTest();

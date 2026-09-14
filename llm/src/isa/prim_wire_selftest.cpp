@@ -1919,6 +1919,21 @@ void TestDteAsync(TestState &state) {
         state, "Dte_async metadata reserved bit", wire, 0, 110);
     CheckWrappedBitRejected<Dte_async_prim>(
         state, "Dte_async region reserved bit", wire, 3, 80);
+    Dte_async_prim legacy_fence;
+    legacy_fence.op = DteAsyncOp::FENCE;
+    const Wire legacy_fence_wire = legacy_fence.serialize();
+    state.Check(legacy_fence_wire[0].range(10, 8).to_uint64() == 3,
+                "Dte_async legacy global fence keeps wire op 3");
+    Dte_async_prim wave_fence;
+    wave_fence.op = DteAsyncOp::P2P_WAVE_FENCE;
+    const Wire wave_fence_wire = wave_fence.serialize();
+    Dte_async_prim decoded_wave_fence;
+    decoded_wave_fence.deserialize(wave_fence_wire);
+    state.Check(wave_fence_wire[0].range(10, 8).to_uint64() == 5 &&
+                    decoded_wave_fence.op == DteAsyncOp::P2P_WAVE_FENCE &&
+                    SameWire(decoded_wave_fence.serialize(), wave_fence_wire),
+                "Dte_async P2P wave fence has exact typed wire op 5");
+
     state.Throws("Dte_async invalid op", [&] {
         Wire bad = wire;
         bad[0].range(10, 8) = 7;

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
+from typing import Iterator
 
 from ..errors import SchemaError
 from ..schema.artifact_manifest import (
     BufferABI,
     CommandFragment,
+    LinkedProgramManifest,
     ProgramSymbolDefinition,
     ProgramSymbolKind,
     RecordOpcode,
@@ -63,6 +67,7 @@ from ..schema.program_io import (
     ProgramSramInitialization,
     ProgramSramTarget,
 )
+from ..schema.serde import canonical_digest
 from ..schema.train_n6 import TrainLinkedProgram
 from ..schema.swizzle_standard import SwizzleStandardLinkedProgram
 from ..schema.swizzle_ir2 import admits_wang_4rank_packed_layout
@@ -70,11 +75,13 @@ from ..schema.swizzle_unfused_standard import (
     UnfusedComparisonStandardLinkedProgram,
 )
 from .swizzle_program_io import (
+    _swizzle_semantic_uses_prevalidated,
     swizzle_semantic_uses,
     swizzle_terminal_abi_ids,
     swizzle_terminal_value_ids,
 )
 from .unfused_comparison_program_io import (
+    _unfused_comparison_semantic_uses_prevalidated,
     unfused_comparison_semantic_uses,
     unfused_comparison_terminal_abi_ids,
     unfused_comparison_terminal_value_ids,
@@ -95,6 +102,49 @@ _WRITE_ROLES = {
     BufferUseRole.LOCAL_COPY_DESTINATION,
     BufferUseRole.DMA_DESTINATION,
 }
+
+
+_MANIFEST_DIGEST_CONTEXT: ContextVar[
+    tuple[LinkedProgramManifest, str] | None
+] = ContextVar("program_io_manifest_digest_context", default=None)
+
+
+@contextmanager
+def _program_io_manifest_digest_context(
+    manifest: LinkedProgramManifest,
+    manifest_digest: str,
+) -> Iterator[None]:
+    """Bind runner-produced canonical bytes to this exact manifest identity."""
+
+    if (
+        type(manifest_digest) is not str
+        or len(manifest_digest) != 64
+        or any(character not in "0123456789abcdef" for character in manifest_digest)
+    ):
+        raise SchemaError("manifest digest is invalid", path="manifest_digest")
+    existing = _MANIFEST_DIGEST_CONTEXT.get()
+    if existing is not None:
+        if existing[0] is not manifest or existing[1] != manifest_digest:
+            raise SchemaError(
+                "nested manifest digest context must preserve exact identity",
+                path="manifest_digest",
+            )
+        yield
+        return
+    token = _MANIFEST_DIGEST_CONTEXT.set((manifest, manifest_digest))
+    try:
+        yield
+    finally:
+        _MANIFEST_DIGEST_CONTEXT.reset(token)
+
+
+def _source_manifest_digest_prevalidated(
+    manifest: LinkedProgramManifest,
+) -> str:
+    context = _MANIFEST_DIGEST_CONTEXT.get()
+    if context is not None and context[0] is manifest:
+        return context[1]
+    return canonical_digest(manifest)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +203,53 @@ class _ResolvedStateAbi:
     @property
     def first_access(self) -> StateUseAccess:
         return self.uses[0][1]
+
+
+def _reused_owned_root_ids(
+    roots: tuple[_ResolvedAbi, ...],
+) -> set[str]:
+    """Return exact roots hidden by authorized lifetime-disjoint reuse."""
+
+    grouped: dict[tuple[int, str], list[_ResolvedAbi]] = {}
+    for item in roots:
+        grouped.setdefault(
+            (item.runtime_core_id, item.abi.region_ref), []
+        ).append(item)
+
+    reused: set[str] = set()
+
+    def mark_if_reused(target: _ResolvedAbi, other: _ResolvedAbi) -> None:
+        if target.abi.ownership is BufferOwnership.BORROWED:
+            return
+        lifetime_disjoint = (
+            other.abi.lifetime_end_exclusive <= target.abi.lifetime_start
+            or target.abi.lifetime_end_exclusive <= other.abi.lifetime_start
+        )
+        earlier_or_borrowed = (
+            other.abi.ownership is BufferOwnership.BORROWED
+            or other.abi.lifetime_end_exclusive <= target.abi.lifetime_start
+        )
+        if lifetime_disjoint and earlier_or_borrowed:
+            reused.add(target.abi.id)
+
+    for group in grouped.values():
+        ordered = sorted(
+            group,
+            key=lambda item: (
+                item.abi.region_offset_bytes,
+                item.abi.region_offset_bytes + item.abi.size_bytes,
+                item.abi.id,
+            ),
+        )
+        for left_index, left in enumerate(ordered):
+            left_end = left.abi.region_offset_bytes + left.abi.size_bytes
+            for right_index in range(left_index + 1, len(ordered)):
+                right = ordered[right_index]
+                if right.abi.region_offset_bytes >= left_end:
+                    break
+                mark_if_reused(left, right)
+                mark_if_reused(right, left)
+    return reused
 
 
 def _leaf(fragment: CommandFragment | RegionManifest) -> CommandFragment:
@@ -262,6 +359,21 @@ def _unique_abis(source: LinkedProgramSource) -> dict[str, BufferABI]:
             path="source.manifest.fragments",
         )
     return by_id
+
+
+def _semantic_uses_prevalidated(
+    source: LinkedProgramSource,
+    abis: dict[str, BufferABI],
+) -> dict[str, tuple[_SemanticUse, ...]]:
+    if type(source) is SwizzleStandardLinkedProgram:
+        return _swizzle_semantic_uses_prevalidated(
+            source, abis,
+        )  # type: ignore[return-value]
+    if type(source) is UnfusedComparisonStandardLinkedProgram:
+        return _unfused_comparison_semantic_uses_prevalidated(
+            source, abis,
+        )  # type: ignore[return-value]
+    return _semantic_uses(source, abis)
 
 
 def _semantic_uses(
@@ -811,8 +923,22 @@ def _semantic_uses(
 
 
 def _resolved_abis(source: LinkedProgramSource) -> tuple[_ResolvedAbi, ...]:
+    return _resolved_abis_from_semantic_uses(source, _semantic_uses)
+
+
+def _resolved_abis_prevalidated(
+    source: LinkedProgramSource,
+) -> tuple[_ResolvedAbi, ...]:
+    return _resolved_abis_from_semantic_uses(
+        source, _semantic_uses_prevalidated,
+    )
+
+
+def _resolved_abis_from_semantic_uses(
+    source: LinkedProgramSource, semantic_uses,
+) -> tuple[_ResolvedAbi, ...]:
     abis = _unique_abis(source)
-    uses = _semantic_uses(source, abis)
+    uses = semantic_uses(source, abis)
     runtime_by_core = {
         binding.logical_core: binding.runtime_core_id
         for binding in source.manifest.core_bindings
@@ -2075,6 +2201,44 @@ def build_timing_program_io(
     state_seed_overrides: Mapping[str, bytes] | None = None,
     state_expected_overrides: Mapping[str, bytes] | None = None,
 ) -> ProgramIoContract:
+    """Validate a public linked source before deriving timing ProgramIO."""
+
+    if type(source) not in _LINKED_PROGRAM_SOURCE_TYPES:
+        raise SchemaError(
+            "source must be a supported linked program carrier",
+            path="source",
+        )
+    if type(source) in (
+        SwizzleStandardLinkedProgram,
+        UnfusedComparisonStandardLinkedProgram,
+    ):
+        source.validate_against("source")
+    else:
+        source.validate("source")
+    return _build_timing_program_io_prevalidated(
+        source,
+        program_artifact_sha256,
+        sram_seed_overrides=sram_seed_overrides,
+        sram_expected_overrides=sram_expected_overrides,
+        state_seed_overrides=state_seed_overrides,
+        state_expected_overrides=state_expected_overrides,
+    )
+
+
+
+
+
+
+
+def _build_timing_program_io_prevalidated(
+    source: LinkedProgramSource,
+    program_artifact_sha256: str,
+    *,
+    sram_seed_overrides: Mapping[str, bytes] | None = None,
+    sram_expected_overrides: Mapping[str, bytes] | None = None,
+    state_seed_overrides: Mapping[str, bytes] | None = None,
+    state_expected_overrides: Mapping[str, bytes] | None = None,
+) -> ProgramIoContract:
     """Build timing IO with explicit whole-state HBM payloads.
 
     SRAM defaults to zero-filled timing payloads. Callers may opt specific
@@ -2083,16 +2247,7 @@ def build_timing_program_io(
     expected state is opt-in and READ_WRITE-only.
     """
 
-    if type(source) not in _LINKED_PROGRAM_SOURCE_TYPES:
-        raise SchemaError(
-            "source must be a supported linked program carrier",
-            path="source",
-        )
-    if type(source) in (SwizzleStandardLinkedProgram, UnfusedComparisonStandardLinkedProgram):
-        source.validate_against("source")
-    else:
-        source.validate("source")
-    resolved = _resolved_abis(source)
+    resolved = _resolved_abis_prevalidated(source)
     resolved_state = _resolved_state_abis(source)
     _validate_lite_train_state_update(source, resolved, resolved_state)
     buffer_by_id = {item.abi.id: item.abi for item in resolved}
@@ -2257,32 +2412,7 @@ def build_timing_program_io(
             for item in resolved
             if item.abi.ownership is not BufferOwnership.ALIASED
         )
-        reused_owned_roots = {
-            item.abi.id
-            for item in roots
-            if item.abi.ownership is not BufferOwnership.BORROWED
-            and any(
-                other is not item
-                and other.runtime_core_id == item.runtime_core_id
-                and other.abi.region_ref == item.abi.region_ref
-                and item.abi.region_offset_bytes
-                < other.abi.region_offset_bytes + other.abi.size_bytes
-                and other.abi.region_offset_bytes
-                < item.abi.region_offset_bytes + item.abi.size_bytes
-                and (
-                    other.abi.ownership is BufferOwnership.BORROWED
-                    or other.abi.lifetime_end_exclusive
-                    <= item.abi.lifetime_start
-                )
-                and (
-                    other.abi.lifetime_end_exclusive
-                    <= item.abi.lifetime_start
-                    or item.abi.lifetime_end_exclusive
-                    <= other.abi.lifetime_start
-                )
-                for other in roots
-            )
-        }
+        reused_owned_roots = _reused_owned_root_ids(roots)
 
     initialization_blobs_by_abi = {
         item.abi.id: ProgramBlob.create(
@@ -2352,16 +2482,20 @@ def build_timing_program_io(
         for state_ref in sorted(expected_blobs)
         for item in state_by_ref[state_ref]
     )
-    contract = ProgramIoContract.create(
+    manifest_digest = _source_manifest_digest_prevalidated(source.manifest)
+    contract = ProgramIoContract._create_with_source_manifest_digest(
         producer_pass="program_io",
         mode=ProgramIoMode.TIMING,
         source_manifest=source.manifest,
+        source_manifest_digest=manifest_digest,
         program_artifact_sha256=program_artifact_sha256,
         blobs=tuple(blobs.values()),
         initializations=(*sram_initializations, *state_initializations),
         output_probes=(*sram_probes, *state_probes),
     )
-    contract.validate_against(source.manifest)
+    contract._validate_against_prevalidated_manifest(
+        source.manifest, manifest_digest,
+    )
     _validate_dp4_updated_weight_probes(source, contract, resolved_state)
     _validate_lite_moe_dp4_backward_program_io(
         source,

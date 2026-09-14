@@ -36,7 +36,10 @@ def _value_id(rank: int, symbolic_ref: str) -> str:
     )
 
 
-def _rank_die_map(adapter: SwizzleFusionPlanAdapter) -> dict[int, int]:
+def _rank_die_map(
+    adapter: SwizzleFusionPlanAdapter,
+    rank_die_ids: dict[int, int] | None = None,
+) -> dict[int, int]:
     result: dict[int, int] = {}
     for route in adapter.decision.problem.group.routes:
         for rank, die in (
@@ -51,6 +54,21 @@ def _rank_die_map(adapter: SwizzleFusionPlanAdapter) -> dict[int, int]:
                 )
             result[rank] = die
     ranks = tuple(program.rank for program in adapter.rank_programs)
+    if rank_die_ids is not None:
+        if set(rank_die_ids) != set(ranks):
+            raise SchemaError(
+                "explicit rank-to-Die placement must exactly cover projected ranks",
+                path="rank_die_ids",
+            )
+        if any(
+            rank in result and result[rank] != die
+            for rank, die in rank_die_ids.items()
+        ):
+            raise SchemaError(
+                "explicit rank-to-Die placement disagrees with routes",
+                path="rank_die_ids",
+            )
+        result = dict(rank_die_ids)
     if set(result) != set(ranks):
         raise SchemaError(
             "routes must identify the Die for every projected rank",
@@ -392,13 +410,15 @@ def _flows(
 
 def project_swizzle_adapter(
     adapter: SwizzleFusionPlanAdapter,
+    *,
+    rank_die_ids: dict[int, int] | None = None,
 ) -> SwizzleIr2Projection:
     """Produce an executable, isolated timing DAG without semantic inference."""
 
     if type(adapter) is not SwizzleFusionPlanAdapter:
         raise SchemaError("must be a SwizzleFusionPlanAdapter", path="adapter")
     adapter.validate("adapter")
-    rank_dies = _rank_die_map(adapter)
+    rank_dies = _rank_die_map(adapter, rank_die_ids)
     task_by_action, per_rank_order = _topological_tasks(adapter, rank_dies)
     action_by_ref = {
         action.source_action.id: action.source_action
@@ -458,13 +478,19 @@ def project_swizzle_adapter(
             ),
         ),
     )
-    validate_swizzle_projection_against_adapter(projection, adapter)
+    validate_swizzle_projection_against_adapter(
+        projection,
+        adapter,
+        rank_die_ids=rank_die_ids,
+    )
     return projection
 
 
 def validate_swizzle_projection_against_adapter(
     projection: SwizzleIr2Projection,
     adapter: SwizzleFusionPlanAdapter,
+    *,
+    rank_die_ids: dict[int, int] | None = None,
 ) -> None:
     """Exact cross-carrier gate used before every downstream consumer."""
 
@@ -508,7 +534,7 @@ def validate_swizzle_projection_against_adapter(
     }
     if set(source_actions) != set(projected):
         raise SchemaError("projection must map every source action exactly once", path="projection.rank_dags.tasks")
-    rank_dies = _rank_die_map(adapter)
+    rank_dies = _rank_die_map(adapter, rank_die_ids)
     expected_tasks, _ = _topological_tasks(adapter, rank_dies)
     if projected != expected_tasks:
         raise SchemaError(

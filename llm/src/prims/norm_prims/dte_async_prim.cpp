@@ -87,7 +87,7 @@ size_t DecodeRegionBlock(const vector<sc_bv<128>> &segments, size_t index,
 
 void Validate(const Dte_async_prim &prim) {
     const auto raw_op = static_cast<uint8_t>(prim.op);
-    if (raw_op > static_cast<uint8_t>(DteAsyncOp::CANCEL))
+    if (raw_op > static_cast<uint8_t>(DteAsyncOp::P2P_WAVE_FENCE))
         throw std::invalid_argument("Dte_async op encoding is invalid");
     if (prim.op == DteAsyncOp::ISSUE) {
         if (prim.payload_bits == 0)
@@ -151,7 +151,8 @@ void Validate(const Dte_async_prim &prim) {
         prim.remote_addr != 0 || prim.address_block != 0)
         throw std::invalid_argument(
             "Dte_async non-issue op must not carry payload or address metadata");
-    if (prim.op == DteAsyncOp::FENCE && prim.token != 0)
+    if ((prim.op == DteAsyncOp::FENCE ||
+         prim.op == DteAsyncOp::P2P_WAVE_FENCE) && prim.token != 0)
         throw std::invalid_argument(
             "Dte_async fence must not carry a logical token");
 }
@@ -300,7 +301,7 @@ void Dte_async_prim::deserialize(vector<sc_bv<128>> segments) {
             "Dte_async wire encoding requires at least two segments");
     const uint64_t raw_op = segments[0].range(10, 8).to_uint64();
     const uint64_t raw_direction = segments[0].range(13, 11).to_uint64();
-    if (raw_op > static_cast<uint8_t>(DteAsyncOp::CANCEL))
+    if (raw_op > static_cast<uint8_t>(DteAsyncOp::P2P_WAVE_FENCE))
         throw std::invalid_argument("Dte_async wire op is invalid");
     if (raw_direction > static_cast<uint8_t>(DteDir::DRAM_TO_REMOTE))
         throw std::invalid_argument("Dte_async wire direction is invalid");

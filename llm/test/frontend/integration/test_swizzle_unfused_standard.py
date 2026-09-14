@@ -13,26 +13,36 @@ from llm.frontend.wafer_frontend.lowering.swizzle_unfused import (
     lower_unfused_comparison_opcodes,
 )
 from llm.frontend.wafer_frontend.lowering.swizzle_unfused_standard import (
+    _validate_compute_wire_addresses,
     link_unfused_comparison_program,
 )
 from llm.frontend.wafer_frontend.passes.project_unfused_comparison import (
+    _multi_rank_peer_waves,
     build_unfused_comparison_plan,
     project_unfused_comparison,
 )
 from llm.frontend.wafer_frontend.passes.unfused_comparison_program_io import (
     unfused_comparison_terminal_abi_ids,
 )
-from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.artifact_manifest import (
+    RecordOpcode,
+    SemanticOperandId,
+)
 from llm.frontend.wafer_frontend.schema.common import DType
 from llm.frontend.wafer_frontend.schema.global_action import LogicalCoreRef
 from llm.frontend.wafer_frontend.schema.ir0 import FusionPattern
 from llm.frontend.wafer_frontend.schema.ir2 import BufferOwnership
+from llm.frontend.wafer_frontend.schema.swizzle import (
+    SwizzleActionKind,
+    SwizzleCandidate,
+)
 from llm.frontend.wafer_frontend.schema.swizzle_unfused_abi import (
     UnfusedComparisonCoreABI,
 )
 
 from swizzle_cases import build_swizzle_integration_cases
 from swizzle_scale_cases import build_swizzle_scale_case, build_swizzle_scale_points
+from test_swizzle_unfused_comparison import _flexible_rank_problem
 
 
 def _build(case):
@@ -59,9 +69,9 @@ class SwizzleUnfusedStandardTest(unittest.TestCase):
 
     def test_three_closed_sources_are_exact_and_deterministic(self) -> None:
         expected = {
-            FusionPattern.AG_GEMM: (22, (2, 4, 10), 8, 17, 32, 10),
-            FusionPattern.GEMM_RS: (36, (6, 4, 16), 10, 27, 52, 12),
-            FusionPattern.GEMM_AR: (42, (4, 4, 20), 24, 29, 50, 26),
+            FusionPattern.AG_GEMM: (24, (2, 4, 10), 8, 17, 32, 10),
+            FusionPattern.GEMM_RS: (38, (6, 4, 16), 10, 27, 52, 12),
+            FusionPattern.GEMM_AR: (46, (4, 4, 20), 24, 29, 50, 26),
         }
         for case in self.cases:
             with self.subTest(pattern=case.pattern.value):
@@ -223,7 +233,7 @@ class SwizzleUnfusedStandardTest(unittest.TestCase):
         case = build_swizzle_scale_case(build_swizzle_scale_points()[1])
         expected = {
             FusionPattern.AG_GEMM: (
-                (17, 17, 17, 17),
+                (20, 20, 20, 20),
                 (4, 8, 28),
                 48,
                 41,
@@ -231,7 +241,7 @@ class SwizzleUnfusedStandardTest(unittest.TestCase):
                 52,
             ),
             FusionPattern.GEMM_RS: (
-                (26, 26, 26, 26),
+                (29, 29, 29, 29),
                 (12, 8, 40),
                 52,
                 73,
@@ -291,6 +301,153 @@ class SwizzleUnfusedStandardTest(unittest.TestCase):
             SchemaError, "every claimed action must emit at least one record"
         ):
             forged.validate_against()
+
+    def test_three_rank_ar_standard_lower_link_is_closed(self) -> None:
+        ir1 = build_swizzle_scale_case(
+            build_swizzle_scale_points()[1]
+        ).partitioned_graph
+        problem, baseline = _flexible_rank_problem(
+            self.cases[2].decision, 3
+        )
+        problem_semantic = problem._semantic_key()
+        problem_semantic["source_ir1_id"] = ir1.id
+        problem = type(problem).create(**problem_semantic)
+        baseline_semantic = baseline._semantic_key()
+        baseline_semantic["problem_ref"] = problem.id
+        baseline = SwizzleCandidate.create(**baseline_semantic)
+        source = _build(SimpleNamespace(
+            partitioned_graph=ir1,
+            decision=SimpleNamespace(problem=problem, baseline=baseline),
+        ))
+        source.validate_against()
+        self.assertEqual(source, _build(SimpleNamespace(
+            partitioned_graph=ir1,
+            decision=SimpleNamespace(problem=problem, baseline=baseline),
+        )))
+        self.assertEqual(
+            (
+                len(source.projection.flows),
+                len(source.core_abi.barrier_events),
+                tuple(len(stream.records) for stream in source.fragment.core_streams),
+            ),
+            (12, 8, (32, 32, 34)),
+        )
+        for stream in source.fragment.core_streams:
+            quotient = Counter(record.opcode for record in stream.records)
+            self.assertEqual(quotient[RecordOpcode.DTE_SEND], 4)
+            self.assertEqual(quotient[RecordOpcode.DTE_RECV], 4)
+            self.assertEqual(quotient[RecordOpcode.LOCAL_REDUCE], 2)
+            event_opcodes = tuple(
+                record.opcode
+                for record in stream.records
+                if record.opcode in (
+                    RecordOpcode.EVENT_SET,
+                    RecordOpcode.EVENT_WAIT,
+                )
+            )
+            self.assertEqual(
+                event_opcodes,
+                (RecordOpcode.EVENT_WAIT,) * 2 + (RecordOpcode.EVENT_SET,) * 2
+                if stream.logical_core.die_id == 2
+                else (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT),
+            )
+        barrier_rank_by_task = {
+            action.id: program.rank
+            for program in source.plan.rank_programs
+            for action in program.actions
+            if action.kind is SwizzleActionKind.BARRIER
+        }
+        self.assertEqual(
+            Counter(
+                barrier_rank_by_task[event.owner_task_ref]
+                for event in source.core_abi.barrier_events
+            ),
+            Counter({0: 2, 1: 2, 2: 4}),
+        )
+        final_wave_ranks = {
+            rank for pair in _multi_rank_peer_waves((0, 1, 2))[-1]
+            for rank in pair
+        }
+        self.assertNotIn(2, final_wave_ranks)
+
+    def test_circle_rank_streams_put_one_fence_at_each_peer_wave_tail(self) -> None:
+        from test_swizzle_meshslice_standard import _case, _planner
+
+        decision = self.cases[2].decision
+        ignored = {RecordOpcode.SRAM_ALLOC_AT, RecordOpcode.SRAM_FREE}
+        for rank_count in (3, 6, 10):
+            with self.subTest(rank_count=rank_count):
+                ir1, _ = _case(
+                    rows=1,
+                    columns=rank_count,
+                    planner=_planner(
+                        max_actions=2_000,
+                        max_buffers=256,
+                        max_chunk_count=1,
+                        sram_budget_bytes=16 << 20,
+                    ),
+                )
+                problem, baseline = _flexible_rank_problem(decision, rank_count)
+                problem_semantic = problem._semantic_key()
+                problem_semantic["source_ir1_id"] = ir1.id
+                problem = type(problem).create(**problem_semantic)
+                baseline_semantic = baseline._semantic_key()
+                baseline_semantic["problem_ref"] = problem.id
+                baseline = SwizzleCandidate.create(**baseline_semantic)
+                source = _build(SimpleNamespace(
+                    partitioned_graph=ir1,
+                    decision=SimpleNamespace(
+                        problem=problem,
+                        baseline=baseline,
+                    ),
+                ))
+                actions = {
+                    action.id: action
+                    for program in source.plan.rank_programs
+                    for action in program.actions
+                }
+                records_by_action = {}
+                for stream in source.fragment.core_streams:
+                    for record in stream.records:
+                        if record.opcode not in ignored:
+                            records_by_action.setdefault(
+                                record.source_global_action_id, []
+                            ).append(record.opcode)
+                remote_waits = 0
+                for program in source.plan.rank_programs:
+                    for index, action in enumerate(program.actions):
+                        if action.kind is not SwizzleActionKind.WAIT:
+                            continue
+                        recv = actions[action.deps[0]]
+                        if recv.kind is not SwizzleActionKind.RECV:
+                            continue
+                        remote_waits += 1
+                        if action.rank < recv.peer_rank:
+                            self.assertEqual(
+                                records_by_action[action.id],
+                                [RecordOpcode.DTE_WAIT, RecordOpcode.DTE_FENCE],
+                            )
+                        else:
+                            self.assertEqual(
+                                records_by_action[action.id],
+                                [RecordOpcode.DTE_WAIT],
+                            )
+                            send = program.actions[index + 1]
+                            self.assertIs(send.kind, SwizzleActionKind.SEND)
+                            self.assertEqual(send.peer_rank, recv.peer_rank)
+                            self.assertEqual(
+                                records_by_action[send.id],
+                                [RecordOpcode.DTE_SEND, RecordOpcode.DTE_FENCE],
+                            )
+                self.assertEqual(remote_waits, 2 * rank_count * (rank_count - 1))
+                self.assertEqual(
+                    sum(
+                        opcode is RecordOpcode.DTE_FENCE
+                        for opcodes in records_by_action.values()
+                        for opcode in opcodes
+                    ),
+                    remote_waits,
+                )
 
     def test_split_reduce_inputs_reject_reversed_physical_pair(self) -> None:
         case = build_swizzle_scale_case(build_swizzle_scale_points()[2])
@@ -435,6 +592,74 @@ class SwizzleUnfusedStandardTest(unittest.TestCase):
             tuple(item.base_address for item in colored),
             (0, 0),
         )
+
+    def test_compute_storage_units_are_small_first_and_pair_stays_whole(
+        self,
+    ) -> None:
+        bindings = _allocate_storage_intervals(
+            rank=0,
+            logical_core=LogicalCoreRef(0, 0),
+            region_ref="dense_release",
+            region_base=0,
+            region_size=1 << 20,
+            storage_specs={
+                "aaa_unrelated": (102400, 0, 2),
+                "data": (2048, 0, 2),
+                "input": (25600, 0, 2),
+                "output": (102400, 0, 2),
+                "reduce_accumulator": (102400, 0, 2),
+            },
+            contiguous_pairs=(("output", "reduce_accumulator"),),
+            priority_storage_refs=frozenset(("data", "input", "output")),
+            reuse_lifetimes=False,
+        )
+        by_ref = {item.storage_ref: item for item in bindings}
+        self.assertEqual(
+            tuple(
+                by_ref[ref].base_address
+                for ref in ("data", "input", "output")
+            ),
+            (0, 2048, 27648),
+        )
+        self.assertEqual(
+            by_ref["reduce_accumulator"].base_address,
+            by_ref["output"].base_address + by_ref["output"].size_bytes,
+        )
+        self.assertGreaterEqual(by_ref["aaa_unrelated"].base_address, 232448)
+
+    def test_compute_wire_preflight_accepts_max_and_rejects_plus_one(
+        self,
+    ) -> None:
+        source = _build(self.cases[0])
+        stream = next(
+            item for item in source.fragment.core_streams
+            if any(record.opcode is RecordOpcode.MATMUL for record in item.records)
+        )
+        record_index = next(
+            index for index, record in enumerate(stream.records)
+            if record.opcode is RecordOpcode.MATMUL
+        )
+        relocation = next(
+            item for item in stream.address_relocations
+            if item.record_index == record_index
+            and item.operand_id is SemanticOperandId.COMPUTE_INPUT_ADDRESS
+        )
+        accepted = tuple(
+            replace(item, value=0xFFFF - relocation.addend)
+            if item.symbol.id == relocation.symbol_ref else item
+            for item in source.manifest.program_symbol_definitions
+        )
+        _validate_compute_wire_addresses(source.fragment, accepted)
+        rejected = tuple(
+            replace(item, value=0x10000 - relocation.addend)
+            if item.symbol.id == relocation.symbol_ref else item
+            for item in source.manifest.program_symbol_definitions
+        )
+        with self.assertRaisesRegex(
+            SchemaError,
+            "compute relocated address cannot fit the uint16 wire",
+        ):
+            _validate_compute_wire_addresses(source.fragment, rejected)
 
     def test_individual_storage_larger_than_region_fails_closed(self) -> None:
         with self.assertRaisesRegex(

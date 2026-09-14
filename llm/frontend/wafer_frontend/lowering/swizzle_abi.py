@@ -10,7 +10,7 @@ from ..schema.common import DType, MeshAxisName, stable_artifact_id
 from ..schema.ir0 import FusionPattern
 from ..schema.ir1 import IR1
 from ..schema.global_action import LogicalCoreRef
-from ..schema.swizzle import SwizzleActionKind
+from ..schema.swizzle import SwizzleActionKind, SwizzleAlgorithm
 from ..schema.swizzle_abi import (
     SWIZZLE_CORE_ADDRESS_ABI_SCHEMA_VERSION,
     SwizzleBarrierEventBinding,
@@ -239,24 +239,31 @@ def _allocate_swizzle_address_bindings(
     for view in operand_abi.operands:
         key = (view.value_ref, view.slot)
         all_views_by_key.setdefault(key, []).append(view)
-        prior = views_by_key.setdefault(key, view)
-        if (
-            prior.shape,
-            prior.layout,
-            prior.dtype,
-            prior.byte_offset,
-            prior.byte_extent,
-        ) != (
-            view.shape,
-            view.layout,
-            view.dtype,
-            view.byte_offset,
-            view.byte_extent,
-        ):
+        prior = views_by_key.get(key)
+        if prior is None:
+            views_by_key[key] = view
+            continue
+        exact = (
+            prior.shape, prior.layout, prior.dtype,
+            prior.byte_offset, prior.byte_extent,
+        ) == (
+            view.shape, view.layout, view.dtype,
+            view.byte_offset, view.byte_extent,
+        )
+        meshslice_subview = (
+            plan.algorithm is SwizzleAlgorithm.MESHSLICE_2D_OS
+            and prior.layout == view.layout
+            and prior.dtype is view.dtype
+        )
+        if not exact and not meshslice_subview:
             raise SchemaError(
                 "one value-slot must have one exact typed view",
                 path="operand_abi.operands",
             )
+        if (view.byte_extent, -view.byte_offset) > (
+            prior.byte_extent, -prior.byte_offset
+        ):
+            views_by_key[key] = view
 
     rank_cores = []
     for dag in projection.rank_dags:
@@ -558,7 +565,28 @@ def _allocate_swizzle_address_bindings(
             item for item in ir1.fabric.sram_profiles
             if item.id == core.sram_profile_ref
         )
-        region = profile.regions[0]
+        release_regions = tuple(
+            item for item in profile.regions
+            if item.name == "dense_release"
+        )
+        topology = plan.deployment_selection.candidate.topology_witness
+        flexible_meshslice = (
+            plan.algorithm is SwizzleAlgorithm.MESHSLICE_2D_OS
+            and (
+                len(topology.row_orders),
+                len(topology.column_orders),
+            ) != (2, 2)
+        )
+        if flexible_meshslice and len(release_regions) > 1:
+            raise SchemaError(
+                "MeshSlice release hardware has ambiguous dense_release regions",
+                path="ir1.fabric.sram_profiles",
+            )
+        region = (
+            release_regions[0]
+            if flexible_meshslice and release_regions
+            else profile.regions[0]
+        )
         region_by_rank[dag.rank] = (logical_core, region)
         address = region.base_bytes
         for buffer in dag.buffers:

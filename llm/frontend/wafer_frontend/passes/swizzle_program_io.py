@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from .meshslice_packed_storage import (
+    build_meshslice_packed_storage,
+)
 
 from ..errors import SchemaError
 from ..schema.artifact_manifest import BufferABI
@@ -74,9 +77,18 @@ def swizzle_semantic_uses(
     source: SwizzleStandardLinkedProgram,
     abis: dict[str, BufferABI],
 ) -> dict[str, tuple[SwizzleProgramIoUse, ...]]:
+    source.validate_against("source")
+    return _swizzle_semantic_uses_prevalidated(source, abis)
+
+
+
+
+def _swizzle_semantic_uses_prevalidated(
+    source: SwizzleStandardLinkedProgram,
+    abis: dict[str, BufferABI],
+) -> dict[str, tuple[SwizzleProgramIoUse, ...]]:
     """Resolve every typed task operand to its exact standard BufferABI."""
 
-    source.validate_against("source")
     by_binding = {abi.binding_id: abi for abi in abis.values()}
     if len(by_binding) != len(abis):
         raise SchemaError(
@@ -88,6 +100,9 @@ def swizzle_semantic_uses(
         for dag in source.projection.rank_dags
         for task in dag.tasks
     }
+    packed = build_meshslice_packed_storage(
+        source.plan, source.projection, source.core_abi, source.operand_abi
+    )
     order = {item.task_ref: item.core_order for item in source.core_abi.task_bindings}
     flattened = {
         task.id: index
@@ -100,7 +115,18 @@ def swizzle_semantic_uses(
     }
     for view in source.operand_abi.operands:
         task = tasks[view.task_ref]
-        abi = by_binding.get(_binding_id(source, view.value_ref, view.slot))
+        alias = (
+            packed.alias_for(view.task_ref, view.ordinal)
+            if packed is not None else None
+        )
+        binding_id = (
+            alias.binding_id
+            if alias is not None and alias.kind.value == "chunk"
+            else _binding_id(
+                source, view.value_ref, view.slot
+            )
+        )
+        abi = by_binding.get(binding_id)
         if abi is None:
             raise SchemaError(
                 "typed Swizzle operand has no exact standard BufferABI",
@@ -140,6 +166,7 @@ def swizzle_semantic_uses(
                 abi.layout in (
                     _TERMINAL_ROOT_LAYOUT,
                     "swizzle_standard_storage_root/v1",
+                    "swizzle_meshslice_packed_root/v1",
                 )
                 and (
                     abi.layout != _TERMINAL_ROOT_LAYOUT

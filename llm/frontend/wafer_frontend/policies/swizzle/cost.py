@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import heapq
 import math
 
 from ...errors import SchemaError
@@ -77,12 +78,12 @@ def _action_duration(
     problem: SwizzleProblem,
     *,
     efficiency: float,
+    routes: dict[str, object],
 ) -> float:
     profile = problem.hardware_profile
     if action.kind is SwizzleActionKind.COMP:
         return action.flops / (profile.peak_flops_per_cycle * efficiency)
     if action.kind is SwizzleActionKind.SEND:
-        routes = _route_index(problem)
         if action.route_ref not in routes:
             raise SchemaError("transport references an unknown route", path="swizzle_action.route_ref")
         route = routes[action.route_ref]
@@ -106,13 +107,15 @@ def _action_duration(
 def _base_resources(
     action: SwizzleActionWitness,
     problem: SwizzleProblem,
+    *,
+    routes: dict[str, object],
 ) -> tuple[str, ...]:
     if action.kind in (SwizzleActionKind.COMP, SwizzleActionKind.REDUCE):
         return (f"compute.rank.{action.rank}",)
     if action.kind is SwizzleActionKind.LOCAL_COPY:
         return (f"memory.rank.{action.rank}",)
     if action.kind is SwizzleActionKind.SEND:
-        route = _route_index(problem).get(action.route_ref or "")
+        route = routes.get(action.route_ref or "")
         if route is None:
             raise SchemaError("transport references an unknown route", path="swizzle_action.route_ref")
         explicit = tuple(getattr(action, "resource_refs", ()))
@@ -135,15 +138,21 @@ def _schedule(
     for action in actions:
         for dependency in action.deps:
             dependents[dependency].append(action.id)
-    ready = sorted((ref for ref, count in remaining.items() if count == 0), key=order.__getitem__)
+    ready = [
+        (order[ref], ref)
+        for ref, count in remaining.items()
+        if count == 0
+    ]
+    heapq.heapify(ready)
+    routes = _route_index(problem)
     availability: dict[str, float] = defaultdict(float)
     finish: dict[str, float] = {}
     timings: dict[str, ActionTiming] = {}
     while ready:
-        action_ref = ready.pop(0)
+        _, action_ref = heapq.heappop(ready)
         action = action_by_id[action_ref]
         earliest = max((finish[ref] for ref in action.deps), default=0.0)
-        resources = list(_base_resources(action, problem))
+        resources = list(_base_resources(action, problem, routes=routes))
         if action.kind is SwizzleActionKind.SEND:
             slots = tuple(
                 f"dte.rank.{action.rank}.slot.{slot}"
@@ -154,7 +163,12 @@ def _schedule(
         canonical_resources = tuple(sorted(resources))
         start = max((availability[ref] for ref in canonical_resources), default=earliest)
         start = max(start, earliest)
-        end = start + _action_duration(action, problem, efficiency=efficiency)
+        end = start + _action_duration(
+            action,
+            problem,
+            efficiency=efficiency,
+            routes=routes,
+        )
         for resource in canonical_resources:
             availability[resource] = end
         finish[action_ref] = end
@@ -162,8 +176,7 @@ def _schedule(
         for dependent in dependents[action_ref]:
             remaining[dependent] -= 1
             if remaining[dependent] == 0:
-                ready.append(dependent)
-        ready.sort(key=order.__getitem__)
+                heapq.heappush(ready, (order[dependent], dependent))
     if len(timings) != len(actions):
         raise SchemaError("action schedule did not close", path="swizzle_rank_programs.actions")
     return tuple(timings[action.id] for action in actions)

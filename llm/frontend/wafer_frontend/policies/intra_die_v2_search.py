@@ -29,6 +29,7 @@ from ..schema.ir1 import IR1, MemoryInitiator
 from ..schema.ir2 import (
     IR2ProjectionResult,
     OrdinaryNodeOrigin,
+    SwizzleNodeOrigin,
     SemanticTask,
     SemanticTaskKind,
 )
@@ -68,14 +69,18 @@ def _available_compute_groups(ir1: IR1, die_id: int, *, double_buffer: bool) -> 
 def _eligible(task: SemanticTask, output_consumers: dict[str, tuple[str, ...]]) -> bool:
     return (
         task.kind is SemanticTaskKind.COMP
-        and isinstance(task.origin_ref, OrdinaryNodeOrigin)
+        and isinstance(task.origin_ref, (OrdinaryNodeOrigin, SwizzleNodeOrigin))
         and task.compute is not None
         and type(task.compute.workload) is GemmWorkload
         and len(task.read_values) == 2
         and len(task.write_values) == 1
         and len(task.compute.inputs) == 2
         and len(task.compute.outputs) == 1
-        and output_consumers.get(task.write_values[0]) == ()
+        and task.write_values[0] in output_consumers
+        and (
+            isinstance(task.origin_ref, SwizzleNodeOrigin)
+            or output_consumers[task.write_values[0]] == ()
+        )
     )
 
 
@@ -193,7 +198,10 @@ def evaluate_intra_die_v2_candidates(
     eligible_by_dag: list[tuple[SemanticTask, ...]] = []
     task_dag_index: dict[str, int] = {}
     for dag_index, dag in enumerate(projection.dags):
-        output_consumers = {value.id: value.consumer_tasks for value in dag.values}
+        output_consumers = {
+            value.id: value.consumer_tasks
+            for value in (*dag.values, *dag.swizzle_values)
+        }
         dag_gemms: list[SemanticTask] = []
         dag_eligible: list[SemanticTask] = []
         for task in dag.tasks:

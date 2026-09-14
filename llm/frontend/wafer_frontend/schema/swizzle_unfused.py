@@ -130,6 +130,65 @@ class UnfusedComparisonRankProgram:
             action.validate(f"{path}.actions[{index}]")
 
 
+def _circle_method_peer_order(
+    ranks: tuple[int, ...],
+    rank: int,
+) -> tuple[int, ...]:
+    players: list[int | None] = list(ranks)
+    if len(players) % 2:
+        players.append(None)
+    peers = []
+    for _round in range(len(players) - 1):
+        for index in range(len(players) // 2):
+            left = players[index]
+            right = players[-1 - index]
+            if rank == left and right is not None:
+                peers.append(right)
+            elif rank == right and left is not None:
+                peers.append(left)
+        players = [players[0], players[-1], *players[1:-1]]
+    if len(peers) != len(ranks) - 1 or set(peers) != set(ranks) - {rank}:
+        raise SchemaError(
+            "circle-method peer order is not exact",
+            path="unfused_comparison_plan.rank_programs",
+        )
+    return tuple(peers)
+
+
+def _complementary_program_sequence(
+    pattern: FusionPattern,
+    ranks: tuple[int, ...],
+    rank: int,
+) -> tuple[tuple[SwizzleActionKind, ...], tuple[int, ...]]:
+    peers = _circle_method_peer_order(ranks, rank)
+
+    def pair(peer: int, *, reduce: bool) -> tuple[SwizzleActionKind, ...]:
+        sequence = (
+            (
+                SwizzleActionKind.SEND,
+                SwizzleActionKind.RECV,
+                SwizzleActionKind.WAIT,
+            )
+            if rank < peer
+            else (
+                SwizzleActionKind.RECV,
+                SwizzleActionKind.WAIT,
+                SwizzleActionKind.SEND,
+            )
+        )
+        return sequence + ((SwizzleActionKind.REDUCE,) if reduce else ())
+
+    reduction = tuple(kind for peer in peers for kind in pair(peer, reduce=True))
+    replication = tuple(kind for peer in peers for kind in pair(peer, reduce=False))
+    transport_peers = tuple(peer for peer in peers for _ in range(2))
+    if pattern is FusionPattern.AG_GEMM:
+        return replication + (SwizzleActionKind.COMP,), transport_peers
+    prefix = (SwizzleActionKind.COMP, SwizzleActionKind.LOCAL_COPY)
+    if pattern is FusionPattern.GEMM_RS:
+        return prefix + reduction, transport_peers
+    return prefix + reduction + replication + (SwizzleActionKind.BARRIER,), transport_peers * 2
+
+
 @dataclass(frozen=True, slots=True)
 class UnfusedComparisonPlan:
     schema_version: str
@@ -221,12 +280,12 @@ class UnfusedComparisonPlan:
                 )
                 * peers
             )
-        else:
-            if len(ranks) != 2:
-                raise SchemaError(
-                    "multi-rank UNFUSED comparison supports AG and RS only",
-                    path=f"{path}.pattern",
-                )
+        elif len(ranks) == 1:
+            expected_kinds = (
+                SwizzleActionKind.COMP,
+                SwizzleActionKind.LOCAL_COPY,
+            )
+        elif len(ranks) == 2:
             expected_kinds = (
                 SwizzleActionKind.COMP, SwizzleActionKind.SEND,
                 SwizzleActionKind.LOCAL_COPY,
@@ -235,11 +294,41 @@ class UnfusedComparisonPlan:
                 SwizzleActionKind.RECV, SwizzleActionKind.WAIT,
                 SwizzleActionKind.BARRIER,
             )
+        else:
+            expected_kinds = (
+                SwizzleActionKind.COMP,
+                SwizzleActionKind.LOCAL_COPY,
+            ) + (
+                SwizzleActionKind.SEND,
+                SwizzleActionKind.RECV,
+                SwizzleActionKind.WAIT,
+                SwizzleActionKind.REDUCE,
+            ) * peers + (
+                SwizzleActionKind.SEND,
+                SwizzleActionKind.RECV,
+                SwizzleActionKind.WAIT,
+            ) * peers + (SwizzleActionKind.BARRIER,)
         actions = ()
         for index, program in enumerate(self.rank_programs):
             program.validate(f"{path}.rank_programs[{index}]")
-            if tuple(action.kind for action in program.actions) != expected_kinds:
+            expected_program_kinds = expected_kinds
+            expected_transport_peers = None
+            if len(ranks) > 2 and len(ranks) != 4:
+                (
+                    expected_program_kinds,
+                    expected_transport_peers,
+                ) = _complementary_program_sequence(
+                    self.pattern, ranks, program.rank,
+                )
+            if tuple(action.kind for action in program.actions) != expected_program_kinds:
                 raise SchemaError("rank action sequence is not the exact naive baseline", path=f"{path}.rank_programs[{index}]")
+            actual_transport_peers = tuple(
+                action.peer_rank
+                for action in program.actions
+                if action.kind in (SwizzleActionKind.SEND, SwizzleActionKind.RECV)
+            )
+            if expected_transport_peers is not None and actual_transport_peers != expected_transport_peers:
+                raise SchemaError("rank peer sequence is not the exact circle baseline", path=f"{path}.rank_programs[{index}]")
             actions += program.actions
         validate_dependency_dag(actions, f"{path}.rank_programs.actions")
         routes = {
@@ -264,12 +353,24 @@ class UnfusedComparisonPlan:
                     "transport action must bind its exact directed route",
                     path=f"{path}.rank_programs.actions",
                 )
-        payload = (
-            self.problem.collective.rank_input_bytes
-            if self.pattern is FusionPattern.AG_GEMM
-            else self.problem.collective.rank_output_bytes
-        )
-        expected_transport_bytes = len(ranks) * peers * payload
+        if self.pattern is FusionPattern.AG_GEMM:
+            expected_transport_bytes = (
+                len(ranks)
+                * peers
+                * self.problem.collective.rank_input_bytes
+            )
+        elif self.pattern is FusionPattern.GEMM_AR:
+            expected_transport_bytes = (
+                2
+                * peers
+                * self.problem.collective.rank_output_bytes
+            )
+        else:
+            expected_transport_bytes = (
+                len(ranks)
+                * peers
+                * self.problem.collective.rank_output_bytes
+            )
         if any(
             sum(
                 action.logical_bytes
@@ -468,7 +569,7 @@ class UnfusedComparisonProjection:
             validate_nonempty(getattr(self, name), f"{path}.{name}")
         projected_ranks = tuple(item.rank for item in self.ranks)
         if (
-            len(projected_ranks) < 2
+            not projected_ranks
             or projected_ranks != tuple(range(len(projected_ranks)))
         ):
             raise SchemaError(
@@ -511,16 +612,36 @@ class UnfusedComparisonProjection:
         if {ref for rank in self.ranks for ref in rank.task_refs} != set(actions):
             raise SchemaError("rank projections do not exactly cover plan actions", path=f"{path}.ranks")
         flow_pairs = {(item.send_task_ref, item.recv_task_ref) for item in self.flows}
-        expected_pairs = {
-            (action.id, recv.id)
-            for action in actions.values()
-            if action.kind is SwizzleActionKind.SEND
-            for recv in actions.values()
-            if recv.kind is SwizzleActionKind.RECV
-            and recv.stage is action.stage
-            and recv.rank == action.peer_rank
-            and recv.peer_rank == action.rank
-        }
+        recv_by_key = {}
+        for recv in actions.values():
+            if recv.kind is not SwizzleActionKind.RECV:
+                continue
+            key = (
+                recv.stage,
+                recv.rank,
+                recv.peer_rank,
+            )
+            if key in recv_by_key:
+                raise SchemaError(
+                    "flows require one exact RECV per stage/rank/peer",
+                    path=f"{path}.flows",
+                )
+            recv_by_key[key] = recv
+        expected_pairs = set()
+        for action in actions.values():
+            if action.kind is not SwizzleActionKind.SEND:
+                continue
+            recv = recv_by_key.get((
+                action.stage,
+                action.peer_rank,
+                action.rank,
+            ))
+            if recv is None:
+                raise SchemaError(
+                    "flows require one exact RECV for every SEND",
+                    path=f"{path}.flows",
+                )
+            expected_pairs.add((action.id, recv.id))
         if flow_pairs != expected_pairs:
             raise SchemaError("flows do not exactly cover SEND/RECV pairs", path=f"{path}.flows")
         from ..passes.project_unfused_comparison import project_unfused_comparison

@@ -430,8 +430,7 @@ int ExpectedCategory(Opcode opcode) {
         opcode == Opcode::LOCAL_NOC_SEND ||
         opcode == Opcode::LOCAL_NOC_RECV)
         return COMM_PRIM;
-    if (opcode == Opcode::LSU_LOAD || opcode == Opcode::LSU_STORE ||
-        opcode == Opcode::DTE_ISSUE || opcode == Opcode::SRAM_BIND ||
+    if (opcode == Opcode::DTE_ISSUE || opcode == Opcode::SRAM_BIND ||
         opcode == Opcode::SRAM_ALLOC || opcode == Opcode::SRAM_ALLOC_AT ||
         opcode == Opcode::SRAM_FREE ||
         opcode == Opcode::SRAM_RESIZE || opcode == Opcode::SRAM_RENAME ||
@@ -646,8 +645,9 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                          prim->sram_addr ==
                              operands.sram.absolute_address_bytes &&
                          prim->size_bytes == operands.size_bytes &&
-                         prim->absolute_sram,
-                     "LSU blocking variant and full addresses");
+                         prim->absolute_sram &&
+                         PrimMainCategoryBits(prim->prim_type) == SYNC_PRIM,
+                     "LSU blocking variant, ordered category, and full addresses");
         return;
     }
     if (record.opcode == Opcode::SRAM_BIND) {
@@ -816,8 +816,9 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
         const DteAsyncOp expected =
             record.opcode == Opcode::DTE_WAIT
                 ? DteAsyncOp::WAIT
-                : record.opcode == Opcode::DTE_CANCEL ? DteAsyncOp::CANCEL
-                                                       : DteAsyncOp::FENCE;
+                : record.opcode == Opcode::DTE_CANCEL
+                      ? DteAsyncOp::CANCEL
+                      : DteAsyncOp::FENCE;
         const uint64_t expected_token = record.opcode == Opcode::DTE_FENCE
                                             ? 0
                                             : std::get<TokenOperands>(
@@ -1246,13 +1247,10 @@ void CheckWholeArtifactCollectiveLowering(Checks &checks) {
                      "whole-artifact collective lowering is deterministic and explicitly non-executable");
         checks.Check(!first.core_actions.empty(),
                      "collective plan emits deterministic per-core action streams");
-        checks.Reject<RecordLoweringError>(
-            "every collective mode enforces one-die membership",
-            "ISA-v1 whole-artifact collective graph: collective "
-            "key(7,11,0) core 0 record 0: ISA-v1 non-P2P collective "
-            "group crosses dies", [&] {
-                LowerIsaV1CollectiveArtifact(artifact, 8, 2);
-            });
+        const auto cross_die =
+            LowerIsaV1CollectiveArtifact(artifact, 8, 2);
+        checks.Check(cross_die == first,
+                     "every collective mode preserves canonical lowering across dies");
     }
 
     ProgramArtifact n1 = CollectiveArtifact(

@@ -240,7 +240,7 @@ struct StandaloneP2pKey {
 
 IsaV1CollectivePlan BuildOne(
     const CollectiveKey &key, const std::vector<const Record *> &records,
-    const std::vector<uint16_t> &group, uint32_t cores_per_die,
+    const std::vector<uint16_t> &group,
     const IsaV1PlannerCapacity &capacity) {
     const size_t n = group.size();
     std::map<uint16_t, size_t> rank_of;
@@ -304,12 +304,6 @@ IsaV1CollectivePlan BuildOne(
     Require(have_tx && have_rx,
             "ISA-v1 collective key is missing SEND or RECEIVE records");
     const CollOp op = IsaV1CollectiveOp(tx, rx);
-    if (op != CollOp::P2P) {
-        const uint32_t die = group.front() / cores_per_die;
-        for (uint16_t core : group)
-            Require(core / cores_per_die == die,
-                    "ISA-v1 non-P2P collective group crosses dies");
-    }
 
     std::vector<size_t> send_ranks;
     std::vector<size_t> receive_ranks;
@@ -565,7 +559,7 @@ std::vector<IsaV1CollectivePlan> BuildIsaV1CollectiveGraph(
             InstanceContext(instance.first, instance.second);
         try {
             plan = BuildOne(instance.first, instance.second, group->second,
-                            registry.cores_per_die, capacity);
+                            capacity);
         } catch (const std::overflow_error &error) {
             throw std::overflow_error(context + ": " + error.what());
         } catch (const std::invalid_argument &error) {

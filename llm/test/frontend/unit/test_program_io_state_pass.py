@@ -33,11 +33,14 @@ def _payloads(source):
     seeds = {
         item.abi.state_ref: bytes([index + 1]) * item.abi.size_bytes
         for index, item in enumerate(resolved)
+        if item.first_access is StateUseAccess.READ
     }
     expected = {
         item.abi.state_ref: bytes([0x80 + index]) * item.abi.size_bytes
         for index, item in enumerate(resolved)
         if item.abi.access is PersistentStateAccess.READ_WRITE
+        and item.first_access is StateUseAccess.READ
+        and any(access is StateUseAccess.WRITE for _index, access in item.uses)
     }
     return resolved, seeds, expected
 
@@ -97,14 +100,14 @@ class ProgramIoStatePassTest(unittest.TestCase):
             for entry in contract.output_probes
             if type(entry.target) is ProgramHbmTarget
         )
-        self.assertEqual(len(self.resolved), 12)
-        self.assertEqual(len(hbm_initializations), 12)
-        self.assertEqual(len(hbm_probes), 4)
+        self.assertEqual(len(self.resolved), 22)
+        self.assertEqual(len(hbm_initializations), 18)
+        self.assertEqual(len(hbm_probes), 0)
         self.assertEqual(
             Counter(item.abi.access for item in self.resolved),
             Counter(
                 {
-                    PersistentStateAccess.READ_ONLY: 8,
+                    PersistentStateAccess.READ_ONLY: 18,
                     PersistentStateAccess.READ_WRITE: 4,
                 }
             ),
@@ -198,18 +201,23 @@ class ProgramIoStatePassTest(unittest.TestCase):
         )
 
     def test_write_first_state_gets_no_seed_or_pseudo_expected(self) -> None:
-        read_write = next(
+        read_only = next(
             item
             for item in self.resolved
-            if item.abi.access is PersistentStateAccess.READ_WRITE
+            if item.abi.access is PersistentStateAccess.READ_ONLY
         )
-        write_use = next(
-            use
-            for use in read_write.uses
-            if use[1] is StateUseAccess.WRITE
+        read_use = read_only.uses[0]
+        write_use = (
+            read_use[0] + 1,
+            StateUseAccess.WRITE,
         )
-        read_use = next(
-            use for use in read_write.uses if use[1] is StateUseAccess.READ
+        read_write = replace(
+            read_only,
+            abi=replace(
+                read_only.abi,
+                access=PersistentStateAccess.READ_WRITE,
+            ),
+            uses=(read_use, write_use),
         )
         write_first = replace(read_write, uses=(write_use, read_use))
         seeds, expected = _deterministic_timing_state_overrides((write_first,))

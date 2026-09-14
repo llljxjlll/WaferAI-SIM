@@ -177,6 +177,15 @@ class TrainForwardIr0Test(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "must equal 0"):
             _rebuild(graph, nodes=tuple(bad_nodes)).validate()
 
+    def test_one_layer_oracle_matches_expanded_graph(self) -> None:
+        source = _tiny_train_spec()
+        spec = replace(source, model=replace(source.model, L=1))
+        graph = build_train_forward_ir0(spec)
+        oracle = build_train_forward_oracle(spec)
+        oracle.validate_against_ir0(spec, graph)
+        self.assertEqual(oracle.graph.value_count, len(graph.values))
+        self.assertEqual(oracle.graph.value_count, 30)
+
     def test_independent_oracle_frozen_dp2_tp2_goldens(self) -> None:
         spec = _tiny_train_spec()
         graph = build_train_forward_ir0(spec)

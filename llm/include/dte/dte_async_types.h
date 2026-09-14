@@ -17,6 +17,7 @@ enum class DteAsyncOp : uint8_t {
     POLL = 2,
     FENCE = 3,
     CANCEL = 4,
+    P2P_WAVE_FENCE = 5,
 };
 
 enum class DteAsyncAccess : uint8_t {
@@ -33,6 +34,7 @@ inline const char *DteAsyncOpName(DteAsyncOp op) {
     case DteAsyncOp::POLL: return "poll";
     case DteAsyncOp::FENCE: return "fence";
     case DteAsyncOp::CANCEL: return "cancel";
+    case DteAsyncOp::P2P_WAVE_FENCE: return "p2p_wave_fence";
     }
     return "unknown";
 }

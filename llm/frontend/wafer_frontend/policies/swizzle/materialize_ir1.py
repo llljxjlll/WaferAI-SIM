@@ -128,6 +128,14 @@ def _origin_for_ref(
         return SwizzleValueOrigin(ref, use, logical, None, None)
     if any(ref == item or ref.startswith(f"{item}::") for item in local_refs):
         return SwizzleValueOrigin(ref, use, None, None, gemm_ref)
+    if (
+        ref.startswith("buffer.meshslice.rank.")
+        and ref.endswith((".lhs", ".rhs"))
+    ):
+        # Degenerate ROW_ONLY/COLUMN_ONLY/LOCAL modes have no remote producer
+        # on at least one physical line.  That operand is the rank-local GEMM
+        # member input, not an untyped synthetic temporary.
+        return SwizzleValueOrigin(ref, use, None, None, gemm_ref)
     raise SchemaError(
         f"value {ref!r} has no IR-1, local-operand, or producer origin",
         path="swizzle_action.value_origins",
@@ -138,6 +146,7 @@ def _index_temporary_producers(
     actions: tuple[SwizzleActionWitness, ...],
 ) -> dict[tuple[str, int | None], str]:
     producers: dict[tuple[str, int | None], str] = {}
+    actions_by_id = {action.id: action for action in actions}
     for action in actions:
         if action.kind in (SwizzleActionKind.WAIT, SwizzleActionKind.BARRIER):
             continue
@@ -145,10 +154,17 @@ def _index_temporary_producers(
             key = (ref, action.chunk_index)
             prior = producers.get(key)
             if prior is not None and prior != action.id:
-                raise SchemaError(
-                    "temporary has multiple data producers in one chunk",
-                    path="candidate.rank_programs",
+                prior_action = actions_by_id[prior]
+                disjoint_meshslice_receives = (
+                    ref.startswith("buffer.meshslice.rank.")
+                    and action.kind is SwizzleActionKind.RECV
+                    and prior_action.kind is SwizzleActionKind.RECV
                 )
+                if not disjoint_meshslice_receives:
+                    raise SchemaError(
+                        "temporary has multiple data producers in one chunk",
+                        path="candidate.rank_programs",
+                    )
             producers[key] = action.id
     return producers
 

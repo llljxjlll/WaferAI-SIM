@@ -20,6 +20,7 @@
 #include "memory/hbm_r4_selftest.h"
 #include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
+#include "dte/dte_control_core.h"
 #include "dte/dte_unit.h"
 #include "dte/coll_runtime.h"
 #include "dte/p2p_payload.h"
@@ -126,6 +127,9 @@ Define_bool_opt("--p5-memory-probe-selftest",
                 g_flag_p5_memory_probe_selftest, false,
                 "run P5 memory probe foundation self-test and exit");
 
+Define_bool_opt("--program-one-shot", g_flag_program_one_shot, false,
+                "execute a Program artifact once without primitive refill");
+
 Define_string_opt("--linked-manifest", g_flag_linked_manifest,
                   std::string{},
                   "linked Program manifest JSON required by --program-io");
@@ -170,6 +174,10 @@ Define_bool_opt("--d2d-link-selftest", g_flag_d2d_link_selftest, false,
 
 Define_bool_opt("--dte-v0-selftest", g_flag_dte_v0_selftest, false,
                 "run DTE V0 payload/resource SystemC self-test and exit");
+
+Define_bool_opt("--dte-control-core-selftest",
+                g_flag_dte_control_core_selftest, false,
+                "run configurable DTE control-core self-test and exit");
 
 Define_bool_opt("--coll-v0-selftest", g_flag_coll_v0_selftest, false,
                 "run NoC collective V0 contract self-test and exit");
@@ -275,6 +283,21 @@ namespace {
 const std::string kDefaultWorkloadConfig =
     std::string(NPUSIM_SOURCE_ROOT) + "/llm/test/default/workload.json";
 
+constexpr uintmax_t kMaxLinkedProgramManifestBytes = uintmax_t{256} << 20;
+
+constexpr bool FitsPublicFileLimit(uintmax_t size, uintmax_t limit) {
+    return size <= limit;
+}
+
+static_assert(FitsPublicFileLimit(kMaxProgramFileBytes,
+                                  kMaxProgramFileBytes));
+static_assert(!FitsPublicFileLimit(kMaxProgramFileBytes + 1,
+                                   kMaxProgramFileBytes));
+static_assert(FitsPublicFileLimit(kMaxLinkedProgramManifestBytes,
+                                  kMaxLinkedProgramManifestBytes));
+static_assert(!FitsPublicFileLimit(kMaxLinkedProgramManifestBytes + 1,
+                                   kMaxLinkedProgramManifestBytes));
+
 std::vector<uint8_t> ReadProgramFile(const std::string &path) {
     const std::filesystem::path input(path);
     if (!std::filesystem::exists(input))
@@ -336,8 +359,9 @@ std::optional<std::array<uint64_t, 3>> ParseMoeSwizzleCalibrationShape(
     return result;
 }
 
-std::string ReadRegularTextFile(const std::string &description,
-                                const std::string &path) {
+std::string ReadRegularTextFile(
+    const std::string &description, const std::string &path,
+    uintmax_t max_bytes = kMaxProgramFileBytes) {
     const std::filesystem::path input(path);
     if (!std::filesystem::exists(input))
         throw std::runtime_error(description + " does not exist: " + path);
@@ -345,8 +369,10 @@ std::string ReadRegularTextFile(const std::string &description,
         throw std::runtime_error(description + " is not a regular file: " +
                                  path);
     const uintmax_t size = std::filesystem::file_size(input);
-    if (size > kMaxProgramFileBytes)
-        throw std::runtime_error(description + " exceeds 64 MiB: " + path);
+    if (!FitsPublicFileLimit(size, max_bytes))
+        throw std::runtime_error(
+            description + " exceeds " +
+            std::to_string(max_bytes >> 20) + " MiB: " + path);
     std::ifstream stream(input, std::ios::binary);
     if (!stream)
         throw std::runtime_error("cannot open " + description + ": " + path);
@@ -614,6 +640,11 @@ int sc_main(int argc, char *argv[]) {
         return 2;
     }
 
+    if (g_flag_program_one_shot && g_flag_program.empty()) {
+        LOG_ERROR(CONFIG) << "--program-one-shot requires --program";
+        return 2;
+    }
+
     if (!g_flag_p5_memory_probe.empty()) {
         if (g_flag_program.empty()) {
             LOG_ERROR(CONFIG)
@@ -725,6 +756,10 @@ int sc_main(int argc, char *argv[]) {
     // DTE V0：bit/payload 纯函数 + 有界 channel/shared-bus SystemC 自测。
     if (g_flag_dte_v0_selftest) {
         int fails = RunDTEV0SelfTest();
+        return fails == 0 ? 0 : 1;
+    }
+    if (g_flag_dte_control_core_selftest) {
+        int fails = RunDteControlCoreSelfTest();
         return fails == 0 ? 0 : 1;
     }
     if (g_flag_coll_v0_selftest) {
@@ -915,7 +950,8 @@ int sc_main(int argc, char *argv[]) {
                 DecodeProgramArtifact(program_bytes);
             if (program_io_requested) {
                 const std::string manifest = ReadRegularTextFile(
-                    "linked Program manifest", g_flag_linked_manifest);
+                    "linked Program manifest", g_flag_linked_manifest,
+                    kMaxLinkedProgramManifestBytes);
                 const std::string sidecar = ReadRegularTextFile(
                     "ProgramIo sidecar", g_flag_program_io);
                 program_io_resolved =
@@ -1011,7 +1047,8 @@ int sc_main(int argc, char *argv[]) {
             InitPlatform(g_flag_hardware_config, g_flag_simulation_config,
                          g_flag_mapping_config);
             program_helper =
-                std::make_unique<config_helper_program>(program_bytes);
+                std::make_unique<config_helper_program>(
+                    program_bytes, !g_flag_program_one_shot);
             std::cout << "Loaded Program Format " << kProgramFormatMajor
                       << "." << kProgramFormatMinor << ", ISA "
                       << kProgramIsaMajor << "." << kProgramIsaMinor
@@ -1773,6 +1810,51 @@ int sc_main(int argc, char *argv[]) {
             [&](const std::vector<sc_object *> &objs) {
             for (auto *o : objs) {
                 if (auto *core = dynamic_cast<WorkerCoreExecutor *>(o)) {
+                    const bool dedicated =
+                        core->dte_control_core != nullptr;
+                    DteControlCoreStatistics controller_stats;
+                    DteControlResidual controller_residual;
+                    if (dedicated) {
+                        controller_stats =
+                            core->dte_control_core->statistics();
+                        controller_residual =
+                            core->dte_control_core->Residual();
+                    }
+                    std::cout
+                        << "[DTE_CTRL_STATS] core=" << core->cid
+                        << " mode="
+                        << (dedicated ? "dual_dte_dedicated"
+                                      : "legacy_shared")
+                        << " submitted=" << controller_stats.enqueued
+                        << " dispatched=" << controller_stats.dispatched
+                        << " completed=" << controller_stats.completed
+                        << " queue_stalls="
+                        << controller_stats.queue_stalls
+                        << " max_queue_occupancy="
+                        << controller_stats.max_queue_occupancy
+                        << " queued="
+                        << controller_residual.queued_commands
+                        << " outstanding="
+                        << (controller_residual.inflight_commands +
+                            controller_residual.active_transfers +
+                            controller_residual.logical_tokens +
+                            controller_residual.pending_notifications)
+                        << "\n";
+                    if (core->dte != nullptr) {
+                        const auto &dte_stats = core->dte->statistics();
+                        std::cout
+                            << "[DTE_STATS] core=" << core->cid
+                            << " issued=" << dte_stats.physical_issued
+                            << " completed=" << dte_stats.completed
+                            << " cancelled=" << dte_stats.cancelled
+                            << " backpressure_stalls="
+                            << dte_stats.backpressure_stalls
+                            << " pending=" << core->dte->PendingCount()
+                            << " active=" << core->dte->ActiveCount()
+                            << " inflight=" << core->dte->InflightCount()
+                            << " max_active=" << core->dte->MaxActiveCount()
+                            << "\n";
+                    }
                     const auto endpoint =
                         core->CollectiveEndpointResidualState();
                     endpoint_residual += endpoint.Total();

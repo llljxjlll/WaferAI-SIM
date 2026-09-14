@@ -159,7 +159,9 @@ class TrainForwardProgramIoTest(unittest.TestCase):
             and item.abi.ownership is BufferOwnership.OWNED
         )
         with patch.object(TrainLinkedProgram, "validate", return_value=None):
-            with self.assertRaisesRegex(SchemaError, "numeric loss"):
+            with self.assertRaisesRegex(
+                SchemaError, "does not accept numeric SRAM expectations",
+            ):
                 build_timing_program_io(
                     self.source,
                     _ARTIFACT_SHA256,
@@ -203,7 +205,11 @@ class TrainForwardProgramIoTest(unittest.TestCase):
                 resolved_terminal[:-1],
             )
 
-        target = resolved_terminal[-1]
+        target = next(
+            item
+            for item in resolved_terminal
+            if {use.replica_index for use in item.uses} != {0}
+        )
         crossed = replace(
             target,
             uses=tuple(

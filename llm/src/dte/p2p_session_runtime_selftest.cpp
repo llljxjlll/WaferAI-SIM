@@ -127,6 +127,109 @@ void Admit(const P2pTxIssue &issue, P2pEndpointSessionRuntime &sender) {
     sender.ReceiveAdmissionAck(WireRoundTrip(AdmissionAckFor(issue)));
 }
 
+void TestPostedAdmissionStableBypass(Checks &checks) {
+    const P2pFlowKey future_a{1, 10, 1, 0};
+    const P2pFlowKey future_b{2, 10, 1, 0};
+    const P2pFlowKey current{3, 10, 1, 0};
+    checks.Check(
+        SelectP2pPendingAdmission({
+            {future_a, P2pRequestDisposition::NEW, false, true},
+            {future_b, P2pRequestDisposition::NEW, false, true},
+            {current, P2pRequestDisposition::NEW, true, true},
+        }) == std::optional<size_t>(2),
+        "posted receive stably bypasses earlier future requests");
+    checks.Check(
+        SelectP2pPendingAdmission({
+            {future_a, P2pRequestDisposition::NEW, false, true},
+            {future_b, P2pRequestDisposition::NEW, false, true},
+        }) == std::optional<size_t>(0),
+        "available capacity preserves stable early REQUEST admission");
+    checks.Check(
+        !SelectP2pPendingAdmission({
+             {future_a, P2pRequestDisposition::NEW, false, false},
+             {future_a, P2pRequestDisposition::NEW, true, true},
+         }).has_value(),
+        "later same-flow REQUEST cannot bypass its FIFO predecessor");
+    checks.Check(
+        SelectP2pPendingAdmission({
+            {future_a, P2pRequestDisposition::NEW, false, false},
+            {future_b, P2pRequestDisposition::ACTIVE_DUPLICATE, false,
+             false},
+        }) == std::optional<size_t>(1),
+        "duplicate processing is not blocked by an unrelated future request");
+
+    constexpr uint64_t kBytes = 8;
+    P2pEndpointSessionRuntime receiver(10, 3, 64, 16, 16);
+    std::vector<P2pEndpointSessionRuntime> senders;
+    for (uint16_t source = 1; source <= 4; ++source)
+        senders.emplace_back(source, 1, 16, 16, 16);
+    std::vector<P2pTxIssue> issues;
+    for (size_t index = 0; index < senders.size(); ++index) {
+        issues.push_back(senders[index].IssueSend(
+            AsyncSpec(static_cast<uint32_t>(201 + index),
+                      static_cast<uint32_t>(301 + index), kBytes, 10),
+            Pattern(kBytes, static_cast<uint8_t>(0x20 + index))));
+        senders[index].MarkRequestSent(issues.back().handle);
+    }
+    for (size_t index = 0; index < 3; ++index)
+        (void)receiver.ReceiveRequest(
+            WireRoundTrip(issues[index].messages.request));
+    const P2pPayloadDeclaration current_declaration =
+        ParseP2pPayloadRequest(issues[3].messages.request);
+    (void)receiver.PostReceive(AsyncSpec(204, 404, kBytes, 4));
+    checks.Check(!receiver.CanReceiveRequest(current_declaration.flow,
+                                             current_declaration.total_bytes) &&
+                     receiver.CanReceiveRequest(current_declaration),
+                 "exact posted receive bypasses only the inbound-count cap");
+    (void)receiver.ReceiveRequest(WireRoundTrip(issues[3].messages.request));
+    checks.Check(receiver.Residual().sessions == 1 &&
+                     receiver.Residual().inbound_flows == 4,
+                 "posted bypass does not raise the active session cap");
+    const std::optional<P2pRxDelivery> current_delivery =
+        DeliverData(issues[3], receiver);
+    const Msg current_ack = receiver.CompleteReceive(current_delivery->handle);
+    checks.Check(receiver.TryWait(404),
+                 "posted-over-cap receive retires through the normal path");
+    senders[3].ReceiveAdmissionAck(AdmissionAckFor(issues[3]));
+    senders[3].CompleteSend(issues[3].handle);
+    checks.Check(senders[3].TryWait(304),
+                 "posted-over-cap sender retires locally");
+    senders[3].ReceiveAck(current_ack);
+    for (size_t index = 0; index < 3; ++index) {
+        const P2pPayloadDeclaration declaration =
+            ParseP2pPayloadRequest(issues[index].messages.request);
+        checks.Check(receiver.AbortInbound(declaration.flow) &&
+                         senders[index].Abort(issues[index].handle),
+                     "future admission fixture tears down exactly");
+    }
+    checks.Check(receiver.Drained(),
+                 "posted bypass and future REQUEST teardown drain exactly");
+
+    P2pEndpointSessionRuntime byte_limited(10, 3, 24, 16, 16);
+    for (size_t index = 0; index < 3; ++index)
+        (void)byte_limited.ReceiveRequest(
+            WireRoundTrip(issues[index].messages.request));
+    (void)byte_limited.PostReceive(AsyncSpec(204, 504, kBytes, 4));
+    checks.Check(!byte_limited.CanReceiveRequest(current_declaration),
+                 "posted receive cannot bypass the exact RX byte bound");
+    checks.Reject(
+        [&] {
+            (void)byte_limited.ReceiveRequest(
+                WireRoundTrip(issues[3].messages.request));
+        },
+        "posted receive max-byte overflow");
+    checks.Check(byte_limited.AbortReceiveFsm(204),
+                 "byte-bound fixture retires posted RX");
+    for (size_t index = 0; index < 3; ++index) {
+        const P2pPayloadDeclaration declaration =
+            ParseP2pPayloadRequest(issues[index].messages.request);
+        checks.Check(byte_limited.AbortInbound(declaration.flow),
+                     "byte-bound fixture retires future inbound");
+    }
+    checks.Check(byte_limited.Drained(),
+                 "byte-bound rejection leaves no endpoint residual");
+}
+
 void TestAckAbi(Checks &checks) {
     const P2pFlowKey flow{4, 9, 17, 0};
     const Msg ack = MakeP2pCompletionAck(flow, 0x10001U);
@@ -309,10 +412,11 @@ void TestRecvBeforeSendSync(Checks &checks) {
     checks.Check(sender.HasFsm(0x10001U) &&
                      waiting.allocated_transport_tags == 1 &&
                      waiting.tx_awaiting_ack == 1 &&
-                     waiting.tx_awaiting_local_retire == 0,
+                     waiting.tx_awaiting_local_retire == 0 &&
+                     !waiting.LocalTxDrained(),
                  "local SYNC retire retains fsm and tag until remote ACK");
     sender.ReceiveAck(WireRoundTrip(ack));
-    checks.Check(sender.Drained(),
+    checks.Check(sender.Drained() && sender.Residual().LocalTxDrained(),
                  "remote ACK releases retained SYNC transport resources");
     checks.Reject([&] { sender.ReceiveAck(ack); }, "duplicate retired ACK");
 }
@@ -331,8 +435,9 @@ void TestSendBeforeRecvAsync(Checks &checks) {
     const P2pEndpointResidual pending = receiver.Residual();
     checks.Check(pending.pending_requests == 1 &&
                      pending.completed_unposted == 1 &&
-                     pending.reserved_rx_bytes == bytes.size(),
-                 "send-before-recv accounts completed pending payload");
+                     pending.reserved_rx_bytes == bytes.size() &&
+                     pending.LocalTxDrained() && !pending.Empty(),
+                 "send-before-recv pending payload does not block a local TX fence");
 
     const P2pRxPostResult post =
         receiver.PostReceive(AsyncSpec(7, 201, bytes.size(), 2));
@@ -1292,6 +1397,7 @@ void TestManifestBoundDieSessionReplay(Checks &checks) {
 
 int RunP2pSessionRuntimeSelfTest() {
     Checks checks;
+    TestPostedAdmissionStableBypass(checks);
     TestAckAbi(checks);
     TestAdmissionStateMachine(checks);
     TestRecvBeforeSendSync(checks);

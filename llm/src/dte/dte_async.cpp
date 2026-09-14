@@ -226,6 +226,10 @@ uint64_t DteAsyncTracker::IssuePhysical(
     batch.member_count = tokens.size();
     batch.payload_bits = payload_bits;
     physical_batches_.emplace(context.xfer_id, batch);
+    const uint64_t watched_xfer_id = context.xfer_id;
+    sc_spawn([this, watched_xfer_id] {
+        WatchPhysicalCompletion(watched_xfer_id);
+    }, sc_gen_unique_name("dte-async-physical-completion"));
 
     for (uint32_t token : tokens) {
         DteAsyncRecord &record = records_.at(token);
@@ -276,6 +280,7 @@ uint64_t DteAsyncTracker::StartAggregationGroup(uint32_t token) {
     group_by_key_[group.key] = group.group_id;
     open_groups_.emplace(group.group_id, group);
     aggregation_changed_.notify(SC_ZERO_TIME);
+    state_changed_.notify(SC_ZERO_TIME);
     return group.group_id;
 }
 
@@ -290,6 +295,7 @@ uint64_t DteAsyncTracker::AppendToAggregationGroup(uint64_t group_id,
     group.next_remote_addr = record.remote_addr + record.payload_bits / 8;
     record.group_id = group_id;
     record.staged = true;
+    state_changed_.notify(SC_ZERO_TIME);
     Trace("DTE_coalesce_collect", "B", token,
           DTE_ASYNC_INVALID_XFER_ID,
           "group=" + std::to_string(group_id) +
@@ -312,6 +318,7 @@ uint64_t DteAsyncTracker::FlushGroup(uint64_t group_id,
     group_by_key_.erase(group.key);
     open_groups_.erase(it);
     aggregation_changed_.notify(SC_ZERO_TIME);
+    state_changed_.notify(SC_ZERO_TIME);
 
     for (uint32_t token : group.tokens) {
         const std::string bind_extra =
@@ -341,6 +348,19 @@ void DteAsyncTracker::FlushAllOpenGroups(const char *reason) {
     ordered.reserve(open_groups_.size());
     for (const auto &[group_id, group] : open_groups_)
         ordered.emplace_back(group.first_issue_sequence, group_id);
+    std::sort(ordered.begin(), ordered.end());
+    for (const auto &[sequence, group_id] : ordered) {
+        (void)sequence;
+        FlushGroup(group_id, reason);
+    }
+}
+
+void DteAsyncTracker::FlushOpenGroupsThrough(
+    uint64_t issue_sequence_exclusive, const char *reason) {
+    std::vector<std::pair<uint64_t, uint64_t>> ordered;
+    for (const auto &[group_id, group] : open_groups_)
+        if (group.first_issue_sequence < issue_sequence_exclusive)
+            ordered.emplace_back(group.first_issue_sequence, group_id);
     std::sort(ordered.begin(), ordered.end());
     for (const auto &[sequence, group_id] : ordered) {
         (void)sequence;
@@ -467,10 +487,13 @@ uint64_t DteAsyncTracker::IssueToken(
     if (has_memory) {
         memory_bridge_->Commit(token);
         memory_reserved = false;
+        sc_spawn([this, token] { WatchMemoryCompletion(token); },
+                 sc_gen_unique_name("dte-async-memory-completion"));
     }
 
     Trace("DTE_async_issue", "B", token, xfer, issue_extra);
     Trace("DTE_async_issue", "E", token, xfer, issue_extra);
+    state_changed_.notify(SC_ZERO_TIME);
     return xfer;
     } catch (...) {
         if (memory_reserved) {
@@ -492,20 +515,25 @@ void DteAsyncTracker::WaitForCompletion(uint32_t token, bool trace_wait) {
         FlushGroup(it->second.group_id, "dependency");
 
     DteAsyncRecord &record = records_.at(token);
-    if (record.context == nullptr ||
-        record.context->xfer_id != record.xfer_id)
+    DteTransferContext *context = record.context;
+    const uint64_t xfer_id = record.xfer_id;
+    const DteDir direction = record.direction;
+    if (context == nullptr || context->xfer_id != xfer_id)
         throw std::logic_error("DTE async token/context mapping is corrupt");
     if (trace_wait)
-        Trace("DTE_async_wait", "B", token, record.xfer_id);
-    if (record.context->state != DteTransferState::COMPLETED)
-        wait(record.context->done);
-    if (record.context->state != DteTransferState::COMPLETED)
+        Trace("DTE_async_wait", "B", token, xfer_id);
+    if (context->state != DteTransferState::COMPLETED &&
+        context->state != DteTransferState::CANCELLED)
+        wait(context->done);
+    if (context->state == DteTransferState::CANCELLED)
+        throw std::runtime_error("DTE async token was cancelled");
+    if (context->state != DteTransferState::COMPLETED)
         throw std::logic_error(
             "DTE async wait woke without a completed transfer");
     if (memory_bridge_ &&
-        (record.direction == DteDir::DRAM_TO_SPM ||
-         record.direction == DteDir::SPM_TO_DRAM ||
-         record.direction == DteDir::SPM_TO_SPM))
+        (direction == DteDir::DRAM_TO_SPM ||
+         direction == DteDir::SPM_TO_DRAM ||
+         direction == DteDir::SPM_TO_SPM))
         memory_bridge_->Wait(token);
 }
 
@@ -515,14 +543,50 @@ void DteAsyncTracker::WaitAndRelease(uint32_t token, bool trace_wait) {
         throw std::invalid_argument(
             "DTE async wait references an unknown token");
     WaitForCompletion(token, trace_wait);
-    const uint64_t xfer_id = records_.at(token).xfer_id;
+    ReleaseCompletedToken(token, trace_wait);
+}
+
+bool DteAsyncTracker::IsComplete(const DteAsyncRecord &record) const {
+    if (record.staged || record.context == nullptr ||
+        record.context->xfer_id != record.xfer_id)
+        return false;
+    if (record.context->state != DteTransferState::COMPLETED)
+        return false;
+    const bool has_memory = memory_bridge_ != nullptr &&
+        (record.direction == DteDir::DRAM_TO_SPM ||
+         record.direction == DteDir::SPM_TO_DRAM ||
+         record.direction == DteDir::SPM_TO_SPM);
+    return !has_memory || memory_bridge_->Poll(record.token);
+}
+
+void DteAsyncTracker::ReleaseCompletedToken(uint32_t token,
+                                            bool trace_wait) {
+    auto record_it = records_.find(token);
+    if (record_it == records_.end())
+        throw std::invalid_argument(
+            "DTE async wait references an unknown token");
+    if (!IsComplete(record_it->second))
+        throw std::logic_error(
+            "DTE async non-blocking retire requires a completed token");
+    const uint64_t xfer_id = record_it->second.xfer_id;
     auto batch_it = physical_batches_.find(xfer_id);
     if (batch_it == physical_batches_.end() ||
         batch_it->second.remaining_tokens == 0)
         throw std::logic_error("DTE async physical batch accounting is corrupt");
 
-    const DteDir direction = records_.at(token).direction;
-    records_.erase(token);
+    const DteDir direction = record_it->second.direction;
+    std::exception_ptr completion_error;
+    if (memory_bridge_ &&
+        (direction == DteDir::DRAM_TO_SPM ||
+         direction == DteDir::SPM_TO_DRAM ||
+         direction == DteDir::SPM_TO_SPM)) {
+        try {
+            memory_bridge_->Wait(token);
+        } catch (...) {
+            completion_error = std::current_exception();
+        }
+    }
+    records_.erase(record_it);
     if (memory_bridge_ &&
         (direction == DteDir::DRAM_TO_SPM ||
          direction == DteDir::SPM_TO_DRAM ||
@@ -537,6 +601,75 @@ void DteAsyncTracker::WaitAndRelease(uint32_t token, bool trace_wait) {
     }
     if (trace_wait)
         Trace("DTE_async_wait", "E", token, xfer_id);
+    state_changed_.notify(SC_ZERO_TIME);
+    if (completion_error)
+        std::rethrow_exception(completion_error);
+}
+
+bool DteAsyncTracker::TryRetireToken(uint32_t token) {
+    auto it = records_.find(token);
+    if (it == records_.end())
+        throw std::invalid_argument(
+            "DTE async wait references an unknown token");
+    if (it->second.staged)
+        FlushGroup(it->second.group_id, "dependency");
+    it = records_.find(token);
+    if (!IsComplete(it->second))
+        return false;
+    Trace("DTE_async_wait", "B", token, it->second.xfer_id,
+          "nonblocking=1");
+    ReleaseCompletedToken(token, true);
+    return true;
+}
+
+bool DteAsyncTracker::TryFenceThrough(
+    uint64_t issue_sequence_exclusive) {
+    FlushOpenGroupsThrough(issue_sequence_exclusive, "fence_watermark");
+    std::vector<std::pair<uint64_t, uint32_t>> targets;
+    for (const auto &[token, record] : records_)
+        if (record.issue_sequence < issue_sequence_exclusive)
+            targets.emplace_back(record.issue_sequence, token);
+    std::sort(targets.begin(), targets.end());
+    bool complete = true;
+    for (const auto &[sequence, token] : targets) {
+        (void)sequence;
+        auto it = records_.find(token);
+        if (it == records_.end())
+            continue;
+        if (!IsComplete(it->second)) {
+            complete = false;
+            continue;
+        }
+        ReleaseCompletedToken(token, true);
+    }
+    return complete;
+}
+
+void DteAsyncTracker::WatchPhysicalCompletion(uint64_t xfer_id) {
+    while (true) {
+        auto it = physical_batches_.find(xfer_id);
+        if (it == physical_batches_.end() || it->second.context == nullptr)
+            return;
+        const DteTransferState state = it->second.context->state;
+        if (state == DteTransferState::COMPLETED ||
+            state == DteTransferState::CANCELLED) {
+            state_changed_.notify(SC_ZERO_TIME);
+            return;
+        }
+        // Re-find by id after every wait; never retain a backend pointer
+        // across a cancellation/release boundary.
+        wait(unit_.StateChangedEvent());
+    }
+}
+
+void DteAsyncTracker::WatchMemoryCompletion(uint32_t token) {
+    try {
+        memory_bridge_->Wait(token);
+    } catch (...) {
+        // The controller-facing operation re-observes and propagates the
+        // stored bridge failure.  This watcher only provides progress.
+    }
+    state_changed_.notify(SC_ZERO_TIME);
 }
 
 void DteAsyncTracker::WaitToken(uint32_t token) {
@@ -620,6 +753,7 @@ void DteAsyncTracker::CancelStagedToken(uint32_t token) {
             tail.remote_addr + tail.payload_bits / 8;
     }
     aggregation_changed_.notify(SC_ZERO_TIME);
+    state_changed_.notify(SC_ZERO_TIME);
 }
 
 void DteAsyncTracker::CancelToken(uint32_t token) {
@@ -633,6 +767,7 @@ void DteAsyncTracker::CancelToken(uint32_t token) {
         CancelStagedToken(token);
         Trace("DTE_async_cancel", "E", token, xfer_id,
               "staged=1");
+        state_changed_.notify(SC_ZERO_TIME);
         return;
     }
 
@@ -661,6 +796,7 @@ void DteAsyncTracker::CancelToken(uint32_t token) {
     records_.erase(it);
     if (has_memory) memory_bridge_->Release(token);
     Trace("DTE_async_cancel", "E", token, xfer_id);
+    state_changed_.notify(SC_ZERO_TIME);
 }
 
 const DteAsyncRecord &DteAsyncTracker::Record(uint32_t token) const {

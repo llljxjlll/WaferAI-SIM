@@ -33,6 +33,7 @@ from ..schema.ir2 import (
     TaskPlacement,
     TaskStateUse,
     TensorSlice,
+    swizzle_temporary_tensor_domains,
     dense_row_major_view_byte_addend,
 )
 from ..schema.persistent_state import (
@@ -484,20 +485,9 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
     ir1_values = {value.id: value for value in ir1.values}
     swizzle_schedule_values: list[IntraDieValue] = []
     for temporary in dag.swizzle_values:
-        producer_witnesses = tuple(
-            task_by_id[task_id]
-            for task_id in temporary.producer_tasks
-            if task_by_id[task_id].tensor_slice is not None
-            and task_by_id[task_id].dtype is not None
-        )
-        witnesses = producer_witnesses or tuple(
-            task_by_id[task_id]
-            for task_id in temporary.consumer_tasks
-            if task_by_id[task_id].tensor_slice is not None
-            and task_by_id[task_id].dtype is not None
-        )
-        source_ids = {task.tensor_slice.value_id for task in witnesses if task.tensor_slice is not None}
-        dtypes = {task.dtype for task in witnesses}
+        domains = swizzle_temporary_tensor_domains(temporary, dag.tasks)
+        source_ids = {source_id for source_id, _dtype in domains}
+        dtypes = {dtype for _source_id, dtype in domains}
         if len(source_ids) != 1 or len(dtypes) != 1:
             _fail(
                 "Swizzle temporary requires one exact typed tensor-slice domain",

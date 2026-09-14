@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <vector>
 
 #include "defs/enums.h"
@@ -34,6 +35,22 @@ public:
     VectorConfig(int x, int cnt) : x_dims(x), count(cnt) {}
 };
 
+enum class ControlCoreMode {
+    LEGACY_SHARED,
+    DUAL_DTE_DEDICATED,
+};
+
+struct DteControllerHWConfig {
+    uint32_t command_queue_depth = 16;
+    uint32_t dispatch_width = 1;
+    uint64_t dispatch_latency_ns = 0;
+    uint64_t completion_notify_latency_ns = 0;
+};
+
+struct ControlCoresHWConfig {
+    ControlCoreMode mode = ControlCoreMode::LEGACY_SHARED;
+    DteControllerHWConfig dte;
+};
 
 class Cast {
 public:
@@ -138,6 +155,7 @@ public:
     int sram_bitwidth; // SRAM的位宽
     int dte_channel_count; // DTE active transfer 上限
     int dte_bit_width;     // DTE 共享聚合数据通路位宽（bit）
+    ControlCoresHWConfig control_cores;
 
     void printSelf() {
         // cout << "CoreHWConfig: " << id << endl;
@@ -160,7 +178,8 @@ public:
           dte_bit_width(2048) {}
     CoreHWConfig(int id, ExuConfig *exu, SfuConfig *sfu, VectorConfig *vec, string dram_config,
                  int dram_bw, int sram_bitwidth, int dte_channel_count = 2,
-                 int dte_bit_width = 2048)
+                 int dte_bit_width = 2048,
+                 ControlCoresHWConfig control_cores = ControlCoresHWConfig{})
         : id(id),
           exu(exu),
           sfu(sfu),
@@ -169,7 +188,8 @@ public:
           dram_bw(dram_bw),
           sram_bitwidth(sram_bitwidth),
           dte_channel_count(dte_channel_count),
-          dte_bit_width(dte_bit_width) {}
+          dte_bit_width(dte_bit_width),
+          control_cores(control_cores) {}
     ~CoreHWConfig() {
         delete exu;
         delete sfu;

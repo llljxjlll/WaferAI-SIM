@@ -18,85 +18,10 @@ from llm.frontend.wafer_frontend.schema.serde import (
     load_json_value,
     loads_json_value,
 )
+from llm.test.frontend.flexible_mesh_fixtures import minimal_hardware
 
 
 ROOT = Path(__file__).resolve().parents[4]
-
-
-def minimal_hardware(die_x: int, die_y: int) -> dict[str, object]:
-    overrides: list[dict[str, object]] = [
-        {"side": "E", "idx": 0, "role": "c2c", "dir": "E"},
-        {"side": "W", "idx": 0, "role": "c2c", "dir": "W"},
-    ]
-    if die_y > 1:
-        overrides = [
-            {"side": "N", "idx": 0, "role": "c2c", "dir": "N"},
-            {"side": "S", "idx": 0, "role": "c2c", "dir": "S"},
-        ] + overrides
-    stacks = [
-        {
-            "stack_id": die_id,
-            "compute_die_id": die_id,
-            "profile": "test_hbm",
-            "backend": "behavioral",
-            "capacity_bytes": 1048576,
-            "bandwidth_cap_GBps": 8.0,
-        }
-        for die_id in range(die_x * die_y)
-    ]
-    return {
-        "x": 2,
-        "y": 2,
-        "die": {"x": die_x, "y": die_y},
-        "noc": {"noc_payload_per_cycle": 4},
-        "memory": {
-            "sram_size": 4096,
-            "sram": {
-                "capacity_bytes": 4096,
-                "allocation_alignment_bytes": 64,
-                "bank_count": 4,
-                "bank_interleave_bytes": 64,
-                "real_data_path": True,
-                "manual_regions": True,
-                "manual_memory_schedule": True,
-                "regions": [
-                    {
-                        "name": "sram",
-                        "base_bytes": 0,
-                        "size_bytes": 4096,
-                        "allocator": "block",
-                        "spillable": False,
-                        "access": ["compute", "dte", "lsu", "noc_rx", "legacy"],
-                    }
-                ],
-            },
-        },
-        "die_ports": {
-            "edges": {"S": {"role": "host"}},
-            "overrides": overrides,
-            "c2c": {"link_bw": 1, "latency": 3, "buffer_depth": 8},
-        },
-        "memory_system": {
-            "topology": "distributed_hbm",
-            "cache_policy": "none",
-            "profiles": {"test_hbm": {"channels_per_stack": 1}},
-            "hbm_stacks": stacks,
-            "address_policy": {
-                "mode": "numa_local_interleave",
-                "home_ranges": [
-                    {
-                        "die_id": die_id,
-                        "base": die_id * 1048576,
-                        "size_bytes": 1048576,
-                    }
-                    for die_id in range(die_x * die_y)
-                ],
-                "stack_interleave_bytes": 1048576,
-                "channel_interleave_bytes": 64,
-            },
-        },
-        "cores": [{"id": 0}],
-    }
 
 
 class FabricLoaderTest(unittest.TestCase):

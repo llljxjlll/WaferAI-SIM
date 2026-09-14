@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..errors import SchemaError
+from ._validation_session import mark_validation_complete, validation_seen
 from .common import (
     DType,
     MeshAxisName,
@@ -1242,6 +1243,8 @@ class IR1:
         }
 
     def validate(self, path: str = "ir1") -> None:
+        if validation_seen(self, "ir1"):
+            return
         if self.schema_version != IR1_SCHEMA_VERSION:
             raise SchemaError(f"unsupported schema version {self.schema_version!r}", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -1681,3 +1684,4 @@ class IR1:
         expected_id = stable_artifact_id("ir1", self._semantic_key(), schema_version=IR1_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "ir1")

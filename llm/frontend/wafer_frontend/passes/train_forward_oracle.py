@@ -107,7 +107,7 @@ def build_train_forward_oracle(spec: ExperimentSpec) -> TrainForwardOracle:
         ),
         graph=TrainForwardGraphMetrics(
             node_count=(11 + (4 if tp > 1 else 0)) * model.L + 4,
-            value_count=(18 + (4 if tp > 1 else 0)) * model.L + 7,
+            value_count=(18 + (4 if tp > 1 else 0)) * model.L + 7 + (model.L == 1),
             edge_count=(13 + (4 if tp > 1 else 0)) * model.L + 3,
             fusion_candidate_count=4 * model.L if tp > 1 else 0,
             collective_node_count=collective_count,

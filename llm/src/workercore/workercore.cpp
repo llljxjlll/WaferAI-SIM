@@ -234,7 +234,7 @@ WorkerCore::WorkerCore(const sc_module_name &n, int s_cid,
             *sram_access, *hbm_byte_transport,
             sram_config.dte_memory_queue_depth,
             sram_config.dte_memory_workers, event_engine, cid);
-        executor->dte_async->BindMemoryBridge(dte_memory_bridge.get());
+        executor->dte_control->BindMemoryBridge(dte_memory_bridge.get());
         executor->sram_storage = sram_storage.get();
         executor->sram_access = sram_access.get();
         executor->hbm_byte_transport = hbm_byte_transport.get();
@@ -341,6 +341,31 @@ WorkerCoreExecutor::WorkerCoreExecutor(const sc_module_name &n, int s_cid,
         "dte_async_core_" + std::to_string(cid);
     dte_async = std::make_unique<DteAsyncTracker>(
         async_name.c_str(), *dte, aggregation, cid, event_engine);
+    if (hw->control_cores.mode ==
+        ControlCoreMode::DUAL_DTE_DEDICATED) {
+        DteControlCoreConfig controller_config;
+        controller_config.command_queue_depth =
+            hw->control_cores.dte.command_queue_depth;
+        controller_config.dispatch_width =
+            hw->control_cores.dte.dispatch_width;
+        controller_config.dispatch_latency = sc_time(
+            static_cast<double>(
+                hw->control_cores.dte.dispatch_latency_ns),
+            SC_NS);
+        controller_config.completion_notify_latency = sc_time(
+            static_cast<double>(
+                hw->control_cores.dte.completion_notify_latency_ns),
+            SC_NS);
+        const std::string controller_name =
+            "dte_control_core_" + std::to_string(cid);
+        dte_control_core = std::make_unique<DteControlCore>(
+            controller_name.c_str(), *dte, controller_config, event_engine);
+        dte_control = std::make_unique<DteControlFrontend>(
+            *dte, *dte_control_core, dte_async.get());
+    } else {
+        dte_control = std::make_unique<DteControlFrontend>(
+            *dte, dte_async.get());
+    }
     if (cid < 0 || static_cast<uint64_t>(cid) > UINT16_MAX)
         throw std::out_of_range("P2P endpoint core id exceeds transport width");
     p2p_endpoint = std::make_unique<P2pEndpointSessionRuntime>(
@@ -638,12 +663,37 @@ void WorkerCoreExecutor::p2p_tx_worker() {
 void WorkerCoreExecutor::p2p_request_admission_worker() {
     while (true) {
         while (p2p_pending_requests.empty()) wait(ev_p2p_request);
+
+        std::vector<P2pPendingAdmissionCandidate> candidates;
+        candidates.reserve(p2p_pending_requests.size());
+        for (const P2pPendingRequest &pending : p2p_pending_requests) {
+            const P2pRequestDisposition candidate_disposition =
+                p2p_endpoint->ClassifyRequest(pending.declaration);
+            const bool posted =
+                candidate_disposition == P2pRequestDisposition::NEW &&
+                p2p_endpoint->MatchesPostedReceive(pending.declaration);
+            candidates.push_back(P2pPendingAdmissionCandidate{
+                pending.declaration.flow,
+                candidate_disposition,
+                posted,
+                candidate_disposition == P2pRequestDisposition::NEW &&
+                    p2p_endpoint->CanReceiveRequest(pending.declaration),
+            });
+        }
+        const std::optional<size_t> selected =
+            SelectP2pPendingAdmission(candidates);
+        if (!selected.has_value()) {
+            wait(ev_p2p_progress);
+            continue;
+        }
+        auto selected_request =
+            p2p_pending_requests.begin() + *selected;
         const P2pPayloadDeclaration declaration =
-            p2p_pending_requests.front().declaration;
+            selected_request->declaration;
         const P2pRequestDisposition disposition =
-            p2p_endpoint->ClassifyRequest(declaration);
+            candidates[*selected].disposition;
         if (disposition == P2pRequestDisposition::CONFLICT) {
-            p2p_pending_requests.pop_front();
+            p2p_pending_requests.erase(selected_request);
             CheckedAccumulate(p2p_stats.request_conflicts_rejected, 1,
                               "REQUEST conflict rejected");
             TraceP2pEndpoint(event_engine, cid,
@@ -654,17 +704,9 @@ void WorkerCoreExecutor::p2p_request_admission_worker() {
             continue;
         }
         auto existing = p2p_rx_fsm_by_flow.find(declaration.flow);
-        if (disposition == P2pRequestDisposition::NEW &&
-            existing == p2p_rx_fsm_by_flow.end() &&
-            !p2p_endpoint->CanReceiveRequest(
-                declaration.flow, declaration.total_bytes)) {
-            wait(ev_p2p_progress);
-            continue;
-        }
-
         P2pPendingRequest pending =
-            std::move(p2p_pending_requests.front());
-        p2p_pending_requests.pop_front();
+            std::move(*selected_request);
+        p2p_pending_requests.erase(selected_request);
         ev_p2p_progress.notify(SC_ZERO_TIME);
 
         if (disposition != P2pRequestDisposition::NEW) {
@@ -866,7 +908,7 @@ void WorkerCoreExecutor::execute_dte_send_endpoint(
         throw std::length_error(
             "P2P endpoint session capacity exhausted before source read");
     if (prim->completion == DteEndpointCompletion::ASYNC &&
-        (dte_async->HasToken(prim->token) ||
+        (dte_control->HasToken(prim->token) ||
          p2p_endpoint->HasToken(prim->token) ||
          p2p_async_handles.count(prim->token) != 0))
         throw std::invalid_argument(
@@ -964,7 +1006,7 @@ void WorkerCoreExecutor::execute_dte_recv_endpoint(
         throw std::length_error(
             "P2P endpoint receive session capacity exhausted");
     if (prim->completion == DteEndpointCompletion::ASYNC &&
-        (dte_async->HasToken(prim->token) ||
+        (dte_control->HasToken(prim->token) ||
          p2p_endpoint->HasToken(prim->token) ||
          p2p_async_handles.count(prim->token) != 0))
         throw std::invalid_argument(
@@ -1018,6 +1060,7 @@ void WorkerCoreExecutor::execute_dte_recv_endpoint(
         RethrowP2pEndpointProtocolFailure(
             "PostReceive setup/match", failure);
     }
+    ev_p2p_progress.notify(SC_ZERO_TIME);
 
 
     if (prim->completion == DteEndpointCompletion::SYNC) {
@@ -1086,7 +1129,7 @@ void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
                 prim->destination_sram_offset, prim->spm_size,
                 sram::Initiator::kDte, sram::Command::kWrite).address;
         }
-        dte_async->IssueToken(
+        dte_control->IssueToken(
             prim->token, prim->payload_bits, prim->direction,
             spm_addr, prim->spm_size, prim->remote_peer,
             remote_addr, prim->address_block);
@@ -1102,7 +1145,7 @@ void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
                 wait(ev_p2p_progress);
             p2p_async_handles.erase(tracked);
         } else {
-            dte_async->WaitToken(prim->token);
+            dte_control->WaitToken(prim->token);
         }
         break;
     case DteAsyncOp::POLL:
@@ -1111,10 +1154,10 @@ void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
                 p2p_endpoint->Poll(prim->token) ==
                 P2pEndpointPhase::COMPLETE;
         else
-            prim->poll_complete = dte_async->PollToken(prim->token);
+            prim->poll_complete = dte_control->PollToken(prim->token);
         break;
     case DteAsyncOp::FENCE: {
-        dte_async->Fence();
+        dte_control->Fence();
         std::vector<uint32_t> tokens;
         tokens.reserve(p2p_async_handles.size());
         for (const auto &entry : p2p_async_handles)
@@ -1125,6 +1168,30 @@ void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
                 wait(ev_p2p_progress);
             p2p_async_handles.erase(token);
         }
+        // Async WAIT retirement does not cover synchronous TX sessions whose
+        // payload is locally complete but whose remote completion ACK is
+        // still in flight. Close only this core's initiated TX tail: an
+        // unposted REQUEST for a future receive wave must not hold the current
+        // fence and prevent that receive from ever being posted.
+        while (!p2p_endpoint->Residual().LocalTxDrained())
+            wait(ev_p2p_progress);
+        break;
+    }
+    case DteAsyncOp::P2P_WAVE_FENCE: {
+        std::vector<uint32_t> tx_tokens;
+        tx_tokens.reserve(p2p_async_handles.size());
+        for (const auto &entry : p2p_async_handles) {
+            if (entry.second.direction == P2pEndpointDirection::TX)
+                tx_tokens.push_back(entry.first);
+        }
+        for (uint32_t token : tx_tokens) {
+            while (p2p_endpoint->HasToken(token) &&
+                   !p2p_endpoint->TryWait(token))
+                wait(ev_p2p_progress);
+            p2p_async_handles.erase(token);
+        }
+        while (!p2p_endpoint->Residual().LocalTxDrained())
+            wait(ev_p2p_progress);
         break;
     }
     case DteAsyncOp::CANCEL:
@@ -1141,7 +1208,7 @@ void WorkerCoreExecutor::execute_dte_async(Dte_async_prim *prim) {
             p2p_async_handles.erase(tracked);
             ev_p2p_progress.notify(SC_ZERO_TIME);
         } else {
-            dte_async->CancelToken(prim->token);
+            dte_control->CancelToken(prim->token);
         }
         break;
     }
@@ -1769,7 +1836,17 @@ void WorkerCoreExecutor::collective_program_worker() {
 
 void WorkerCoreExecutor::worker_core_execute() {
     while (true) {
-        if (!moe_swizzle_pending_fixed_interval_kinds.empty())
+        // SEND_DONE is completed by send_logic()/send_para_logic().  In
+        // parallel mode this executor can advance in the same delta in which
+        // the send worker starts, so finalizing the marker here would either
+        // create a zero interval or truncate the real terminal-send span.
+        // All other fixed markers remain owned by this generic boundary.
+        const bool terminal_marker_owned_by_send =
+            moe_swizzle_pending_fixed_interval_kinds.size() == 1 &&
+            moe_swizzle_pending_fixed_interval_kinds.front() ==
+                MoeSwizzleRuntimeIntervalKind::TERMINAL_DONE_FIXED;
+        if (!moe_swizzle_pending_fixed_interval_kinds.empty() &&
+            !terminal_marker_owned_by_send)
             FinalizeMoeSwizzlePendingFixedIntervals(
                 static_cast<uint16_t>(cid),
                 moe_swizzle_pending_fixed_interval_start,
@@ -1780,7 +1857,8 @@ void WorkerCoreExecutor::worker_core_execute() {
         bool conf_delete = false; // 是否自动填充了一个recv_conf原语
 
         if (prim_queue.size() == 0) {
-            if (SPEC_DTE_ASYNC && dte_async->OutstandingCount() != 0)
+            if (SPEC_DTE_ASYNC &&
+                dte_control->OutstandingTokenCount() != 0)
                 throw std::runtime_error(
                     "DTE V3a primitive queue drained with outstanding tokens; "
                     "an explicit wait/fence is required");
@@ -1824,6 +1902,19 @@ void WorkerCoreExecutor::worker_core_execute() {
                 fixed_kinds.push_back(
                     MoeSwizzleRuntimeIntervalKind::DTE_SYNC);
                 if (!p2p_async_handles.empty())
+                    fixed_kinds.push_back(
+                        MoeSwizzleRuntimeIntervalKind::SESSION_RETIRE);
+            } else if (async_prim->op ==
+                       DteAsyncOp::P2P_WAVE_FENCE) {
+                fixed_kinds.push_back(
+                    MoeSwizzleRuntimeIntervalKind::DTE_SYNC);
+                const bool has_tx = std::any_of(
+                    p2p_async_handles.begin(), p2p_async_handles.end(),
+                    [](const auto &entry) {
+                        return entry.second.direction ==
+                            P2pEndpointDirection::TX;
+                    });
+                if (has_tx)
                     fixed_kinds.push_back(
                         MoeSwizzleRuntimeIntervalKind::SESSION_RETIRE);
             }
@@ -1985,7 +2076,7 @@ void WorkerCoreExecutor::worker_core_execute() {
         } else if (typeid(*p) == typeid(Send_prim)) {
             auto *send_prim = static_cast<Send_prim *>(p);
             if (SPEC_DTE_ASYNC && send_prim->type == SEND_DONE &&
-                dte_async->OutstandingCount() != 0)
+                dte_control->OutstandingTokenCount() != 0)
                 throw std::runtime_error(
                     "DTE V3a SEND_DONE reached with outstanding tokens; "
                     "an explicit wait/fence is required");

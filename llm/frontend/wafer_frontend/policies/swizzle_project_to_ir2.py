@@ -1,4 +1,4 @@
-"""Fail-closed common-IR2 projection for the first Swizzle GEMM_RS ABI."""
+"""Fail-closed common-IR2 projection for canonical Swizzle dense ABIs."""
 
 from __future__ import annotations
 
@@ -68,6 +68,11 @@ def _bound_value_id(
     plan: SwizzleFusionPlan, rank: int, action: SwizzleBoundAction,
     value_ref: str, ir1_values: set[str], *, write: bool,
 ) -> str:
+    if write and (
+        _is_ag_output_slice(plan, rank, action, value_ref)
+        or _is_terminal_ag_accumulation(plan, rank, action, value_ref)
+    ):
+        return plan.decision.problem.gemm.output.value_ref
     if write and action.fusion_kind is FusionActionKind.LOCAL_COPY:
         outputs = action.source_action.output_refs
         logical_output = plan.decision.problem.collective.output.value_ref
@@ -82,6 +87,47 @@ def _bound_value_id(
             )
         return logical_output
     return _value_id(plan.id, rank, value_ref, ir1_values)
+
+
+def _is_ag_output_slice(
+    plan: SwizzleFusionPlan,
+    rank: int,
+    action: SwizzleBoundAction,
+    value_ref: str,
+) -> bool:
+    """Recognize Wang free-LHS chunks that directly cover GEMM output rows."""
+
+    chunk = action.chunk_origin
+    logical_output = plan.decision.problem.gemm.output.value_ref
+    return (
+        plan.pattern is FusionPattern.AG_GEMM
+        and action.fusion_kind is FusionActionKind.COMP
+        and chunk is not None
+        and chunk.axis == 0
+        and action.source_action.output_refs == (value_ref,)
+        and value_ref
+        == f"{logical_output}::rank{rank}::chunk{chunk.chunk_index}"
+    )
+
+
+def _is_terminal_ag_accumulation(
+    plan: SwizzleFusionPlan,
+    rank: int,
+    action: SwizzleBoundAction,
+    value_ref: str,
+) -> bool:
+    """Recognize only Wang's exact terminal contract-axis accumulator."""
+
+    logical_output = plan.decision.problem.gemm.output.value_ref
+    return (
+        plan.pattern is FusionPattern.AG_GEMM
+        and action.fusion_kind is FusionActionKind.REDUCE
+        and action.reduction_origin is not None
+        and action.reduction_origin.node_ref
+        == plan.decision.problem.gemm.node_ref
+        and action.source_action.output_refs == (value_ref,)
+        and value_ref == f"{logical_output}::rank{rank}::boundary"
+    )
 
 
 def _origin(plan_id: str, rank: int, action_id: str) -> SwizzleNodeOrigin:
@@ -143,7 +189,7 @@ def _chunk_slice(
     )
 
 
-def _compute_contract(
+def _gemm_rs_compute_contract(
     action: SwizzleBoundAction,
     placement: RankPlacement,
     *,
@@ -243,6 +289,102 @@ def _compute_contract(
     )
 
 
+def _ag_gemm_compute_contract(
+    action: SwizzleBoundAction,
+    placement: RankPlacement,
+    *,
+    path: str,
+) -> ComputeContract:
+    source = action.source_action
+    origin = action.compute_origin
+    chunk = action.chunk_origin
+    if origin is None or chunk is None:
+        _fail("COMP requires exact compute and chunk origins", path)
+    if (
+        origin.workload.partition is not GemmPartition.COLUMN_PARALLEL
+        or len(source.input_refs) != 2
+        or len(source.output_refs) != 1
+        or len(origin.ir1_input_refs) != 2
+        or len(origin.ir1_output_refs) != 1
+        or len(chunk.logical_shape) != 2
+        or chunk.source_value_ref != origin.ir1_input_refs[0]
+        or chunk.axis not in (0, 1)
+    ):
+        _unsupported(
+            "Swizzle AG_GEMM common IR2 supports canonical M- or K-chunked "
+            "column-parallel GEMM only",
+            path,
+        )
+
+    full_m, full_n, full_k = origin.workload.logical_shape
+    rank_m, rank_n, rank_k = origin.workload.rank_shape
+    chunk_0, chunk_1 = chunk.logical_shape
+    offset_0, offset_1 = chunk.logical_offset
+    if rank_m != full_m or rank_k != full_k:
+        _fail("column-parallel origin has inexact rank shape", path)
+    if chunk.axis == 0:
+        if chunk_1 != full_k or offset_1 != 0 or offset_0 + chunk_0 > full_m:
+            _fail("COMP chunk does not preserve the exact gathered GEMM M tile", f"{path}.chunk_origin")
+        tile_m, tile_k = chunk_0, full_k
+        m_offset, k_offset = offset_0, 0
+    else:
+        if chunk_0 != full_m or offset_0 != 0 or offset_1 + chunk_1 > full_k:
+            _fail("COMP chunk does not preserve the exact gathered GEMM K tile", f"{path}.chunk_origin")
+        tile_m, tile_k = full_m, chunk_1
+        m_offset, k_offset = 0, offset_1
+    if len(placement.logical_coord) != 1:
+        _unsupported(
+            "Swizzle AG_GEMM common IR2 requires one-dimensional TP placement",
+            f"{path}.rank",
+        )
+    rhs_n_offset = placement.logical_coord[0] * rank_n
+    if rhs_n_offset + rank_n > full_n:
+        _fail("rank-local RHS slice lies outside logical N", path)
+
+    workload = GemmWorkload(
+        logical_shape=(tile_m, full_n, tile_k),
+        rank_shape=(tile_m, rank_n, tile_k),
+        partition=origin.workload.partition,
+        dtype=origin.workload.dtype,
+    )
+    expected_flops = 2 * math.prod(workload.rank_shape)
+    if source.flops != expected_flops or source.logical_bytes != 0:
+        _fail("COMP witness cost disagrees with its exact GEMM tile", f"{path}.source_action")
+    return ComputeContract(
+        op_kind=OpKind.GEMM,
+        workload=workload,
+        math=origin.math,
+        effects=origin.effects,
+        impl_ref=origin.impl_ref,
+        inputs=(ComputeOperand(source.input_refs[0], "lhs"), ComputeOperand(source.input_refs[1], "rhs")),
+        outputs=(ComputeOperand(source.output_refs[0], "partial"),),
+        tile=ComputeTileBinding(
+            origin_workload=origin.workload,
+            input_slices=(
+                ComputeOperandSlice(source.input_refs[0], origin.ir1_input_refs[0], (m_offset, k_offset), (tile_m, tile_k)),
+                ComputeOperandSlice(source.input_refs[1], origin.ir1_input_refs[1], (k_offset, rhs_n_offset), (tile_k, rank_n)),
+            ),
+            output_slices=(
+                ComputeOperandSlice(source.output_refs[0], origin.ir1_output_refs[0], (m_offset, rhs_n_offset), (tile_m, rank_n)),
+            ),
+        ),
+    )
+
+
+def _compute_contract(
+    plan: SwizzleFusionPlan,
+    action: SwizzleBoundAction,
+    placement: RankPlacement,
+    *,
+    path: str,
+) -> ComputeContract:
+    if plan.pattern is FusionPattern.GEMM_RS:
+        return _gemm_rs_compute_contract(action, placement, path=path)
+    if plan.pattern is FusionPattern.AG_GEMM:
+        return _ag_gemm_compute_contract(action, placement, path=path)
+    _unsupported("Swizzle common IR2 has no compute ABI for this pattern", path)
+
+
 def _reduction_contract(
     action: SwizzleBoundAction,
     action_index: dict[str, tuple[int, SwizzleBoundAction]],
@@ -271,9 +413,11 @@ def _reduction_contract(
             if peer_rank is None:
                 _fail("RECV producer is missing its peer rank", path)
             contribution_rank = peer_rank
+        elif producer.fusion_kind is FusionActionKind.REDUCE:
+            contribution_rank = producer_rank
         else:
             _unsupported(
-                "Swizzle GEMM_RS reduction inputs must come from COMP or RECV",
+                "Swizzle reduction inputs must come from COMP, RECV, or REDUCE",
                 f"{path}.value_origins[{index}]",
             )
         input_ranks.append(contribution_rank)
@@ -431,7 +575,7 @@ def project_swizzle_gemm_rs_to_ir2(
     *,
     state_transfers: tuple[StateTransferLike, ...],
 ) -> IR2ProjectionResult:
-    """Project only the proven direct-route GEMM_RS Swizzle subset.
+    """Project the proven direct-route GEMM_RS/AG_GEMM Swizzle subsets.
 
     This function is deliberately not a fallback.  Any unmodelled plan,
     route, value origin, compute tile, or state/standalone composition fails at
@@ -451,9 +595,9 @@ def project_swizzle_gemm_rs_to_ir2(
     if len({plan.id for plan in fusion_plans}) != len(fusion_plans):
         _fail("contains duplicate Swizzle plan ids", "fusion_plans")
     for index, plan in enumerate(fusion_plans):
-        if plan.pattern is not FusionPattern.GEMM_RS:
+        if plan.pattern not in (FusionPattern.GEMM_RS, FusionPattern.AG_GEMM):
             _unsupported(
-                "Swizzle common IR2 currently supports GEMM_RS only",
+                "Swizzle common IR2 currently supports GEMM_RS and AG_GEMM only",
                 f"fusion_plans[{index}].pattern",
             )
         plan.validate_against(ir1, f"fusion_plans[{index}]")
@@ -621,7 +765,7 @@ def project_swizzle_gemm_rs_to_ir2(
                         task_dtype = dtype
 
                 compute = (
-                    _compute_contract(action, placement, path=path)
+                    _compute_contract(plan, action, placement, path=path)
                     if action.fusion_kind is FusionActionKind.COMP
                     else None
                 )
@@ -650,6 +794,34 @@ def project_swizzle_gemm_rs_to_ir2(
                     task_slice = TensorSlice(
                         logical_output, action.chunk_origin.logical_offset,
                         action.chunk_origin.logical_shape,
+                    )
+                    task_dtype = values[logical_output].dtype
+                if action.fusion_kind is FusionActionKind.COMP and any(
+                    _is_ag_output_slice(plan, program.rank, action, ref)
+                    for ref in source.output_refs
+                ):
+                    assert compute is not None and compute.tile is not None
+                    output_binding = compute.tile.output_slices[0]
+                    logical_output = plan.decision.problem.gemm.output.value_ref
+                    task_slice = TensorSlice(
+                        logical_output,
+                        output_binding.logical_offset,
+                        output_binding.logical_shape,
+                    )
+                    task_dtype = values[logical_output].dtype
+                if action.fusion_kind is FusionActionKind.REDUCE and any(
+                    _is_terminal_ag_accumulation(
+                        plan, program.rank, action, ref
+                    )
+                    for ref in source.output_refs
+                ):
+                    logical_output = plan.decision.problem.gemm.output.value_ref
+                    full_m = plan.decision.problem.gemm.m
+                    rank_n = plan.decision.problem.gemm.output.shape[1]
+                    task_slice = TensorSlice(
+                        logical_output,
+                        (0, placement.logical_coord[0] * rank_n),
+                        (full_m, rank_n),
                     )
                     task_dtype = values[logical_output].dtype
                 if compute is not None:
@@ -861,9 +1033,25 @@ def project_swizzle_gemm_rs_to_ir2(
             and (whole or task.member_id == node_id)
         )
 
+    swizzle_action_by_origin = {
+        (plan_id, rank, action.source_action.id): action
+        for rows in task_actions_by_die.values()
+        for plan_id, rank, action in rows
+    }
+
     def reads_source(task: SemanticTask, value_id: str) -> bool:
         if value_id in task.read_values:
             return True
+        origin = task.origin_ref
+        if isinstance(origin, SwizzleNodeOrigin):
+            bound = swizzle_action_by_origin.get(
+                (origin.plan_id, origin.rank, origin.action_id)
+            )
+            if bound is not None and any(
+                item.use.value == "read" and item.logical_source_ref == value_id
+                for item in bound.value_origins
+            ):
+                return True
         return (
             task.kind is SemanticTaskKind.COMP
             and task.compute is not None

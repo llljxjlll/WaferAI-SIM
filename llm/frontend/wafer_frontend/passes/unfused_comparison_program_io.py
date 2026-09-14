@@ -63,9 +63,18 @@ def unfused_comparison_semantic_uses(
     source: UnfusedComparisonStandardLinkedProgram,
     abis: dict[str, BufferABI],
 ) -> dict[str, tuple[UnfusedComparisonProgramIoUse, ...]]:
+    source.validate_against("source")
+    return _unfused_comparison_semantic_uses_prevalidated(source, abis)
+
+
+
+
+def _unfused_comparison_semantic_uses_prevalidated(
+    source: UnfusedComparisonStandardLinkedProgram,
+    abis: dict[str, BufferABI],
+) -> dict[str, tuple[UnfusedComparisonProgramIoUse, ...]]:
     """Map each typed subview use to both its alias and storage root ABI."""
 
-    source.validate_against("source")
     aliases = {
         item.value_id: item for item in abis.values() if item.alias_of is not None
     }

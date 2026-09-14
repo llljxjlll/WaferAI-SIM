@@ -245,6 +245,24 @@ if(BUILD_SANITIZER_TESTS)
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME dte_control_core_selftest
+             COMMAND npusim --dte-control-core-selftest)
+    set_tests_properties(dte_control_core_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        TIMEOUT 60
+        LABELS "dte;control-core;config")
+
+    foreach(dte_stage IN ITEMS v0 v3 v3b v4)
+        add_test(NAME dte_${dte_stage}_selftest
+                 COMMAND npusim --dte-${dte_stage}-selftest)
+        set_tests_properties(dte_${dte_stage}_selftest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            RUN_SERIAL TRUE
+            TIMEOUT 60
+            LABELS "dte;runtime;regression")
+    endforeach()
+
     add_test(NAME program_io_v1_selftest
         COMMAND npusim_program_io_selftest)
     set_tests_properties(program_io_v1_selftest PROPERTIES
@@ -559,6 +577,27 @@ if(BUILD_TESTING)
         FAIL_REGULAR_EXPRESSION "Loaded Program Format")
 
     find_package(PythonInterp 3 REQUIRED)
+
+    set(dte_control_frontend_audit
+        "${CMAKE_SOURCE_DIR}/notes/extensions/DTE_control_core/check_c4_frontend_coverage.py")
+    add_test(NAME dte_control_frontend_static_gate
+        COMMAND ${PYTHON_EXECUTABLE} -B ${dte_control_frontend_audit})
+    set_tests_properties(dte_control_frontend_static_gate PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        TIMEOUT 30
+        LABELS "dte;control-core;static")
+
+    set(dte_control_core_integration_runner
+        "${CMAKE_SOURCE_DIR}/llm/test/dte/run_test_dte_control_core.py")
+    add_test(NAME dte_control_core_integration
+        COMMAND ${PYTHON_EXECUTABLE} -B
+            ${dte_control_core_integration_runner}
+            --npusim $<TARGET_FILE:npusim>)
+    set_tests_properties(dte_control_core_integration PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUN_SERIAL TRUE
+        TIMEOUT 300
+        LABELS "dte;control-core;integration;runtime")
 
     set(program_io_e1_t_runner
         "${CMAKE_SOURCE_DIR}/llm/test/frontend/integration/run_program_io_e1_t.py")

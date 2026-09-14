@@ -11,7 +11,7 @@ from ..schema.swizzle import (
 from .swizzle_topo import SwizzlePlanner
 
 
-SWIZZLE_POLICY_SCHEMA_VERSION = "wafer_frontend.swizzle_topo_policy/v1alpha2"
+SWIZZLE_POLICY_SCHEMA_VERSION = "wafer_frontend.swizzle_topo_policy/v1alpha3"
 
 
 def production_swizzle_policy() -> SwizzlePlanner:
@@ -41,9 +41,11 @@ def production_swizzle_policy() -> SwizzlePlanner:
             )
         ),
         max_candidates=32,
-        max_actions=4096,
+        # The Wang generator applies an exact shape-aware preflight before
+        # building its DAG.  This ceiling covers R=100 AR (79,400 actions).
+        max_actions=80_000,
         max_buffers=512,
-        max_chunk_count=64,
+        max_chunk_count=100,
         allow_unroll_two=True,
     )
     return SwizzlePlanner(hardware, constraints, force_deployment=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextvars import ContextVar
 
 from ..errors import SchemaError
 from ..schema.artifact_manifest import (
@@ -47,13 +48,91 @@ from ..schema.swizzle_unfused_lowering import (
     UnfusedComparisonLoweredProgram,
     UnfusedComparisonOperandABI,
 )
-from ..schema.swizzle_unfused_standard import UnfusedComparisonStandardLinkedProgram
+from ..schema.swizzle_unfused_standard import (
+    UNFUSED_COMPARISON_STANDARD_LINKED_SCHEMA_VERSION,
+    UnfusedComparisonStandardLinkedProgram,
+)
 from .swizzle_standard import _dtype_code, _relocations, _region
+
+
+_PREVALIDATED_LINK_INPUTS: ContextVar[tuple[object, ...] | None] = ContextVar(
+    "unfused_standard_prevalidated_link_inputs", default=None
+)
+
+
+def _has_prevalidated_inputs(*values: object) -> bool:
+    cached = _PREVALIDATED_LINK_INPUTS.get()
+    return (
+        cached is not None
+        and len(cached) == len(values)
+        and all(actual is expected for actual, expected in zip(cached, values))
+    )
 
 
 _SCHEMA = "wafer_frontend.unfused_comparison_standard_lowering/v1alpha1"
 _PRODUCER = "unfused_comparison_standard_lowering"
 
+
+def _validate_compute_wire_addresses(
+    fragment: CommandFragment,
+    definitions: tuple[ProgramSymbolDefinition, ...],
+) -> None:
+    """Fail before finalization when a MATMUL base cannot fit its wire field."""
+
+    definition_by_ref = {item.symbol.id: item for item in definitions}
+    if len(definition_by_ref) != len(definitions):
+        raise SchemaError(
+            "duplicate program symbol definition",
+            path="program_symbol_definitions",
+        )
+    compute_operands = (
+        SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+        SemanticOperandId.COMPUTE_DATA_ADDRESS,
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    )
+    for stream_index, stream in enumerate(fragment.core_streams):
+        relocation_by_key = {
+            (item.record_index, item.operand_id): item
+            for item in stream.address_relocations
+        }
+        if len(relocation_by_key) != len(stream.address_relocations):
+            raise SchemaError(
+                "duplicate address relocation",
+                path=f"fragment.core_streams[{stream_index}].address_relocations",
+            )
+        for record_index, record in enumerate(stream.records):
+            if record.opcode is not RecordOpcode.MATMUL:
+                continue
+            path = (
+                f"fragment.core_streams[{stream_index}].records"
+                f"[{record_index}]"
+            )
+            for operand_id in compute_operands:
+                relocation = relocation_by_key.get((record_index, operand_id))
+                if relocation is None:
+                    raise SchemaError(
+                        "MATMUL is missing an exact address relocation",
+                        path=path,
+                    )
+                definition = definition_by_ref.get(relocation.symbol_ref)
+                if (
+                    relocation.symbol_kind
+                    is not ProgramSymbolKind.ABSOLUTE_ADDRESS
+                    or definition is None
+                    or definition.symbol.kind
+                    is not ProgramSymbolKind.ABSOLUTE_ADDRESS
+                ):
+                    raise SchemaError(
+                        "MATMUL requires an exact absolute address definition",
+                        path=path,
+                    )
+                resolved = definition.value + relocation.addend
+                if not 0 <= resolved <= 0xFFFF:
+                    raise SchemaError(
+                        "compute relocated address cannot fit the uint16 wire: "
+                        f"observed={resolved} limit=65535",
+                        path=path,
+                    )
 
 def _id(kind: str, semantic: object) -> str:
     return stable_artifact_id(
@@ -144,7 +223,11 @@ def _derive_buffers(
             "lifetime_start": lifetime[0],
             "lifetime_end_exclusive": lifetime[1],
             "dtype": first.dtype,
-            "layout": "unfused_comparison_storage/v1",
+            "layout": (
+                terminal.layout
+                if terminal is not None and len(projection.ranks) == 1
+                else "unfused_comparison_storage/v1"
+            ),
             "ownership": (
                 BufferOwnership.BORROWED
                 if first.use is SwizzleValueUse.READ
@@ -209,10 +292,13 @@ def lower_unfused_comparison_fragment(
     core_abi: UnfusedComparisonCoreABI,
     operand_abi: UnfusedComparisonOperandABI,
 ) -> CommandFragment:
-    projection.validate_against(ir1, plan)
-    lowered.validate_against(plan, projection)
-    core_abi.validate_against(ir1, plan, projection)
-    operand_abi.validate_against(ir1, plan, projection)
+    if not _has_prevalidated_inputs(
+        ir1, plan, projection, lowered, core_abi, operand_abi
+    ):
+        projection.validate_against(ir1, plan)
+        lowered.validate_against(plan, projection)
+        core_abi.validate_against(ir1, plan, projection)
+        operand_abi.validate_against(ir1, plan, projection)
     actions = {action.id: action for program in plan.rank_programs for action in program.actions}
     task_bindings = {item.task_ref: item for item in core_abi.task_bindings}
     runtime_bindings = {item.task_ref: item for item in core_abi.runtime_bindings}
@@ -232,6 +318,7 @@ def lower_unfused_comparison_fragment(
     alias_by_value = {item.value_id: item for item in buffers if item.alias_of is not None}
     program_symbols = {}
     runtime_symbols = {}
+    circle_tail_fences = len(plan.rank_programs) > 2 and len(plan.rank_programs) != 4
 
     def program(kind: ProgramSymbolKind, source_ref: str) -> str:
         symbol_id = _id("program_symbol", {"kind": kind, "source_ref": source_ref})
@@ -327,12 +414,41 @@ def lower_unfused_comparison_fragment(
                         RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, abs_symbol[view.value_ref]), *tail,
                     )
                 records.append(RelocatableRecord(owner, opcode, operands))
+                if (
+                    circle_tail_fences
+                    and action.kind is SwizzleActionKind.SEND
+                    and action.peer_rank is not None
+                    and action.rank > action.peer_rank
+                ):
+                    # Circle-method ranks use complementary local order.  The
+                    # higher rank sends after its receive WAIT, so its wave
+                    # fence belongs to this SEND tail rather than to the WAIT.
+                    records.append(RelocatableRecord(
+                        owner,
+                        RecordOpcode.DTE_FENCE,
+                        (),
+                    ))
             elif action.kind is SwizzleActionKind.WAIT:
                 binding = runtime_bindings[owner]
                 runtime(RuntimeSymbolKind.DTE_TOKEN, binding.token_symbol_ref, action.deps[0])
                 records.append(RelocatableRecord(owner, RecordOpcode.DTE_WAIT, (
                     RecordOperand.runtime("token", RuntimeOperandField.DTE_TOKEN, binding.token_symbol_ref),
                 )))
+                # A receive WAIT retires the local RX token, but the matching
+                # synchronous TX can remain live until its completion ACK is
+                # consumed. Close the peer wave before admitting the next one
+                # so the production session bound remains exact.
+                recv = actions[action.deps[0]]
+                if not (
+                    circle_tail_fences
+                    and recv.peer_rank is not None
+                    and action.rank > recv.peer_rank
+                ):
+                    records.append(RelocatableRecord(
+                        owner,
+                        RecordOpcode.DTE_FENCE,
+                        (),
+                    ))
             elif action.kind is SwizzleActionKind.LOCAL_COPY:
                 contract = dtes[owner]
                 binding = runtime_bindings[owner]
@@ -363,7 +479,7 @@ def lower_unfused_comparison_fragment(
                     RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, abs_symbol[accumulator.value_ref]),
                 )))
             elif action.kind is SwizzleActionKind.BARRIER:
-                for event in sorted(events_by_owner[owner], key=lambda item: (item.opcode.value, item.event_symbol_ref)):
+                for event in sorted(events_by_owner[owner], key=lambda item: (item.phase.value, item.event_symbol_ref)):
                     runtime(RuntimeSymbolKind.RUNTIME_CORE, event.source_core_symbol_ref, str(event.source_core))
                     runtime(RuntimeSymbolKind.RUNTIME_CORE, event.destination_core_symbol_ref, str(event.destination_core))
                     runtime(RuntimeSymbolKind.EVENT_TAG, event.event_symbol_ref, event.barrier_ref)
@@ -382,7 +498,7 @@ def lower_unfused_comparison_fragment(
                     )))
     streams = []
     for core, records in sorted(records_by_core.items(), key=lambda item: (item[0].die_id, item[0].local_core_id)):
-        runtime_relocations, address_relocations = _relocations(records)
+        runtime_relocations, address_relocations = _relocations(records, {})
         streams.append(CoreFragmentStream(core, tuple(records), runtime_relocations, address_relocations))
     used_program_symbol_refs = {
         relocation.symbol_ref
@@ -416,11 +532,17 @@ def link_unfused_comparison_manifest(
     operand_abi: UnfusedComparisonOperandABI,
     fragment: CommandFragment,
 ) -> LinkedProgramManifest:
-    expected = lower_unfused_comparison_fragment(
+    if not _has_prevalidated_inputs(
         ir1, plan, projection, lowered, core_abi, operand_abi
-    )
-    if fragment != expected:
-        raise SchemaError("fragment is not the exact UNFUSED producer result", path="fragment")
+    ):
+        expected = lower_unfused_comparison_fragment(
+            ir1, plan, projection, lowered, core_abi, operand_abi
+        )
+        if fragment != expected:
+            raise SchemaError(
+                "fragment is not the exact UNFUSED producer result",
+                path="fragment",
+            )
     actions = {action.id: action for program in plan.rank_programs for action in program.actions}
     task_core = {item.task_ref: item.logical_core for item in core_abi.task_bindings}
     task_binding_by_core = {item.logical_core: item for item in core_abi.task_bindings}
@@ -428,15 +550,56 @@ def link_unfused_comparison_manifest(
     root_storage_ref = _root_storage_refs(core_abi)
     buffer_by_id = {item.id: item for item in fragment.buffer_abi}
     buffer_by_binding = {item.binding_id: item for item in fragment.buffer_abi}
+    if (
+        len(buffer_by_id) != len(fragment.buffer_abi)
+        or len(buffer_by_binding) != len(fragment.buffer_abi)
+    ):
+        raise SchemaError("duplicate buffer witness", path="fragment.buffer_abi")
     buffer_by_storage = defaultdict(list)
+    buffer_by_value = defaultdict(list)
+    roots_by_region_core = defaultdict(list)
     for item in fragment.buffer_abi:
         buffer_by_storage[item.storage_id].append(item)
+        buffer_by_value[item.value_id].append(item)
+        if item.alias_of is None:
+            roots_by_region_core[(item.region_ref, item.logical_core)].append(item)
+    operands_by_task = defaultdict(list)
+    rank_by_value = {}
+    rank_by_storage_core = {}
+    for operand in operand_abi.operands:
+        operands_by_task[operand.task_ref].append(operand)
+        rank = actions[operand.task_ref].rank
+        previous_rank = rank_by_value.setdefault(operand.value_ref, rank)
+        if previous_rank != rank:
+            raise SchemaError(
+                "value has inconsistent rank owners",
+                path="operand_abi.operands",
+            )
+        storage_key = (operand.storage_ref, task_core[operand.task_ref])
+        previous_rank = rank_by_storage_core.setdefault(storage_key, rank)
+        if previous_rank != rank:
+            raise SchemaError(
+                "storage has inconsistent rank owners",
+                path="operand_abi.operands",
+            )
+    for values in operands_by_task.values():
+        values.sort(key=lambda item: item.ordinal)
+    record_action_by_key = {
+        (stream.logical_core, index): record.source_global_action_id
+        for stream in fragment.core_streams
+        for index, record in enumerate(stream.records)
+    }
+    if len(record_action_by_key) != sum(
+        len(stream.records) for stream in fragment.core_streams
+    ):
+        raise SchemaError("duplicate record witness", path="fragment.core_streams")
     symbol_by_id = {item.id: item for item in fragment.program_symbols}
     symbol_uses = defaultdict(set)
     for stream in fragment.core_streams:
         for relocation in stream.address_relocations:
             symbol_uses[relocation.symbol_ref].add(stream.logical_core)
-    address_bindings = []
+    address_binding_by_key = {}
+    binding_keys_by_symbol = defaultdict(list)
     for stream in fragment.core_streams:
         for relocation in stream.address_relocations:
             record = stream.records[relocation.record_index]
@@ -462,82 +625,124 @@ def link_unfused_comparison_manifest(
                 record.opcode is RecordOpcode.LOCAL_REDUCE
                 and relocation.operand_id is SemanticOperandId.SOURCE_ADDRESS
             ):
-                views = sorted(
-                    (item for item in operand_abi.operands if item.task_ref == record.source_global_action_id),
-                    key=lambda item: item.ordinal,
-                )
-                candidates = [
-                    next(item for item in fragment.buffer_abi if item.value_id == view.value_ref)
-                    for view in views[:2]
-                ]
+                views = operands_by_task[record.source_global_action_id]
+                candidates = []
+                for view in views[:2]:
+                    matching = buffer_by_value[view.value_ref]
+                    if len(matching) != 1:
+                        raise SchemaError(
+                            "reduce view requires one exact buffer witness",
+                            path="fragment.buffer_abi",
+                        )
+                    candidates.append(matching[0])
             else:
                 raise SchemaError(
                     "program symbol has no exact UNFUSED storage witness",
                     path="fragment.program_symbols",
                 )
             key = (fragment.id, stream.logical_core, relocation.record_index, relocation.operand_id)
-            if not any(
-                (item.fragment_id, item.logical_core, item.fragment_record_index, item.operand_id) == key
-                for item in address_bindings
-            ):
-                candidates = sorted(candidates, key=lambda item: (item.region_offset_bytes, item.id))
-                address_bindings.append(AddressOperandBinding(
+            if key not in address_binding_by_key:
+                candidates = sorted(
+                    candidates, key=lambda item: (item.region_offset_bytes, item.id)
+                )
+                address_binding_by_key[key] = AddressOperandBinding(
                     fragment.id,
                     stream.logical_core,
                     relocation.record_index,
                     relocation.operand_id,
                     tuple(item.id for item in candidates),
                     tuple(item.tensor_slice for item in candidates),
-                ))
+                )
+                binding_keys_by_symbol[relocation.symbol_ref].append(key)
+    address_bindings = list(address_binding_by_key.values())
     program_definitions = []
     for symbol in fragment.program_symbols:
         cores = tuple(sorted(symbol_uses[symbol.id], key=lambda item: (item.die_id, item.local_core_id)))
         if symbol.kind is ProgramSymbolKind.SRAM_LABEL:
             name, value, size = f"unf_label_{symbol.id[-16:]}", 0, 0
         elif symbol.kind is ProgramSymbolKind.SRAM_REGION:
-            root = next(
-                item for item in fragment.buffer_abi
-                if item.alias_of is None and item.region_ref == symbol.source_ref
-                and item.logical_core in cores
+            if not cores:
+                raise SchemaError(
+                    "SRAM region symbol requires exact core witnesses",
+                    path="fragment.program_symbols",
+                )
+            regions = []
+            for core in cores:
+                roots = roots_by_region_core[(symbol.source_ref, core)]
+                if not roots:
+                    raise SchemaError(
+                        "SRAM region symbol is missing its root buffer",
+                        path="fragment.program_symbols",
+                    )
+                root = roots[0]
+                storage_ref = root_storage_ref[root.storage_id]
+                rank = rank_by_storage_core.get((storage_ref, core))
+                if rank is None:
+                    raise SchemaError(
+                        "root buffer is missing its exact rank owner",
+                        path="operand_abi.operands",
+                    )
+                regions.append(_region(
+                    ir1, storage_binding[(rank, storage_ref)]
+                ))
+            region = regions[0]
+            region_witness = (
+                region.name, region.base_bytes, region.size_bytes
             )
-            binding = storage_binding[(actions[next(
-                view.task_ref for view in operand_abi.operands
-                if view.storage_ref == root_storage_ref[root.storage_id]
-                and task_core[view.task_ref] == root.logical_core
-            )].rank, root_storage_ref[root.storage_id])]
-            region = _region(ir1, binding)
-            name, value, size = region.name, region.base_bytes, region.size_bytes
+            if any(
+                (item.name, item.base_bytes, item.size_bytes) != region_witness
+                for item in regions[1:]
+            ):
+                raise SchemaError(
+                    "shared SRAM region symbol has inconsistent witnesses",
+                    path="fragment.program_symbols",
+                )
+            name, value, size = region_witness
         elif symbol.source_ref in buffer_by_binding:
             abi = buffer_by_binding[symbol.source_ref]
-            root = next(item for item in fragment.buffer_abi if item.binding_id == abi.alias_of)
-            binding = storage_binding[(actions[next(
-                view.task_ref for view in operand_abi.operands if view.value_ref == abi.value_id
-            )].rank, root_storage_ref[root.storage_id])]
+            root = buffer_by_binding.get(abi.alias_of)
+            if root is None or root.alias_of is not None:
+                raise SchemaError(
+                    "absolute symbol is missing its exact root buffer",
+                    path="fragment.program_symbols",
+                )
+            rank = rank_by_value.get(abi.value_id)
+            if rank is None:
+                raise SchemaError(
+                    "absolute symbol is missing its exact rank owner",
+                    path="operand_abi.operands",
+                )
+            binding = storage_binding[
+                (rank, root_storage_ref[root.storage_id])
+            ]
             name = f"unf_abs_{symbol.id[-16:]}"
             value = binding.base_address + (abi.region_offset_bytes - root.region_offset_bytes)
             size = abi.size_bytes
         else:
             matching = [
-                item for item in address_bindings
-                if any(
-                    stream.logical_core == item.logical_core
-                    and relocation.record_index == item.fragment_record_index
-                    and relocation.operand_id == item.operand_id
-                    and relocation.symbol_ref == symbol.id
-                    for stream in fragment.core_streams
-                    for relocation in stream.address_relocations
-                )
+                address_binding_by_key[key]
+                for key in binding_keys_by_symbol[symbol.id]
             ]
             if len(matching) != 1:
                 raise SchemaError("reduce span requires one exact witness", path="fragment.program_symbols")
             abis = [buffer_by_id[ref] for ref in matching[0].buffer_abi_ids]
             starts = sorted((item.region_offset_bytes, item.size_bytes) for item in abis)
-            root = next(item for item in fragment.buffer_abi if item.binding_id == abis[0].alias_of)
-            action = actions[next(
-                stream.records[matching[0].fragment_record_index].source_global_action_id
-                for stream in fragment.core_streams
-                if stream.logical_core == matching[0].logical_core
-            )]
+            root = buffer_by_binding.get(abis[0].alias_of)
+            if root is None or root.alias_of is not None:
+                raise SchemaError(
+                    "reduce span is missing its exact root buffer",
+                    path="fragment.program_symbols",
+                )
+            action_ref = record_action_by_key.get((
+                matching[0].logical_core,
+                matching[0].fragment_record_index,
+            ))
+            if action_ref is None:
+                raise SchemaError(
+                    "reduce span is missing its exact record witness",
+                    path="fragment.core_streams",
+                )
+            action = actions[action_ref]
             binding = storage_binding[
                 (action.rank, root_storage_ref[root.storage_id])
             ]
@@ -545,6 +750,9 @@ def link_unfused_comparison_manifest(
             size = sum(item[1] for item in starts)
             name = f"unf_reduce_{symbol.id[-16:]}"
         program_definitions.append(ProgramSymbolDefinition(symbol, name, value, size, cores))
+    _validate_compute_wire_addresses(
+        fragment, tuple(program_definitions),
+    )
     runtime_defs = []
     flow_by_task = {
         task_ref: flow for flow in projection.flows
@@ -557,42 +765,152 @@ def link_unfused_comparison_manifest(
         for dependency in action.deps
         if actions[dependency].kind is SwizzleActionKind.RECV
     }
-    local_copy_token = {
-        item.token_symbol_ref: item.task_ref
-        for item in core_abi.runtime_bindings
-        if actions[item.task_ref].kind is SwizzleActionKind.LOCAL_COPY
+    flow_by_id = {flow.id: flow for flow in projection.flows}
+    if len(flow_by_id) != len(projection.flows):
+        raise SchemaError("duplicate flow id", path="projection.flows")
+    fsm_flow_by_symbol = {}
+    token_owner_by_symbol = {}
+    peer_core_by_symbol = {}
+    for binding in core_abi.runtime_bindings:
+        if binding.fsm_symbol_ref is not None:
+            flow = flow_by_id.get(binding.flow_ref)
+            if flow is None:
+                raise SchemaError(
+                    "FSM binding requires one exact flow",
+                    path="core_abi.runtime_bindings",
+                )
+            previous = fsm_flow_by_symbol.setdefault(
+                binding.fsm_symbol_ref, flow
+            )
+            if previous is not flow:
+                raise SchemaError(
+                    "FSM symbol maps to multiple flows",
+                    path="core_abi.runtime_bindings",
+                )
+        if (
+            binding.token_symbol_ref is not None
+            and actions[binding.task_ref].kind
+            in (SwizzleActionKind.RECV, SwizzleActionKind.LOCAL_COPY)
+        ):
+            if binding.token_symbol_ref in token_owner_by_symbol:
+                raise SchemaError(
+                    "token symbol has duplicate owner",
+                    path="core_abi.runtime_bindings",
+                )
+            token_owner_by_symbol[binding.token_symbol_ref] = binding.task_ref
+        if binding.peer_symbol_ref is not None:
+            if binding.peer_symbol_ref in peer_core_by_symbol:
+                raise SchemaError(
+                    "peer symbol has duplicate core witness",
+                    path="core_abi.runtime_bindings",
+                )
+            peer_core_by_symbol[binding.peer_symbol_ref] = binding.peer_core
+    event_by_symbol = {}
+    event_core_by_symbol = {}
+    for event in core_abi.barrier_events:
+        previous_event = event_by_symbol.get(event.event_symbol_ref)
+        if previous_event is None:
+            event_by_symbol[event.event_symbol_ref] = event
+        elif (
+            (
+                previous_event.source_core,
+                previous_event.destination_core,
+                previous_event.source_task_ref,
+                previous_event.destination_task_ref,
+            )
+            != (
+                event.source_core,
+                event.destination_core,
+                event.source_task_ref,
+                event.destination_task_ref,
+            )
+        ):
+            raise SchemaError(
+                "event symbol has inconsistent witnesses",
+                path="core_abi.barrier_events",
+            )
+        for symbol_ref, represented in (
+            (event.source_core_symbol_ref, event.source_core),
+            (event.destination_core_symbol_ref, event.destination_core),
+        ):
+            previous_core = event_core_by_symbol.get(symbol_ref)
+            if previous_core is None:
+                event_core_by_symbol[symbol_ref] = represented
+            elif previous_core != represented:
+                raise SchemaError(
+                    "event core symbol has inconsistent witnesses",
+                    path="core_abi.barrier_events",
+                )
+    if set(event_core_by_symbol) & set(peer_core_by_symbol):
+        raise SchemaError(
+            "runtime core symbol has ambiguous witness",
+            path="fragment.runtime_symbols",
+        )
+    runtime_core_by_symbol = {
+        **peer_core_by_symbol,
+        **event_core_by_symbol,
     }
     for symbol in fragment.runtime_symbols:
         if symbol.kind is RuntimeSymbolKind.DTE_FSM:
-            flow = next(
-                flow for flow in projection.flows
-                if any(item.fsm_symbol_ref == symbol.id and item.flow_ref == flow.id for item in core_abi.runtime_bindings)
-            )
+            flow = fsm_flow_by_symbol.get(symbol.id)
+            if flow is None:
+                raise SchemaError(
+                    "FSM symbol is missing its exact flow",
+                    path="fragment.runtime_symbols",
+                )
             cores = tuple(sorted((task_core[flow.send_task_ref], task_core[flow.recv_task_ref]), key=lambda item: (item.die_id, item.local_core_id)))
             source, destination = flow.send_task_ref, flow.recv_task_ref
         elif symbol.kind is RuntimeSymbolKind.DTE_TOKEN:
-            recv = next((item.task_ref for item in core_abi.runtime_bindings if item.token_symbol_ref == symbol.id and actions[item.task_ref].kind is SwizzleActionKind.RECV), None)
-            owner = recv if recv is not None else local_copy_token[symbol.id]
+            owner = token_owner_by_symbol.get(symbol.id)
+            if owner is None:
+                raise SchemaError(
+                    "token symbol is missing its exact owner",
+                    path="fragment.runtime_symbols",
+                )
             cores = (task_core[owner],)
             source, destination = owner, wait_by_recv.get(owner, owner)
         elif symbol.kind is RuntimeSymbolKind.RUNTIME_CORE:
-            event = next((item for item in core_abi.barrier_events if symbol.id in (item.source_core_symbol_ref, item.destination_core_symbol_ref)), None)
-            if event is not None:
-                represented = event.source_core if symbol.id == event.source_core_symbol_ref else event.destination_core
-            else:
-                represented = next(item.peer_core for item in core_abi.runtime_bindings if item.peer_symbol_ref == symbol.id)
+            represented = runtime_core_by_symbol.get(symbol.id)
+            if represented is None:
+                raise SchemaError(
+                    "runtime core symbol is missing its exact witness",
+                    path="fragment.runtime_symbols",
+                )
             cores, source, destination = (represented,), None, None
         elif symbol.kind is RuntimeSymbolKind.EVENT_TAG:
-            event = next(item for item in core_abi.barrier_events if item.event_symbol_ref == symbol.id)
+            event = event_by_symbol.get(symbol.id)
+            if event is None:
+                raise SchemaError(
+                    "event symbol is missing its exact witness",
+                    path="fragment.runtime_symbols",
+                )
             cores = tuple(sorted((event.source_core, event.destination_core), key=lambda item: (item.die_id, item.local_core_id)))
             source, destination = event.source_task_ref, event.destination_task_ref
         else:
             raise SchemaError("unexpected runtime symbol kind", path="fragment.runtime_symbols")
         runtime_defs.append(RuntimeSymbolDefinition(symbol, cores, source, destination))
     active_cores = tuple(stream.logical_core for stream in fragment.core_streams)
+    first_by_core = {}
+    for binding in core_abi.task_bindings:
+        previous = first_by_core.get(binding.logical_core)
+        if previous is None or binding.core_order < previous.core_order:
+            first_by_core[binding.logical_core] = binding
+        elif (
+            binding.core_order == previous.core_order
+            and binding.task_ref != previous.task_ref
+        ):
+            raise SchemaError(
+                "core has duplicate first task order",
+                path="core_abi.task_bindings",
+            )
     starts = []
     for core in active_cores:
-        first = min((item for item in core_abi.task_bindings if item.logical_core == core), key=lambda item: item.core_order)
+        first = first_by_core.get(core)
+        if first is None:
+            raise SchemaError(
+                "active core is missing its first task",
+                path="core_abi.task_bindings",
+            )
         symbol = RuntimeSymbol(_id("start_tag", {"projection": projection.id, "core": core, "first": first.task_ref}), RuntimeSymbolKind.START_TAG, first.task_ref)
         runtime_defs.append(RuntimeSymbolDefinition(symbol, (core,), None, None))
         starts.append(LogicalStartEvent(core, symbol.id, 1))
@@ -662,6 +980,72 @@ def link_unfused_comparison_manifest(
     result.validate()
     return result
 
+
+def _link_unfused_comparison_program_prevalidated(
+    ir1: IR1,
+    plan: UnfusedComparisonPlan,
+    projection: UnfusedComparisonProjection,
+    lowered: UnfusedComparisonLoweredProgram,
+    core_abi: UnfusedComparisonCoreABI,
+    operand_abi: UnfusedComparisonOperandABI,
+) -> UnfusedComparisonStandardLinkedProgram:
+    """Trusted path for exact objects built earlier in this builder session."""
+
+    if (
+        plan.source_ir1_id != ir1.id
+        or projection.source_ir1_id != ir1.id
+        or projection.source_plan_ref != plan.id
+        or projection.problem_ref != plan.problem.id
+        or projection.baseline_ref != plan.baseline.id
+        or projection.pattern is not plan.pattern
+        or lowered.source_plan_ref != plan.id
+        or lowered.source_projection_ref != projection.id
+        or core_abi.source_ir1_id != ir1.id
+        or core_abi.source_plan_ref != plan.id
+        or core_abi.source_projection_ref != projection.id
+        or operand_abi.source_ir1_id != ir1.id
+        or operand_abi.source_plan_ref != plan.id
+        or operand_abi.source_projection_ref != projection.id
+    ):
+        raise SchemaError("prevalidated input closure drifted", path="inputs")
+    values = (ir1, plan, projection, lowered, core_abi, operand_abi)
+    token = _PREVALIDATED_LINK_INPUTS.set(values)
+    try:
+        fragment = lower_unfused_comparison_fragment(*values)
+        manifest = link_unfused_comparison_manifest(*values, fragment)
+    finally:
+        _PREVALIDATED_LINK_INPUTS.reset(token)
+    if (
+        fragment.producer_pass != "unfused_comparison_standard_lowering"
+        or fragment.source_global_dag_id != projection.id
+        or manifest.producer_pass != "unfused_comparison_standard_linker"
+        or manifest.source_ir1_id != ir1.id
+        or manifest.source_projection_id != projection.id
+        or manifest.source_schedule_set_id != core_abi.id
+        or manifest.source_global_dag_id != projection.id
+        or manifest.fragments != (fragment,)
+    ):
+        raise SchemaError("prevalidated output closure drifted", path="result")
+    semantic = {
+        "ir1": ir1,
+        "plan": plan,
+        "projection": projection,
+        "lowered": lowered,
+        "core_abi": core_abi,
+        "operand_abi": operand_abi,
+        "fragment": fragment,
+        "manifest": manifest,
+    }
+    return UnfusedComparisonStandardLinkedProgram(
+        schema_version=UNFUSED_COMPARISON_STANDARD_LINKED_SCHEMA_VERSION,
+        producer_pass="unfused_comparison_standard_linker",
+        id=stable_artifact_id(
+            "unfused_comparison_standard_linked",
+            semantic,
+            schema_version=UNFUSED_COMPARISON_STANDARD_LINKED_SCHEMA_VERSION,
+        ),
+        **semantic,
+    )
 
 def link_unfused_comparison_program(
     ir1: IR1,

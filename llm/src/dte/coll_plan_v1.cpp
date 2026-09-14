@@ -341,11 +341,23 @@ ValidatedSpec Validate(const IsaV1CollectiveSpec &spec,
     RequireWithin(scratch_bytes, capacity.max_derived_bytes,
                   "ISA-v1 preflight scratch exceeds planner byte capacity");
 
-    // Preflight the exact canonical greedy waves without materializing child
-    // flows. The loop is bounded by max_children, which was checked above.
+    // Preflight deterministic waves without materializing child flows.
+    // Symmetric collectives use cyclic deltas so a production-capacity wave
+    // gives every rank exactly one send and one receive. Rooted and P2P
+    // collectives retain their canonical pair ordering.
     std::vector<uint32_t> sessions(n, 0);
     std::vector<uint64_t> receive_bytes(n, 0);
     uint64_t children_in_wave = 0;
+    auto finish_wave = [&]() {
+        if (children_in_wave == 0) return;
+        out.wave_count = CheckedAdd(
+            out.wave_count, 1, "ISA-v1 wave count overflows");
+        RequireWithin(out.wave_count, capacity.max_waves,
+                      "ISA-v1 wave count exceeds planner capacity");
+        std::fill(sessions.begin(), sessions.end(), 0);
+        std::fill(receive_bytes.begin(), receive_bytes.end(), 0);
+        children_in_wave = 0;
+    };
     auto admit = [&](uint16_t src, uint16_t dst, uint64_t bytes) {
         auto fits = [&]() {
             return sessions[src] < capacity.max_sessions_per_rank_per_wave &&
@@ -353,18 +365,7 @@ ValidatedSpec Validate(const IsaV1CollectiveSpec &spec,
                    bytes <= capacity.max_receive_bytes_per_rank_per_wave -
                                 receive_bytes[dst];
         };
-        if (!fits()) {
-            if (children_in_wave == 0)
-                throw std::invalid_argument(
-                    "ISA-v1 one child cannot fit planner capacity");
-            out.wave_count = CheckedAdd(
-                out.wave_count, 1, "ISA-v1 wave count overflows");
-            RequireWithin(out.wave_count, capacity.max_waves,
-                          "ISA-v1 wave count exceeds planner capacity");
-            std::fill(sessions.begin(), sessions.end(), 0);
-            std::fill(receive_bytes.begin(), receive_bytes.end(), 0);
-            children_in_wave = 0;
-        }
+        if (!fits()) finish_wave();
         if (!fits())
             throw std::invalid_argument(
                 "ISA-v1 one child cannot fit an empty wave");
@@ -373,7 +374,7 @@ ValidatedSpec Validate(const IsaV1CollectiveSpec &spec,
         receive_bytes[dst] += bytes;
         ++children_in_wave;
     };
-    auto admit_pairs = [&](uint64_t bytes) {
+    auto admit_non_symmetric_pairs = [&](uint64_t bytes) {
         const uint16_t count = static_cast<uint16_t>(n);
         if (out.op == CollOp::P2P) {
             if (spec.p2p_source_rank != spec.p2p_destination_rank)
@@ -385,25 +386,33 @@ ValidatedSpec Validate(const IsaV1CollectiveSpec &spec,
                 if (spec.root_rank != dst) admit(spec.root_rank, dst, bytes);
             return;
         }
-        if (IsRootReceive(out.op)) {
-            for (uint16_t src = 0; src < count; ++src)
-                if (src != spec.root_rank) admit(src, spec.root_rank, bytes);
-            return;
-        }
         for (uint16_t src = 0; src < count; ++src)
-            for (uint16_t dst = 0; dst < count; ++dst)
-                if (src != dst) admit(src, dst, bytes);
+            if (src != spec.root_rank) admit(src, spec.root_rank, bytes);
     };
     uint64_t preflight_chunk_offset = 0;
     while (preflight_chunk_offset < spec.length_bytes) {
         const uint64_t bytes = std::min(
             out.chunk_bytes, spec.length_bytes - preflight_chunk_offset);
-        admit_pairs(bytes);
+        if (IsSymmetric(out.op)) {
+            const uint16_t count = static_cast<uint16_t>(n);
+            for (uint16_t delta = 1; delta < count; ++delta) {
+                for (uint16_t src = 0; src < count; ++src) {
+                    const uint16_t dst = static_cast<uint16_t>(
+                        (static_cast<uint32_t>(src) + delta) % count);
+                    admit(src, dst, bytes);
+                }
+                // Keep delta boundaries canonical even when a larger custom
+                // session capacity could pack multiple cyclic rounds.
+                finish_wave();
+            }
+        } else {
+            admit_non_symmetric_pairs(bytes);
+        }
         preflight_chunk_offset += bytes;
     }
-    if (children_in_wave != 0 || out.wave_count == 0) {
-        out.wave_count =
-            CheckedAdd(out.wave_count, 1, "ISA-v1 wave count overflows");
+    finish_wave();
+    if (out.wave_count == 0) {
+        out.wave_count = 1;
         RequireWithin(out.wave_count, capacity.max_waves,
                       "ISA-v1 wave count exceeds planner capacity");
     }
@@ -662,8 +671,9 @@ IsaV1CollectivePlan PlanIsaV1Collective(
     if (plan.child_flows.size() != valid.child_count)
         throw std::logic_error("ISA-v1 internal child count mismatch");
 
-    // Canonical greedy waves.  A wave never exceeds either endpoint-session
-    // capacity or aggregate receive bytes on any rank.
+    // Materialize the same deterministic schedule used by preflight.
+    // Child/FSM order remains canonical chunk/source/destination order; only
+    // child-to-wave assignment follows cyclic deltas for symmetric ops.
     std::vector<uint32_t> sessions(n, 0);
     std::vector<uint64_t> receive_bytes(n, 0);
     IsaV1Wave current;
@@ -672,8 +682,12 @@ IsaV1CollectivePlan PlanIsaV1Collective(
         std::fill(sessions.begin(), sessions.end(), 0);
         std::fill(receive_bytes.begin(), receive_bytes.end(), 0);
     };
-    reset_wave();
-    for (uint32_t index = 0; index < plan.child_flows.size(); ++index) {
+    auto finish_wave = [&]() {
+        if (current.child_indices.empty()) return;
+        plan.waves.push_back(std::move(current));
+        reset_wave();
+    };
+    auto admit = [&](uint32_t index) {
         const auto &flow = plan.child_flows[index];
         auto fits = [&]() {
             return sessions[flow.source_rank] <
@@ -684,13 +698,7 @@ IsaV1CollectivePlan PlanIsaV1Collective(
                        capacity.max_receive_bytes_per_rank_per_wave -
                            receive_bytes[flow.destination_rank];
         };
-        if (!fits()) {
-            if (current.child_indices.empty())
-                throw std::invalid_argument(
-                    "ISA-v1 one child cannot fit planner capacity");
-            plan.waves.push_back(std::move(current));
-            reset_wave();
-        }
+        if (!fits()) finish_wave();
         if (!fits())
             throw std::invalid_argument(
                 "ISA-v1 one child cannot fit an empty wave");
@@ -698,9 +706,37 @@ IsaV1CollectivePlan PlanIsaV1Collective(
         ++sessions[flow.source_rank];
         ++sessions[flow.destination_rank];
         receive_bytes[flow.destination_rank] += flow.length_bytes;
+    };
+    reset_wave();
+    if (IsSymmetric(valid.op)) {
+        const uint16_t count = static_cast<uint16_t>(n);
+        const uint64_t pairs_per_chunk = valid.remote_pair_count;
+        for (uint64_t chunk = 0; chunk < valid.chunk_count; ++chunk) {
+            for (uint16_t delta = 1; delta < count; ++delta) {
+                for (uint16_t src = 0; src < count; ++src) {
+                    const uint16_t dst = static_cast<uint16_t>(
+                        (static_cast<uint32_t>(src) + delta) % count);
+                    const uint64_t destination_ordinal =
+                        dst < src ? dst : static_cast<uint64_t>(dst) - 1;
+                    const uint64_t pair_ordinal =
+                        static_cast<uint64_t>(src) * (n - 1) +
+                        destination_ordinal;
+                    const uint64_t index =
+                        chunk * pairs_per_chunk + pair_ordinal;
+                    if (index >= plan.child_flows.size())
+                        throw std::logic_error(
+                            "ISA-v1 round-robin child index mismatch");
+                    admit(static_cast<uint32_t>(index));
+                }
+                finish_wave();
+            }
+        }
+    } else {
+        for (uint32_t index = 0; index < plan.child_flows.size(); ++index)
+            admit(index);
     }
-    if (!current.child_indices.empty() || plan.waves.empty())
-        plan.waves.push_back(std::move(current));
+    finish_wave();
+    if (plan.waves.empty()) plan.waves.emplace_back();
 
     if (plan.waves.size() != valid.wave_count)
         throw std::logic_error("ISA-v1 internal wave count mismatch");

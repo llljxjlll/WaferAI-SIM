@@ -20,6 +20,9 @@
         "command_slot_area_um2": 0.0,
         "port_bit_area_um2": 0.0
     },
+    "control_cores": {
+        "mode": "legacy_shared"
+    },
     "operand": {
         "comp_util": 0.7,
         "core_credit": 8,

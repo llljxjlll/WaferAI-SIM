@@ -84,7 +84,12 @@ void ValidateLsuPrim(const Lsu_mem_prim &prim) {
 
 } // namespace
 void Lsu_mem_prim::refreshPrimType() {
-    setPrimMainCategory(IsTransfer(op) ? MEM_PRIM : SYNC_PRIM);
+    // ISSUE is the only asynchronous LSU operation.  Blocking LOAD/STORE
+    // execute Issue()+Wait() inside taskCoreDefault and therefore must stay
+    // on the ordered executor path; classifying them as MEM_PRIM lets the
+    // main stream advance to the next record (including SEND_DONE) before
+    // the Wait completes.
+    setPrimMainCategory(op == LsuMemOp::ISSUE ? MEM_PRIM : SYNC_PRIM);
 }
 
 

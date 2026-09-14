@@ -1,5 +1,7 @@
 #include <cmath>
+#include <map>
 #include <regex>
+#include <sstream>
 
 #include "common/config.h"
 #include "defs/global.h"
@@ -10,6 +12,46 @@
 #include "memory/sram/sram_region.h"
 #include "utils/config_utils.h"
 #include "utils/print_utils.h"
+
+namespace {
+
+std::string FormatCoreRanges(const std::vector<int> &cores) {
+    std::ostringstream out;
+    for (size_t begin = 0; begin < cores.size();) {
+        size_t end = begin;
+        while (end + 1 < cores.size() && cores[end + 1] == cores[end] + 1)
+            ++end;
+        if (begin != 0) out << ",";
+        out << cores[begin];
+        if (end != begin) out << "-" << cores[end];
+        begin = end + 1;
+    }
+    return out.str();
+}
+
+void LogControlCoreConfigs() {
+    std::map<std::string, std::vector<int>> groups;
+    for (const auto &[core_id, config] : g_core_hw_config) {
+        const auto &control = config->control_cores;
+        std::ostringstream description;
+        if (control.mode == ControlCoreMode::LEGACY_SHARED) {
+            description << "mode=legacy_shared";
+        } else {
+            description << "mode=dual_dte_dedicated"
+                        << " queue=" << control.dte.command_queue_depth
+                        << " width=" << control.dte.dispatch_width
+                        << " dispatch=" << control.dte.dispatch_latency_ns
+                        << "ns notify="
+                        << control.dte.completion_notify_latency_ns << "ns";
+        }
+        groups[description.str()].push_back(core_id);
+    }
+    for (const auto &[description, cores] : groups)
+        LOG_INFO(CONFIG) << "ControlCore config: " << description
+                         << " cores=" << FormatCoreRanges(cores);
+}
+
+} // namespace
 
 int GetDefinedParam(string var) {
     for (auto v : vtable) {
@@ -179,11 +221,35 @@ void ParseHardwareConfig(json j) {
             GPU_DRAM_ALIGNED = conf_gpu["dram_aligned"];
     }
 
+    json global_control_cores = json::object();
+    if (j.contains("control_cores")) {
+        if (!j.at("control_cores").is_object())
+            throw std::invalid_argument(
+                "control_cores must be an object, got " +
+                j.at("control_cores").dump());
+        global_control_cores = j.at("control_cores");
+    }
+    const auto effective_core_config =
+        [&global_control_cores](const json &core) {
+            json effective = core;
+            json effective_control_cores = global_control_cores;
+            if (core.contains("control_cores")) {
+                const json &override = core.at("control_cores");
+                if (override.is_object() && override.contains("mode") &&
+                    override.at("mode") == "legacy_shared" &&
+                    !override.contains("dte"))
+                    effective_control_cores.erase("dte");
+                effective_control_cores.merge_patch(override);
+            }
+            effective["control_cores"] = effective_control_cores;
+            return effective;
+        };
+
     auto config_cores = j["cores"];
-    CoreHWConfig sample = config_cores[0];
+    CoreHWConfig sample = effective_core_config(config_cores[0]);
 
     for (auto core : config_cores) {
-        CoreHWConfig c = core;
+        CoreHWConfig c = effective_core_config(core);
         for (int i = sample.id + 1; i < c.id; i++) {
             ExuConfig *exu =
                 new ExuConfig(MAC_Array, sample.exu->x_dims, sample.exu->count);
@@ -194,7 +260,8 @@ void ParseHardwareConfig(json j) {
                 i, new CoreHWConfig(i, exu, sfu, vec, sample.dram_config,
                                     sample.dram_bw, sample.sram_bitwidth,
                                     sample.dte_channel_count,
-                                    sample.dte_bit_width)));
+                                    sample.dte_bit_width,
+                                    sample.control_cores)));
         }
 
         ExuConfig *exu = new ExuConfig(MAC_Array, c.exu->x_dims, c.exu->count);
@@ -204,7 +271,8 @@ void ParseHardwareConfig(json j) {
             make_pair(c.id, new CoreHWConfig(c.id, exu, sfu, vec, c.dram_config,
                                              c.dram_bw, c.sram_bitwidth,
                                              c.dte_channel_count,
-                                             c.dte_bit_width)));
+                                             c.dte_bit_width,
+                                             c.control_cores)));
 
         delete sample.exu;
         delete sample.sfu;
@@ -225,8 +293,11 @@ void ParseHardwareConfig(json j) {
             i, new CoreHWConfig(i, exu, sfu, vec, sample.dram_config,
                                 sample.dram_bw, sample.sram_bitwidth,
                                 sample.dte_channel_count,
-                                sample.dte_bit_width)));
+                                sample.dte_bit_width,
+                                sample.control_cores)));
     }
+
+    LogControlCoreConfigs();
 
     for (auto core : g_core_hw_config)
         core.second->printSelf();

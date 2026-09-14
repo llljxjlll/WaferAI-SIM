@@ -9,6 +9,7 @@ from ..schema.action import CollectiveAlgorithm, FusionPlan
 from ..schema.artifact_manifest import (
     COMMAND_FRAGMENT_SCHEMA_VERSION,
     AddressRelocation,
+    BufferABI,
     CommandFragment,
     CoreFragmentStream,
     FragmentKind,
@@ -45,6 +46,7 @@ from ..schema.ir2 import (
 from .coarse import (
     _binding_for_use,
     _buffer_abi,
+    _lower_local_noc,
     _program_symbol,
     _require_matmul,
     _view_addend_for_use,
@@ -656,9 +658,12 @@ class NaiveIsaRegionLowering:
                     "ISA region v1 supports only NAIVE DIRECT fused GEMM->ReduceScatter",
                     path="plan",
                 )
-        elif plan.pattern is not FusionPattern.GEMM_RS:
+        elif plan.pattern not in (
+            FusionPattern.GEMM_RS,
+            FusionPattern.AG_GEMM,
+        ):
             raise SchemaError(
-                "Swizzle ISA region v1 supports only the common-IR2 GEMM_RS bridge",
+                "Swizzle ISA region v1 supports only the common-IR2 GEMM_RS or AG_GEMM bridge",
                 path="plan.pattern",
             )
         expected_actions = _exact_plan_actions(plan, context)
@@ -674,6 +679,9 @@ class NaiveIsaRegionLowering:
             SemanticTaskKind.WAIT,
             SemanticTaskKind.REDUCE,
             SemanticTaskKind.LOCAL_COPY,
+            SemanticTaskKind.LOCAL_SEND,
+            SemanticTaskKind.LOCAL_RECV,
+            SemanticTaskKind.LOCAL_WAIT,
             SemanticTaskKind.BARRIER,
         }
         if not actions or any(
@@ -737,6 +745,7 @@ class NaiveIsaRegionLowering:
             fragment_runtime_symbols: list[RuntimeSymbol] = []
             fragment_program_symbols: list[ProgramSymbol] = []
             fragment_bindings: list[BufferBinding] = []
+            local_buffer_abis: list[BufferABI] = []
             for core in sorted(
                 actions_by_core,
                 key=lambda item: (item.die_id, item.local_core_id),
@@ -841,6 +850,50 @@ class NaiveIsaRegionLowering:
                             for relocation in emitted_addresses
                         )
                         fragment_bindings.extend(used_bindings)
+                    elif action.task_kind in (
+                        SemanticTaskKind.LOCAL_SEND,
+                        SemanticTaskKind.LOCAL_RECV,
+                        SemanticTaskKind.LOCAL_WAIT,
+                    ):
+                        # Split-K handoffs share the production Local NoC
+                        # record ABI with standalone/coarse actions.  Splice
+                        # the one-action fragment into this plan-owned region.
+                        local_fragment = _lower_local_noc(action, context)
+                        if (
+                            len(local_fragment.core_streams) != 1
+                            or local_fragment.core_streams[0].logical_core != core
+                        ):
+                            raise SchemaError(
+                                "Local NoC lowering must preserve the action core",
+                                path="actions.logical_core",
+                            )
+                        local_stream = local_fragment.core_streams[0]
+                        records.extend(local_stream.records)
+                        fragment_runtime_symbols.extend(
+                            local_fragment.runtime_symbols
+                        )
+                        fragment_program_symbols.extend(
+                            local_fragment.program_symbols
+                        )
+                        runtime_relocations.extend(
+                            RuntimeRelocation(
+                                relocation.record_index + record_base,
+                                relocation.field,
+                                relocation.symbol_ref,
+                            )
+                            for relocation in local_stream.runtime_relocations
+                        )
+                        address_relocations.extend(
+                            AddressRelocation(
+                                relocation.record_index + record_base,
+                                relocation.operand_id,
+                                relocation.symbol_kind,
+                                relocation.symbol_ref,
+                                relocation.addend,
+                            )
+                            for relocation in local_stream.address_relocations
+                        )
+                        local_buffer_abis.extend(local_fragment.buffer_abi)
                     elif action.task_kind is SemanticTaskKind.BARRIER:
                         participants = _plan_barrier_group(
                             context.global_dag, action, "actions"
@@ -958,19 +1011,22 @@ class NaiveIsaRegionLowering:
                 program_symbols=program_symbols,
                 buffer_abi=tuple(
                     sorted(
-                        (
-                            _buffer_abi(schedule_id, binding, core)
-                            for binding in used_bindings
-                            for core in (
-                                next(
-                                    action.logical_core
-                                    for action in local_actions
-                                    if any(
-                                        use.binding_id == binding.id
-                                        for use in action.buffer_uses
-                                    )
-                                ),
+                        _unique_by_id(
+                            tuple(
+                                _buffer_abi(schedule_id, binding, core)
+                                for binding in used_bindings
+                                for core in (
+                                    next(
+                                        action.logical_core
+                                        for action in local_actions
+                                        if any(
+                                            use.binding_id == binding.id
+                                            for use in action.buffer_uses
+                                        )
+                                    ),
+                                )
                             )
+                            + tuple(local_buffer_abis)
                         ),
                         key=lambda abi: abi.id,
                     )

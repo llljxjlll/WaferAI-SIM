@@ -85,17 +85,6 @@ sc_time DteCycleTime(uint64_t cycle) {
     return sc_time(static_cast<double>(cycle) * CYCLE, SC_NS);
 }
 
-void WaitForDteTransmitStart(DteTransferContext &context) {
-    if (context.state == DteTransferState::PENDING ||
-        context.state == DteTransferState::LAUNCHING ||
-        context.state == DteTransferState::BUS_WAIT)
-        wait(context.transmit_started);
-    if (context.state != DteTransferState::TRANSMITTING &&
-        context.state != DteTransferState::COMPLETED)
-        throw std::logic_error(
-            "DTE V2b transfer did not reach the transmitting state");
-}
-
 void WaitUntilDteTime(const sc_time &target) {
     if (target > sc_time_stamp())
         wait(target - sc_time_stamp());
@@ -175,22 +164,24 @@ void WorkerCoreExecutor::send_logic() {
         LOG_DEBUG(PRIM) << "destination " << prim->des_id << ", tag "
                         << prim->tag_id << ", max packet " << prim->max_packet;
 
-        DteTransferContext *stream_source_xfer = nullptr;
+        std::optional<DteTransferHandle> stream_source_xfer;
+        DteTransferSnapshot stream_source_snapshot;
         uint64_t stream_source_first_ns = 0;
         bool stream_source_started = false;
         if (SPEC_USE_BEHA_DTE && prim->type == SEND_DATA) {
-            dte->WaitForCredit();
-            DteTransferContext &xfer = dte->Issue(
-                ComputeSendPayloadBits(*prim), DteDir::SPM_TO_REMOTE);
+            const uint64_t payload_bits = ComputeSendPayloadBits(*prim);
+            const DteTransferHandle xfer = dte_control->Issue(
+                payload_bits, DteDir::SPM_TO_REMOTE);
             if (SPEC_DTE_STREAMING) {
-                stream_source_xfer = &xfer;
+                stream_source_xfer = xfer;
                 TraceDteStreaming(event_engine, "DTE_stream_source_fill", "B",
                                   cid, prim->des_id, prim->tag_id,
-                                  xfer.payload_bits);
-                WaitForDteTransmitStart(xfer);
+                                  payload_bits);
+                dte_control->WaitTransmitStart(xfer);
+                stream_source_snapshot = dte_control->Snapshot(xfer);
             } else {
-                wait(xfer.done);
-                if (!dte->Release(xfer.xfer_id))
+                dte_control->Wait(xfer);
+                if (!dte_control->Release(xfer))
                     throw std::logic_error(
                         "source DTE completed context could not be released");
             }
@@ -226,14 +217,14 @@ void WorkerCoreExecutor::send_logic() {
                                      ? prim->end_length
                                      : M_D_DATA;
 
-                    if (stream_source_xfer != nullptr) {
+                    if (stream_source_xfer.has_value()) {
                         const uint64_t ready_bits = DteStreamingReadyBits(
-                            *prim, dte->config().bit_width_bits,
+                            *prim, dte_control->BitWidth(),
                             SPEC_USE_BEHA_NOC);
                         const sc_time ready_time =
-                            stream_source_xfer->transmit_start_time +
+                            stream_source_snapshot.transmit_start_time +
                             DteCycleTime(CeilDivU64(
-                                ready_bits, dte->config().bit_width_bits));
+                                ready_bits, dte_control->BitWidth()));
                         WaitUntilDteTime(ready_time);
                     }
 
@@ -243,18 +234,18 @@ void WorkerCoreExecutor::send_logic() {
                     if (!channel_avail_i.read())
                         wait(ev_channel_avail_i);
 
-                    if (stream_source_xfer != nullptr &&
+                    if (stream_source_xfer.has_value() &&
                         !stream_source_started) {
                         stream_source_started = true;
                         stream_source_first_ns = CurrentDteNanoseconds();
                         TraceDteStreaming(
                             event_engine, "DTE_stream_source_fill", "E", cid,
                             prim->des_id, prim->tag_id,
-                            stream_source_xfer->payload_bits);
+                            stream_source_snapshot.payload_bits);
                         TraceDteStreaming(
                             event_engine, "DTE_stream_network", "B", cid,
                             prim->des_id, prim->tag_id,
-                            stream_source_xfer->payload_bits);
+                            stream_source_snapshot.payload_bits);
                     }
 
                     Msg temp_msg = Msg(is_end_packet, MSG_TYPE::DATA, seq,
@@ -264,12 +255,13 @@ void WorkerCoreExecutor::send_logic() {
                     temp_msg.source_ = cid;
                     temp_msg.subflow_ = subflow;
                     temp_msg.exit_port_ = prim->stripe_exit_ports[subflow];
-                    if (stream_source_xfer != nullptr) {
+                    if (stream_source_xfer.has_value()) {
                         temp_msg.dte_stream_source_first_ns_ =
                             stream_source_first_ns;
                         temp_msg.dte_stream_source_done_ns_ =
                             static_cast<uint64_t>(
-                                stream_source_xfer->scheduled_completion_time.value() /
+                                stream_source_snapshot
+                                    .scheduled_completion_time.value() /
                                 sc_time(1, SC_NS).value());
                     }
                     while (!channel_avail_i.read() ||
@@ -361,14 +353,12 @@ void WorkerCoreExecutor::send_logic() {
             }
 
             if (job_done) {
-                if (stream_source_xfer != nullptr) {
-                    if (stream_source_xfer->state !=
-                        DteTransferState::COMPLETED)
-                        wait(stream_source_xfer->done);
-                    if (!dte->Release(stream_source_xfer->xfer_id))
+                if (stream_source_xfer.has_value()) {
+                    dte_control->Wait(*stream_source_xfer);
+                    if (!dte_control->Release(*stream_source_xfer))
                         throw std::logic_error(
                             "DTE V2b source context could not be released");
-                    stream_source_xfer = nullptr;
+                    stream_source_xfer.reset();
                 }
                 LOG_INFO(PRIM) << "Core " << cid << " end send primitive "
                                << GetEnumSendType(prim->type);
@@ -378,6 +368,9 @@ void WorkerCoreExecutor::send_logic() {
                             MoeSwizzleRuntimeIntervalKind::TERMINAL_DONE_FIXED)
                         throw std::logic_error(
                             "SEND_DONE terminal interval state is not exact");
+                    if (sc_time_stamp().value() ==
+                        moe_swizzle_pending_fixed_interval_start)
+                        wait(CYCLE, SC_NS);
                     FinalizeMoeSwizzlePendingFixedIntervals(
                         static_cast<uint16_t>(cid),
                         moe_swizzle_pending_fixed_interval_start,
@@ -396,10 +389,9 @@ void WorkerCoreExecutor::send_logic() {
 
 void WorkerCoreExecutor::send_para_logic() {
     while (true) {
-        // V2a：先为本批所有 SEND_DATA 背靠背 issue。context 由 DTEUnit 的
-        // 地址稳定 list 持有；这里显式记录 prim -> (xfer_id, context) 映射。
-        std::map<Send_prim *, std::pair<uint64_t, DteTransferContext *>>
-            dte_batch;
+        // V2a：先为本批所有 SEND_DATA 背靠背 issue。frontend handle 隔离
+        // dedicated controller 与 DTEUnit 内部 context 的所有权。
+        std::map<Send_prim *, DteTransferHandle> dte_batch;
         size_t batch_data_remaining = 0;
         std::queue<PrimBase *> pending = send_para_queue;
         while (!pending.empty()) {
@@ -416,10 +408,9 @@ void WorkerCoreExecutor::send_para_logic() {
             if (dte_batch.count(send))
                 throw std::logic_error(
                     "DTE V2a batch contains a duplicate SEND_DATA primitive");
-            dte->WaitForCredit();
-            DteTransferContext &xfer = dte->Issue(
+            const DteTransferHandle xfer = dte_control->Issue(
                 ComputeSendPayloadBits(*send), DteDir::SPM_TO_REMOTE);
-            dte_batch.emplace(send, std::make_pair(xfer.xfer_id, &xfer));
+            dte_batch.emplace(send, xfer);
         }
 
         auto consume_data_tail = [&]() {
@@ -470,19 +461,9 @@ void WorkerCoreExecutor::send_para_logic() {
                 if (mapping == dte_batch.end())
                     throw std::logic_error(
                         "DTE V2a SEND_DATA has no batch transfer context");
-                const uint64_t xfer_id = mapping->second.first;
-                DteTransferContext *context = mapping->second.second;
-                if (context == nullptr || context->xfer_id != xfer_id)
-                    throw std::logic_error(
-                        "DTE V2a SEND_DATA transfer mapping is corrupt");
-                // done 可能在控制握手期间已经通知；先查状态，避免错过
-                // SC_ZERO_TIME 事件后再 wait 导致永久阻塞。
-                if (context->state != DteTransferState::COMPLETED)
-                    wait(context->done);
-                if (context->state != DteTransferState::COMPLETED)
-                    throw std::logic_error(
-                        "DTE V2a SEND_DATA woke before transfer completion");
-                if (!dte->Release(xfer_id))
+                const DteTransferHandle xfer = mapping->second;
+                dte_control->Wait(xfer);
+                if (!dte_control->Release(xfer))
                     throw std::logic_error(
                         "DTE V2a completed SEND_DATA context could not be released");
                 dte_batch.erase(mapping);
@@ -630,6 +611,9 @@ void WorkerCoreExecutor::send_para_logic() {
                         MoeSwizzleRuntimeIntervalKind::TERMINAL_DONE_FIXED)
                     throw std::logic_error(
                         "parallel SEND_DONE terminal interval state is not exact");
+                if (sc_time_stamp().value() ==
+                    moe_swizzle_pending_fixed_interval_start)
+                    wait(CYCLE, SC_NS);
                 FinalizeMoeSwizzlePendingFixedIntervals(
                     static_cast<uint16_t>(cid),
                     moe_swizzle_pending_fixed_interval_start,
@@ -663,8 +647,7 @@ void WorkerCoreExecutor::recv_logic() {
         vector<sc_bv<128>> segments; // 单个原语配置的所有数据包
         std::set<int> ack_subflows;
         std::set<std::pair<int, int>> ended_subflows;
-        std::map<int, DteTransferContext *> stream_destination_xfers;
-        std::map<int, uint64_t> stream_destination_xfer_ids;
+        std::map<int, DteTransferHandle> stream_destination_xfers;
         std::map<int, uint64_t> stream_payload_bits;
         std::map<int, uint64_t> stream_source_first_ns;
         std::map<int, uint64_t> stream_source_done_ns;
@@ -806,13 +789,10 @@ void WorkerCoreExecutor::recv_logic() {
                                 throw std::runtime_error(
                                     "DTE V2b first DATA has incomplete REQUEST metadata");
 
-                            dte->WaitForCredit();
-                            DteTransferContext &xfer = dte->Issue(
+                            const DteTransferHandle xfer = dte_control->Issue(
                                 round.payload_bits, DteDir::REMOTE_TO_SPM);
                             stream_destination_xfers.emplace(temp.source_,
-                                                             &xfer);
-                            stream_destination_xfer_ids.emplace(temp.source_,
-                                                                xfer.xfer_id);
+                                                             xfer);
                             stream_payload_bits.emplace(temp.source_,
                                                         round.payload_bits);
                             stream_source_first_ns.emplace(
@@ -1088,22 +1068,18 @@ void WorkerCoreExecutor::recv_logic() {
 
                         uint64_t overall_target_ns = CurrentDteNanoseconds();
                         for (int source : completed_sources) {
-                            DteTransferContext *context =
+                            const DteTransferHandle handle =
                                 stream_destination_xfers.at(source);
-                            if (context == nullptr ||
-                                context->xfer_id !=
-                                    stream_destination_xfer_ids.at(source))
+                            dte_control->Wait(handle);
+                            const DteTransferSnapshot context =
+                                dte_control->Snapshot(handle);
+                            if (!context.backend_valid ||
+                                context.backend_state !=
+                                    DteTransferState::COMPLETED)
                                 throw std::logic_error(
-                                    "DTE V2b destination context mapping is corrupt");
-                            if (context->state !=
-                                DteTransferState::COMPLETED)
-                                wait(context->done);
-                            if (context->state !=
-                                DteTransferState::COMPLETED)
-                                throw std::logic_error(
-                                    "DTE V2b destination woke before completion");
+                                    "DTE V2b destination completion snapshot is invalid");
                             const uint64_t dte_done_ns = static_cast<uint64_t>(
-                                context->completion_time.value() /
+                                context.backend_completion_time.value() /
                                 sc_time(1, SC_NS).value());
                             const uint64_t target_ns =
                                 CombineDteStreamingTailsNs(
@@ -1123,17 +1099,16 @@ void WorkerCoreExecutor::recv_logic() {
                                 event_engine, "DTE_stream_destination", "E",
                                 source, cid, prim->tag_id,
                                 stream_payload_bits.at(source));
-                            if (!dte->Release(
-                                    stream_destination_xfer_ids.at(source)))
+                            if (!dte_control->Release(
+                                    stream_destination_xfers.at(source)))
                                 throw std::logic_error(
                                     "DTE V2b destination context could not be released");
                         }
                     } else {
-                        dte->WaitForCredit();
-                        DteTransferContext &xfer =
-                            dte->Issue(payload_bits, DteDir::REMOTE_TO_SPM);
-                        wait(xfer.done);
-                        if (!dte->Release(xfer.xfer_id))
+                        const DteTransferHandle xfer = dte_control->Issue(
+                            payload_bits, DteDir::REMOTE_TO_SPM);
+                        dte_control->Wait(xfer);
+                        if (!dte_control->Release(xfer))
                             throw std::logic_error(
                                 "destination DTE completed context could not be released");
                     }

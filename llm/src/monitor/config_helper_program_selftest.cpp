@@ -650,6 +650,16 @@ void CheckSingleCoreFlow(Checks &checks) {
                      start[0].msg.tag_id_ == 17 &&
                      start[0].msg.source_ == HOST_ENDPOINT_ID,
                  "start count emits exact completion-message count");
+    config_helper_program one_shot_helper(artifact, false);
+    const auto one_shot_config = one_shot_helper.BuildConfigMessages();
+    checks.Check(!one_shot_config.empty() &&
+                     PrimIdOf(one_shot_config.back()) ==
+                         PrimIdValue(PrimId::SEND) &&
+                     one_shot_config.back().msg.data_.range(59, 56).to_uint() ==
+                         SEND_DONE && one_shot_config.back().msg.is_end_ &&
+                     !one_shot_config.back().msg.refill_,
+                 "explicit one-shot Program ends without primitive refill");
+
     checks.Check(data.size() == 1 && data[0].msg.msg_type_ == P_DATA &&
                      data[0].msg.is_end_ && data[0].msg.tag_id_ == 0 &&
                      data[0].msg.source_ == HOST_ENDPOINT_ID,
@@ -1983,10 +1993,13 @@ void CheckPlatformAndLifecycleValidation(Checks &checks) {
         EmptyCoreAckPolicy::INCLUDE_EMPTY, {}, {0});
     cross_die.core_groups = {
         {1, {0, static_cast<uint64_t>(CORES_PER_DIE)}}};
-    checks.Reject<ConfigHelperProgramError>(
-        "group cannot span dies", "spans multiple dies", [&] {
-            config_helper_program rejected(cross_die);
-        });
+    config_helper_program cross_die_helper(cross_die);
+    checks.Check(
+        cross_die_helper.core_group_registry() != nullptr &&
+            cross_die_helper.core_group_registry()->Members(1) ==
+                std::vector<uint16_t>(
+                    {0, static_cast<uint16_t>(CORES_PER_DIE)}),
+        "active sorted cross-die group commits to runtime registry");
 
     ProgramArtifact same_die = Artifact(
         {{0, BoundMatmul()}, {1, BoundMatmul(10)}},
@@ -2005,8 +2018,10 @@ void CheckPlatformAndLifecycleValidation(Checks &checks) {
                          std::vector<uint16_t>({0, 1}),
                  "program helper commits one immutable runtime group registry");
     checks.Reject<ConfigHelperProgramError>(
-        "failed reload preserves committed registry", "spans multiple dies",
-        [&] { same_die_helper.LoadProgram(EncodeProgramArtifact(cross_die)); });
+        "failed reload preserves committed registry", "not an active",
+        [&] {
+            same_die_helper.LoadProgram(EncodeProgramArtifact(group_inactive));
+        });
     checks.Check(same_die_helper.core_group_registry() == committed_registry &&
                      same_die_helper.core_group_registry()->Members(1) ==
                          std::vector<uint16_t>({0, 1}),

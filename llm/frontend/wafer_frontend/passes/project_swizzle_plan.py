@@ -186,6 +186,10 @@ class SwizzlePlanProjection:
         validate_swizzle_projection_against_adapter(
             self.projection,
             self.adapter,
+            rank_die_ids={
+                dag.rank: dag.die_id
+                for dag in self.projection.rank_dags
+            },
         )
         expected = stable_artifact_id(
             "swizzle_plan_projection",
@@ -217,6 +221,17 @@ class SwizzlePlanProjection:
                 path=f"{path}.source_plan_ref",
             )
         _validate_adapter_against_plan(self.adapter, plan, path=path)
+        group = next(item for item in ir1.groups if item.id == plan.group_ref)
+        rank_die_ids = {
+            item.rank: item.die_id for item in group.placements
+        }
+        if {
+            dag.rank: dag.die_id for dag in self.projection.rank_dags
+        } != rank_die_ids:
+            raise SchemaError(
+                "projection rank-to-Die placement disagrees with IR1",
+                path=f"{path}.projection.rank_dags",
+            )
         if (
             self.projection.source_ir1_id,
             self.projection.source_decision_ref,
@@ -254,10 +269,17 @@ def project_swizzle_plan(
     plan.validate_against(ir1, "swizzle_fusion_plan")
     adapter = _adapter_from_plan(plan)
     _validate_adapter_against_plan(adapter, plan, path="swizzle_plan_projection")
+    group = next(item for item in ir1.groups if item.id == plan.group_ref)
+    rank_die_ids = {
+        item.rank: item.die_id for item in group.placements
+    }
     result = SwizzlePlanProjection.create(
         source_plan_ref=plan.id,
         adapter=adapter,
-        projection=project_swizzle_adapter(adapter),
+        projection=project_swizzle_adapter(
+            adapter,
+            rank_die_ids=rank_die_ids,
+        ),
     )
     result.validate_against(ir1, plan)
     return result

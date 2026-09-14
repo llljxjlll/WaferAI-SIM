@@ -138,10 +138,16 @@ def _validate_lowered_fragments(
                     "ISA_REGION leaves require a RegionManifest wrapper",
                     path=fragment_path,
                 )
-            fragment.validate_against(context.global_dag, fragment_path)
+            fragment.validate(fragment_path)
+            fragment._validate_against_validated_dag(
+                context.global_dag, fragment_path
+            )
             leaf = fragment
         elif type(fragment) is RegionManifest:
-            fragment.validate_against(context.global_dag, fragment_path)
+            fragment.validate(fragment_path)
+            fragment._validate_against_validated_dag(
+                context.global_dag, fragment_path
+            )
             leaf = fragment.fragment
         else:
             raise SchemaError(

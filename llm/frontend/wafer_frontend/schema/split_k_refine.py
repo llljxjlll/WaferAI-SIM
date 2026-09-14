@@ -16,6 +16,7 @@ from .ir2 import (
     IR2ProjectionResult,
     IntraDieDAG,
     OrdinaryNodeOrigin,
+    SwizzleNodeOrigin,
     SemanticTaskKind,
 )
 
@@ -616,12 +617,9 @@ class SplitKTaskRewrite:
                 f"{path}.input_handoffs[{index}]",
             )
         if self.enable_direct_dma:
-            if (
-                not self.direct_dma_task_ids
-                or len(set(self.direct_dma_task_ids)) != len(self.direct_dma_task_ids)
-            ):
+            if len(set(self.direct_dma_task_ids)) != len(self.direct_dma_task_ids):
                 raise SchemaError(
-                    "direct DMA task ids must be non-empty and unique",
+                    "direct DMA task ids must be unique",
                     path=f"{path}.direct_dma_task_ids",
                 )
             for index, task_id in enumerate(self.direct_dma_task_ids):
@@ -876,10 +874,13 @@ class SplitKRefinedProjection:
                 or source_task.kind is not SemanticTaskKind.COMP
                 or source_task.compute is None
                 or type(source_task.compute.workload) is not GemmWorkload
-                or not isinstance(source_task.origin_ref, OrdinaryNodeOrigin)
+                or not isinstance(
+                    source_task.origin_ref,
+                    (OrdinaryNodeOrigin, SwizzleNodeOrigin),
+                )
             ):
                 raise SchemaError(
-                    "rewrite source must be an ordinary GEMM COMP",
+                    "rewrite source must be an ordinary or Swizzle GEMM COMP",
                     path=f"{path}.rewrites[{index}].source_task_id",
                 )
             key = (source_dag.id, source_task.id)
@@ -926,28 +927,53 @@ class SplitKRefinedProjection:
                         "split task/partial value closure is incomplete",
                         path=f"{path}.rewrites[{index}].part_task_ids[{part_index}]",
                     )
-            expected_input_keys = tuple(
-                (part_index, operand_index, producer_task_id)
-                for part_index in range(split_k_parts)
-                if enable_reduce
-                and part_index % rewrite.compute_group_count != 0
-                for operand_index, value_id in enumerate(source_task.read_values)
-                if not (
-                    enable_direct_dma
-                    and any(
-                        value.id == value_id
-                        for value in source_dag.state_staging_values
-                    )
+            expected_input_keys_list: list[tuple[int, int, str]] = []
+            source_values = {
+                value.id: value for value in (
+                    *source_dag.values,
+                    *source_dag.state_staging_values,
+                    *source_dag.swizzle_values,
                 )
-                for producer_task_id in tuple(
-                    next(
-                        (value.producer_tasks for value in (*source_dag.values, *source_dag.state_staging_values)
-                         if value.id == value_id),
-                        (),
+            }
+            for part_index in range(split_k_parts):
+                if (
+                    not enable_reduce
+                    or part_index % rewrite.compute_group_count == 0
+                ):
+                    continue
+                for operand_index, value_id in enumerate(source_task.read_values):
+                    if (
+                        enable_direct_dma
+                        and any(
+                            value.id == value_id
+                            for value in source_dag.state_staging_values
+                        )
+                    ):
+                        continue
+                    value = source_values[value_id]
+                    producers = tuple(
+                        task_id for task_id in value.producer_tasks
+                        if task_id in source_task.deps
                     )
-                )
-                if producer_task_id in source_task.deps
-            )
+                    tile = source_task.compute.tile if source_task.compute is not None else None
+                    workload = tile.origin_workload if tile is not None else None
+                    if (
+                        not producers
+                        and operand_index == 0
+                        and isinstance(source_task.origin_ref, SwizzleNodeOrigin)
+                        and not enable_double_buffer
+                        and len(source_task.deps) == 1
+                        and type(workload) is GemmWorkload
+                        and workload.rank_shape[0] > 1
+                        and workload.rank_shape[2] // split_k_parts
+                        < workload.rank_shape[2]
+                    ):
+                        producers = source_task.deps
+                    expected_input_keys_list.extend(
+                        (part_index, operand_index, producer_task_id)
+                        for producer_task_id in producers
+                    )
+            expected_input_keys = tuple(expected_input_keys_list)
             actual_input_keys = tuple(
                 (item.part_index, item.operand_index, item.source_task_id)
                 for item in rewrite.input_handoffs
@@ -1246,7 +1272,10 @@ class SplitKRefinedProjection:
             for task in dag.tasks
             if (
                 task.kind is SemanticTaskKind.COMP
-                and isinstance(task.origin_ref, OrdinaryNodeOrigin)
+                and isinstance(
+                    task.origin_ref,
+                    (OrdinaryNodeOrigin, SwizzleNodeOrigin),
+                )
                 and task.compute is not None
                 and type(task.compute.workload) is GemmWorkload
                 and len(task.read_values) == 2
@@ -1255,14 +1284,17 @@ class SplitKRefinedProjection:
                 and len(task.compute.outputs) == 1
                 and any(
                     value.id == task.write_values[0]
-                    and not value.consumer_tasks
-                    for value in dag.values
+                    and (
+                        isinstance(task.origin_ref, SwizzleNodeOrigin)
+                        or not value.consumer_tasks
+                    )
+                    for value in (*dag.values, *dag.swizzle_values)
                 )
             )
         }
         if seen != expected_rewrites:
             raise SchemaError(
-                "rewrites must exactly cover every eligible ordinary GEMM",
+                "rewrites must exactly cover every eligible ordinary GEMM or Swizzle GEMM",
                 path=f"{path}.rewrites",
             )
         expected_id = stable_artifact_id(

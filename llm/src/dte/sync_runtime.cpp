@@ -21,18 +21,21 @@ CoreGroupRegistry::CoreGroupRegistry(
             throw std::invalid_argument("core group ID 0 is reserved");
         if (definition.members.empty())
             throw std::invalid_argument("core group must not be empty");
+        if (definition.members.size() > UINT16_MAX)
+            throw std::invalid_argument(
+                "core group exceeds u16 rank/count capacity");
         if (candidate.count(definition.group_id) != 0)
             throw std::invalid_argument("duplicate core group ID");
+        if (!std::is_sorted(definition.members.begin(),
+                            definition.members.end()))
+            throw std::invalid_argument("core group members must be sorted");
 
         std::set<uint16_t> unique;
-        const uint32_t first_die = definition.members.front() / cores_per_die;
         for (uint16_t member : definition.members) {
             if (member >= total_cores)
                 throw std::invalid_argument("core group member is out of range");
             if (!unique.insert(member).second)
                 throw std::invalid_argument("duplicate core group member");
-            if (member / cores_per_die != first_die)
-                throw std::invalid_argument("cross-die core group is unsupported");
         }
         candidate.emplace(definition.group_id, std::move(definition.members));
     }

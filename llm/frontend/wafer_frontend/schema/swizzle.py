@@ -286,8 +286,8 @@ class SwizzleCollectiveDescriptor:
             raise SchemaError("must be a SwizzleCollectivePosition", path=f"{path}.position")
         if not self.mesh_axes or len(set(self.mesh_axes)) != len(self.mesh_axes):
             raise SchemaError("must contain unique mesh axes", path=f"{path}.mesh_axes")
-        if type(self.participant_ranks) is not tuple or len(self.participant_ranks) <= 1:
-            raise SchemaError("must contain at least two participant ranks", path=f"{path}.participant_ranks")
+        if type(self.participant_ranks) is not tuple or not self.participant_ranks:
+            raise SchemaError("must contain at least one participant rank", path=f"{path}.participant_ranks")
         if tuple(sorted(set(self.participant_ranks))) != self.participant_ranks:
             raise SchemaError("must contain unique ranks in canonical order", path=f"{path}.participant_ranks")
         for index, rank in enumerate(self.participant_ranks):

@@ -85,6 +85,16 @@ void ValidateSpec(const P2pEndpointSessionSpec &spec) {
         Require(spec.token == 0, "synchronous P2P token must be zero");
 }
 
+size_t CheckedP2pReassemblyFlowCapacity(size_t max_sessions) {
+    if (max_sessions > std::numeric_limits<size_t>::max() / 2)
+        throw std::overflow_error(
+            "P2P posted/future reassembly flow capacity overflows size_t");
+    // At most max_sessions unposted future declarations may be retained, and
+    // at most max_sessions active RX sessions may promote their exact request.
+    // The byte pool remains shared and independently bounded.
+    return max_sessions * 2;
+}
+
 void ValidateSend(const Dte_send_endpoint_prim &prim) {
     ValidateCommon(prim);
     Require(prim.mode == DteEndpointSendMode::P2P,
@@ -255,6 +265,36 @@ size_t CheckedP2pPendingRequestCapacity(
         throw std::overflow_error(
             "P2P pending REQUEST capacity overflows size_t");
     return topology_cores * per_core_sessions;
+}
+
+std::optional<size_t> SelectP2pPendingAdmission(
+    const std::vector<P2pPendingAdmissionCandidate> &candidates) {
+    std::set<P2pFlowKey> earlier_flows;
+    // Prefer a request that can satisfy an already-posted receive. This is a
+    // stable bypass of capacity-blocked future requests, not a general queue
+    // reorder: an earlier request for the same flow always wins.
+    for (size_t index = 0; index < candidates.size(); ++index) {
+        const P2pPendingAdmissionCandidate &candidate = candidates[index];
+        if (!earlier_flows.insert(candidate.flow).second)
+            continue;
+        if (candidate.disposition != P2pRequestDisposition::NEW)
+            return index;
+        if (candidate.matches_posted_receive && candidate.has_capacity)
+            return index;
+    }
+    // Preserve the existing early-REQUEST behavior (needed by the frozen R=4
+    // schedule) when capacity is available. Only the posted candidate above
+    // may bypass this stable first-admissible order.
+    earlier_flows.clear();
+    for (size_t index = 0; index < candidates.size(); ++index) {
+        const P2pPendingAdmissionCandidate &candidate = candidates[index];
+        if (!earlier_flows.insert(candidate.flow).second)
+            continue;
+        if (candidate.disposition == P2pRequestDisposition::NEW &&
+            candidate.has_capacity)
+            return index;
+    }
+    return std::nullopt;
 }
 
 bool P2pEndpointHandle::operator==(
@@ -440,7 +480,8 @@ P2pEndpointSessionRuntime::P2pEndpointSessionRuntime(
       max_transport_tag_(max_transport_tag),
       topology_cores_(topology_cores),
       max_seen_request_identities_(0),
-      reassembler_(max_rx_buffered_bytes, max_sessions) {
+      reassembler_(max_rx_buffered_bytes,
+                   CheckedP2pReassemblyFlowCapacity(max_sessions)) {
     if (max_sessions == 0)
         throw std::invalid_argument("P2P endpoint max_sessions must be non-zero");
     if (max_transport_tag == 0)
@@ -777,6 +818,38 @@ bool P2pEndpointSessionRuntime::CanReceiveRequest(
     return total_bytes <= max_rx_buffered_bytes_ - reserved_rx_bytes_;
 }
 
+bool P2pEndpointSessionRuntime::MatchesPostedReceive(
+    const P2pPayloadDeclaration &declaration) const noexcept {
+    const auto posted = sessions_.find(declaration.fsm_id);
+    return posted != sessions_.end() &&
+           posted->second.handle.direction == P2pEndpointDirection::RX &&
+           posted->second.phase == P2pEndpointPhase::ACTIVE &&
+           !posted->second.flow.has_value() &&
+           posted->second.peer_core == declaration.flow.source &&
+           posted->second.length_bytes == declaration.total_bytes &&
+           declaration.flow.destination == local_core_;
+}
+
+bool P2pEndpointSessionRuntime::CanReceiveRequest(
+    const P2pPayloadDeclaration &declaration) const noexcept {
+    if (!MatchesPostedReceive(declaration))
+        return CanReceiveRequest(
+            declaration.flow, declaration.total_bytes);
+    if (declaration.flow.source >= topology_cores_ ||
+        declaration.flow.transport_tag == 0 ||
+        declaration.flow.transport_tag > max_transport_tag_ ||
+        declaration.flow.subflow != 0 || declaration.total_bytes == 0 ||
+        declaration.total_bytes > max_rx_buffered_bytes_ ||
+        inbound_.find(declaration.flow) != inbound_.end() ||
+        reserved_rx_bytes_ > max_rx_buffered_bytes_)
+        return false;
+    // The posted RX session already passed the active max_sessions_ gate.
+    // It may promote its exact queued REQUEST past max_sessions_ unposted
+    // inbound declarations, but cannot exceed the independent byte bound.
+    return declaration.total_bytes <=
+           max_rx_buffered_bytes_ - reserved_rx_bytes_;
+}
+
 std::optional<P2pRxDelivery>
 P2pEndpointSessionRuntime::ReceiveRequest(const Msg &request) {
     const P2pPayloadDeclaration declaration =
@@ -789,7 +862,7 @@ P2pEndpointSessionRuntime::ReceiveRequest(const Msg &request) {
         return std::nullopt;
     if (inbound_by_fsm_.find(declaration.fsm_id) != inbound_by_fsm_.end())
         throw std::invalid_argument("duplicate or early-reused P2P REQUEST fsm_id");
-    if (!CanReceiveRequest(declaration.flow, declaration.total_bytes))
+    if (!CanReceiveRequest(declaration))
         throw std::length_error("P2P receive byte or flow capacity exhausted");
 
     auto early = early_data_.find(declaration.flow);

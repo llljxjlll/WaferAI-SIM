@@ -4382,9 +4382,29 @@ void RunSwizzleProducedManifest(bool require_scale = false) {
     std::size_t records = 0;
     for (const ProgramCore &core : first.cores)
         records += core.records.size();
-    const bool scale = records == 180 || records == 188 ||
+    const CommandFragmentDto &fragment =
+        std::get<CommandFragmentDto>(dto.fragments.front());
+    const std::size_t ranks = fragment.core_streams.size();
+    std::size_t transports = 0;
+    std::map<std::string, std::size_t> layouts;
+    for (const auto &stream : fragment.core_streams)
+        for (const auto &record : stream.records)
+            if (record.opcode == Opcode::DTE_SEND)
+                ++transports;
+    for (const auto &abi : fragment.buffer_abi)
+        ++layouts[abi.layout];
+    const bool meshslice_rect2d =
+        ranks >= 4 && ranks <= 100 &&
+        transports >= 2 * ranks && transports <= 18 * ranks &&
+        records == 8 * ranks + 3 * transports &&
+        layouts == std::map<std::string, std::size_t>{
+            {"KN_dp_tp", ranks},
+            {"MK_dp_tp", ranks},
+            {"MN_dp_tp", ranks},
+        };
+    const bool scale = !meshslice_rect2d && (records == 180 || records == 188 ||
         records == 244 || records == 316 || records == 324 ||
-        records == 444;
+        records == 444);
     const std::string pattern =
         records == 38 ? "ag_gemm" :
         records == 44 ? "gemm_rs" :
@@ -4395,7 +4415,8 @@ void RunSwizzleProducedManifest(bool require_scale = false) {
         records == 244 ? "scale_rs_c8" :
         records == 316 ? "scale_ag_c16_u1" :
         records == 324 ? "scale_ag_c16_u2" :
-        records == 444 ? "scale_rs_c16" : "";
+        records == 444 ? "scale_rs_c16" :
+        meshslice_rect2d ? "meshslice_rect2d" : "";
     Require(!pattern.empty(),
             "Swizzle stdin does not match a frozen production quotient");
     Require(scale == require_scale,
@@ -4462,6 +4483,7 @@ void RunSwizzleProducedManifest(bool require_scale = false) {
 
     Json bad_terminal = Json::parse(text);
     const std::size_t expected_cores =
+        pattern == "meshslice_rect2d" ? ranks :
         scale || pattern == "meshslice_2d_os" ? 4 : 2;
     Require(bad_terminal["envelope"]["terminal_cores"].size() ==
                 expected_cores &&
@@ -4476,7 +4498,8 @@ void RunSwizzleProducedManifest(bool require_scale = false) {
         [&] { finalizer.FinalizeJson(bad_terminal.dump()); },
         "restable Swizzle terminal envelope");
 
-    if (pattern == "meshslice_2d_os" || scale) {
+    if (pattern == "meshslice_2d_os" ||
+        pattern == "meshslice_rect2d" || scale) {
         Json bad_quotient = Json::parse(text);
         bool changed_wait = false;
         for (Json &stream :
@@ -4491,6 +4514,45 @@ void RunSwizzleProducedManifest(bool require_scale = false) {
         ExpectFailure(
             [&] { finalizer.FinalizeJson(bad_quotient.dump()); },
             "restable MeshSlice opcode quotient");
+    }
+
+    if (pattern == "meshslice_rect2d") {
+        Json bad_layout = Json::parse(text);
+        bool changed_layout = false;
+        for (Json &abi : bad_layout["fragments"][0]["buffer_abi"])
+            if (!changed_layout && abi["layout"] == "MK_dp_tp") {
+                abi["layout"] = "MK_dp_tp_changed";
+                changed_layout = true;
+            }
+        Require(changed_layout,
+                "rectangular MeshSlice stdin lacks MK_dp_tp");
+        RefreshManifestIds(bad_layout);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_layout.dump()); },
+            "restable rectangular MeshSlice layout quotient");
+
+        Json bad_core_abi = Json::parse(text);
+        const Json source_core =
+            bad_core_abi["fragments"][0]["core_streams"][0]
+                        ["logical_core"];
+        const Json destination_core =
+            bad_core_abi["fragments"][0]["core_streams"][1]
+                        ["logical_core"];
+        bool changed_core_abi = false;
+        for (Json &abi :
+             bad_core_abi["fragments"][0]["buffer_abi"])
+            if (!changed_core_abi &&
+                abi["ownership"] == "owned" &&
+                abi["logical_core"] == source_core) {
+                abi["logical_core"] = destination_core;
+                changed_core_abi = true;
+            }
+        Require(changed_core_abi,
+                "rectangular MeshSlice stdin lacks per-core owned ABI");
+        RefreshManifestIds(bad_core_abi);
+        ExpectFailure(
+            [&] { finalizer.FinalizeJson(bad_core_abi.dump()); },
+            "restable rectangular MeshSlice per-core ABI quotient");
     }
 
     if (scale) {

@@ -29,8 +29,10 @@ void ApplyProgramRelocations(ProgramArtifact &artifact);
 
 class config_helper_program : public config_helper_base {
 public:
-    explicit config_helper_program(const std::vector<uint8_t> &artifact_bytes);
-    explicit config_helper_program(const ProgramArtifact &artifact);
+    explicit config_helper_program(const std::vector<uint8_t> &artifact_bytes,
+                                   bool refill = true);
+    explicit config_helper_program(const ProgramArtifact &artifact,
+                                   bool refill = true);
 
     // Strong exception guarantee: the currently committed program and ACK/
     // DONE state remain unchanged if any decode, relocation, lowering, or
@@ -84,6 +86,7 @@ private:
     };
 
     std::vector<uint8_t> artifact_bytes_;
+    bool refill_ = true;
     ProgramArtifact artifact_;
     std::vector<PreparedCore> prepared_cores_;
     std::set<int> expected_ack_cores_;

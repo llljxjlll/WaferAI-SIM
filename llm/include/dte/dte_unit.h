@@ -38,6 +38,7 @@ public:
     size_t MaxActiveCount() const { return max_active_count_; }
     size_t InflightCount() const { return inflight_count_; }
     uint64_t CompletedCount() const { return completed_count_; }
+    const sc_event &StateChangedEvent() const { return state_changed_; }
     bool BusBusy() const;
     bool PortBusy(DtePort port) const;
     double AveragePowerMw() const;
@@ -47,6 +48,7 @@ public:
 
 private:
     void scheduler();
+    void cleanupRetired();
     void admitPending();
     bool finishLaunches();
     bool startReadyTransfers();
@@ -71,6 +73,7 @@ private:
     Event_engine *event_engine_;
 
     std::list<std::unique_ptr<DteTransferContext>> contexts_;
+    std::list<std::unique_ptr<DteTransferContext>> retired_contexts_;
     std::deque<DteTransferContext *> pending_;
     std::vector<DteTransferContext *> active_;
     std::array<DteTransferContext *,
@@ -88,6 +91,7 @@ private:
 
     sc_event state_changed_;
     sc_event credit_available_;
+    sc_event retired_changed_;
 };
 
 int RunDTEV0SelfTest();

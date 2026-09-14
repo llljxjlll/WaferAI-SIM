@@ -1,6 +1,25 @@
 """Versioned, immutable frontend schemas."""
 
 from .common import ArtifactMetadata, DType, ProfileKey, Sharding, TensorValue
+from .rect_mesh import (
+    RECT_MESH_MAX_COLUMNS,
+    RECT_MESH_MAX_RANKS,
+    RECT_MESH_MAX_ROWS,
+    RectMeshRankOrder,
+    RectMeshRoutePolicy,
+    RectMeshSpec,
+    RectMeshWorkloadScope,
+)
+from .rect_mesh_compile import (
+    RECT_MESH_ARTIFACT_FILE_LIMIT_BYTES,
+    RECT_MESH_ARTIFACT_RECORD_LIMIT,
+    RECT_MESH_COMPILE_CAPABILITY_SCHEMA_VERSION,
+    RectMeshArtifactFilePreflight,
+    RectMeshCompileCapabilityReport,
+    RectMeshCompileChain,
+    RectMeshCompileMode,
+    RectMeshFallbackReason,
+)
 from .lite_runtime_evidence import (
     LITE_RUNTIME_CAPABILITY_MATRIX_SCHEMA_VERSION,
     S2_LITE_RUNTIME_REPORT_SCHEMA_VERSION,
@@ -703,6 +722,21 @@ __all__ = [
     "Stage1aStatePayload",
     "ArtifactMetadata",
     "DType",
+    "RECT_MESH_MAX_COLUMNS",
+    "RECT_MESH_MAX_RANKS",
+    "RECT_MESH_MAX_ROWS",
+    "RectMeshRankOrder",
+    "RectMeshRoutePolicy",
+    "RectMeshSpec",
+    "RectMeshWorkloadScope",
+    "RECT_MESH_ARTIFACT_FILE_LIMIT_BYTES",
+    "RECT_MESH_ARTIFACT_RECORD_LIMIT",
+    "RECT_MESH_COMPILE_CAPABILITY_SCHEMA_VERSION",
+    "RectMeshArtifactFilePreflight",
+    "RectMeshCompileCapabilityReport",
+    "RectMeshCompileChain",
+    "RectMeshCompileMode",
+    "RectMeshFallbackReason",
     "CAPABILITY_MANIFEST_SCHEMA_VERSION",
     "CASE_MATRIX_SCHEMA_VERSION",
     "AcceptanceClaim",
@@ -1352,4 +1386,46 @@ __all__ = list(dict.fromkeys((
     *_swizzle_scale_all,
     *_swizzle_performance_evidence_all,
     *_swizzle_calibration_all,
+)))
+from .flexible_mesh_capacity import *
+from .flexible_mesh_capacity import __all__ as _flexible_mesh_capacity_all
+from .flexible_mesh_groups import *
+from .flexible_mesh_groups import __all__ as _flexible_mesh_groups_all
+from .flexible_mesh_workload import *
+from .flexible_mesh_workload import __all__ as _flexible_mesh_workload_all
+from .flexible_dense_train import *
+from .flexible_dense_train import __all__ as _flexible_dense_train_all
+from .flexible_dense_backward import *
+from .flexible_dense_backward import __all__ as _flexible_dense_backward_all
+from .flexible_dense_backward_ir import *
+from .flexible_dense_backward_ir import __all__ as _flexible_dense_backward_ir_all
+from .flexible_mesh_runtime import *
+from .flexible_mesh_runtime import __all__ as _flexible_mesh_runtime_all
+from .flexible_mesh_release import *
+from .flexible_mesh_release import __all__ as _flexible_mesh_release_all
+from .flexible_mesh_completion import *
+from .flexible_mesh_completion import __all__ as _flexible_mesh_completion_all
+from .flexible_mesh_representative_completion import *
+from .flexible_mesh_representative_completion import (
+    __all__ as _flexible_mesh_representative_completion_all,
+)
+from .flexible_moe import *
+from .flexible_moe import __all__ as _flexible_moe_all
+from .flexible_moe_standard import *
+from .flexible_moe_standard import __all__ as _flexible_moe_standard_all
+
+__all__ = list(dict.fromkeys((
+    *__all__,
+    *_flexible_mesh_capacity_all,
+    *_flexible_mesh_groups_all,
+    *_flexible_mesh_workload_all,
+    *_flexible_dense_train_all,
+    *_flexible_dense_backward_all,
+    *_flexible_dense_backward_ir_all,
+    *_flexible_mesh_runtime_all,
+    *_flexible_mesh_release_all,
+    *_flexible_mesh_completion_all,
+    *_flexible_mesh_representative_completion_all,
+    *_flexible_moe_all,
+    *_flexible_moe_standard_all,
 )))

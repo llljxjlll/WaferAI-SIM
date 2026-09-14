@@ -13,6 +13,8 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import math
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 
@@ -643,6 +645,24 @@ def _manifest_allocations(
                 and alias.region_offset_bytes + alias.size_bytes
                 <= root.region_offset_bytes + root.size_bytes
             )
+            meshslice_packed_subview_alias = (
+                manifest.producer_pass == "swizzle_standard_linker"
+                and root.layout == "swizzle_meshslice_packed_root/v1"
+                and alias.layout in (
+                    "swizzle_meshslice_packed_full_view/v1",
+                    "swizzle_meshslice_packed_chunk/v1",
+                )
+                and alias.alignment_bytes == (
+                    root.alignment_bytes
+                    if alias.layout == "swizzle_meshslice_packed_full_view/v1"
+                    else math.gcd(root.alignment_bytes, alias.size_bytes)
+                )
+                and alias.region_offset_bytes % alias.alignment_bytes == 0
+                and alias.region_offset_bytes >= root.region_offset_bytes
+                and alias.size_bytes > 0
+                and alias.region_offset_bytes + alias.size_bytes
+                <= root.region_offset_bytes + root.size_bytes
+            )
             moe_storage_subview_alias = (
                 manifest.producer_pass == "moe_swizzle_standard_linker"
                 and root.layout.startswith("moe_swizzle_")
@@ -659,6 +679,7 @@ def _manifest_allocations(
             alignment_exact = alias.alignment_bytes == root.alignment_bytes
             if common_alias or not (
                 moe_storage_subview_alias
+                or meshslice_packed_subview_alias
                 or alignment_exact and (
                 whole_root_alias
                 or backward_subview_alias
@@ -976,38 +997,54 @@ def _validate_allocation_nonoverlap(
 ) -> None:
     """Admit lifetime-disjoint reuse only for linkers with schedule-lifetime proof."""
 
-    for index, left in enumerate(allocations):
-        for right in allocations[index + 1 :]:
-            physical_overlap = (
-                left.runtime_core_id == right.runtime_core_id
-                and left.region_symbol_ref == right.region_symbol_ref
-                and left.absolute_start
-                < right.absolute_start + right.size_bytes
-                and right.absolute_start
-                < left.absolute_start + left.size_bytes
+    for left, right in _physical_allocation_overlap_pairs(allocations):
+        lifetime_disjoint = (
+            left.abi.lifetime_end_exclusive <= right.abi.lifetime_start
+            or right.abi.lifetime_end_exclusive <= left.abi.lifetime_start
+        )
+        reuse_authorized = (
+            producer_pass == "manifest_linker"
+            or producer_pass == "moe_swizzle_standard_linker"
+            or (
+                producer_pass == "unfused_comparison_standard_linker"
+                and core_stream_count == 4
             )
-            if not physical_overlap:
-                continue
-            lifetime_disjoint = (
-                left.abi.lifetime_end_exclusive
-                <= right.abi.lifetime_start
-                or right.abi.lifetime_end_exclusive
-                <= left.abi.lifetime_start
-            )
-            reuse_authorized = (
-                producer_pass == "manifest_linker"
-                or producer_pass == "moe_swizzle_standard_linker"
-                or (
-                    producer_pass == "unfused_comparison_standard_linker"
-                    and core_stream_count == 4
-                )
-            )
-            if reuse_authorized and lifetime_disjoint:
-                continue
-            raise SchemaError(
-                "physical allocation ranges overlap during live intervals",
-                path=path,
-            )
+        )
+        if reuse_authorized and lifetime_disjoint:
+            continue
+        raise SchemaError(
+            "physical allocation ranges overlap during live intervals",
+            path=path,
+        )
+
+
+def _physical_allocation_overlap_pairs(
+    allocations: tuple[_Allocation, ...],
+) -> Iterator[tuple[_Allocation, _Allocation]]:
+    """Return each same-core/region physical-overlap pair exactly once."""
+
+    grouped: dict[tuple[int, str], list[_Allocation]] = {}
+    for allocation in allocations:
+        grouped.setdefault(
+            (allocation.runtime_core_id, allocation.region_symbol_ref), []
+        ).append(allocation)
+
+    for group in grouped.values():
+        ordered = sorted(
+            group,
+            key=lambda item: (
+                item.absolute_start,
+                item.absolute_start + item.size_bytes,
+                item.abi.id,
+            ),
+        )
+        for left_index, left in enumerate(ordered):
+            left_end = left.absolute_start + left.size_bytes
+            for right_index in range(left_index + 1, len(ordered)):
+                right = ordered[right_index]
+                if right.absolute_start >= left_end:
+                    break
+                yield left, right
 
 
 @dataclass(frozen=True, slots=True)
@@ -1042,10 +1079,37 @@ class ProgramIoContract:
         initializations: tuple[ProgramSramInitialization, ...],
         output_probes: tuple[ProgramOutputProbe, ...],
     ) -> "ProgramIoContract":
+        return cls._create_with_source_manifest_digest(
+            producer_pass=producer_pass,
+            mode=mode,
+            source_manifest=source_manifest,
+            source_manifest_digest=canonical_digest(source_manifest),
+            program_artifact_sha256=program_artifact_sha256,
+            blobs=blobs,
+            initializations=initializations,
+            output_probes=output_probes,
+        )
+
+    @classmethod
+    def _create_with_source_manifest_digest(
+        cls,
+        *,
+        producer_pass: str,
+        mode: ProgramIoMode,
+        source_manifest: LinkedProgramManifest,
+        source_manifest_digest: str,
+        program_artifact_sha256: str,
+        blobs: tuple[ProgramBlob, ...],
+        initializations: tuple[ProgramSramInitialization, ...],
+        output_probes: tuple[ProgramOutputProbe, ...],
+    ) -> "ProgramIoContract":
+        """Private constructor for an identity-bound, precomputed digest."""
+
+        _validate_sha256(source_manifest_digest, "source_manifest_digest")
         semantic_key = {
             "mode": mode,
             "source_linked_manifest_id": source_manifest.id,
-            "source_linked_manifest_digest": canonical_digest(source_manifest),
+            "source_linked_manifest_digest": source_manifest_digest,
             "program_artifact_sha256": program_artifact_sha256,
             "blobs": tuple(sorted(blobs, key=lambda blob: blob.id)),
             "initializations": tuple(sorted(initializations, key=_entry_order)),
@@ -1061,6 +1125,31 @@ class ProgramIoContract:
             ),
             **semantic_key,
         )
+
+    def bind_program_artifact_sha256(
+        self, program_artifact_sha256: str,
+    ) -> "ProgramIoContract":
+        """Rebind immutable IO semantics to the finalized artifact digest."""
+
+        self.validate()
+        _validate_sha256(
+            program_artifact_sha256,
+            "program_io_contract.program_artifact_sha256",
+        )
+        semantic_key = self._semantic_key()
+        semantic_key["program_artifact_sha256"] = program_artifact_sha256
+        result = ProgramIoContract(
+            schema_version=PROGRAM_IO_CONTRACT_SCHEMA_VERSION,
+            producer_pass=self.producer_pass,
+            id=stable_artifact_id(
+                "program_io_contract",
+                semantic_key,
+                schema_version=PROGRAM_IO_CONTRACT_SCHEMA_VERSION,
+            ),
+            **semantic_key,
+        )
+        result.validate()
+        return result
 
     def _semantic_key(self) -> dict[str, object]:
         return {
@@ -1218,10 +1307,25 @@ class ProgramIoContract:
         path: str = "program_io_contract",
     ) -> None:
         manifest.validate("linked_program_manifest")
+        self._validate_against_prevalidated_manifest(
+            manifest,
+            canonical_digest(manifest),
+            path,
+        )
+
+    def _validate_against_prevalidated_manifest(
+        self,
+        manifest: LinkedProgramManifest,
+        manifest_digest: str,
+        path: str = "program_io_contract",
+    ) -> None:
+        """Private exact validation after manifest validation/digest closure."""
+
+        _validate_sha256(manifest_digest, f"{path}.source_linked_manifest_digest")
         self.validate(path)
         if (
             self.source_linked_manifest_id != manifest.id
-            or self.source_linked_manifest_digest != canonical_digest(manifest)
+            or self.source_linked_manifest_digest != manifest_digest
         ):
             raise SchemaError(
                 "source id/digest do not identify the exact linked manifest",

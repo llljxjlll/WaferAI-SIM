@@ -1247,8 +1247,8 @@ class CollectiveWorkload:
 
     def validate(self, path: str) -> None:
         validate_uint64(self.participant_count, f"{path}.participant_count")
-        if self.participant_count <= 1:
-            raise SchemaError("must be greater than one", path=f"{path}.participant_count")
+        if self.participant_count == 0:
+            raise SchemaError("must be greater than zero", path=f"{path}.participant_count")
         for field_name in (
             "logical_tensor_bytes",
             "rank_input_bytes",
@@ -1258,7 +1258,13 @@ class CollectiveWorkload:
         ):
             value = getattr(self, field_name)
             validate_uint64(value, f"{path}.{field_name}")
-            if value == 0:
+            if value == 0 and not (
+                self.participant_count == 1
+                and field_name in (
+                    "rank_logical_payload_bytes",
+                    "group_logical_payload_bytes",
+                )
+            ):
                 raise SchemaError("must be greater than zero", path=f"{path}.{field_name}")
         if not self.mesh_axes or len(set(self.mesh_axes)) != len(self.mesh_axes):
             raise SchemaError("must contain unique mesh axes", path=f"{path}.mesh_axes")

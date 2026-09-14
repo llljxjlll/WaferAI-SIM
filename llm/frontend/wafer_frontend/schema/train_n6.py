@@ -12,6 +12,7 @@ from .artifact_manifest import (
     RegionManifest,
 )
 from .common import stable_artifact_id, validate_nonempty, validate_uint64
+from ._validation_session import mark_validation_complete, validation_seen
 from .ir0 import TrainStructure
 from .n6 import _leaf_fragment, _validate_lowered_fragments
 from .train_global_action import (
@@ -114,6 +115,8 @@ class TrainLoweredReplica:
         }
 
     def validate(self, path: str = "train_lowered_replica") -> None:
+        if validation_seen(self, "train_lowered_replica"):
+            return
         validate_uint64(self.replica_index, f"{path}.replica_index")
         for field_name in (
             "source_global_action_replica_id",
@@ -163,6 +166,7 @@ class TrainLoweredReplica:
                 f"unstable replica id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_lowered_replica")
 
     def validate_against(
         self,
@@ -271,6 +275,8 @@ class TrainLoweredProgram:
         }
 
     def validate(self, path: str = "train_lowered_program") -> None:
+        if validation_seen(self, "train_lowered_program"):
+            return
         if self.schema_version != TRAIN_LOWERED_PROGRAM_SCHEMA_VERSION:
             raise SchemaError(
                 "unsupported schema version",
@@ -374,6 +380,7 @@ class TrainLoweredProgram:
                 f"unstable artifact id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_lowered_program")
 
     def validate_against(
         self,
@@ -459,6 +466,8 @@ class TrainLinkedProgram:
         return {"source": self.source, "manifest": self.manifest}
 
     def validate(self, path: str = "train_linked_program") -> None:
+        if validation_seen(self, "train_linked_program"):
+            return
         if self.schema_version != TRAIN_LINKED_PROGRAM_SCHEMA_VERSION:
             raise SchemaError(
                 "unsupported schema version",
@@ -528,6 +537,7 @@ class TrainLinkedProgram:
                 f"unstable linked Train id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_linked_program")
 
     def validate_against(
         self,

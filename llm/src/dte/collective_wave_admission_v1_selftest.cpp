@@ -117,6 +117,14 @@ void TestLifecycle(Suite &suite) {
         [&] { runtime.Depart(identity, 0, 0, 1); },
         "late duplicate departure is rejected");
 
+    // Cyclic-delta canonical planning may create multiple waves even when a
+    // larger synthetic capacity could pack the complete symmetric exchange.
+    const std::vector<uint16_t> cores{0, 1, 2, 3};
+    for (std::size_t wave = 1;
+         wave < image.Lowering().plans[0].waves.size(); ++wave) {
+        ArriveAll(runtime, identity, 0, static_cast<uint16_t>(wave), cores);
+        DepartAll(runtime, identity, 0, static_cast<uint16_t>(wave), cores);
+    }
     runtime.RetireImage(identity);
     suite.Check(runtime.Residual().Empty(),
                 "normal image retirement drains residual");

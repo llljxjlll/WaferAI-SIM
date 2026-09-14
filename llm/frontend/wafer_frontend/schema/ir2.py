@@ -7,12 +7,15 @@ from enum import Enum
 import math
 
 from ..errors import SchemaError
+from ._validation_session import mark_validation_complete, validation_seen
 from .action import (
     BarrierContract,
     BarrierScope,
     canonical_compute_operand_roles,
     ComputeContract,
     ComputeOperand,
+    ComputeOperandSlice,
+    ComputeTileBinding,
     FusionAction,
     FusionActionKind,
     FusionPlan,
@@ -34,6 +37,7 @@ from .common import (
 from .ir0 import (
     EdgeKind,
     FusionPattern,
+    GemmWorkload,
     OpKind,
     StateAccess,
     StateAccessMode,
@@ -726,6 +730,64 @@ class SwizzleIntraDieValue:
                 validate_nonempty(ref, f"{path}.{field_name}[{index}]")
 
 
+def swizzle_temporary_tensor_domains(
+    temporary: SwizzleIntraDieValue,
+    tasks: tuple["SemanticTask", ...],
+) -> tuple[tuple[str, DType], ...]:
+    """Return the producer-authoritative typed IR-1 tensor domain.
+
+    GEMM tasks carry per-operand slices, so their task-level ``tensor_slice``
+    may describe another operand.  Prefer exact compute bindings, and—as with
+    SSA—prefer producer domains over consumer views such as a terminal copy.
+    """
+
+    task_index = {task.id: task for task in tasks}
+
+    def collect(task_ids: tuple[str, ...]) -> list[tuple[str, DType]]:
+        result: list[tuple[str, DType]] = []
+        for task_id in task_ids:
+            task = task_index[task_id]
+            matched_compute_operand = False
+            compute = task.compute
+            if compute is not None and compute.tile is not None:
+                bindings = (
+                    compute.tile.input_slices
+                    if temporary.id in task.read_values
+                    else ()
+                ) + (
+                    compute.tile.output_slices
+                    if temporary.id in task.write_values
+                    else ()
+                )
+                for binding in bindings:
+                    if binding.operand_id == temporary.id:
+                        result.append(
+                            (binding.source_value_id, compute.workload.dtype)
+                        )
+                        matched_compute_operand = True
+            if (
+                not matched_compute_operand
+                and task.tensor_slice is not None
+                and task.dtype is not None
+                and temporary.id in task.read_values + task.write_values
+            ):
+                result.append((task.tensor_slice.value_id, task.dtype))
+        return result
+
+    result = collect(temporary.producer_tasks)
+    if not result:
+        result = collect(temporary.consumer_tasks)
+    logical_sources = {
+        origin.logical_source_ref
+        for origin in temporary.origins
+        if origin.logical_source_ref is not None
+    }
+    if len(logical_sources) == 1 and result:
+        logical_source = next(iter(logical_sources))
+        return tuple((logical_source, dtype) for _source_id, dtype in result)
+    return tuple(result)
+
+
 @dataclass(frozen=True, slots=True)
 class DmaContract:
     """Bounded state transfer with exactly one local SRAM endpoint."""
@@ -1322,18 +1384,18 @@ def _producer_sort_key(task: SemanticTask) -> tuple[tuple[int, ...], tuple[int, 
     )
 
 
-def _require_swizzle_gemm_rs(plan: SwizzleFusionPlan, path: str) -> None:
+def _require_swizzle_dense_abi(plan: SwizzleFusionPlan, path: str) -> None:
     """Fail closed until each additional Swizzle pattern has a common ABI."""
 
-    if plan.pattern is not FusionPattern.GEMM_RS:
+    if plan.pattern not in (FusionPattern.GEMM_RS, FusionPattern.AG_GEMM):
         raise SchemaError(
-            "common IR2 Swizzle projection currently supports GEMM_RS only",
+            "common IR2 Swizzle projection supports GEMM_RS and AG_GEMM only",
             path=path,
         )
 
 
-def _validate_swizzle_gemm_rs_dag(dag: "IntraDieDAG", ir1: IR1, plans: tuple[SwizzleFusionPlan, ...], *, path: str) -> None:
-    """Validate the first direct-route GEMM_RS common-IR2 shape exactly."""
+def _validate_swizzle_dense_dag(dag: "IntraDieDAG", ir1: IR1, plans: tuple[SwizzleFusionPlan, ...], *, path: str) -> None:
+    """Validate direct-route GEMM_RS/AG_GEMM common-IR2 shapes exactly."""
     if dag.state_access_ids or dag.state_transfer_ids:
         raise SchemaError("Swizzle GEMM_RS cannot combine state transfer yet", path=path)
     groups = {group.id: group for group in ir1.groups}
@@ -1369,6 +1431,30 @@ def _validate_swizzle_gemm_rs_dag(dag: "IntraDieDAG", ir1: IR1, plans: tuple[Swi
         plan_id: str, rank: int, action: object, ref: str, *, write: bool
     ) -> str:
         plan = plan_index[plan_id]
+        logical_gemm_output = plan.decision.problem.gemm.output.value_ref
+        chunk = action.chunk_origin
+        if (
+            write
+            and plan.pattern is FusionPattern.AG_GEMM
+            and action.fusion_kind is FusionActionKind.COMP
+            and chunk is not None
+            and chunk.axis == 0
+            and action.source_action.output_refs == (ref,)
+            and ref
+            == f"{logical_gemm_output}::rank{rank}::chunk{chunk.chunk_index}"
+        ):
+            return logical_gemm_output
+        if (
+            write
+            and plan.pattern is FusionPattern.AG_GEMM
+            and action.fusion_kind is FusionActionKind.REDUCE
+            and action.reduction_origin is not None
+            and action.reduction_origin.node_ref
+            == plan.decision.problem.gemm.node_ref
+            and action.source_action.output_refs == (ref,)
+            and ref == f"{logical_gemm_output}::rank{rank}::boundary"
+        ):
+            return logical_gemm_output
         if write and action.fusion_kind is FusionActionKind.LOCAL_COPY:
             logical_output = plan.decision.problem.collective.output.value_ref
             if (
@@ -1395,6 +1481,83 @@ def _validate_swizzle_gemm_rs_dag(dag: "IntraDieDAG", ir1: IR1, plans: tuple[Swi
         )
         if (task.kind.value, task.member_id, task.read_values, task.write_values, task.sync) != (action.fusion_kind.value, action.member_ref, expected_reads, expected_writes, action.sync):
             raise SchemaError("task fields disagree with Swizzle bound action", path=f"{path}.tasks[{task.id}]")
+        plan = plan_index[key[0]]
+        chunk = action.chunk_origin
+        if (
+            plan.pattern is FusionPattern.AG_GEMM
+            and action.fusion_kind is FusionActionKind.COMP
+            and chunk is not None
+            and chunk.axis == 0
+        ):
+            compute = task.compute
+            origin = action.compute_origin
+            if compute is None or origin is None or compute.tile is None:
+                raise SchemaError(
+                    "AG_GEMM COMP lacks its exact compute tile",
+                    path=f"{path}.tasks[{task.id}].compute",
+                )
+            placement = next(
+                item for item in groups[plan.group_ref].placements
+                if item.rank == key[1]
+            )
+            if len(placement.logical_coord) != 1:
+                raise SchemaError(
+                    "AG_GEMM COMP requires one-dimensional TP placement",
+                    path=f"{path}.tasks[{task.id}].origin_ref",
+                )
+            full_m, full_n, full_k = origin.workload.logical_shape
+            _rank_m, rank_n, _rank_k = origin.workload.rank_shape
+            chunk_m, chunk_k = chunk.logical_shape
+            chunk_m_offset, chunk_k_offset = chunk.logical_offset
+            n_offset = placement.logical_coord[0] * rank_n
+            expected_workload = GemmWorkload(
+                logical_shape=(chunk_m, full_n, chunk_k),
+                rank_shape=(chunk_m, rank_n, chunk_k),
+                partition=origin.workload.partition,
+                dtype=origin.workload.dtype,
+            )
+            expected_tile = ComputeTileBinding(
+                origin_workload=origin.workload,
+                input_slices=(
+                    ComputeOperandSlice(
+                        expected_reads[0], origin.ir1_input_refs[0],
+                        (chunk_m_offset, chunk_k_offset), (chunk_m, chunk_k),
+                    ),
+                    ComputeOperandSlice(
+                        expected_reads[1], origin.ir1_input_refs[1],
+                        (chunk_k_offset, n_offset), (chunk_k, rank_n),
+                    ),
+                ),
+                output_slices=(
+                    ComputeOperandSlice(
+                        expected_writes[0], origin.ir1_output_refs[0],
+                        (chunk_m_offset, n_offset), (chunk_m, rank_n),
+                    ),
+                ),
+            )
+            expected_compute = ComputeContract(
+                op_kind=OpKind.GEMM,
+                workload=expected_workload,
+                math=origin.math,
+                effects=origin.effects,
+                impl_ref=origin.impl_ref,
+                inputs=(
+                    ComputeOperand(expected_reads[0], "lhs"),
+                    ComputeOperand(expected_reads[1], "rhs"),
+                ),
+                outputs=(ComputeOperand(expected_writes[0], "partial"),),
+                tile=expected_tile,
+            )
+            expected_slice = TensorSlice(
+                plan.decision.problem.gemm.output.value_ref,
+                (chunk_m_offset, n_offset),
+                (chunk_m, rank_n),
+            )
+            if task.compute != expected_compute or task.tensor_slice != expected_slice:
+                raise SchemaError(
+                    "AG_GEMM COMP compute/output slice disagrees with exact provenance",
+                    path=f"{path}.tasks[{task.id}]",
+                )
         if action.fusion_kind is FusionActionKind.LOCAL_COPY:
             chunk = action.chunk_origin
             assert chunk is not None
@@ -1621,9 +1784,26 @@ def _validate_mixed_dag_dependencies(
             and (whole or task.member_id == node_id)
         )
 
+    bound_action_by_origin = {
+        (plan.id, program.rank, action.source_action.id): action
+        for plan in fusion_plans
+        for program in plan.rank_programs
+        for action in program.actions
+    }
+
     def reads_source(task: SemanticTask, value_id: str) -> bool:
         if value_id in task.read_values:
             return True
+        origin = task.origin_ref
+        if isinstance(origin, SwizzleNodeOrigin):
+            action = bound_action_by_origin.get(
+                (origin.plan_id, origin.rank, origin.action_id)
+            )
+            if action is not None and any(
+                item.use.value == "read" and item.logical_source_ref == value_id
+                for item in action.value_origins
+            ):
+                return True
         return (
             task.kind is SemanticTaskKind.COMP
             and task.compute is not None and task.compute.tile is not None
@@ -2536,9 +2716,9 @@ class IntraDieDAG:
             if len(swizzle_plans) != len(fusion_plans):
                 raise SchemaError("common IR2 cannot mix legacy and Swizzle fusion plans", path=f"{path}.fusion_plans")
             for index, plan in enumerate(swizzle_plans):
-                _require_swizzle_gemm_rs(plan, f"{path}.fusion_plans[{index}]")
+                _require_swizzle_dense_abi(plan, f"{path}.fusion_plans[{index}]")
                 plan.validate_against(ir1, f"{path}.fusion_plans[{index}]")
-            _validate_swizzle_gemm_rs_dag(self, ir1, swizzle_plans, path=path)
+            _validate_swizzle_dense_dag(self, ir1, swizzle_plans, path=path)
             for index, plan in enumerate(standalone_plans):
                 plan.validate_against(ir1, f"{path}.standalone_plans[{index}]")
             _validate_standalone_dag_provenance(
@@ -3389,6 +3569,8 @@ class IR2ProjectionResult:
         }
 
     def validate(self, path: str = "ir2_projection_result") -> None:
+        if validation_seen(self, "ir2_projection_result"):
+            return
         if self.schema_version != IR2_PROJECTION_RESULT_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -3521,6 +3703,7 @@ class IR2ProjectionResult:
         )
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "ir2_projection_result")
 
     def validate_against(
         self,
@@ -3589,7 +3772,7 @@ class IR2ProjectionResult:
                     path=f"{path}.dags",
                 )
             for index, plan in enumerate(swizzle_plans):
-                _require_swizzle_gemm_rs(plan, f"{path}.fusion_plans[{index}]")
+                _require_swizzle_dense_abi(plan, f"{path}.fusion_plans[{index}]")
                 plan.validate_against(ir1, f"{path}.fusion_plans[{index}]")
             for index, dag in enumerate(self.dags):
                 dag.validate_against(
@@ -5555,20 +5738,9 @@ class IntraDieSchedule:
         value_index = {value.id: value for value in dag.values}
         ir1_values = {value.id: value for value in ir1.values}
         for temporary in dag.swizzle_values:
-            producer_witnesses = tuple(
-                task_index[task_id]
-                for task_id in temporary.producer_tasks
-                if task_index[task_id].tensor_slice is not None
-                and task_index[task_id].dtype is not None
-            )
-            witnesses = producer_witnesses or tuple(
-                task_index[task_id]
-                for task_id in temporary.consumer_tasks
-                if task_index[task_id].tensor_slice is not None
-                and task_index[task_id].dtype is not None
-            )
-            source_ids = {task.tensor_slice.value_id for task in witnesses if task.tensor_slice is not None}
-            dtypes = {task.dtype for task in witnesses}
+            domains = swizzle_temporary_tensor_domains(temporary, dag.tasks)
+            source_ids = {source_id for source_id, _dtype in domains}
+            dtypes = {dtype for _source_id, dtype in domains}
             if len(source_ids) != 1 or len(dtypes) != 1:
                 raise SchemaError(
                     "Swizzle temporary requires one exact typed tensor-slice domain",
@@ -6573,9 +6745,29 @@ class IntraDieSchedule:
                 binding.region_offset_bytes != source_base + index * chunk_bytes
                 or binding.size_bytes != chunk_bytes
                 for index, binding in enumerate(inputs)
-            ) or output.size_bytes != chunk_bytes:
+            ):
                 raise SchemaError(
                     "LOCAL_REDUCE inputs must be rank-ordered tight-stride chunks",
+                    path=f"{path}.task_buffer_uses",
+                )
+            output_uses = tuple(
+                use for use in uses_by_task[task.id]
+                if use.role is BufferUseRole.REDUCE_OUTPUT
+            )
+            if len(output_uses) != 1:
+                raise SchemaError(
+                    "LOCAL_REDUCE requires one exact output view",
+                    path=f"{path}.task_buffer_uses",
+                )
+            output_addend = dense_row_major_view_byte_addend(
+                output.tensor_slice,
+                output_uses[0].tensor_slice,
+                output.dtype,
+                path=f"{path}.task_buffer_uses",
+            )
+            if output_addend + chunk_bytes > output.size_bytes:
+                raise SchemaError(
+                    "LOCAL_REDUCE output view exceeds its binding root",
                     path=f"{path}.task_buffer_uses",
                 )
             region = resolved_regions[inputs[0].id]
@@ -6585,8 +6777,8 @@ class IntraDieSchedule:
                     "LOCAL_REDUCE source span exceeds named region",
                     path=f"{path}.task_buffer_uses",
                 )
-            output_start = output.region_offset_bytes
-            output_end = output_start + output.size_bytes
+            output_start = output.region_offset_bytes + output_addend
+            output_end = output_start + chunk_bytes
             if output_start < source_end and source_base < output_end:
                 raise SchemaError(
                     "LOCAL_REDUCE output must not overlap the source span",
@@ -6955,6 +7147,8 @@ class IntraDieScheduleSet:
         }
 
     def validate(self, path: str = "intra_die_schedule_set") -> None:
+        if validation_seen(self, "intra_die_schedule_set"):
+            return
         if self.schema_version != INTRA_DIE_SCHEDULE_SET_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -6982,6 +7176,7 @@ class IntraDieScheduleSet:
         )
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "intra_die_schedule_set")
 
     def validate_against(
         self,

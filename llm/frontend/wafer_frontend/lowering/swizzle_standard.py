@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from math import gcd
+
+from ..passes.meshslice_packed_storage import (
+    build_meshslice_packed_storage,
+)
 
 from ..errors import SchemaError
 from ..schema.artifact_manifest import (
@@ -63,6 +68,9 @@ _TERMINAL_ROOT_LAYOUT = "swizzle_standard_terminal_root/v1"
 _TERMINAL_SUBVIEW_LAYOUT = "swizzle_standard_terminal_subview/v1"
 _STORAGE_ROOT_LAYOUT = "swizzle_standard_storage_root/v1"
 _STORAGE_SUBVIEW_LAYOUT = "swizzle_standard_storage_subview/v1"
+_MESHSLICE_PACKED_ROOT_LAYOUT = "swizzle_meshslice_packed_root/v1"
+_MESHSLICE_PACKED_FULL_LAYOUT = "swizzle_meshslice_packed_full_view/v1"
+_MESHSLICE_PACKED_CHUNK_LAYOUT = "swizzle_meshslice_packed_chunk/v1"
 
 
 def _id(kind: str, semantic: object) -> str:
@@ -165,7 +173,10 @@ def _derive_legacy_ar_buffers(
         for key in sorted(group_keys):
             address = address_by_key[key]
             views = views_by_key[key]
-            first = views[0]
+            first = max(
+                views,
+                key=lambda view: (view.byte_extent, -view.byte_offset),
+            )
             if any(
                 (
                     view.shape, view.layout, view.dtype,
@@ -177,10 +188,21 @@ def _derive_legacy_ar_buffers(
                 )
                 for view in views[1:]
             ):
-                raise SchemaError(
-                    "one value-slot has inconsistent typed views",
-                    path="operand_abi.operands",
+                meshslice_subviews = (
+                    projection.algorithm is SwizzleAlgorithm.MESHSLICE_2D_OS
+                    and all(
+                        view.layout == first.layout
+                        and view.dtype is first.dtype
+                        and view.byte_offset + view.byte_extent
+                        <= address.size_bytes
+                        for view in views
+                    )
                 )
+                if not meshslice_subviews:
+                    raise SchemaError(
+                        "one value-slot has inconsistent typed views",
+                        path="operand_abi.operands",
+                    )
             binding_id = _id(
                 "buffer_binding", {"core_abi": core_abi.id, "key": key}
             )
@@ -227,12 +249,128 @@ def _derive_legacy_ar_buffers(
     return tuple(sorted(result, key=lambda item: item.id))
 
 
+def _derive_meshslice_packed_buffers(
+    ir1: IR1,
+    plan: SwizzleFusionPlan,
+    projection: SwizzleIr2Projection,
+    core_abi: SwizzleCoreAddressABI,
+    operand_abi: SwizzleOperandABI,
+) -> tuple[BufferABI, ...] | None:
+    packed = build_meshslice_packed_storage(
+        plan, projection, core_abi, operand_abi
+    )
+    if packed is None:
+        return None
+    result = list(_derive_legacy_ar_buffers(
+        ir1, projection, core_abi, operand_abi
+    ))
+    replaced = {
+        _id("buffer_binding", {
+            "core_abi": core_abi.id,
+            "key": (root.value_ref, root.slot),
+        })
+        for root in packed.roots
+    }
+    result = [abi for abi in result if abi.binding_id not in replaced]
+    orders = {
+        item.task_ref: item.core_order for item in core_abi.task_bindings
+    }
+    element_bytes = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}
+    for root in packed.roots:
+        address = root.address_binding
+        region = _region(ir1, address)
+        root_semantic = {
+            "schedule_id": core_abi.id,
+            "binding_id": root.binding_id,
+            "value_id": root.root_value_id,
+            "logical_core": address.logical_core,
+            "tensor_slice": TensorSlice(
+                root.root_value_id,
+                (0,),
+                (address.size_bytes // element_bytes[root.dtype],),
+            ),
+            "region_ref": address.region_ref,
+            "region_offset_bytes": address.address - region.base_bytes,
+            "size_bytes": address.size_bytes,
+            "alignment_bytes": address.alignment_bytes,
+            "banks": (),
+            "storage_id": root.storage_id,
+            "alias_of": None,
+            "lifetime_start": address.lifetime_start,
+            "lifetime_end_exclusive": address.lifetime_end_exclusive,
+            "dtype": root.dtype,
+            "layout": _MESHSLICE_PACKED_ROOT_LAYOUT,
+            "ownership": BufferOwnership.BORROWED,
+        }
+        result.append(BufferABI(
+            id=_id("buffer_abi", root_semantic), **root_semantic
+        ))
+        for alias in root.aliases:
+            uses = tuple(orders[ref] for ref, _ordinal in alias.task_uses)
+            if not uses:
+                raise SchemaError(
+                    "packed alias lacks a task use",
+                    path="meshslice_packed_storage.roots",
+                )
+            binding_id = (
+                _id("buffer_binding", {
+                    "core_abi": core_abi.id,
+                    "key": (root.value_ref, root.slot),
+                })
+                if alias.kind.value == "full_view"
+                else alias.binding_id
+            )
+            semantic = {
+                "schedule_id": core_abi.id,
+                "binding_id": binding_id,
+                "value_id": root.value_ref,
+                "logical_core": address.logical_core,
+                "tensor_slice": TensorSlice(
+                    root.value_ref,
+                    (0,) * len(alias.shape),
+                    alias.shape,
+                ),
+                "region_ref": address.region_ref,
+                "region_offset_bytes": (
+                    address.address - region.base_bytes + alias.byte_offset
+                ),
+                "size_bytes": alias.byte_extent,
+                "alignment_bytes": (
+                    address.alignment_bytes
+                    if alias.kind.value == "full_view"
+                    else gcd(address.alignment_bytes, alias.byte_extent)
+                ),
+                "banks": (),
+                "storage_id": root.storage_id,
+                "alias_of": root.binding_id,
+                "lifetime_start": min(uses),
+                "lifetime_end_exclusive": max(uses) + 1,
+                "dtype": alias.dtype,
+                "layout": (
+                    _MESHSLICE_PACKED_FULL_LAYOUT
+                    if alias.kind.value == "full_view"
+                    else _MESHSLICE_PACKED_CHUNK_LAYOUT
+                ),
+                "ownership": BufferOwnership.ALIASED,
+            }
+            result.append(BufferABI(
+                id=_id("buffer_abi", semantic), **semantic
+            ))
+    return tuple(sorted(result, key=lambda item: item.id))
+
+
 def _derive_buffers(
     ir1: IR1,
+    plan: SwizzleFusionPlan,
     projection: SwizzleIr2Projection,
     core_abi: SwizzleCoreAddressABI,
     operand_abi: SwizzleOperandABI,
 ) -> tuple[BufferABI, ...]:
+    packed = _derive_meshslice_packed_buffers(
+        ir1, plan, projection, core_abi, operand_abi
+    )
+    if packed is not None:
+        return packed
     if not admits_wang_4rank_packed_layout(projection):
         return _derive_legacy_ar_buffers(
             ir1, projection, core_abi, operand_abi
@@ -574,7 +712,10 @@ def _derive_buffers(
     return tuple(sorted(result, key=lambda item: item.id))
 
 
-def _relocations(records: list[RelocatableRecord]) -> tuple[tuple[RuntimeRelocation, ...], tuple[AddressRelocation, ...]]:
+def _relocations(
+    records: list[RelocatableRecord],
+    address_addends: dict[tuple[str, SemanticOperandId], int],
+) -> tuple[tuple[RuntimeRelocation, ...], tuple[AddressRelocation, ...]]:
     runtime = []
     address = []
     for record_index, record in enumerate(records):
@@ -592,7 +733,16 @@ def _relocations(records: list[RelocatableRecord]) -> tuple[tuple[RuntimeRelocat
                     },
                     SemanticOperandId.SRAM_BIND_OUTPUT: ProgramSymbolKind.SRAM_LABEL,
                 }.get(operand.operand_id, ProgramSymbolKind.ABSOLUTE_ADDRESS)
-                address.append(AddressRelocation(record_index, operand.operand_id, symbol_kind, operand.symbol_ref, 0))
+                address.append(AddressRelocation(
+                    record_index,
+                    operand.operand_id,
+                    symbol_kind,
+                    operand.symbol_ref,
+                    address_addends.get((
+                        record.source_global_action_id,
+                        operand.operand_id,
+                    ), 0),
+                ))
     runtime.sort(key=lambda item: (item.record_index, list(RuntimeOperandField).index(item.field)))
     address.sort(key=lambda item: (item.record_index, int(item.operand_id)))
     return tuple(runtime), tuple(address)
@@ -606,11 +756,30 @@ def lower_swizzle_standard_fragment(
     core_abi: SwizzleCoreAddressABI,
     operand_abi: SwizzleOperandABI,
 ) -> CommandFragment:
-    """Build one standard fragment, consuming only explicitly witnessed ABI facts."""
+    """Build one standard fragment after complete public input validation."""
 
     lowered.validate_against(plan, projection)
     operand_abi.validate_against(ir1, plan, projection, core_abi)
-    buffers = _derive_buffers(ir1, projection, core_abi, operand_abi)
+    return _lower_swizzle_standard_fragment_prevalidated(
+        ir1, plan, projection, lowered, core_abi, operand_abi
+    )
+
+
+
+
+
+def _lower_swizzle_standard_fragment_prevalidated(
+    ir1: IR1,
+    plan: SwizzleFusionPlan,
+    projection: SwizzleIr2Projection,
+    lowered: SwizzleLoweredProgram,
+    core_abi: SwizzleCoreAddressABI,
+    operand_abi: SwizzleOperandABI,
+) -> CommandFragment:
+    packed = build_meshslice_packed_storage(
+        plan, projection, core_abi, operand_abi
+    )
+    buffers = _derive_buffers(ir1, plan, projection, core_abi, operand_abi)
     # Binding IDs are the authoritative key; rebuild value-slot mapping without shape guessing.
     buffer_by_key = {
         key: next(item for item in buffers if item.binding_id == _id("buffer_binding", {"core_abi": core_abi.id, "key": key}))
@@ -641,11 +810,21 @@ def lower_swizzle_standard_fragment(
         return symbol_id
 
     abs_symbol = {key: program(ProgramSymbolKind.ABSOLUTE_ADDRESS, abi.binding_id) for key, abi in buffer_by_key.items()}
+    packed_abs_symbol = {}
+    if packed is not None:
+        for root in packed.roots:
+            for alias in root.chunks:
+                symbol = program(
+                    ProgramSymbolKind.ABSOLUTE_ADDRESS, alias.binding_id
+                )
+                for task_use in alias.task_uses:
+                    packed_abs_symbol[task_use] = symbol
     label_symbol = {abi.storage_id: program(ProgramSymbolKind.SRAM_LABEL, abi.storage_id) for abi in buffers}
     region_symbol = {abi.region_ref: program(ProgramSymbolKind.SRAM_REGION, abi.region_ref) for abi in buffers}
     roots = {abi.storage_id: abi for abi in buffers if abi.alias_of is None}
     tasks = {task.id: task for dag in projection.rank_dags for task in dag.tasks}
     records_by_core: dict[object, list[RelocatableRecord]] = defaultdict(list)
+    address_addends: dict[tuple[str, SemanticOperandId], int] = {}
 
     for dag in projection.rank_dags:
         for task in sorted(dag.tasks, key=lambda item: task_bindings[item.id].core_order):
@@ -742,23 +921,33 @@ def lower_swizzle_standard_fragment(
                     RecordOperand.literal("group_id", 0), RecordOperand.literal("collective_id", 0), RecordOperand.literal("epoch", 0),
                 )
                 view = views[0]
+                address_symbol = packed_abs_symbol.get(
+                    (owner, view.ordinal),
+                    abs_symbol[(view.value_ref, view.slot)],
+                )
                 if task.kind is SwizzleActionKind.SEND:
+                    address_addends[(owner, SemanticOperandId.SOURCE_ADDRESS)] = (
+                        0 if (owner, view.ordinal) in packed_abs_symbol else view.byte_offset
+                    )
                     operands = (
                         RecordOperand.literal("mode", 0), RecordOperand.literal("source_space", 0), RecordOperand.literal("completion", 1),
                         RecordOperand.literal("datatype", 0), RecordOperand.literal("reduce_op", 0),
                         RecordOperand.runtime("fsm_id", RuntimeOperandField.DTE_FSM, binding.fsm_symbol_ref), RecordOperand.literal("token", 0),
                         RecordOperand.literal("length_bytes", contract.logical_bytes),
-                        RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, abs_symbol[(view.value_ref, view.slot)]), *common_tail,
+                        RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, address_symbol), *common_tail,
                     )
                     opcode = RecordOpcode.DTE_SEND
                 else:
+                    address_addends[(owner, SemanticOperandId.DESTINATION_ADDRESS)] = (
+                        0 if (owner, view.ordinal) in packed_abs_symbol else view.byte_offset
+                    )
                     assert binding.token_symbol_ref
                     runtime(RuntimeSymbolKind.DTE_TOKEN, binding.token_symbol_ref, owner)
                     operands = (
                         RecordOperand.literal("mode", 0), RecordOperand.literal("completion", 0), RecordOperand.literal("datatype", 0), RecordOperand.literal("reduce_op", 0),
                         RecordOperand.runtime("fsm_id", RuntimeOperandField.DTE_FSM, binding.fsm_symbol_ref),
                         RecordOperand.runtime("token", RuntimeOperandField.DTE_TOKEN, binding.token_symbol_ref), RecordOperand.literal("length_bytes", contract.logical_bytes),
-                        RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, abs_symbol[(view.value_ref, view.slot)]), *common_tail,
+                        RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, address_symbol), *common_tail,
                     )
                     opcode = RecordOpcode.DTE_RECV
                 records.append(RelocatableRecord(owner, opcode, operands))
@@ -775,6 +964,8 @@ def lower_swizzle_standard_fragment(
                 assert binding.token_symbol_ref and contract.direction is SwizzleDteDirection.LOCAL_COPY
                 runtime(RuntimeSymbolKind.DTE_TOKEN, binding.token_symbol_ref, owner)
                 source, destination = views
+                address_addends[(owner, SemanticOperandId.SOURCE_ADDRESS)] = source.byte_offset
+                address_addends[(owner, SemanticOperandId.DESTINATION_ADDRESS)] = destination.byte_offset
                 records.append(RelocatableRecord(owner, RecordOpcode.DTE_ISSUE, (
                     RecordOperand.literal("direction", 0), RecordOperand.runtime("token", RuntimeOperandField.DTE_TOKEN, binding.token_symbol_ref),
                     RecordOperand.literal("payload_bits", contract.payload_bits), RecordOperand.literal("size_bytes", contract.logical_bytes), RecordOperand.literal("hbm_address", 0),
@@ -830,7 +1021,9 @@ def lower_swizzle_standard_fragment(
 
     streams = []
     for core, records in sorted(records_by_core.items(), key=lambda item: (item[0].die_id, item[0].local_core_id)):
-        runtime_relocations, address_relocations = _relocations(records)
+        runtime_relocations, address_relocations = _relocations(
+            records, address_addends
+        )
         streams.append(CoreFragmentStream(core, tuple(records), runtime_relocations, address_relocations))
     used_program_symbols = {
         relocation.symbol_ref
@@ -863,13 +1056,31 @@ def link_swizzle_standard_manifest(
     operand_abi: SwizzleOperandABI,
     fragment: CommandFragment,
 ) -> LinkedProgramManifest:
-    """Link the dedicated fragment through the unchanged standard ABI closure."""
+    """Link only an exact standard-lowering fragment through the public ABI."""
 
     expected_fragment = lower_swizzle_standard_fragment(
         ir1, plan, projection, lowered, core_abi, operand_abi
     )
     if fragment != expected_fragment:
-        raise SchemaError("fragment is not the exact Swizzle standard lowering", path="fragment")
+        raise SchemaError(
+            "fragment is not the exact Swizzle standard lowering",
+            path="fragment",
+        )
+    return _link_swizzle_standard_manifest_prevalidated(
+        ir1, plan, projection, lowered, core_abi, operand_abi, fragment
+    )
+
+
+
+def _link_swizzle_standard_manifest_prevalidated(
+    ir1: IR1,
+    plan: SwizzleFusionPlan,
+    projection: SwizzleIr2Projection,
+    lowered: SwizzleLoweredProgram,
+    core_abi: SwizzleCoreAddressABI,
+    operand_abi: SwizzleOperandABI,
+    fragment: CommandFragment,
+) -> LinkedProgramManifest:
     task_by_id = {task.id: task for dag in projection.rank_dags for task in dag.tasks}
     task_core = {item.task_ref: item.logical_core for item in core_abi.task_bindings}
     core_binding_by_ref = {item.logical_core: item for item in core_abi.task_bindings}
@@ -947,10 +1158,10 @@ def link_swizzle_standard_manifest(
             name, value, size = region.name, region.base_bytes, region.size_bytes
         elif symbol.source_ref in buffer_by_binding:
             abi = buffer_by_binding[symbol.source_ref]
-            binding = next(item for item in core_abi.value_bindings if (item.value_ref, item.slot) == (
-                next(key for key in {(view.value_ref, view.slot) for view in operand_abi.operands} if _id("buffer_binding", {"core_abi": core_abi.id, "key": key}) == abi.binding_id)
-            ))
-            name, value, size = f"swz_abs_{symbol.id[-16:]}", binding.address, binding.size_bytes
+            region = _region(ir1, abi)
+            name = f"swz_abs_{symbol.id[-16:]}"
+            value = region.base_bytes + abi.region_offset_bytes
+            size = abi.size_bytes
         else:
             # The only non-BufferABI absolute is the ordered LOCAL_REDUCE input span.
             matching = [
@@ -977,6 +1188,52 @@ def link_swizzle_standard_manifest(
 
     runtime_defs = []
     runtime_by_id = {item.id: item for item in fragment.runtime_symbols}
+    flow_by_id = {item.id: item for item in projection.flows}
+    fsm_flow_by_symbol = {}
+    recv_by_token = {}
+    peer_core_by_symbol = {}
+    for binding in core_abi.runtime_bindings:
+        if binding.fsm_symbol_ref is not None:
+            prior = fsm_flow_by_symbol.setdefault(
+                binding.fsm_symbol_ref, binding.flow_ref
+            )
+            if prior != binding.flow_ref or binding.flow_ref not in flow_by_id:
+                raise SchemaError(
+                    "FSM symbol must identify one exact flow",
+                    path="core_abi.runtime_bindings",
+                )
+        if (
+            binding.token_symbol_ref is not None
+            and task_by_id[binding.task_ref].kind is SwizzleActionKind.RECV
+        ):
+            prior = recv_by_token.setdefault(
+                binding.token_symbol_ref, binding.task_ref
+            )
+            if prior != binding.task_ref:
+                raise SchemaError(
+                    "DTE token must identify one exact receive",
+                    path="core_abi.runtime_bindings",
+                )
+        if binding.peer_symbol_ref is not None:
+            prior = peer_core_by_symbol.setdefault(
+                binding.peer_symbol_ref, binding.peer_core
+            )
+            if prior != binding.peer_core or binding.peer_core is None:
+                raise SchemaError(
+                    "peer symbol must identify one exact runtime core",
+                    path="core_abi.runtime_bindings",
+                )
+    event_by_core_symbol = {
+        symbol_ref: event
+        for event in core_abi.barrier_events
+        for symbol_ref in (
+            event.source_core_symbol_ref,
+            event.destination_core_symbol_ref,
+        )
+    }
+    event_by_tag = {
+        event.event_symbol_ref: event for event in core_abi.barrier_events
+    }
     flow_by_task = {
         ref: flow
         for flow in projection.flows
@@ -996,27 +1253,38 @@ def link_swizzle_standard_manifest(
     }
     for symbol in fragment.runtime_symbols:
         if symbol.kind is RuntimeSymbolKind.DTE_FSM:
-            flow = next(flow for flow in projection.flows if any(
-                binding.fsm_symbol_ref == symbol.id and binding.flow_ref == flow.id
-                for binding in core_abi.runtime_bindings
-            ))
+            flow_ref = fsm_flow_by_symbol.get(symbol.id)
+            if flow_ref is None:
+                raise SchemaError(
+                    "FSM symbol lacks one exact flow", path="fragment.runtime_symbols"
+                )
+            flow = flow_by_id[flow_ref]
             cores = tuple(sorted((task_core[flow.send_task_ref], task_core[flow.recv_task_ref]), key=lambda core: (core.die_id, core.local_core_id)))
             source, destination = flow.send_task_ref, flow.recv_task_ref
         elif symbol.kind is RuntimeSymbolKind.DTE_TOKEN:
-            recv = next((binding.task_ref for binding in core_abi.runtime_bindings if binding.token_symbol_ref == symbol.id and task_by_id[binding.task_ref].kind is SwizzleActionKind.RECV), None)
+            recv = recv_by_token.get(symbol.id)
             owner = recv if recv is not None else local_copy_tokens[symbol.id]
             cores = (task_core[owner],)
             source, destination = owner, wait_by_recv.get(owner, owner)
         elif symbol.kind is RuntimeSymbolKind.RUNTIME_CORE:
-            event = next((item for item in core_abi.barrier_events if symbol.id in (item.source_core_symbol_ref, item.destination_core_symbol_ref)), None)
+            event = event_by_core_symbol.get(symbol.id)
             if event is not None:
                 represented = event.source_core if symbol.id == event.source_core_symbol_ref else event.destination_core
             else:
-                binding = next(item for item in core_abi.runtime_bindings if item.peer_symbol_ref == symbol.id)
-                represented = binding.peer_core
+                represented = peer_core_by_symbol.get(symbol.id)
+                if represented is None:
+                    raise SchemaError(
+                        "runtime core symbol lacks one exact core",
+                        path="fragment.runtime_symbols",
+                    )
             cores, source, destination = (represented,), None, None
         elif symbol.kind is RuntimeSymbolKind.EVENT_TAG:
-            event = next(item for item in core_abi.barrier_events if item.event_symbol_ref == symbol.id)
+            event = event_by_tag.get(symbol.id)
+            if event is None:
+                raise SchemaError(
+                    "event tag lacks one exact barrier event",
+                    path="fragment.runtime_symbols",
+                )
             cores = tuple(sorted((event.source_core, event.destination_core), key=lambda core: (core.die_id, core.local_core_id)))
             source, destination = event.source_task_ref, event.destination_task_ref
         else:
@@ -1099,6 +1367,35 @@ def link_swizzle_standard_manifest(
     )
     manifest.validate()
     return manifest
+
+
+def _link_swizzle_standard_program_prevalidated(
+    ir1: IR1,
+    plan: SwizzleFusionPlan,
+    projection: SwizzleIr2Projection,
+    lowered: SwizzleLoweredProgram,
+    core_abi: SwizzleCoreAddressABI,
+    operand_abi: SwizzleOperandABI,
+) -> SwizzleStandardLinkedProgram:
+    """Close immutable producer results without re-running derivations."""
+
+    fragment = _lower_swizzle_standard_fragment_prevalidated(
+        ir1, plan, projection, lowered, core_abi, operand_abi
+    )
+    manifest = _link_swizzle_standard_manifest_prevalidated(
+        ir1, plan, projection, lowered, core_abi, operand_abi, fragment
+    )
+    return SwizzleStandardLinkedProgram.create(
+        ir1=ir1,
+        plan=plan,
+        projection=projection,
+        lowered=lowered,
+        core_abi=core_abi,
+        operand_abi=operand_abi,
+        fragment=fragment,
+        manifest=manifest,
+    )
+
 
 
 def link_swizzle_standard_program(

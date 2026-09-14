@@ -9,7 +9,7 @@ from .artifact_manifest import PlanBarrierEventPhase, RecordOpcode
 from .common import stable_artifact_id, validate_nonempty, validate_uint64
 from .global_action import LogicalCoreRef
 from .ir1 import IR1
-from .swizzle import SwizzleActionKind
+from .swizzle import SwizzleActionKind, SwizzleAlgorithm
 from .swizzle_ir2 import SwizzleIr2Projection, SwizzleIr2ValueOriginKind
 from .swizzle_lowering import validate_swizzle_plan_projection
 from .swizzle_plan import SwizzleFusionPlan
@@ -301,19 +301,50 @@ class SwizzleCoreAddressABI:
         from .swizzle_operand_abi import build_swizzle_operand_abi
 
         operand_abi = build_swizzle_operand_abi(ir1, plan, projection)
-        views_by_key = {}
+        views_by_key: dict[tuple[str, int], list[object]] = {}
         for view in operand_abi.operands:
             key = (view.value_ref, view.slot)
-            signature = (
-                view.shape, view.layout, view.dtype,
-                view.byte_offset, view.byte_extent,
+            views_by_key.setdefault(key, []).append(view)
+        for views in views_by_key.values():
+            first = views[0]
+            exact = all(
+                (
+                    view.shape, view.layout, view.dtype,
+                    view.byte_offset, view.byte_extent,
+                ) == (
+                    first.shape, first.layout, first.dtype,
+                    first.byte_offset, first.byte_extent,
+                )
+                for view in views[1:]
             )
-            prior = views_by_key.setdefault(key, signature)
-            if prior != signature:
+            meshslice_subviews = (
+                plan.algorithm is SwizzleAlgorithm.MESHSLICE_2D_OS
+                and all(
+                    view.layout == first.layout
+                    and view.dtype is first.dtype
+                    for view in views
+                )
+            )
+            if not exact and not meshslice_subviews:
                 raise SchemaError(
                     "one value-slot must have one exact typed view",
                     path=f"{path}.value_bindings",
                 )
+
+        def typed_view_signature(key: tuple[str, int]) -> frozenset[tuple] | None:
+            views = views_by_key.get(key)
+            if not views:
+                return None
+            return frozenset(
+                (
+                    view.shape,
+                    view.layout,
+                    view.dtype,
+                    view.byte_offset,
+                    view.byte_extent,
+                )
+                for view in views
+            )
         task_orders = {
             item.task_ref: item.core_order for item in self.task_bindings
         }
@@ -524,9 +555,9 @@ class SwizzleCoreAddressABI:
                         and lifetime_disjoint
                         and left_buffer_slot is not None
                         and left_buffer_slot == right_buffer_slot
-                        and views_by_key.get((left_ref, left_slot))
-                        == views_by_key.get((right_ref, right_slot))
-                        and views_by_key.get((left_ref, left_slot)) is not None
+                        and typed_view_signature((left_ref, left_slot))
+                        == typed_view_signature((right_ref, right_slot))
+                        and typed_view_signature((left_ref, left_slot)) is not None
                     )
                     exact_invariant_alias = (
                         exact_span
@@ -536,9 +567,9 @@ class SwizzleCoreAddressABI:
                         and left_value.symbolic_ref == left_value.origin_ref
                         and right_value.symbolic_ref == right_value.origin_ref
                         and left_value.origin_ref == right_value.origin_ref
-                        and views_by_key.get((left_ref, left_slot))
-                        == views_by_key.get((right_ref, right_slot))
-                        and views_by_key.get((left_ref, left_slot)) is not None
+                        and typed_view_signature((left_ref, left_slot))
+                        == typed_view_signature((right_ref, right_slot))
+                        and typed_view_signature((left_ref, left_slot)) is not None
                     )
                     exact_boundary_chunk_reuse = (
                         exact_span
@@ -557,9 +588,9 @@ class SwizzleCoreAddressABI:
                         and right_value.symbolic_ref.startswith(
                             f"{right_value.origin_ref}::"
                         )
-                        and views_by_key.get((left_ref, left_slot))
-                        == views_by_key.get((right_ref, right_slot))
-                        and views_by_key.get((left_ref, left_slot)) is not None
+                        and typed_view_signature((left_ref, left_slot))
+                        == typed_view_signature((right_ref, right_slot))
+                        and typed_view_signature((left_ref, left_slot)) is not None
                     )
                     if not (
                         exact_update_alias

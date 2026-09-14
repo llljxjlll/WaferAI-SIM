@@ -85,6 +85,16 @@ std::optional<P2pCompletionAck> ExtractP2pAckIdentityForAbort(
 size_t CheckedP2pPendingRequestCapacity(size_t topology_cores,
                                         size_t per_core_sessions);
 
+struct P2pPendingAdmissionCandidate {
+    P2pFlowKey flow;
+    P2pRequestDisposition disposition = P2pRequestDisposition::NEW;
+    bool matches_posted_receive = false;
+    bool has_capacity = false;
+};
+
+std::optional<size_t> SelectP2pPendingAdmission(
+    const std::vector<P2pPendingAdmissionCandidate> &candidates);
+
 struct P2pTxIssue {
     P2pEndpointHandle handle;
     uint16_t transport_tag = 0;
@@ -121,6 +131,10 @@ struct P2pEndpointResidual {
     size_t early_data_bytes = 0;
 
     bool Empty() const noexcept;
+    bool LocalTxDrained() const noexcept {
+        return tx_awaiting_admission == 0 && tx_awaiting_ack == 0 &&
+               tx_awaiting_local_retire == 0;
+    }
 };
 
 struct P2pEndpointLifetimeStats {
@@ -234,6 +248,10 @@ public:
     size_t ReservedRxBytes() const noexcept { return reserved_rx_bytes_; }
     bool CanReceiveRequest(const P2pFlowKey &flow,
                            uint64_t total_bytes) const noexcept;
+    bool CanReceiveRequest(
+        const P2pPayloadDeclaration &declaration) const noexcept;
+    bool MatchesPostedReceive(
+        const P2pPayloadDeclaration &declaration) const noexcept;
     P2pRequestDisposition ClassifyRequest(
         const P2pPayloadDeclaration &declaration) const;
     size_t SeenRequestCount() const noexcept { return seen_requests_.size(); }

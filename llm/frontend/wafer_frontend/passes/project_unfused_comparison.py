@@ -1,10 +1,12 @@
 """Build the exact sequential collective/GEMM W10 baseline."""
 
 from __future__ import annotations
+from contextvars import ContextVar
 
 from dataclasses import dataclass
 
 from ..errors import SchemaError
+from ..schema._validation_session import mark_validation_complete, validation_seen
 from ..schema.common import DType, MeshAxisName, stable_artifact_id
 from ..schema.ir0 import FusionPattern
 from ..schema.ir1 import IR1
@@ -21,6 +23,16 @@ from ..schema.swizzle_unfused import (
     UnfusedComparisonRankProjection,
     UnfusedComparisonStage,
 )
+
+_PREVALIDATED_PROJECTION_INPUTS: ContextVar[tuple[object, object] | None] = (
+    ContextVar("unfused_projection_prevalidated_inputs", default=None)
+)
+
+
+def _has_prevalidated_projection_inputs(ir1: IR1, plan: UnfusedComparisonPlan) -> bool:
+    values = _PREVALIDATED_PROJECTION_INPUTS.get()
+    return values is not None and values[0] is ir1 and values[1] is plan
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,18 +63,31 @@ def _value(problem: SwizzleProblem, rank: int, name: str) -> str:
     )
 
 
-def _route(problem: SwizzleProblem, source: int, destination: int):
-    matches = tuple(
-        item
-        for item in problem.group.routes
-        if (item.source_rank, item.destination_rank) == (source, destination)
-    )
-    if len(matches) != 1:
+def _route(
+    problem: SwizzleProblem,
+    source: int,
+    destination: int,
+    route_by_pair: dict[tuple[int, int], object] | None = None,
+):
+    if route_by_pair is None:
+        matches = tuple(
+            item
+            for item in problem.group.routes
+            if (item.source_rank, item.destination_rank) == (source, destination)
+        )
+        if len(matches) != 1:
+            raise SchemaError(
+                "UNFUSED V1 requires one exact directed route per rank pair",
+                path="problem.group.routes",
+            )
+        return matches[0]
+    route = route_by_pair.get((source, destination))
+    if route is None:
         raise SchemaError(
             "UNFUSED V1 requires one exact directed route per rank pair",
             path="problem.group.routes",
         )
-    return matches[0]
+    return route
 
 
 def _action(
@@ -207,14 +232,75 @@ def _local_shard_offset(
     return tuple(offset)
 
 
+def _multi_rank_peer_waves(
+    ranks: tuple[int, ...],
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """Return deterministic one-send/one-receive waves over all ordered pairs.
+
+    The exact four-rank XOR order is retained because it is part of the frozen
+    W10 scale evidence.  Every other multi-rank group uses the canonical circle
+    method, with both directions of each matching pair in the same wave.
+    """
+
+    if len(ranks) <= 2:
+        raise SchemaError(
+            "multi-rank peer waves require more than two ranks",
+            path="problem.collective.participant_ranks",
+        )
+    if len(ranks) == 4:
+        return tuple(
+            tuple(
+                (source, ranks[source_index ^ partner_mask])
+                for source_index, source in enumerate(ranks)
+            )
+            for partner_mask in (1, 2, 3)
+        )
+    players: list[int | None] = list(ranks)
+    if len(players) % 2:
+        players.append(None)
+    waves = []
+    for _round in range(len(players) - 1):
+        pairs = []
+        for index in range(len(players) // 2):
+            left = players[index]
+            right = players[-1 - index]
+            if left is not None and right is not None:
+                low, high = sorted((left, right))
+                pairs.extend(((low, high), (high, low)))
+        waves.append(tuple(sorted(pairs)))
+        players = [players[0], players[-1], *players[1:-1]]
+    flattened = tuple(pair for wave in waves for pair in wave)
+    expected = {
+        (source, destination)
+        for source in ranks
+        for destination in ranks
+        if source != destination
+    }
+    if len(flattened) != len(expected) or set(flattened) != expected:
+        raise SchemaError(
+            "circle-method peer waves are not an exact directed quotient",
+            path="problem.collective.participant_ranks",
+        )
+    return tuple(waves)
+
+
 def _build_multi_rank_actions(
     problem: SwizzleProblem,
     semantic: SwizzleSemanticWitness,
 ) -> tuple[tuple[UnfusedComparisonAction, ...], dict[str, _ValueSpec]]:
-    """Build the direct all-pairs AG/RS baseline for more than two ranks."""
+    """Build the direct all-pairs AG/RS or RS+AG baseline for more than two ranks."""
 
     coll = problem.collective
     ranks = coll.participant_ranks
+    route_by_pair = {
+        (route.source_rank, route.destination_rank): route
+        for route in problem.group.routes
+    }
+    if len(route_by_pair) != len(problem.group.routes):
+        raise SchemaError(
+            "UNFUSED V1 requires one exact directed route per rank pair",
+            path="problem.group.routes",
+        )
     actions_by_rank = {rank: [] for rank in ranks}
     values: dict[str, _ValueSpec] = {}
     gemm_values = {}
@@ -279,15 +365,12 @@ def _build_multi_rank_actions(
                 received_values[(rank, source)] = received
                 values[received.ref] = received
 
-        if len(ranks) != 4:
-            raise SchemaError(
-                "multi-rank UNFUSED AG requires the exact four-rank wave schedule",
-                path="problem.collective.participant_ranks",
-            )
         waits_by_rank = {rank: [] for rank in ranks}
-        for partner_mask in (1, 2, 3):
-            for source_index, source in enumerate(ranks):
-                destination = ranks[source_index ^ partner_mask]
+        for wave in _multi_rank_peer_waves(ranks):
+            source_by_destination = {
+                destination: source for source, destination in wave
+            }
+            for source, destination in wave:
                 previous_wait = (
                     waits_by_rank[source][-1]
                     if waits_by_rank[source]
@@ -301,14 +384,15 @@ def _build_multi_rank_actions(
                     deps=(previous_wait.id,) if previous_wait is not None else (),
                     reads=(local_values[source].ref,),
                     peer_rank=destination,
-                    route=_route(problem, source, destination),
+                    route=_route(problem, source, destination, route_by_pair),
                     logical_bytes=coll.rank_input_bytes,
                 )
                 sends[(source, destination)] = send
-                actions_by_rank[source].append(send)
 
-            for destination_index, rank in enumerate(ranks):
-                source = ranks[destination_index ^ partner_mask]
+            for rank in ranks:
+                if rank not in source_by_destination:
+                    continue
+                source = source_by_destination[rank]
                 received = received_values[(rank, source)]
                 previous_wait = (
                     waits_by_rank[rank][-1]
@@ -326,7 +410,7 @@ def _build_multi_rank_actions(
                     deps=recv_deps,
                     writes=(received.ref,),
                     peer_rank=source,
-                    route=_route(problem, source, rank),
+                    route=_route(problem, source, rank, route_by_pair),
                     logical_bytes=coll.rank_input_bytes,
                 )
                 wait = _action(
@@ -337,7 +421,12 @@ def _build_multi_rank_actions(
                     deps=(recv.id,),
                     reads=(received.ref,),
                 )
-                actions_by_rank[rank].extend((recv, wait))
+                local_send = sends[(rank, source)]
+                actions_by_rank[rank].extend(
+                    (local_send, recv, wait)
+                    if len(ranks) == 4 or rank < source
+                    else (recv, wait, local_send)
+                )
                 waits_by_rank[rank].append(wait)
 
         for rank in ranks:
@@ -366,19 +455,33 @@ def _build_multi_rank_actions(
             actions_by_rank[rank].append(comp)
         return tuple(tuple(actions_by_rank[rank]) for rank in ranks), values
 
-    if problem.pattern is not FusionPattern.GEMM_RS:
+    if problem.pattern not in (FusionPattern.GEMM_RS, FusionPattern.GEMM_AR):
         raise SchemaError(
-            "multi-rank UNFUSED comparison supports AG and RS only",
+            "multi-rank UNFUSED comparison supports AG, RS, and AR only",
             path="problem.pattern",
         )
 
     dtype_bytes = 2 if problem.gemm.dtype is DType.FP16 else 4
-    chunk_bytes = coll.rank_output_bytes
+    degree = len(ranks)
+    if (
+        problem.pattern is FusionPattern.GEMM_AR
+        and coll.rank_output_bytes % degree
+    ):
+        raise SchemaError(
+            "all-reduce bytes must divide the exact group degree",
+            path="problem.collective.rank_output_bytes",
+        )
+    chunk_bytes = (
+        coll.rank_output_bytes // degree
+        if problem.pattern is FusionPattern.GEMM_AR
+        else coll.rank_output_bytes
+    )
     if chunk_bytes % dtype_bytes:
         raise SchemaError(
             "collective shard bytes are not dtype aligned",
             path="problem.collective.rank_output_bytes",
         )
+    chunk_shape = (chunk_bytes // dtype_bytes,)
     gemms = {}
     sends = {}
     send_chunks = {}
@@ -400,48 +503,72 @@ def _build_multi_rank_actions(
         gemms[rank] = gemm
         actions_by_rank[rank].append(gemm)
 
+        chunk_value_shape = (
+            chunk_shape
+            if problem.pattern is FusionPattern.GEMM_AR
+            else coll.output.shape
+        )
+        chunk_layout = (
+            "flat_transport/v1"
+            if problem.pattern is FusionPattern.GEMM_AR
+            else coll.output.layout
+        )
         local_chunk = _ValueSpec(
             _value(problem, rank, "local_chunk"),
             coll.input.value_ref,
-            coll.output.shape,
-            coll.output.layout,
+            chunk_value_shape,
+            chunk_layout,
             problem.gemm.dtype,
             output.ref,
             coll.rank_input_bytes,
             ranks.index(rank) * chunk_bytes,
         )
-        received_storage = _value(problem, rank, "received_reduce_storage")
-        terminal_storage = _value(problem, rank, "terminal_reduce_storage")
+        if problem.pattern is FusionPattern.GEMM_AR:
+            terminal_storage = _value(problem, rank, "contiguous_reduce_storage")
+            received_storage = terminal_storage
+            terminal_storage_bytes = (degree + 1) * chunk_bytes
+            received_offset = ranks.index(rank) * chunk_bytes
+            accumulator_offset = (ranks.index(rank) + 1) * chunk_bytes
+        else:
+            received_storage = _value(problem, rank, "received_reduce_storage")
+            terminal_storage = _value(problem, rank, "terminal_reduce_storage")
+            terminal_storage_bytes = chunk_bytes
+            received_offset = 0
+            accumulator_offset = 0
         received = _ValueSpec(
             _value(problem, rank, "received_contribution"),
             coll.input.value_ref,
-            coll.output.shape,
-            coll.output.layout,
+            chunk_value_shape,
+            chunk_layout,
             problem.gemm.dtype,
             received_storage,
-            chunk_bytes,
-            0,
+            terminal_storage_bytes if received_storage == terminal_storage else chunk_bytes,
+            received_offset,
         )
         accumulator = _ValueSpec(
             _value(problem, rank, "packed_local_chunk"),
             coll.input.value_ref,
-            coll.output.shape,
-            coll.output.layout,
+            chunk_value_shape,
+            chunk_layout,
             problem.gemm.dtype,
             terminal_storage,
-            chunk_bytes,
-            0,
+            terminal_storage_bytes,
+            accumulator_offset,
         )
         reduced = _ValueSpec(
             _value(problem, rank, "reduced_chunk"),
             coll.output.value_ref,
-            coll.output.shape,
-            coll.output.layout,
+            chunk_value_shape,
+            chunk_layout,
             problem.gemm.dtype,
             terminal_storage,
-            chunk_bytes,
-            0,
-            _local_shard_offset(problem, coll.output, rank),
+            terminal_storage_bytes,
+            accumulator_offset,
+            (
+                (0,)
+                if problem.pattern is FusionPattern.GEMM_AR
+                else _local_shard_offset(problem, coll.output, rank)
+            ),
         )
         if any(item.bytes != chunk_bytes for item in (local_chunk, received, accumulator, reduced)):
             raise SchemaError(
@@ -461,8 +588,8 @@ def _build_multi_rank_actions(
             send_chunk = _ValueSpec(
                 _value(problem, rank, f"send_chunk_for_rank_{owner}"),
                 coll.input.value_ref,
-                coll.output.shape,
-                coll.output.layout,
+                chunk_value_shape,
+                chunk_layout,
                 problem.gemm.dtype,
                 output.ref,
                 coll.rank_input_bytes,
@@ -488,15 +615,13 @@ def _build_multi_rank_actions(
         packings[rank] = packing
         actions_by_rank[rank].append(packing)
 
-    if len(ranks) != 4:
-        raise SchemaError(
-            "multi-rank UNFUSED RS requires the exact four-rank wave schedule",
-            path="problem.collective.participant_ranks",
-        )
     previous_reduce = {rank: None for rank in ranks}
-    for partner_mask in (1, 2, 3):
-        for rank_index, rank in enumerate(ranks):
-            peer = ranks[rank_index ^ partner_mask]
+    for wave in _multi_rank_peer_waves(ranks):
+        destination_by_source = dict(wave)
+        source_by_destination = {
+            destination: source for source, destination in wave
+        }
+        for rank, peer in wave:
             prior = previous_reduce[rank]
             send = _action(
                 rank=rank,
@@ -506,14 +631,16 @@ def _build_multi_rank_actions(
                 deps=(prior.id,) if prior is not None else (gemms[rank].id,),
                 reads=(send_chunks[(rank, peer)].ref,),
                 peer_rank=peer,
-                route=_route(problem, rank, peer),
+                route=_route(problem, rank, peer, route_by_pair),
                 logical_bytes=chunk_bytes,
             )
             sends[(rank, peer)] = send
-            actions_by_rank[rank].append(send)
 
-        for rank_index, rank in enumerate(ranks):
-            peer = ranks[rank_index ^ partner_mask]
+        for rank in ranks:
+            if rank not in source_by_destination:
+                continue
+            peer = source_by_destination[rank]
+            outbound_peer = destination_by_source[rank]
             prior = previous_reduce[rank]
             recv_deps = (sends[(peer, rank)].id,)
             if prior is not None:
@@ -526,7 +653,7 @@ def _build_multi_rank_actions(
                 deps=recv_deps,
                 writes=(received_values[rank].ref,),
                 peer_rank=peer,
-                route=_route(problem, peer, rank),
+                route=_route(problem, peer, rank, route_by_pair),
                 logical_bytes=chunk_bytes,
             )
             wait = _action(
@@ -541,14 +668,14 @@ def _build_multi_rank_actions(
                 reduce_deps = (
                     gemms[rank].id,
                     packings[rank].id,
-                    sends[(rank, peer)].id,
+                    sends[(rank, outbound_peer)].id,
                     wait.id,
                 )
                 accumulator_ref = accumulator_values[rank].ref
             else:
                 reduce_deps = (
                     prior.id,
-                    sends[(rank, peer)].id,
+                    sends[(rank, outbound_peer)].id,
                     wait.id,
                 )
                 accumulator_ref = reduced_values[rank].ref
@@ -561,9 +688,208 @@ def _build_multi_rank_actions(
                 reads=(received_values[rank].ref, accumulator_ref),
                 writes=(reduced_values[rank].ref,),
             )
-            actions_by_rank[rank].extend((recv, wait, reduction))
+            local_send = sends[(rank, outbound_peer)]
+            actions_by_rank[rank].extend(
+                (local_send, recv, wait, reduction)
+                if len(ranks) == 4 or rank < peer
+                else (recv, wait, local_send, reduction)
+            )
             previous_reduce[rank] = reduction
+
+    if problem.pattern is FusionPattern.GEMM_AR:
+        replication_sends = {}
+        replication_waits = {rank: [] for rank in ranks}
+        output_values = {}
+        replicated_values = {}
+        for rank in ranks:
+            storage_ref = reduced_values[rank].storage_ref
+            storage_bytes = reduced_values[rank].storage_bytes
+            output = _ValueSpec(
+                _value(problem, rank, "collective_output"),
+                coll.output.value_ref,
+                coll.output.shape,
+                coll.output.layout,
+                problem.gemm.dtype,
+                storage_ref,
+                storage_bytes,
+                chunk_bytes,
+            )
+            if output.bytes != coll.rank_output_bytes:
+                raise SchemaError(
+                    "AR typed output disagrees with collective bytes",
+                    path="problem.collective",
+                )
+            output_values[rank] = output
+            values[output.ref] = output
+            for source in ranks:
+                if source == rank:
+                    continue
+                replicated = _ValueSpec(
+                    _value(problem, rank, f"replicated_chunk_from_rank_{source}"),
+                    coll.output.value_ref,
+                    chunk_shape,
+                    "flat_transport/v1",
+                    problem.gemm.dtype,
+                    storage_ref,
+                    storage_bytes,
+                    (ranks.index(source) + 1) * chunk_bytes,
+                )
+                replicated_values[(rank, source)] = replicated
+                values[replicated.ref] = replicated
+
+        final_reductions = {
+            rank: previous_reduce[rank]
+            for rank in ranks
+        }
+        for wave in _multi_rank_peer_waves(ranks):
+            source_by_destination = {
+                destination: source for source, destination in wave
+            }
+            for source, destination in wave:
+                previous_wait = (
+                    replication_waits[source][-1]
+                    if replication_waits[source]
+                    else None
+                )
+                send = _action(
+                    rank=source,
+                    kind=SwizzleActionKind.SEND,
+                    stage=UnfusedComparisonStage.REPLICATION,
+                    member_ref=coll.node_ref,
+                    deps=(
+                        (previous_wait.id,)
+                        if previous_wait is not None
+                        else (final_reductions[source].id,)
+                    ),
+                    reads=(reduced_values[source].ref,),
+                    peer_rank=destination,
+                    route=_route(problem, source, destination, route_by_pair),
+                    logical_bytes=chunk_bytes,
+                )
+                replication_sends[(source, destination)] = send
+
+            for rank in ranks:
+                if rank not in source_by_destination:
+                    continue
+                source = source_by_destination[rank]
+                previous_wait = (
+                    replication_waits[rank][-1]
+                    if replication_waits[rank]
+                    else None
+                )
+                recv_deps = (replication_sends[(source, rank)].id,)
+                if previous_wait is not None:
+                    recv_deps += (previous_wait.id,)
+                else:
+                    recv_deps += (final_reductions[rank].id,)
+                received = replicated_values[(rank, source)]
+                recv = _action(
+                    rank=rank,
+                    kind=SwizzleActionKind.RECV,
+                    stage=UnfusedComparisonStage.REPLICATION,
+                    member_ref=coll.node_ref,
+                    deps=recv_deps,
+                    writes=(received.ref,),
+                    peer_rank=source,
+                    route=_route(problem, source, rank, route_by_pair),
+                    logical_bytes=chunk_bytes,
+                )
+                wait = _action(
+                    rank=rank,
+                    kind=SwizzleActionKind.WAIT,
+                    stage=UnfusedComparisonStage.REPLICATION,
+                    member_ref=coll.node_ref,
+                    deps=(recv.id,),
+                    reads=(received.ref,),
+                )
+                local_send = replication_sends[(rank, source)]
+                actions_by_rank[rank].extend(
+                    (local_send, recv, wait)
+                    if len(ranks) == 4 or rank < source
+                    else (recv, wait, local_send)
+                )
+                replication_waits[rank].append(wait)
+
+        for rank in ranks:
+            complete = _action(
+                rank=rank,
+                kind=SwizzleActionKind.BARRIER,
+                stage=UnfusedComparisonStage.COMPLETE,
+                member_ref=coll.node_ref,
+                deps=(
+                    final_reductions[rank].id,
+                    *(
+                        replication_sends[(rank, destination)].id
+                        for destination in ranks
+                        if destination != rank
+                    ),
+                    *(wait.id for wait in replication_waits[rank]),
+                ),
+                reads=(output_values[rank].ref,),
+            )
+            actions_by_rank[rank].append(complete)
     return tuple(tuple(actions_by_rank[rank]) for rank in ranks), values
+
+
+def _build_single_rank_actions(
+    problem: SwizzleProblem,
+) -> tuple[
+    tuple[tuple[UnfusedComparisonAction, ...], ...],
+    dict[str, _ValueSpec],
+]:
+    """Close a one-rank post-GEMM collective as an exact local copy."""
+
+    if problem.pattern not in (
+        FusionPattern.GEMM_RS,
+        FusionPattern.GEMM_AR,
+    ):
+        raise SchemaError(
+            "single-rank UNFUSED comparison supports post-GEMM collectives only",
+            path="problem.pattern",
+        )
+    rank = problem.collective.participant_ranks[0]
+    lhs, rhs, output = _gemm_values(problem, rank)
+    if output.bytes != problem.collective.rank_input_bytes:
+        raise SchemaError(
+            "single-rank GEMM output disagrees with collective input bytes",
+            path="problem.collective.rank_input_bytes",
+        )
+    gemm = _action(
+        rank=rank,
+        kind=SwizzleActionKind.COMP,
+        stage=UnfusedComparisonStage.GEMM,
+        member_ref=problem.gemm.node_ref,
+        reads=(lhs.ref, rhs.ref),
+        writes=(output.ref,),
+        flops=_gemm_flops(lhs, rhs, output),
+    )
+    collective_output = _ValueSpec(
+        _value(problem, rank, "collective_output"),
+        problem.collective.output.value_ref,
+        problem.collective.output.shape,
+        problem.collective.output.layout,
+        problem.gemm.dtype,
+    )
+    if collective_output.bytes != problem.collective.rank_output_bytes:
+        raise SchemaError(
+            "single-rank collective output bytes are not exact",
+            path="problem.collective.rank_output_bytes",
+        )
+    copy = _action(
+        rank=rank,
+        kind=SwizzleActionKind.LOCAL_COPY,
+        stage=UnfusedComparisonStage.REDUCTION,
+        member_ref=problem.collective.node_ref,
+        deps=(gemm.id,),
+        reads=(output.ref,),
+        writes=(collective_output.ref,),
+        logical_bytes=collective_output.bytes,
+    )
+    values = {
+        item.ref: item
+        for item in (lhs, rhs, output, collective_output)
+    }
+    return ((gemm, copy),), values
 
 
 def _build_actions(problem: SwizzleProblem, semantic: SwizzleSemanticWitness) -> tuple[tuple[UnfusedComparisonAction, ...], dict[str, _ValueSpec]]:
@@ -575,6 +901,8 @@ def _build_actions(problem: SwizzleProblem, semantic: SwizzleSemanticWitness) ->
             "UNFUSED comparison requires every canonical placed rank",
             path="problem.collective.participant_ranks",
         )
+    if len(ranks) == 1:
+        return _build_single_rank_actions(problem)
     if len(ranks) != 2:
         return _build_multi_rank_actions(problem, semantic)
     actions_by_rank: list[list[UnfusedComparisonAction]] = [[], []]
@@ -836,6 +1164,7 @@ def build_unfused_comparison_plan(
         ),
     )
     result.validate()
+    mark_validation_complete(result, "unfused_comparison_plan_exact")
     return result
 
 
@@ -843,7 +1172,18 @@ def project_unfused_comparison(
     ir1: IR1,
     plan: UnfusedComparisonPlan,
 ) -> UnfusedComparisonProjection:
-    plan.validate_against(ir1)
+    prevalidated = _has_prevalidated_projection_inputs(ir1, plan)
+    if prevalidated:
+        if (
+            plan.source_ir1_id != ir1.id
+            or plan.problem.source_ir1_id != ir1.id
+            or plan.baseline.problem_ref != plan.problem.id
+        ):
+            raise SchemaError(
+                "prevalidated projection input closure drifted", path="plan"
+            )
+    else:
+        plan.validate_against(ir1)
     actions, values = _build_actions(plan.problem, plan.baseline.semantic_witness)
     if tuple(program.actions for program in plan.rank_programs) != actions:
         raise SchemaError("plan is not the exact deterministic baseline", path="plan.rank_programs")
@@ -863,31 +1203,45 @@ def project_unfused_comparison(
                     spec.storage_bytes or spec.bytes,
                     spec.byte_offset,
                 ))
-    flows = tuple(
-        UnfusedComparisonFlow.create(
-            route_ref=send.route_ref,
-            source_rank=send.rank,
-            destination_rank=recv.rank,
-            die_path=send.die_path,
-            send_task_ref=send.id,
-            recv_task_ref=recv.id,
-            logical_bytes=send.logical_bytes,
-        )
-        for rank_actions in actions
-        for send in rank_actions
-        if send.kind is SwizzleActionKind.SEND
-        for recv in (
-            next(
-                item
-                for other_actions in actions
-                for item in other_actions
-                if item.kind is SwizzleActionKind.RECV
-                and item.stage is send.stage
-                and item.rank == send.peer_rank
-                and item.peer_rank == send.rank
-            ),
-        )
-    )
+    recv_by_key = {}
+    for rank_actions in actions:
+        for recv in rank_actions:
+            if recv.kind is not SwizzleActionKind.RECV:
+                continue
+            key = (recv.stage, recv.rank, recv.peer_rank)
+            if key in recv_by_key:
+                raise SchemaError(
+                    "projection requires one exact RECV per stage/rank/peer",
+                    path="plan.rank_programs",
+                )
+            recv_by_key[key] = recv
+    flows = []
+    for rank_actions in actions:
+        for send in rank_actions:
+            if send.kind is not SwizzleActionKind.SEND:
+                continue
+            recv = recv_by_key.get((
+                send.stage,
+                send.peer_rank,
+                send.rank,
+            ))
+            if recv is None:
+                raise SchemaError(
+                    "projection requires one exact RECV for every SEND",
+                    path="plan.rank_programs",
+                )
+            flows.append(
+                UnfusedComparisonFlow.create(
+                    route_ref=send.route_ref,
+                    source_rank=send.rank,
+                    destination_rank=recv.rank,
+                    die_path=send.die_path,
+                    send_task_ref=send.id,
+                    recv_task_ref=recv.id,
+                    logical_bytes=send.logical_bytes,
+                )
+            )
+    flows = tuple(flows)
     die_by_rank = {}
     for flow in flows:
         previous = die_by_rank.setdefault(flow.source_rank, flow.die_path[0])
@@ -896,6 +1250,31 @@ def project_unfused_comparison(
         previous = die_by_rank.setdefault(flow.destination_rank, flow.die_path[-1])
         if previous != flow.die_path[-1]:
             raise SchemaError("rank destination die is inconsistent", path="problem.group.routes")
+    if len(plan.problem.collective.participant_ranks) == 1:
+        physical_group = next(
+            (
+                item
+                for item in ir1.groups
+                if item.id == plan.problem.group.group_ref
+            ),
+            None,
+        )
+        if physical_group is None:
+            raise SchemaError(
+                "route-free rank requires its exact IR1 physical group",
+                path="problem.group.group_ref",
+            )
+        rank = plan.problem.collective.participant_ranks[0]
+        placement = next(
+            (item for item in physical_group.placements if item.rank == rank),
+            None,
+        )
+        if placement is None:
+            raise SchemaError(
+                "route-free rank is absent from its IR1 physical group",
+                path="problem.group.placements",
+            )
+        die_by_rank[rank] = placement.die_id
     result = UnfusedComparisonProjection.create(
         source_ir1_id=ir1.id,
         source_plan_ref=plan.id,
@@ -914,8 +1293,37 @@ def project_unfused_comparison(
         operands=tuple(operands),
         flows=flows,
     )
+    mark_validation_complete(result, "unfused_comparison_projection_exact")
     result.validate()
     return result
+
+def _project_unfused_comparison_prevalidated(
+    ir1: IR1,
+    plan: UnfusedComparisonPlan,
+) -> UnfusedComparisonProjection:
+    """Project an exact plan built earlier in this builder session."""
+
+    if not validation_seen(plan, "unfused_comparison_plan_exact"):
+        raise SchemaError(
+            "requires an exact plan from this builder session", path="plan"
+        )
+    if (
+        plan.source_ir1_id != ir1.id
+        or plan.problem.source_ir1_id != ir1.id
+        or plan.baseline.problem_ref != plan.problem.id
+    ):
+        raise SchemaError("prevalidated projection input closure drifted", path="plan")
+    token = _PREVALIDATED_PROJECTION_INPUTS.set((ir1, plan))
+    try:
+        result = project_unfused_comparison(ir1, plan)
+    finally:
+        _PREVALIDATED_PROJECTION_INPUTS.reset(token)
+    if not validation_seen(result, "unfused_comparison_projection_exact"):
+        raise SchemaError(
+            "prevalidated projection output closure drifted", path="projection"
+        )
+    return result
+
 
 
 __all__ = ["build_unfused_comparison_plan", "project_unfused_comparison"]

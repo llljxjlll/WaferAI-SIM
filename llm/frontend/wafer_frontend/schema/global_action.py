@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from ..errors import SchemaError
 from .action import ComputeContract, ReductionContract, SyncContract
 from .common import DType, stable_artifact_id, validate_dependency_dag, validate_nonempty, validate_uint64
+from ._validation_session import mark_validation_complete, validation_seen
 from .ir0 import OpKind
 from .ir1 import IR1
 from .persistent_state import PersistentStateAccess
@@ -539,6 +540,8 @@ class GlobalActionDAG:
         )}
 
     def validate(self, path: str = "global_action_dag") -> None:
+        if validation_seen(self, "global_action_dag"):
+            return
         if self.schema_version != GLOBAL_ACTION_DAG_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -582,6 +585,7 @@ class GlobalActionDAG:
         expected_id = stable_artifact_id("global_action_dag", self._semantic_key(), schema_version=GLOBAL_ACTION_DAG_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "global_action_dag")
 
     def validate_against(
         self,

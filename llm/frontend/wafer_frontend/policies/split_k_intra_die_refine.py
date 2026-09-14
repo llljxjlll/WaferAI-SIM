@@ -32,6 +32,8 @@ from ..schema.ir2 import (
     SemanticTask,
     SemanticTaskKind,
     StateStagingValue,
+    SwizzleIntraDieValue,
+    SwizzleNodeOrigin,
     TensorSlice,
     DmaContract,
     dense_row_major_view_byte_addend,
@@ -98,12 +100,12 @@ def _source_origin(
 
 def _eligible(task: SemanticTask, dag: IntraDieDAG) -> bool:
     output = next(
-        (value for value in dag.values if value.id in task.write_values),
+        (value for value in (*dag.values, *dag.swizzle_values) if value.id in task.write_values),
         None,
     )
     return (
         task.kind is SemanticTaskKind.COMP
-        and isinstance(task.origin_ref, OrdinaryNodeOrigin)
+        and isinstance(task.origin_ref, (OrdinaryNodeOrigin, SwizzleNodeOrigin))
         and task.compute is not None
         and type(task.compute.workload) is GemmWorkload
         and len(task.read_values) == 2
@@ -111,7 +113,10 @@ def _eligible(task: SemanticTask, dag: IntraDieDAG) -> bool:
         and len(task.compute.inputs) == 2
         and len(task.compute.outputs) == 1
         and output is not None
-        and not output.consumer_tasks
+        and (
+            isinstance(task.origin_ref, SwizzleNodeOrigin)
+            or not output.consumer_tasks
+        )
     )
 
 
@@ -143,6 +148,20 @@ def _split_compute(
         logical_shape=(logical_m, logical_n, logical_k_part),
         rank_shape=(rank_m, rank_n, rank_k_part),
     )
+    source_tile = source.compute.tile
+    source_input_domains = (
+        tuple(binding.source_value_id for binding in source_tile.input_slices)
+        if source_tile is not None
+        else source.read_values
+    )
+    source_output_domain = (
+        source_tile.output_slices[0].source_value_id
+        if source_tile is not None
+        else source.write_values[0]
+    )
+    origin_workload = (
+        source_tile.origin_workload if source_tile is not None else workload
+    )
     compute = ComputeContract(
         op_kind=OpKind.GEMM,
         workload=part_workload,
@@ -155,11 +174,11 @@ def _split_compute(
         ),
         outputs=(ComputeOperand(output_id, "partial"),),
         tile=ComputeTileBinding(
-            origin_workload=workload,
+            origin_workload=origin_workload,
             input_slices=tuple(
                 ComputeOperandSlice(
                     input_ids[index],
-                    source.read_values[index],
+                    source_input_domains[index],
                     tensor_slice.offset,
                     tensor_slice.shape,
                 )
@@ -168,7 +187,7 @@ def _split_compute(
             output_slices=(
                 ComputeOperandSlice(
                     output_id,
-                    source.write_values[0],
+                    source_output_domain,
                     output_slice.offset,
                     output_slice.shape,
                 ),
@@ -249,7 +268,8 @@ def _stage_task(
 
 def _pack_row_task(
     source: SemanticTask,
-    source_value: IntraDieValue,
+    source_value_id: str,
+    source_dtype: DType,
     *,
     part_index: int,
     operand_index: int,
@@ -259,7 +279,7 @@ def _pack_row_task(
     deps: tuple[str, ...],
 ) -> SemanticTask:
     payload_bytes = math.prod(tensor_slice.shape) * _element_bytes(
-        source_value.dtype, f"tasks[{source.id}]"
+        source_dtype, f"tasks[{source.id}]"
     )
     return SemanticTask(
         id=split_k_pack_row_task_id(
@@ -270,8 +290,8 @@ def _pack_row_task(
         op_kind=OpKind.P2P, member_id=source.member_id, flow_id=None,
         chunk_id=part_index, collective_step=row_index, source_rank=None,
         destination_rank=None, tensor_slice=tensor_slice, bytes=payload_bytes,
-        dtype=source_value.dtype, shape=tensor_slice.shape,
-        read_values=(source_value.id,), write_values=(packed_value_id,),
+        dtype=source_dtype, shape=tensor_slice.shape,
+        read_values=(source_value_id,), write_values=(packed_value_id,),
         compute=None, reduction=None,
         sync=SyncContract(
             f"event.{source.id}.split_k.part.{part_index}.input."
@@ -384,7 +404,11 @@ def _local_handoff(
     send_id = split_k_local_send_task_id(source.id, part_index)
     recv_id = split_k_local_recv_task_id(source.id, part_index)
     wait_id = split_k_local_wait_task_id(source.id, part_index)
-    region_id = f"{source.id}.split_k.part.{part_index}.local_transport_region"
+    region_id = (
+        source.region_id
+        if isinstance(source.origin_ref, SwizzleNodeOrigin)
+        else f"{source.id}.split_k.part.{part_index}.local_transport_region"
+    )
     tensor_slice = TensorSlice(
         partial_value_id, output_slice.offset, output_slice.shape
     )
@@ -418,6 +442,10 @@ def _local_handoff(
         bytes=0, dtype=None, shape=(), read_values=(), write_values=(),
         deps=(recv_id,), **common,
     )
+    if isinstance(source.origin_ref, SwizzleNodeOrigin):
+        send = replace(send, sync=SyncContract(f"event.{send.id}.done", None, None))
+        recv = replace(recv, sync=SyncContract(f"event.{recv.id}.done", None, None))
+        wait = replace(wait, sync=SyncContract(f"event.{wait.id}.done", None, None))
     handoff = SplitKLocalHandoff(
         part_index=part_index,
         part_task_id=source_dependency_task_id,
@@ -525,7 +553,11 @@ def _input_handoff(
     send_id = split_k_input_send_task_id(source.id, part_index, operand_index)
     recv_id = split_k_input_recv_task_id(source.id, part_index, operand_index)
     wait_id = split_k_input_wait_task_id(source.id, part_index, operand_index)
-    region_id = f"{source.id}.split_k.part.{part_index}.input.{operand_index}.local_transport_region"
+    region_id = (
+        source.region_id
+        if isinstance(source.origin_ref, SwizzleNodeOrigin)
+        else f"{source.id}.split_k.part.{part_index}.input.{operand_index}.local_transport_region"
+    )
     payload_bytes = math.prod(tensor_slice.shape) * _element_bytes(
         dtype, f"tasks[{source.id}]"
     )
@@ -552,6 +584,10 @@ def _input_handoff(
         bytes=0, dtype=None, shape=(), read_values=(), write_values=(),
         deps=(recv_id,), **common,
     )
+    if isinstance(source.origin_ref, SwizzleNodeOrigin):
+        send = replace(send, sync=SyncContract(f"event.{send.id}.done", None, None))
+        recv = replace(recv, sync=SyncContract(f"event.{recv.id}.done", None, None))
+        wait = replace(wait, sync=SyncContract(f"event.{wait.id}.done", None, None))
     carrier = SplitKInputHandoff(
         part_index=part_index, operand_index=operand_index,
         source_task_id=producer_task_id,
@@ -609,7 +645,7 @@ def _refine_dag(
 ) -> tuple[IntraDieDAG, tuple[SplitKTaskRewrite, ...]]:
     source_values = {
         value.id: value
-        for value in (*dag.values, *dag.state_staging_values)
+        for value in (*dag.values, *dag.state_staging_values, *dag.swizzle_values)
     }
     eligible = tuple(task for task in dag.tasks if _eligible(task, dag))
     generated_by_source: dict[str, tuple[SemanticTask, ...]] = {}
@@ -651,24 +687,83 @@ def _refine_dag(
                 f"projection.dags[{dag.die_id}].tasks[{source.id}]",
             )
         assert inputs[0] is not None and inputs[1] is not None
-        if type(output) is not IntraDieValue:
-            _fail(
-                "split-K output must be an ordinary local value",
-                f"projection.dags[{dag.die_id}].tasks[{source.id}]",
-            )
         from .naive_intra_die import _ordinary_rank_local_view
 
-        output_slice = _ordinary_rank_local_view(
-            source, output, ir1
-        )
-        input_base_views = tuple(
-            _ordinary_rank_local_view(source, value, ir1)
-            if type(value) is IntraDieValue
-            else TensorSlice(
-                value.id, (0,) * len(value.shape), value.shape
+        if type(output) is IntraDieValue:
+            if isinstance(source.origin_ref, SwizzleNodeOrigin):
+                tile = source.compute.tile
+                bindings = () if tile is None else tuple(
+                    binding for binding in tile.output_slices
+                    if binding.operand_id == output.id
+                    and binding.source_value_id == output.origin_value_id
+                )
+                if len(bindings) != 1:
+                    _fail(
+                        "Swizzle split-K ordinary output requires one exact output tile",
+                        f"projection.dags[{dag.die_id}].tasks[{source.id}]",
+                    )
+                output_slice = TensorSlice(
+                    output.id,
+                    bindings[0].logical_offset,
+                    bindings[0].logical_shape,
+                )
+            else:
+                output_slice = _ordinary_rank_local_view(source, output, ir1)
+            output_origin_value_id = output.origin_value_id
+            output_shape = output.shape
+            output_dtype = output.dtype
+            output_logical_layout = output.logical_layout
+            output_sharding = output.sharding
+        elif type(output) is SwizzleIntraDieValue:
+            if source.tensor_slice is None:
+                _fail(
+                    "Swizzle split-K output requires an exact tensor slice",
+                    f"projection.dags[{dag.die_id}].tasks[{source.id}]",
+                )
+            origin = next(
+                (value for value in ir1.values
+                 if value.id == source.tensor_slice.value_id),
+                None,
             )
-            for value in inputs
-        )
+            if origin is None:
+                _fail(
+                    "Swizzle split-K output slice must resolve to an IR-1 value",
+                    f"projection.dags[{dag.die_id}].tasks[{source.id}]",
+                )
+            output_slice = source.tensor_slice
+            output_origin_value_id = origin.id
+            output_shape = origin.shape
+            output_dtype = origin.dtype
+            output_logical_layout = origin.logical_layout
+            output_sharding = origin.sharding
+        else:
+            _fail(
+                "split-K output must be an ordinary or Swizzle local value",
+                f"projection.dags[{dag.die_id}].tasks[{source.id}]",
+            )
+        if isinstance(source.origin_ref, SwizzleNodeOrigin):
+            if source.compute.tile is None:
+                _fail(
+                    "Swizzle split-K COMP requires exact tiled input views",
+                    f"projection.dags[{dag.die_id}].tasks[{source.id}]",
+                )
+            input_base_views = tuple(
+                TensorSlice(
+                    inputs[index].id,
+                    operand.logical_offset,
+                    operand.logical_shape,
+                )
+                for index, operand in enumerate(source.compute.tile.input_slices)
+            )
+        else:
+            input_base_views = tuple(
+                _ordinary_rank_local_view(source, value, ir1)
+                if type(value) is IntraDieValue
+                else TensorSlice(
+                    value.id, (0,) * len(value.shape), value.shape
+                )
+                for value in inputs
+            )
         rank_m, rank_n, rank_k = workload.rank_shape
         rank_k_part = rank_k // options.split_k_parts
         stage_tasks: list[SemanticTask] = []
@@ -705,6 +800,7 @@ def _refine_dag(
             effective_input_ids = list(source.read_values)
             effective_input_slices = list(part_input_slices)
             pack_ready_by_operand: dict[int, str] = {}
+            exact_pack_source_by_operand: dict[int, str] = {}
             # A K-column slice of A[M,K] is row-strided when M > 1.
             # Materialize it as exact contiguous rows into one tight local pack.
             lhs = inputs[0]
@@ -712,45 +808,83 @@ def _refine_dag(
             lhs_producers = tuple(
                 task_id for task_id in lhs.producer_tasks
                 if task_id in source.deps
-            ) if type(lhs) is IntraDieValue else ()
+            )
             needs_lhs_pack = (
                 not options.enable_double_buffer
-                and type(lhs) is IntraDieValue
                 and lhs_slice.shape[0] > 1
                 and lhs_slice.shape[1] < input_base_views[0].shape[1]
-                and len(lhs_producers) == 1
+                and (
+                    len(lhs_producers) == 1
+                    or isinstance(source.origin_ref, SwizzleNodeOrigin)
+                )
             )
             if needs_lhs_pack:
-                assert type(lhs) is IntraDieValue
                 packed_id = split_k_pack_value_id(
                     source.id, lhs.id, part_index, 0
                 )
-                previous_dep = lhs_producers[0]
+                logical_sources = {
+                    origin.logical_source_ref for origin in lhs.origins
+                    if origin.logical_source_ref is not None
+                } if type(lhs) is SwizzleIntraDieValue else set()
+                exact_source_deps = tuple(
+                    dependency for dependency in source.deps
+                    for dependency_task in dag.tasks
+                    if dependency_task.id == dependency
+                    and any(
+                        value_id in logical_sources
+                        for value_id in dependency_task.write_values
+                    )
+                )
+                if len(exact_source_deps) > 1:
+                    _fail(
+                        "split-K packed input must have one exact local source writer",
+                        f"tasks[{source.id}].read_values[0]",
+                    )
+                initial_deps = (
+                    lhs_producers or exact_source_deps or source.deps
+                )
+                if len(initial_deps) == 1:
+                    exact_pack_source_by_operand[0] = initial_deps[0]
+                if len(initial_deps) == 1:
+                    exact_pack_source_by_operand[0] = initial_deps[0]
+                previous_dep: str | None = None
                 for row_index in range(lhs_slice.shape[0]):
                     row_slice = TensorSlice(
                         lhs.id,
                         (lhs_slice.offset[0] + row_index, lhs_slice.offset[1]),
                         (1, lhs_slice.shape[1]),
                     )
-                    pack_deps = (previous_dep,)
+                    pack_deps = (
+                        initial_deps if previous_dep is None else (previous_dep,)
+                    )
                     pack_task = _pack_row_task(
-                        source, lhs, part_index=part_index, operand_index=0,
+                        source, lhs.id, workload.dtype,
+                        part_index=part_index, operand_index=0,
                         row_index=row_index, packed_value_id=packed_id,
                         tensor_slice=row_slice, deps=pack_deps,
                     )
                     stage_tasks.append(pack_task)
                     previous_dep = pack_task.id
+                assert previous_dep is not None
                 pack_ready_by_operand[0] = previous_dep
                 effective_input_ids[0] = packed_id
                 effective_input_slices[0] = TensorSlice(
                     packed_id, lhs_slice.offset, lhs_slice.shape
                 )
-                origin_value_id, origin_sharding = _source_origin(lhs, ir1)
+                source_value_id = (
+                    source.compute.tile.input_slices[0].source_value_id
+                    if source.compute.tile is not None
+                    else lhs.origin_value_id
+                )
+                origin = next(
+                    value for value in ir1.values
+                    if value.id == source_value_id
+                )
                 derived_values.append(IntraDieValue(
-                    id=packed_id, origin_value_id=origin_value_id,
-                    shape=lhs.shape, dtype=lhs.dtype,
-                    logical_layout=lhs.logical_layout,
-                    sharding=origin_sharding, alias_set=None,
+                    id=packed_id, origin_value_id=origin.id,
+                    shape=origin.shape, dtype=origin.dtype,
+                    logical_layout=origin.logical_layout,
+                    sharding=origin.sharding, alias_set=None,
                     producer_tasks=(), consumer_tasks=(),
                 ))
             input_waits: list[str] = []
@@ -808,6 +942,8 @@ def _refine_dag(
                         task_id for task_id in input_value.producer_tasks
                         if task_id in source.deps
                     )
+                    if not producers and operand_index in exact_pack_source_by_operand:
+                        producers = (exact_pack_source_by_operand[operand_index],)
                     if len(producers) > 1:
                         _fail(
                             "split-K input must have at most one local producer",
@@ -838,14 +974,15 @@ def _refine_dag(
                                 or type(input_value) is StateStagingValue
                             ) else transport_value_id
                         ),
-                        tensor_slice=transport_slice, dtype=input_value.dtype,
+                        tensor_slice=transport_slice, dtype=workload.dtype,
                         destination_compute_group=(
                             part_index % compute_group_count
                         ),
                     )
                     input_local_tasks.extend(chain)
                     input_handoffs.append(carrier)
-                    local_regions.append(region)
+                    if isinstance(source.origin_ref, OrdinaryNodeOrigin):
+                        local_regions.append(region)
                     input_waits.append(carrier.wait_task_id)
             if options.enable_double_buffer:
                 direct_receive_operands = tuple(
@@ -1032,13 +1169,21 @@ def _refine_dag(
                 part_deps = tuple(dict.fromkeys(exact_stage_ids))
             else:
                 input_ids = (effective_input_ids[0], effective_input_ids[1])
-                part_deps = (
-                    tuple(input_waits)
-                    if part_index % compute_group_count
-                    else tuple(dict.fromkeys(
-                        source.deps + tuple(pack_ready_by_operand.values())
-                    ))
-                )
+                handed_off_operand_indices = {
+                    item.operand_index for item in input_handoffs
+                    if item.part_index == part_index
+                }
+                part_deps = tuple(dict.fromkeys(
+                    (
+                        tuple(input_waits)
+                        if part_index % compute_group_count
+                        else source.deps
+                    ) + tuple(
+                        task_id for operand_index, task_id
+                        in pack_ready_by_operand.items()
+                        if operand_index not in handed_off_operand_indices
+                    )
+                ))
             parts.append(
                 _split_compute(
                     source,
@@ -1054,11 +1199,11 @@ def _refine_dag(
             derived_values.append(
                 IntraDieValue(
                     id=partial_ids[part_index],
-                    origin_value_id=output.origin_value_id,
-                    shape=output.shape,
-                    dtype=output.dtype,
-                    logical_layout=output.logical_layout,
-                    sharding=output.sharding,
+                    origin_value_id=output_origin_value_id,
+                    shape=output_shape,
+                    dtype=output_dtype,
+                    logical_layout=output_logical_layout,
+                    sharding=output_sharding,
                     alias_set=None,
                     producer_tasks=(),
                     consumer_tasks=(),
@@ -1078,14 +1223,15 @@ def _refine_dag(
                 compute_group_count=compute_group_count,
                 payload_bytes=payload_bytes,
             )
-            local_regions.extend(tree_regions)
+            if isinstance(source.origin_ref, OrdinaryNodeOrigin):
+                local_regions.extend(tree_regions)
             for accumulator_id in reduction_accumulator_ids:
                 derived_values.append(IntraDieValue(
                     id=accumulator_id,
-                    origin_value_id=output.origin_value_id,
-                    shape=output.shape, dtype=output.dtype,
-                    logical_layout=output.logical_layout,
-                    sharding=output.sharding, alias_set=None,
+                    origin_value_id=output_origin_value_id,
+                    shape=output_shape, dtype=output_dtype,
+                    logical_layout=output_logical_layout,
+                    sharding=output_sharding, alias_set=None,
                     producer_tasks=(), consumer_tasks=(),
                 ))
             generated = (
@@ -1118,7 +1264,8 @@ def _refine_dag(
                 )
                 output_local_tasks.extend(chain)
                 handoffs.append(handoff)
-                local_regions.append(region)
+                if isinstance(source.origin_ref, OrdinaryNodeOrigin):
+                    local_regions.append(region)
                 ready_by_part[part_index] = handoff.wait_task_id
             reduction_tasks: list[SemanticTask] = []
             accumulator_ids: list[str] = []
@@ -1158,9 +1305,9 @@ def _refine_dag(
                 if not is_commit:
                     accumulator_ids.append(output_value_id)
                     derived_values.append(IntraDieValue(
-                        id=output_value_id, origin_value_id=output.origin_value_id,
-                        shape=output.shape, dtype=output.dtype,
-                        logical_layout=output.logical_layout, sharding=output.sharding,
+                        id=output_value_id, origin_value_id=output_origin_value_id,
+                        shape=output_shape, dtype=output_dtype,
+                        logical_layout=output_logical_layout, sharding=output_sharding,
                         alias_set=None, producer_tasks=(), consumer_tasks=(),
                     ))
                 previous_value = output_value_id
@@ -1373,7 +1520,18 @@ def _refine_dag(
         "state_transfer_ids": dag.state_transfer_ids,
     }
     if dag.swizzle_values:
-        dag_semantic["swizzle_values"] = dag.swizzle_values
+        dag_semantic["swizzle_values"] = tuple(
+            replace(
+                value,
+                producer_tasks=tuple(
+                    task.id for task in tasks if value.id in task.write_values
+                ),
+                consumer_tasks=tuple(
+                    task.id for task in tasks if value.id in task.read_values
+                ),
+            )
+            for value in dag.swizzle_values
+        )
     refined = IntraDieDAG.create(
         producer_pass="intra_die_refine", **dag_semantic
     )

@@ -5,6 +5,123 @@
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
 
+#include <limits>
+
+namespace {
+
+uint64_t ParseUnsignedInteger(const json &object, const char *field,
+                              uint64_t default_value,
+                              const std::string &path) {
+    if (!object.contains(field)) return default_value;
+
+    const json &value = object.at(field);
+    if (value.is_number_unsigned()) return value.get<uint64_t>();
+    if (value.is_number_integer()) {
+        const int64_t signed_value = value.get<int64_t>();
+        if (signed_value >= 0) return static_cast<uint64_t>(signed_value);
+    }
+
+    throw std::invalid_argument(path + "." + field +
+                                " must be a non-negative integer, got " +
+                                value.dump());
+}
+
+uint64_t ParseNanoseconds(const json &object, const char *field,
+                          uint64_t default_value,
+                          const std::string &path) {
+    const uint64_t value =
+        ParseUnsignedInteger(object, field, default_value, path);
+    constexpr uint64_t kMaxExactNanoseconds = uint64_t{1} << 53;
+    if (value > kMaxExactNanoseconds)
+        throw std::invalid_argument(
+            path + "." + field +
+            " is too large for an exact SystemC nanosecond conversion, got " +
+            std::to_string(value));
+    return value;
+}
+
+uint32_t ParsePositiveUint32(const json &object, const char *field,
+                             uint32_t default_value,
+                             const std::string &path) {
+    const uint64_t value =
+        ParseUnsignedInteger(object, field, default_value, path);
+    if (value == 0 || value > std::numeric_limits<uint32_t>::max())
+        throw std::invalid_argument(
+            path + "." + field + " must be in [1, " +
+            std::to_string(std::numeric_limits<uint32_t>::max()) +
+            "], got " + std::to_string(value));
+    return static_cast<uint32_t>(value);
+}
+
+ControlCoresHWConfig ParseControlCoresConfig(const json &object, int core_id) {
+    const std::string path = "core[" + std::to_string(core_id) +
+                             "].control_cores";
+    if (!object.is_object())
+        throw std::invalid_argument(path + " must be an object, got " +
+                                    object.dump());
+
+    ControlCoresHWConfig config;
+    if (object.contains("mode")) {
+        const json &mode = object.at("mode");
+        if (!mode.is_string())
+            throw std::invalid_argument(path +
+                                        ".mode must be a string, got " +
+                                        mode.dump());
+        const std::string value = mode.get<std::string>();
+        if (value == "legacy_shared")
+            config.mode = ControlCoreMode::LEGACY_SHARED;
+        else if (value == "dual_dte_dedicated")
+            config.mode = ControlCoreMode::DUAL_DTE_DEDICATED;
+        else
+            throw std::invalid_argument(
+                path + ".mode must be legacy_shared or "
+                       "dual_dte_dedicated, got " +
+                value);
+    }
+
+    if (object.contains("dte")) {
+        const json &dte = object.at("dte");
+        const std::string dte_path = path + ".dte";
+        if (!dte.is_object())
+            throw std::invalid_argument(dte_path +
+                                        " must be an object, got " +
+                                        dte.dump());
+        config.dte.command_queue_depth = ParsePositiveUint32(
+            dte, "command_queue_depth", config.dte.command_queue_depth,
+            dte_path);
+        config.dte.dispatch_width = ParsePositiveUint32(
+            dte, "dispatch_width", config.dte.dispatch_width, dte_path);
+        config.dte.dispatch_latency_ns = ParseNanoseconds(
+            dte, "dispatch_latency_ns", config.dte.dispatch_latency_ns,
+            dte_path);
+        config.dte.completion_notify_latency_ns = ParseNanoseconds(
+            dte, "completion_notify_latency_ns",
+            config.dte.completion_notify_latency_ns, dte_path);
+    }
+
+    if (config.dte.dispatch_width > config.dte.command_queue_depth)
+        throw std::invalid_argument(
+            path + ".dte.dispatch_width must be <= " + path +
+            ".dte.command_queue_depth, got " +
+            std::to_string(config.dte.dispatch_width) + " > " +
+            std::to_string(config.dte.command_queue_depth));
+
+    const DteControllerHWConfig defaults;
+    if (config.mode == ControlCoreMode::LEGACY_SHARED &&
+        (config.dte.command_queue_depth != defaults.command_queue_depth ||
+         config.dte.dispatch_width != defaults.dispatch_width ||
+         config.dte.dispatch_latency_ns != defaults.dispatch_latency_ns ||
+         config.dte.completion_notify_latency_ns !=
+             defaults.completion_notify_latency_ns))
+        throw std::invalid_argument(
+            path +
+            ".dte must keep its default values when mode is legacy_shared");
+
+    return config;
+}
+
+} // namespace
+
 void CoreJob::printSelf() {}
 
 void CoreConfig::printSelf() {}
@@ -191,4 +308,8 @@ void from_json(const json &j, CoreHWConfig &c) {
             "core[" + std::to_string(c.id) +
             "].dte_bit_width must be > 0, got " +
             std::to_string(c.dte_bit_width));
+
+    c.control_cores = j.contains("control_cores")
+                          ? ParseControlCoresConfig(j.at("control_cores"), c.id)
+                          : ControlCoresHWConfig{};
 }

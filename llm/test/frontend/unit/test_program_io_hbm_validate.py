@@ -119,7 +119,7 @@ def _stateful_contract(
         blob = ProgramBlob.create(bytes([0x10 + index]) * abi.size_bytes)
         blobs.append(blob)
         initializations.append(_initialization(manifest, abi, blob))
-    for fill, abi in ((0x51, parameter), (0x52, kv)):
+    for fill, abi in ((0x51, parameter),):
         blob = ProgramBlob.create(bytes([fill]) * abi.size_bytes)
         blobs.append(blob)
         initializations.append(_state_initialization(manifest, abi, blob))
@@ -191,7 +191,7 @@ class ProgramIoHbmValidateAgainstTest(unittest.TestCase):
             for entry in self.contract.output_probes
             if type(entry.target) is ProgramHbmTarget
         )
-        self.assertEqual(len(hbm_initializations), 2)
+        self.assertEqual(len(hbm_initializations), 1)
         self.assertEqual(len(hbm_probes), 1)
         self.assertEqual(hbm_probes[0].target.state_ref, self.kv.state_ref)
         self.assertFalse(hasattr(hbm_probes[0].target, "address"))

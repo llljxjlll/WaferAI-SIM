@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import TypeVar, Union, get_args, get_origin, get_type_hints
 
 from ..errors import FrontendError, SchemaError
+from ._validation_session import (
+    cache_dataclass_primitive,
+    cached_dataclass_primitive,
+)
 
 
 T = TypeVar("T")
@@ -44,12 +48,17 @@ def to_primitive(value: object, *, path: str = "$") -> object:
     if isinstance(value, Enum):
         return value.value
     if is_dataclass(value) and not isinstance(value, type):
-        return {
+        cached = cached_dataclass_primitive(value)
+        if cached is not None:
+            return cached
+        primitive = {
             field.name: to_primitive(
                 getattr(value, field.name), path=_child_path(path, field.name)
             )
             for field in fields(value)
         }
+        cache_dataclass_primitive(value, primitive)
+        return primitive
     if isinstance(value, tuple) or isinstance(value, list):
         return [
             to_primitive(item, path=f"{path}[{index}]")

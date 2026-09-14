@@ -424,16 +424,20 @@ void TestRoleAndRegistryFailures(Suite &suite) {
         (void)BuildIsaV1CollectiveGraph(input.records, input.registry);
     }, "graph derives and enforces expected_sources=N-1");
 
-    suite.Throws<std::invalid_argument>([&] {
-        auto input = Make(CollTxKind::SCATTER, CollRxKind::GATHER, 2);
-        input.registry.total_cores = 16;
-        input.registry.cores_per_die = 8;
-        input.registry.active_cores = {2, 11};
-        input.registry.groups[0].members = {2, 11};
-        for (auto &record : input.records)
-            if (record.core_id == 7) record.core_id = 11;
-        (void)BuildIsaV1CollectiveGraph(input.records, input.registry);
-    }, "non-P2P collective groups cannot cross dies");
+    auto cross_die = Make(CollTxKind::SCATTER, CollRxKind::GATHER, 2);
+    cross_die.registry.total_cores = 16;
+    cross_die.registry.cores_per_die = 8;
+    cross_die.registry.active_cores = {2, 11};
+    cross_die.registry.groups[0].members = {2, 11};
+    for (auto &record : cross_die.records)
+        if (record.core_id == 7) record.core_id = 11;
+    const auto cross_die_plans = BuildIsaV1CollectiveGraph(
+        cross_die.records, cross_die.registry);
+    suite.Check(cross_die_plans.size() == 1 &&
+                    cross_die_plans[0].group ==
+                        std::vector<uint16_t>({2, 11}) &&
+                    cross_die_plans[0].child_flows.size() == 2,
+                "non-P2P collective group may span active dies");
 
     suite.Throws<std::invalid_argument>([&] {
         auto input = Make(CollTxKind::SCATTER, CollRxKind::UNICAST, 4);

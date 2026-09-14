@@ -163,10 +163,14 @@ def _expected_semantics(
     meshslice = plan.algorithm is SwizzleAlgorithm.MESHSLICE_2D_OS
     meshslice_views = {}
     meshslice_tile = None
+    meshslice_rows: tuple[tuple[int, ...], ...] = ()
+    meshslice_columns: tuple[tuple[int, ...], ...] = ()
     if meshslice:
         problem = plan.decision.problem
-        rows = len(plan.candidate.topology_witness.row_orders)
-        columns = len(plan.candidate.topology_witness.column_orders)
+        meshslice_rows = plan.candidate.topology_witness.row_orders
+        meshslice_columns = plan.candidate.topology_witness.column_orders
+        rows = len(meshslice_rows)
+        columns = len(meshslice_columns)
         chunks = plan.candidate.chunk_count
         meshslice_tile = (
             problem.gemm.m // rows,
@@ -214,6 +218,7 @@ def _expected_semantics(
                 shapes = tuple(item[0] for item in typed)
                 layouts = tuple(item[1] for item in typed)
                 dtypes = tuple(item[2] for item in typed)
+                offsets = (0,) * len(refs)
                 if task.kind is SwizzleActionKind.COMP:
                     assert meshslice_tile is not None
                     rank_m, rank_n, rank_k = meshslice_tile
@@ -231,7 +236,50 @@ def _expected_semantics(
                         task.id, problem.gemm.dtype, problem.gemm.accumulation_dtype,
                         rank_m, rank_n, rank_k,
                     )
-                )
+                    )
+                elif task.kind in (
+                    SwizzleActionKind.SEND,
+                    SwizzleActionKind.RECV,
+                ) and (rows, columns) != (2, 2):
+                    # Preserve the proven exact-2x2 operand ABI and stable
+                    # artifact IDs. Larger rectangles need explicit peer
+                    # subviews because a line has multiple remote producers.
+                    if len(refs) != 1 or task.peer_rank is None:
+                        raise SchemaError(
+                            "MeshSlice DTE requires one typed peer operand",
+                            path="projection.rank_dags",
+                        )
+                    value = projected_values[refs[0]]
+                    role = value.buffer_ref.rsplit(".", 1)[-1]
+                    source_rank = (
+                        task.rank
+                        if task.kind is SwizzleActionKind.SEND
+                        else task.peer_rank
+                    )
+                    if role == "lhs":
+                        line = next(
+                            item for item in meshslice_rows
+                            if task.rank in item
+                        )
+                        shape = (tile_m, tile_k // columns)
+                    elif role == "rhs":
+                        line = next(
+                            item for item in meshslice_columns
+                            if task.rank in item
+                        )
+                        shape = (tile_k // rows, tile_n)
+                    else:
+                        # MeshSlice GEMM_AR replication transports complete
+                        # result buffers rather than row/column K shards.
+                        line = ()
+                        shape = shapes[0]
+                    shapes = (shape,)
+                    offsets = (
+                        line.index(source_rank)
+                        * prod(shape)
+                        * _dtype_bytes(dtypes[0])
+                        if line else 0,
+                    )
             elif task.kind is SwizzleActionKind.COMP:
                 origin = action.compute_origin
                 if origin is None:
@@ -251,6 +299,7 @@ def _expected_semantics(
                 if task.flops != 2 * rank_m * rank_n * rank_k:
                     raise SchemaError("GEMM FLOPs disagree with chunk witness", path="projection.rank_dags")
                 shapes = ((rank_m, rank_k), (rank_k, rank_n), (rank_m, rank_n))
+                offsets = (0,) * len(refs)
                 source_values = tuple(
                     ir1_values[ref]
                     for ref in origin.ir1_input_refs[:2] + origin.ir1_output_refs[:1]
@@ -272,6 +321,7 @@ def _expected_semantics(
                     raise SchemaError("non-COMP operand lacks chunk witness", path="plan.rank_programs")
                 source = ir1_values[action.chunk_origin.source_value_ref]
                 shapes = (action.chunk_origin.logical_shape,) * len(refs)
+                offsets = (0,) * len(refs)
                 source_values = (source,) * len(refs)
                 layouts = tuple(source.logical_layout for source in source_values)
                 dtypes = tuple(source.dtype for source in source_values)
@@ -279,8 +329,9 @@ def _expected_semantics(
                 shapes = ()
                 layouts = ()
                 dtypes = ()
-            for ordinal, (use, ref, shape, layout, dtype) in enumerate(
-                zip(uses, refs, shapes, layouts, dtypes, strict=True)
+                offsets = ()
+            for ordinal, (use, ref, shape, layout, dtype, byte_offset) in enumerate(
+                zip(uses, refs, shapes, layouts, dtypes, offsets, strict=True)
             ):
                 value = projected_values[ref]
                 slot = slot_by_buffer.get(value.buffer_ref, 0)
@@ -294,7 +345,7 @@ def _expected_semantics(
                         shape,
                         layout,
                         dtype,
-                        0,
+                        byte_offset,
                         prod(shape) * _dtype_bytes(dtype),
                     )
                 )

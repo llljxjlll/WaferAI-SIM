@@ -1,4 +1,4 @@
-"""Production placement adapter for exact 2x2 MeshSlice programs."""
+"""Production placement adapter for complete rectangular MeshSlice programs."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from .discover_fusion import with_discovered_fusion_candidates
 from .group_registry import _expected_group
 
 
-def _require_exact_mesh(source: IR0) -> tuple[LogicalInstance, DeviceMesh]:
+def _require_rect_mesh(
+    source: IR0,
+) -> tuple[LogicalInstance, DeviceMesh, int, int]:
     if len(source.instances) != 1:
         raise SchemaError(
             "MeshSlice 2D placement requires exactly one logical instance",
@@ -28,16 +30,30 @@ def _require_exact_mesh(source: IR0) -> tuple[LogicalInstance, DeviceMesh]:
         )
     mesh = instance.meshes[0]
     axes = {axis.name: axis.size for axis in mesh.axes}
+    if len(mesh.axes) != 2 or set(axes) != {
+        MeshAxisName.DP,
+        MeshAxisName.TP,
+    }:
+        raise SchemaError(
+            "MeshSlice 2D placement requires exact DP and TP axes",
+            path="ir0.instances[0].meshes[0].axes",
+        )
+    rows = axes[MeshAxisName.DP]
+    columns = axes[MeshAxisName.TP]
+    rank_count = rows * columns
     if (
-        len(mesh.axes) != 2
-        or axes != {MeshAxisName.DP: 2, MeshAxisName.TP: 2}
-        or instance.parallel.dp != 2
-        or instance.parallel.tp != 2
+        rows < 1
+        or columns < 1
+        or rows > 10
+        or columns > 10
+        or rank_count > 100
+        or instance.parallel.dp != rows
+        or instance.parallel.tp != columns
         or instance.parallel.pp != 1
         or instance.parallel.ep != 1
     ):
         raise SchemaError(
-            "MeshSlice 2D placement requires an exact DP2xTP2 mesh",
+            "MeshSlice 2D placement requires a complete DPxTP rectangle within 10x10",
             path="ir0.instances[0].meshes[0].axes",
         )
     if any(node.mesh_ref != mesh.id for node in source.nodes):
@@ -45,11 +61,11 @@ def _require_exact_mesh(source: IR0) -> tuple[LogicalInstance, DeviceMesh]:
             "every MeshSlice member must bind the exact 2D mesh",
             path="ir0.nodes",
         )
-    return instance, mesh
+    return instance, mesh, rows, columns
 
 
 def place_meshslice_2d_ir1(source: IR0, context: PlacementContext) -> IR1:
-    """Place one exact DP2xTP2 workload on a real physical 2x2 rectangle."""
+    """Place one DPxTP workload on a complete physical rectangle."""
 
     if type(source) is not IR0 or type(context) is not PlacementContext:
         raise SchemaError(
@@ -58,7 +74,8 @@ def place_meshslice_2d_ir1(source: IR0, context: PlacementContext) -> IR1:
         )
     source.validate("ir0")
     context.validate("placement_context")
-    instance, mesh = _require_exact_mesh(source)
+    instance, mesh, rows, columns = _require_rect_mesh(source)
+    rank_count = rows * columns
     if not source.fusion_candidates:
         source = with_discovered_fusion_candidates(source)
     if len(source.fusion_candidates) != 1:
@@ -69,11 +86,17 @@ def place_meshslice_2d_ir1(source: IR0, context: PlacementContext) -> IR1:
 
     surrogate_mesh = DeviceMesh(
         mesh.id,
-        (MeshAxis(MeshAxisName.TP, 4),),
+        (MeshAxis(MeshAxisName.TP, rank_count),),
     )
     surrogate_instance = replace(
         instance,
-        parallel=ParallelAxes(tp=4, sp=False, dp=1, pp=1, ep=1),
+        parallel=ParallelAxes(
+            tp=rank_count,
+            sp=False,
+            dp=1,
+            pp=1,
+            ep=1,
+        ),
         meshes=(surrogate_mesh,),
     )
     one_d = _expected_group(
@@ -87,13 +110,13 @@ def place_meshslice_2d_ir1(source: IR0, context: PlacementContext) -> IR1:
     xs = tuple(sorted({coord[0] for coord in coords}))
     ys = tuple(sorted({coord[1] for coord in coords}))
     if (
-        len(one_d.placements) != 4
-        or len(xs) != 2
-        or len(ys) != 2
+        len(one_d.placements) != rank_count
+        or len(xs) != columns
+        or len(ys) != rows
         or set(coords) != {(x, y) for x in xs for y in ys}
     ):
         raise SchemaError(
-            "selected dies must form one complete physical 2x2 rectangle",
+            "selected dies must form the requested complete physical rectangle",
             path="placement_context.fabric.dies",
         )
     placements = tuple(
@@ -108,7 +131,7 @@ def place_meshslice_2d_ir1(source: IR0, context: PlacementContext) -> IR1:
     )
     group = replace(
         one_d,
-        logical_shape=(2, 2),
+        logical_shape=(rows, columns),
         placements=placements,
     )
     group.validate("meshslice_2d_group")
@@ -118,8 +141,8 @@ def place_meshslice_2d_ir1(source: IR0, context: PlacementContext) -> IR1:
     }
     if pairs != {
         (source_rank, destination_rank)
-        for source_rank in range(4)
-        for destination_rank in range(4)
+        for source_rank in range(rank_count)
+        for destination_rank in range(rank_count)
         if source_rank != destination_rank
     }:
         raise SchemaError(

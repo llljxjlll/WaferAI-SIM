@@ -9,6 +9,7 @@ separate boundary-reshard proof and explicitly enables that path.
 from __future__ import annotations
 
 from collections import defaultdict
+from enum import Enum
 import math
 
 from ...errors import SchemaError
@@ -29,6 +30,31 @@ from ...schema.swizzle import (
     SwizzleTopologyWitness,
 )
 from .enumerate import SwizzleCandidateDraft, legal_divisors
+
+
+class MeshSliceExecutionMode(str, Enum):
+    FULL_2D = "full_2d"
+    ROW_ONLY = "row_only"
+    COLUMN_ONLY = "column_only"
+    LOCAL = "local"
+
+
+def meshslice_execution_mode(
+    rows: int,
+    columns: int,
+) -> MeshSliceExecutionMode:
+    if rows <= 0 or columns <= 0:
+        raise SchemaError(
+            "MeshSlice dimensions must be positive",
+            path="swizzle_problem.group.logical_shape",
+        )
+    if rows > 1 and columns > 1:
+        return MeshSliceExecutionMode.FULL_2D
+    if columns > 1:
+        return MeshSliceExecutionMode.ROW_ONLY
+    if rows > 1:
+        return MeshSliceExecutionMode.COLUMN_ONLY
+    return MeshSliceExecutionMode.LOCAL
 
 
 def _dtype_bytes(dtype: DType) -> int:
@@ -102,8 +128,197 @@ def _blocked_slice_counts(problem: SwizzleProblem, rows: int, columns: int) -> t
     )
 
 
+def _candidate_scale(
+    problem: SwizzleProblem,
+    *,
+    rows: int,
+    columns: int,
+    slice_count: int,
+) -> tuple[int, int]:
+    """Return exact action/buffer counts before materializing the DAG."""
+
+    return meshslice_candidate_scale(
+        problem.pattern,
+        rows=rows,
+        columns=columns,
+        slice_count=slice_count,
+    )
+
+
+def meshslice_candidate_scale(
+    pattern: FusionPattern,
+    *,
+    rows: int,
+    columns: int,
+    slice_count: int,
+) -> tuple[int, int]:
+    """Pure production estimator used by the complete shape sweep."""
+
+    if type(pattern) is not FusionPattern:
+        raise SchemaError("requires a fusion pattern", path="pattern")
+    meshslice_execution_mode(rows, columns)
+    if slice_count <= 0:
+        raise SchemaError("slice count must be positive", path="slice_count")
+
+    ranks = rows * columns
+    peers = rows + columns - 2
+    actions = slice_count * ranks * (3 * peers + 1)
+    buffers_per_rank = 3
+    if pattern in (FusionPattern.GEMM_RS, FusionPattern.GEMM_AR):
+        actions += ranks
+        buffers_per_rank += 1
+    if pattern is FusionPattern.GEMM_AR:
+        actions += 3 * ranks * (ranks - 1) + ranks
+        buffers_per_rank += 1
+    return actions, ranks * buffers_per_rank
+
+
 def _make_action(**semantic: object) -> SwizzleActionWitness:
     return SwizzleActionWitness.create(**semantic)
+
+
+def _round_robin_pair_rounds(
+    line: tuple[int, ...],
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    """Return canonical circle-method matching rounds for one line."""
+
+    players: list[int | None] = list(line)
+    if len(players) % 2:
+        players.append(None)
+    rounds = []
+    for _round in range(len(players) - 1):
+        pairs = []
+        for index in range(len(players) // 2):
+            left = players[index]
+            right = players[-1 - index]
+            if left is not None and right is not None:
+                pairs.append((min(left, right), max(left, right)))
+        rounds.append(tuple(sorted(pairs)))
+        players = [players[0], players[-1], *players[1:-1]]
+    if sum(len(item) for item in rounds) != len(line) * (len(line) - 1) // 2:
+        raise SchemaError(
+            "round-robin pair schedule is not exact",
+            path="swizzle_candidate.rank_programs",
+        )
+    return tuple(rounds)
+
+
+def _session_safe_gather_order(
+    actions: dict[int, list[SwizzleActionWitness]],
+    *,
+    rows: tuple[tuple[int, ...], ...],
+    columns: tuple[tuple[int, ...], ...],
+    slice_count: int,
+) -> None:
+    """Order non-frozen gather edges in matching waves.
+
+    SEND and RECV share one endpoint session pool.  A matching wave keeps at
+    most one bidirectional peer pair live per rank, well below the platform
+    capacity, while preserving every action/dependency witness and ID.
+    """
+
+    if (len(rows), len(columns)) in ((1, 1), (2, 2)):
+        return
+    by_id = {
+        action.id: action
+        for rank_actions in actions.values()
+        for action in rank_actions
+    }
+
+    def operand(action: SwizzleActionWitness) -> str | None:
+        refs = (
+            action.input_refs
+            if action.kind is SwizzleActionKind.SEND
+            else action.output_refs
+            if action.kind is SwizzleActionKind.RECV
+            else ()
+        )
+        if len(refs) != 1:
+            return None
+        role = refs[0].rsplit(".", 1)[-1]
+        return role if role in ("lhs", "rhs") else None
+
+    sends = {}
+    receives = {}
+    waits = {}
+    for rank, rank_actions in actions.items():
+        for action in rank_actions:
+            role = operand(action)
+            if role is not None and action.peer_rank is not None:
+                key = (rank, action.chunk_index, role, action.peer_rank)
+                if action.kind is SwizzleActionKind.SEND:
+                    sends[key] = action
+                else:
+                    receives[key] = action
+            elif action.kind is SwizzleActionKind.WAIT and len(action.deps) == 1:
+                receive = by_id.get(action.deps[0])
+                if receive is not None and operand(receive) is not None:
+                    waits[receive.id] = action
+
+    edges = tuple(sorted({
+        (chunk, role, min(rank, peer), max(rank, peer))
+        for rank, chunk, role, peer in sends
+    }))
+    if not edges:
+        return
+    wave_by_edge = {}
+    for chunk in range(slice_count):
+        wave_base = 0
+        for role, lines in (("lhs", rows), ("rhs", columns)):
+            role_round_count = 0
+            for line in lines:
+                rounds = _round_robin_pair_rounds(line)
+                role_round_count = max(role_round_count, len(rounds))
+                for round_index, pairs in enumerate(rounds):
+                    for left, right in pairs:
+                        wave_by_edge[(chunk, role, left, right)] = (
+                            wave_base + round_index
+                        )
+            wave_base += role_round_count
+    if set(wave_by_edge) != set(edges):
+        raise SchemaError(
+            "round-robin waves do not exactly cover gather edges",
+            path="swizzle_candidate.rank_programs",
+        )
+
+    for rank, original in actions.items():
+        ordered = []
+        selected = set()
+        for chunk in range(slice_count):
+            chunk_edges = tuple(
+                edge for edge in edges
+                if edge[0] == chunk and rank in edge[2:]
+            )
+            for edge in sorted(
+                chunk_edges, key=lambda item: (wave_by_edge[item], item)
+            ):
+                _chunk, role, left, right = edge
+                peer = right if rank == left else left
+                send = sends[(rank, chunk, role, peer)]
+                receive = receives[(rank, chunk, role, peer)]
+                wait = waits[receive.id]
+                # Complementary endpoint order avoids a mesh-wide send-first
+                # admission cycle: the lower rank injects while the higher
+                # rank posts and drains its receive before injecting back.
+                ordered.extend(
+                    (send, receive, wait)
+                    if rank == left else (receive, wait, send)
+                )
+                selected.update((send.id, receive.id, wait.id))
+            computes = tuple(
+                action for action in original
+                if action.kind is SwizzleActionKind.COMP
+                and action.chunk_index == chunk
+            )
+            ordered.extend(computes)
+            selected.update(action.id for action in computes)
+        ordered.extend(action for action in original if action.id not in selected)
+        if len(ordered) != len(original) or len({item.id for item in ordered}) != len(original):
+            raise SchemaError(
+                "MeshSlice session-safe order lost an action",
+                path="swizzle_candidate.rank_programs",
+            )
+        actions[rank] = ordered
 
 
 def _programs_for_slice_count(
@@ -340,6 +555,16 @@ def _programs_for_slice_count(
                 actions[destination].append(barrier)
                 buffer_actions[(destination, replicated_buffer)].append(barrier.id)
 
+    _session_safe_gather_order(
+        actions,
+        rows=rows,
+        columns=columns,
+        slice_count=slice_count,
+    )
+    action_orders = {
+        rank: {action.id: index for index, action in enumerate(actions[rank])}
+        for rank in ranks
+    }
     programs = tuple(
         SwizzleRankProgramWitness(rank, tuple(actions[rank])) for rank in ranks
     )
@@ -352,7 +577,10 @@ def _programs_for_slice_count(
             buffer_ref=buffer_ref,
             size_bytes=sizes[buffer_ref.rsplit(".", 1)[-1]],
             double_buffered=(buffer_ref.endswith((".lhs", ".rhs")) and slice_count > 1),
-            lifetime_action_refs=tuple(dict.fromkeys(action_refs)),
+            lifetime_action_refs=tuple(sorted(
+                dict.fromkeys(action_refs),
+                key=action_orders[rank].__getitem__,
+            )),
         )
         for (rank, buffer_ref), action_refs in sorted(buffer_actions.items())
     )
@@ -386,17 +614,39 @@ def _feasibility(
         problem.gemm.k // slice_count,
     )
     floor = problem.hardware_profile.efficient_tile_floor
+    mode = meshslice_execution_mode(len(rows), len(columns))
+    if mode is MeshSliceExecutionMode.FULL_2D:
+        dte_inflight = (
+            problem.hardware_profile.max_inflight_dte >= 2,
+            "row and column communication can be concurrently in flight",
+        )
+        dimensionality = (
+            True,
+            "both physical dimensions contain multiple ranks",
+        )
+    elif mode is MeshSliceExecutionMode.LOCAL:
+        dte_inflight = (True, "LOCAL mode has no remote DTE traffic")
+        dimensionality = (True, "LOCAL mode is the 1x1 rectangle")
+    else:
+        dte_inflight = (
+            problem.hardware_profile.max_inflight_dte >= 1,
+            f"{mode.value} requires one remote DTE stream",
+        )
+        dimensionality = (
+            True,
+            f"{mode.value} is a complete degenerate rectangle",
+        )
     checks = {
         "action_count": (action_count <= problem.constraints.max_actions, f"{action_count} actions <= limit {problem.constraints.max_actions}"),
         "boundary_sharding": (boundary_closed, "explicit 2D OS sharding or boundary reshard witness"),
         "buffer_count": (len(requirements) <= problem.constraints.max_buffers, f"{len(requirements)} buffers <= limit {problem.constraints.max_buffers}"),
         "double_buffer": (slice_count == 1 or problem.hardware_profile.double_buffer_supported, "multi-slice input double buffering is supported"),
-        "dte_inflight": (problem.hardware_profile.max_inflight_dte >= 2, "row and column communication can be concurrently in flight"),
+        "dte_inflight": dte_inflight,
         "efficient_tile": (all(tile[index] >= floor[index] for index in range(3)), f"tile {tile!r} satisfies floor {floor!r}"),
         "message_payload": (not messages or min(messages) >= problem.hardware_profile.min_transfer_bytes, "all partial collectives satisfy minimum payload"),
         "rectangle": (rectangle, "placement is a complete physical rectangle"),
         "sram": (max(per_rank_sram.values(), default=0) <= problem.hardware_profile.sram_budget_bytes, f"per-rank high-water <= {problem.hardware_profile.sram_budget_bytes}"),
-        "two_dimensional": (len(rows) > 1 and len(columns) > 1, "both physical dimensions contain multiple ranks"),
+        "two_dimensional": dimensionality,
     }
     return SwizzleFeasibilityWitness(
         tuple(
@@ -425,11 +675,22 @@ def generate_meshslice_2d_drafts(
     boundary_closed = exact_sharding or (
         allow_boundary_reshard and semantic_witness.sharding_transition_closed
     )
-    if not rectangle or len(rows) <= 1 or len(columns) <= 1 or not boundary_closed:
+    if not rectangle or not rows or not columns or not boundary_closed:
         return ()
     slice_counts = _blocked_slice_counts(problem, len(rows), len(columns))
     drafts: list[SwizzleCandidateDraft] = []
     for slice_count in slice_counts:
+        action_count, buffer_count = _candidate_scale(
+            problem,
+            rows=len(rows),
+            columns=len(columns),
+            slice_count=slice_count,
+        )
+        if (
+            action_count > problem.constraints.max_actions
+            or buffer_count > problem.constraints.max_buffers
+        ):
+            continue
         programs, requirements, route_refs = _programs_for_slice_count(
             problem, rows, columns, slice_count
         )
@@ -477,4 +738,9 @@ def generate_meshslice_2d_drafts(
     return tuple(drafts[: min(32, problem.constraints.max_candidates)])
 
 
-__all__ = ["generate_meshslice_2d_drafts"]
+__all__ = [
+    "generate_meshslice_2d_drafts",
+    "meshslice_candidate_scale",
+    "meshslice_execution_mode",
+    "MeshSliceExecutionMode",
+]

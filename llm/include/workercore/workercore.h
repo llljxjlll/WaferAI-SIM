@@ -7,6 +7,8 @@
 #include "common/system.h"
 #include "defs/const.h"
 #include "dte/dte_async.h"
+#include "dte/dte_control_core.h"
+#include "dte/dte_control_frontend.h"
 #include "dte/dte_unit.h"
 #include "dte/coll_byte_wire_v1.h"
 #include "dte/coll_reduce_stream.h"
@@ -238,7 +240,7 @@ public:
 
     /* ----------------SendHelper------------------- */
     sc_time present_time = sc_time(0, SC_NS);
-    int send_helper_write; // 用于指示send
+    int send_helper_write = 0; // 用于指示send
                            // helper是要向data_sent_o写入true还是false
 
     // 向router传递：是否可以向core传递信息（数据信道）
@@ -280,6 +282,8 @@ public:
     Event_engine *event_engine;
     std::unique_ptr<DTEUnit> dte;
     std::unique_ptr<DteAsyncTracker> dte_async;
+    std::unique_ptr<DteControlCore> dte_control_core;
+    std::unique_ptr<DteControlFrontend> dte_control;
     std::unique_ptr<P2pEndpointSessionRuntime> p2p_endpoint;
     struct P2pTxJob {
         P2pTxIssue issue;
@@ -512,7 +516,9 @@ public:
         return CollectiveEndpointResidualState().Total();
     }
     size_t DteOutstandingCount() const {
-        return (dte_async ? dte_async->OutstandingCount() : 0) +
+        return (dte_control ? dte_control->OutstandingTokenCount() +
+                                  dte_control->OutstandingTransferCount()
+                            : 0) +
                (p2p_endpoint ? p2p_endpoint->Residual().async_tokens : 0);
     }
 

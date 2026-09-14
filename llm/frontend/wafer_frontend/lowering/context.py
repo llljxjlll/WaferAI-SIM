@@ -8,6 +8,7 @@ from ..errors import SchemaError
 from ..schema.action import StandaloneCollectivePlan
 from ..schema.swizzle_plan import FusedPlan
 from ..schema.global_action import GlobalActionDAG
+from ..schema._validation_session import mark_validation_complete, validation_seen
 from ..schema.ir1 import IR1
 from ..schema.ir2 import IR2ProjectionResult, IntraDieScheduleSet
 
@@ -24,6 +25,8 @@ class LoweringContext:
     global_dag: GlobalActionDAG
 
     def validate(self, path: str = "lowering_context") -> None:
+        if validation_seen(self, "lowering_context"):
+            return
         self.ir1.validate(f"{path}.ir1")
         fusion_ids = tuple(plan.id for plan in self.fusion_plans)
         standalone_ids = tuple(plan.id for plan in self.standalone_plans)
@@ -69,3 +72,4 @@ class LoweringContext:
             self.schedule_set,
             f"{path}.global_dag",
         )
+        mark_validation_complete(self, "lowering_context")

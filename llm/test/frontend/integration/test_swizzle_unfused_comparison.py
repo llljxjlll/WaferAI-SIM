@@ -9,6 +9,7 @@ from llm.frontend.wafer_frontend.lowering.swizzle_unfused import (
     allocate_unfused_comparison_core_abi,
 )
 from llm.frontend.wafer_frontend.passes.project_unfused_comparison import (
+    _multi_rank_peer_waves,
     build_unfused_comparison_plan,
     project_unfused_comparison,
 )
@@ -18,7 +19,10 @@ from llm.frontend.wafer_frontend.schema.swizzle import (
     SwizzleActionKind,
     SwizzleAlgorithm,
     SwizzleCandidate,
+    SwizzleGroupView,
     SwizzleProblem,
+    SwizzleRankPlacement,
+    SwizzleRouteView,
 )
 from llm.frontend.wafer_frontend.schema.swizzle_unfused import (
     UnfusedComparisonAction,
@@ -31,6 +35,104 @@ from llm.frontend.wafer_frontend.schema.swizzle_unfused_abi import (
 
 from swizzle_cases import build_swizzle_integration_cases
 from swizzle_scale_cases import build_swizzle_scale_case, build_swizzle_scale_points
+
+
+def _flexible_rank_problem(decision, rank_count: int):
+    """Retype one production scale problem for focused cyclic-wave tests."""
+
+    problem = decision.problem
+    ranks = tuple(range(rank_count))
+    group = SwizzleGroupView(
+        group_ref=f"flexible_mesh_tp_{rank_count}",
+        logical_shape=(1, rank_count),
+        placements=tuple(
+            SwizzleRankPlacement(rank=rank, x=rank, y=0) for rank in ranks
+        ),
+        routes=tuple(
+            SwizzleRouteView(
+                id=f"flexible_route_r{source}_r{destination}",
+                source_rank=source,
+                destination_rank=destination,
+                die_path=(source, destination),
+                resource_ids=(f"flexible_link_r{source}_r{destination}",),
+            )
+            for source in ranks
+            for destination in ranks
+            if source != destination
+        ),
+    )
+    if problem.pattern is FusionPattern.AG_GEMM:
+        m, n, k = 8 * rank_count, 48 * rank_count, 64
+        gemm = replace(
+            problem.gemm,
+            m=m,
+            n=n,
+            k=k,
+            lhs=replace(problem.gemm.lhs, shape=(m, k)),
+            rhs=replace(problem.gemm.rhs, shape=(k, n)),
+            output=replace(problem.gemm.output, shape=(m, n)),
+            flops=2 * m * n * k,
+        )
+        rank_input_bytes = 8 * k * 2
+        collective = replace(
+            problem.collective,
+            participant_ranks=ranks,
+            logical_bytes=rank_count * rank_input_bytes,
+            rank_input_bytes=rank_input_bytes,
+            rank_output_bytes=rank_count * rank_input_bytes,
+            input=replace(problem.collective.input, shape=(8, k)),
+            output=replace(problem.collective.output, shape=(m, k)),
+        )
+    elif problem.pattern is FusionPattern.GEMM_RS:
+        m, n, k = 8 * rank_count, 64, 16 * rank_count
+        gemm = replace(
+            problem.gemm,
+            m=m,
+            n=n,
+            k=k,
+            lhs=replace(problem.gemm.lhs, shape=(m, k)),
+            rhs=replace(problem.gemm.rhs, shape=(k, n)),
+            output=replace(problem.gemm.output, shape=(m, n)),
+            flops=2 * m * n * k,
+        )
+        rank_output_bytes = 8 * n * 2
+        collective = replace(
+            problem.collective,
+            participant_ranks=ranks,
+            logical_bytes=rank_count * rank_output_bytes,
+            rank_input_bytes=rank_count * rank_output_bytes,
+            rank_output_bytes=rank_output_bytes,
+            input=replace(problem.collective.input, shape=(m, n)),
+            output=replace(problem.collective.output, shape=(8, n)),
+        )
+    else:
+        m, n, k = 4 * rank_count, 8, 4 * rank_count
+        gemm = replace(
+            problem.gemm,
+            m=m,
+            n=n,
+            k=k,
+            lhs=replace(problem.gemm.lhs, shape=(m, k)),
+            rhs=replace(problem.gemm.rhs, shape=(k, n)),
+            output=replace(problem.gemm.output, shape=(m, n)),
+            flops=2 * m * n * k,
+        )
+        rank_bytes = m * n * 2
+        collective = replace(
+            problem.collective,
+            participant_ranks=ranks,
+            logical_bytes=rank_bytes,
+            rank_input_bytes=rank_bytes,
+            rank_output_bytes=rank_bytes,
+            input=replace(problem.collective.input, shape=(m, n)),
+            output=replace(problem.collective.output, shape=(m, n)),
+        )
+    problem_semantic = problem._semantic_key()
+    problem_semantic.update(gemm=gemm, collective=collective, group=group)
+    flexible_problem = SwizzleProblem.create(**problem_semantic)
+    baseline_semantic = decision.baseline._semantic_key()
+    baseline_semantic["problem_ref"] = flexible_problem.id
+    return flexible_problem, SwizzleCandidate.create(**baseline_semantic)
 
 
 class SwizzleUnfusedComparisonTest(unittest.TestCase):
@@ -428,6 +530,286 @@ class SwizzleUnfusedComparisonTest(unittest.TestCase):
             build_unfused_comparison_plan(
                 case.partitioned_graph, problem, baseline,
             )
+
+    def test_arbitrary_rank_ag_rs_use_complete_circle_waves(self) -> None:
+        case = build_swizzle_scale_case(build_swizzle_scale_points()[1])
+        decisions = {item.problem.pattern: item for item in case.decisions}
+        for rank_count in (3, 6, 10):
+            for pattern in (FusionPattern.AG_GEMM, FusionPattern.GEMM_RS):
+                with self.subTest(rank_count=rank_count, pattern=pattern.value):
+                    problem, baseline = _flexible_rank_problem(
+                        decisions[pattern], rank_count
+                    )
+                    plan = build_unfused_comparison_plan(
+                        case.partitioned_graph, problem, baseline
+                    )
+                    projection = project_unfused_comparison(
+                        case.partitioned_graph, plan
+                    )
+                    plan.validate_against(case.partitioned_graph)
+                    projection.validate_against(case.partitioned_graph, plan)
+
+                    payload = (
+                        problem.collective.rank_input_bytes
+                        if pattern is FusionPattern.AG_GEMM
+                        else problem.collective.rank_output_bytes
+                    )
+                    all_actions = tuple(
+                        action
+                        for program in plan.rank_programs
+                        for action in program.actions
+                    )
+                    expected_pairs = {
+                        (source, destination)
+                        for source in range(rank_count)
+                        for destination in range(rank_count)
+                        if source != destination
+                    }
+                    self.assertEqual(
+                        {
+                            (flow.source_rank, flow.destination_rank)
+                            for flow in projection.flows
+                        },
+                        expected_pairs,
+                    )
+                    self.assertEqual(len(projection.flows), rank_count * (rank_count - 1))
+                    for kind in (SwizzleActionKind.SEND, SwizzleActionKind.RECV):
+                        self.assertEqual(
+                            sum(
+                                action.logical_bytes
+                                for action in all_actions
+                                if action.kind is kind
+                            ),
+                            rank_count * (rank_count - 1) * payload,
+                        )
+
+                    action_index = {action.id: action for action in all_actions}
+                    waves = _multi_rank_peer_waves(tuple(range(rank_count)))
+                    for program in plan.rank_programs:
+                        expected_peers = tuple(
+                            dict(wave)[program.rank]
+                            for wave in waves
+                            if program.rank in dict(wave)
+                        )
+                        sends = tuple(
+                            action for action in program.actions
+                            if action.kind is SwizzleActionKind.SEND
+                        )
+                        recvs = tuple(
+                            action for action in program.actions
+                            if action.kind is SwizzleActionKind.RECV
+                        )
+                        waits = tuple(
+                            action for action in program.actions
+                            if action.kind is SwizzleActionKind.WAIT
+                        )
+                        self.assertEqual(
+                            tuple(action.peer_rank for action in sends),
+                            expected_peers,
+                        )
+                        self.assertEqual(
+                            tuple(action.peer_rank for action in recvs),
+                            expected_peers,
+                        )
+                        positions = {
+                            action.id: ordinal
+                            for ordinal, action in enumerate(program.actions)
+                        }
+                        for wave, (send, recv, wait) in enumerate(
+                            zip(sends, recvs, waits, strict=True)
+                        ):
+                            matching_send = next(
+                                action
+                                for action in all_actions
+                                if action.kind is SwizzleActionKind.SEND
+                                and action.rank == recv.peer_rank
+                                and action.peer_rank == recv.rank
+                            )
+                            self.assertIn(matching_send.id, recv.deps)
+                            self.assertEqual(wait.deps, (recv.id,))
+                            if program.rank < send.peer_rank:
+                                self.assertLess(
+                                    positions[send.id], positions[recv.id]
+                                )
+                                self.assertLess(
+                                    positions[recv.id], positions[wait.id]
+                                )
+                            else:
+                                self.assertLess(
+                                    positions[recv.id], positions[wait.id]
+                                )
+                                self.assertLess(
+                                    positions[wait.id], positions[send.id]
+                                )
+                            if wave:
+                                predecessor_kind = (
+                                    SwizzleActionKind.WAIT
+                                    if pattern is FusionPattern.AG_GEMM
+                                    else SwizzleActionKind.REDUCE
+                                )
+                                self.assertTrue(any(
+                                    action_index[dep].kind is predecessor_kind
+                                    for dep in send.deps
+                                ))
+                                self.assertTrue(any(
+                                    action_index[dep].kind is predecessor_kind
+                                    for dep in recv.deps
+                                ))
+
+    def test_hundred_rank_circle_wave_planning_is_bounded_and_complete(self) -> None:
+        ranks = tuple(range(100))
+        waves = _multi_rank_peer_waves(ranks)
+        self.assertEqual((len(waves), {len(wave) for wave in waves}), (99, {100}))
+        pairs = tuple(pair for wave in waves for pair in wave)
+        self.assertEqual(len(pairs), 9_900)
+        self.assertEqual(len(set(pairs)), 9_900)
+        for wave in waves:
+            self.assertEqual(len({source for source, _ in wave}), 100)
+            self.assertEqual(len({destination for _, destination in wave}), 100)
+            peer = dict(wave)
+            self.assertTrue(all(peer[peer[rank]] == rank for rank in ranks))
+        cyclic = tuple(
+            tuple((rank, (rank + offset) % 100) for rank in ranks)
+            for offset in range(1, 100)
+        )
+        self.assertNotEqual(waves, cyclic)
+
+    def test_three_and_six_rank_ar_is_exact_typed_rs_then_ag(self) -> None:
+        decision = self.cases[2].decision
+        for rank_count in (3, 6):
+            with self.subTest(rank_count=rank_count):
+                problem, baseline = _flexible_rank_problem(decision, rank_count)
+                plan = build_unfused_comparison_plan(
+                    self.cases[2].partitioned_graph, problem, baseline
+                )
+                projection = project_unfused_comparison(
+                    self.cases[2].partitioned_graph, plan
+                )
+                plan.validate_against(self.cases[2].partitioned_graph)
+                projection.validate_against(
+                    self.cases[2].partitioned_graph, plan
+                )
+
+                peers = rank_count - 1
+                waves = _multi_rank_peer_waves(tuple(range(rank_count)))
+                actions = {
+                    action.id: action
+                    for program in plan.rank_programs
+                    for action in program.actions
+                }
+                for program in plan.rank_programs:
+                    peer_order = tuple(
+                        dict(wave)[program.rank]
+                        for wave in waves
+                        if program.rank in dict(wave)
+                    )
+
+                    def pair(peer: int, reduce: bool):
+                        sequence = (
+                            (
+                                SwizzleActionKind.SEND,
+                                SwizzleActionKind.RECV,
+                                SwizzleActionKind.WAIT,
+                            )
+                            if program.rank < peer
+                            else (
+                                SwizzleActionKind.RECV,
+                                SwizzleActionKind.WAIT,
+                                SwizzleActionKind.SEND,
+                            )
+                        )
+                        return sequence + ((SwizzleActionKind.REDUCE,) if reduce else ())
+
+                    expected_kinds = (
+                        SwizzleActionKind.COMP,
+                        SwizzleActionKind.LOCAL_COPY,
+                    ) + tuple(kind for peer in peer_order for kind in pair(peer, True)) + tuple(kind for peer in peer_order for kind in pair(peer, False)) + (SwizzleActionKind.BARRIER,)
+                    self.assertEqual(
+                        tuple(action.kind for action in program.actions),
+                        expected_kinds,
+                    )
+                    self.assertEqual(
+                        Counter(
+                            action.stage.value
+                            for action in program.actions
+                            if action.kind is SwizzleActionKind.SEND
+                        ),
+                        Counter(reduction=peers, replication=peers),
+                    )
+
+                self.assertEqual(len(projection.flows), 2 * rank_count * peers)
+                self.assertEqual(
+                    {
+                        (
+                            actions[flow.send_task_ref].stage,
+                            flow.source_rank,
+                            flow.destination_rank,
+                        )
+                        for flow in projection.flows
+                    },
+                    {
+                        (stage, source, destination)
+                        for stage in (
+                            actions[next(
+                                action.id
+                                for program in plan.rank_programs
+                                for action in program.actions
+                                if action.stage.value == stage_name
+                            )].stage
+                            for stage_name in ("reduction", "replication")
+                        )
+                        for source in range(rank_count)
+                        for destination in range(rank_count)
+                        if source != destination
+                    },
+                )
+
+                chunk_bytes = problem.collective.rank_output_bytes // rank_count
+                operands_by_task = {}
+                for operand in projection.operands:
+                    operands_by_task.setdefault(operand.task_ref, []).append(operand)
+                for program in plan.rank_programs:
+                    rank = program.rank
+                    barrier = program.actions[-1]
+                    output = operands_by_task[barrier.id][0]
+                    self.assertEqual(
+                        (
+                            output.shape,
+                            output.byte_extent,
+                            output.storage_bytes,
+                            output.byte_offset,
+                        ),
+                        (
+                            problem.collective.output.shape,
+                            problem.collective.rank_output_bytes,
+                            (rank_count + 1) * chunk_bytes,
+                            chunk_bytes,
+                        ),
+                    )
+                    reductions = tuple(
+                        action
+                        for action in program.actions
+                        if action.kind is SwizzleActionKind.REDUCE
+                    )
+                    self.assertEqual(len(reductions), peers)
+                    for reduction in reductions:
+                        source, accumulator, result = sorted(
+                            operands_by_task[reduction.id],
+                            key=lambda item: item.ordinal,
+                        )
+                        self.assertEqual(
+                            (
+                                source.storage_ref,
+                                accumulator.storage_ref,
+                                result.storage_ref,
+                            ),
+                            (output.storage_ref,) * 3,
+                        )
+                        self.assertEqual(source.byte_offset, rank * chunk_bytes)
+                        self.assertEqual(
+                            (accumulator.byte_offset, result.byte_offset),
+                            ((rank + 1) * chunk_bytes,) * 2,
+                        )
 
 
 if __name__ == "__main__":

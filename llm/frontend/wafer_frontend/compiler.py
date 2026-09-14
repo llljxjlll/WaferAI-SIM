@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from functools import partial
 
-from .errors import SchemaError
+from .errors import SchemaError, UnsupportedFeatureError
 from .passes import (
     PassManager,
     PipelinePhase,
@@ -28,8 +28,17 @@ from .passes import (
 from .passes.pass_manager import PipelineSnapshot
 from .passes.intra_die_refine import refine_bundle
 from .policies.registry import PolicyRegistry, RegistryKind, production_registry
-from .schema.common import stable_artifact_id, validate_nonempty
-from .schema.experiment import ExperimentSpec
+from .schema.common import (
+    ValidationMode,
+    stable_artifact_id,
+    validate_nonempty,
+)
+from .schema.experiment import (
+    ExperimentSpec,
+    InterDiePolicyName,
+    PlacementStrategy,
+    WorkloadMode,
+)
 from .schema.ir1 import PhysicalFabric
 from .schema.n4 import (
     FusedInterDieContract,
@@ -56,6 +65,18 @@ from .schema.placement import PlacementContext
 from .schema.policy import PolicySelection
 from .schema.persistent_state import HbmAddressSpace
 from .schema.serde import canonical_digest
+from .schema.rect_mesh import RectMeshSpec
+from .schema.rect_mesh_compile import (
+    RectMeshCompileCapabilityReport,
+    RectMeshCompileChain,
+    RectMeshCompileMode,
+    RectMeshFallbackReason,
+)
+
+
+RECT_MESH_COMPILATION_SCHEMA_VERSION = (
+    "wafer_frontend.rect_mesh_compilation/v1alpha1"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +198,115 @@ class NaiveCompilation:
             raise SchemaError(
                 "receipt policy selections disagree with the fixed contexts",
                 path=f"{path}.snapshot.receipts",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RectMeshCompilation:
+    """Explicit opt-in wrapper for one rectangular whole-workload compile."""
+
+    schema_version: str
+    producer_pass: str
+    id: str
+    requested_spec: ExperimentSpec
+    mesh: RectMeshSpec
+    requested_mode: RectMeshCompileMode
+    compilation: NaiveCompilation
+    capability_report: RectMeshCompileCapabilityReport
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        producer_pass: str,
+        requested_spec: ExperimentSpec,
+        mesh: RectMeshSpec,
+        requested_mode: RectMeshCompileMode,
+        compilation: NaiveCompilation,
+        capability_report: RectMeshCompileCapabilityReport,
+    ) -> "RectMeshCompilation":
+        semantic = {
+            "requested_spec": requested_spec,
+            "mesh": mesh,
+            "requested_mode": requested_mode,
+            "compilation": compilation,
+            "capability_report": capability_report,
+        }
+        result = cls(
+            schema_version=RECT_MESH_COMPILATION_SCHEMA_VERSION,
+            producer_pass=producer_pass,
+            id=stable_artifact_id(
+                "rect_mesh_compilation",
+                semantic,
+                schema_version=RECT_MESH_COMPILATION_SCHEMA_VERSION,
+            ),
+            **semantic,
+        )
+        result.validate()
+        return result
+
+    def _semantic_key(self) -> dict[str, object]:
+        return {
+            "requested_spec": self.requested_spec,
+            "mesh": self.mesh,
+            "requested_mode": self.requested_mode,
+            "compilation": self.compilation,
+            "capability_report": self.capability_report,
+        }
+
+    def validate(self, path: str = "rect_mesh_compilation") -> None:
+        if self.schema_version != RECT_MESH_COMPILATION_SCHEMA_VERSION:
+            raise SchemaError(
+                "unsupported schema version", path=f"{path}.schema_version"
+            )
+        validate_nonempty(self.producer_pass, f"{path}.producer_pass")
+        if type(self.requested_spec) is not ExperimentSpec:
+            raise SchemaError(
+                "must be an ExperimentSpec", path=f"{path}.requested_spec"
+            )
+        if type(self.mesh) is not RectMeshSpec:
+            raise SchemaError("must be a RectMeshSpec", path=f"{path}.mesh")
+        if type(self.requested_mode) is not RectMeshCompileMode:
+            raise SchemaError(
+                "must be a RectMeshCompileMode", path=f"{path}.requested_mode"
+            )
+        if type(self.compilation) is not NaiveCompilation:
+            raise SchemaError(
+                "must be a NaiveCompilation", path=f"{path}.compilation"
+            )
+        _validate_rect_mesh_compile_inputs(
+            self.requested_spec, self.compilation.fabric, self.mesh
+        )
+        self.compilation.validate(f"{path}.compilation")
+        if self.compilation.spec != _rect_mesh_baseline_spec(self.requested_spec):
+            raise SchemaError(
+                "executable fallback must use the exact naive policy rewrite",
+                path=f"{path}.compilation.spec.policy.inter_die",
+            )
+        if type(self.capability_report) is not RectMeshCompileCapabilityReport:
+            raise SchemaError(
+                "must be a RectMeshCompileCapabilityReport",
+                path=f"{path}.capability_report",
+            )
+        self.capability_report.validate(f"{path}.capability_report")
+        if (
+            self.capability_report.producer_pass != self.producer_pass
+            or self.capability_report.mesh != self.mesh
+            or self.capability_report.requested_mode is not self.requested_mode
+            or self.capability_report.selected_chain
+            is not RectMeshCompileChain.NAIVE_FIXED_V1
+        ):
+            raise SchemaError(
+                "capability report disagrees with compiler dispatch", path=path
+            )
+        expected = stable_artifact_id(
+            "rect_mesh_compilation",
+            self._semantic_key(),
+            schema_version=RECT_MESH_COMPILATION_SCHEMA_VERSION,
+        )
+        if self.id != expected:
+            raise SchemaError(
+                f"unstable artifact id; expected {expected!r}", path=f"{path}.id"
             )
 
 
@@ -422,3 +552,183 @@ def compile_naive(
     )
     result.validate()
     return result
+
+
+def _rect_mesh_baseline_spec(spec: ExperimentSpec) -> ExperimentSpec:
+    """Return the exact policy-only rewrite used by executable fallback."""
+
+    return replace(
+        spec,
+        policy=replace(spec.policy, inter_die=InterDiePolicyName.NAIVE),
+    )
+
+
+def _validate_rect_mesh_compile_inputs(
+    spec: ExperimentSpec,
+    fabric: PhysicalFabric,
+    mesh: RectMeshSpec,
+) -> None:
+    """Fail closed before dispatching a whole-workload RectMesh compile."""
+
+    if type(spec) is not ExperimentSpec:
+        raise SchemaError("must be an ExperimentSpec", path="spec")
+    if type(fabric) is not PhysicalFabric:
+        raise SchemaError("must be a PhysicalFabric", path="fabric")
+    if type(mesh) is not RectMeshSpec:
+        raise SchemaError("must be a RectMeshSpec", path="rect_mesh")
+    spec.validate("spec")
+    fabric.validate("fabric")
+    mesh.validate("rect_mesh")
+    if spec.workload.mode is not WorkloadMode.INFER:
+        raise UnsupportedFeatureError(
+            "RectMesh v1 whole-workload dispatch is Dense inference only",
+            path="spec.workload.mode",
+            code="rect_mesh_dense_inference_only",
+        )
+    infer = spec.workload.infer
+    assert infer is not None
+    if len(infer.profiles()) != 1:
+        raise UnsupportedFeatureError(
+            "RectMesh v1 whole-workload dispatch requires one static profile",
+            path="spec.workload.infer",
+            code="rect_mesh_static_profile_only",
+        )
+    if (
+        spec.backend.reduction_contract.validation
+        is not ValidationMode.TIMING
+    ):
+        raise UnsupportedFeatureError(
+            "RectMesh v1 supports timing validation only",
+            path="spec.backend.reduction_contract.validation",
+            code=(
+                RectMeshFallbackReason
+                .UNSUPPORTED_FUNCTIONAL_EXECUTION.value
+            ),
+        )
+    if (
+        fabric.die_grid != mesh.physical_shape
+        or len(fabric.dies) != mesh.rank_count
+        or len(fabric.links) != mesh.directed_link_count
+    ):
+        raise SchemaError(
+            "fabric must be the exact complete rectangular Mesh",
+            path="fabric.die_grid",
+            code=RectMeshFallbackReason.INVALID_MESH.value,
+        )
+    actual_rank_coordinates = tuple(
+        (die.id, die.coord) for die in fabric.dies
+    )
+    expected_rank_coordinates = tuple(
+        (rank, mesh.coordinate(rank)) for rank in range(mesh.rank_count)
+    )
+    if actual_rank_coordinates != expected_rank_coordinates:
+        raise SchemaError(
+            "fabric dies must be hole-free row-major rank coordinates",
+            path="fabric.dies",
+            code=RectMeshFallbackReason.INVALID_MESH.value,
+        )
+    if len(spec.parallel.instances) != 1:
+        raise UnsupportedFeatureError(
+            "RectMesh v1 requires exactly one Dense instance",
+            path="spec.parallel.instances",
+            code=RectMeshFallbackReason.INCOMPATIBLE_SHARDING.value,
+        )
+    instance = spec.parallel.instances[0]
+    if instance.tp != mesh.rank_count:
+        raise SchemaError(
+            f"TP must equal rectangular Mesh rank count {mesh.rank_count}",
+            path="spec.parallel.instances[0].tp",
+            code=RectMeshFallbackReason.INCOMPATIBLE_SHARDING.value,
+        )
+    if spec.placement.strategy is PlacementStrategy.EXPLICIT:
+        expected_key = (instance.id, f"{instance.id}.mesh.tp")
+        if (
+            len(spec.placement.groups) != 1
+            or (
+                spec.placement.groups[0].instance_id,
+                spec.placement.groups[0].mesh_ref,
+            )
+            != expected_key
+            or spec.placement.groups[0].die_ids
+            != tuple(range(mesh.rank_count))
+        ):
+            raise SchemaError(
+                "explicit placement must be the complete hole-free row-major Mesh",
+                path="spec.placement.groups",
+                code=RectMeshFallbackReason.INVALID_PLACEMENT.value,
+            )
+
+
+def compile_rect_mesh(
+    spec: ExperimentSpec,
+    fabric: PhysicalFabric,
+    *,
+    rect_mesh: RectMeshSpec,
+    hbm_address_spaces: tuple[HbmAddressSpace, ...],
+    mode: RectMeshCompileMode = RectMeshCompileMode.AUTO,
+    producer_pass: str = "rect_mesh_frontend",
+    registry: PolicyRegistry | None = None,
+    intra_die_refine_options: (
+        SplitKRefineOptions | IntraDieOptimizationOptions | None
+    ) = None,
+) -> RectMeshCompilation:
+    """Compile an H by W Dense workload with diagnosable dispatch.
+
+    AUTO currently selects the existing whole-workload chain as an executable
+    fallback. The independent standard Swizzle chain cannot yet replace
+    selected regions while retaining ordinary and standalone regions in the
+    same artifact. Forced STANDARD therefore fails before any compiler pass
+    instead of emitting a partial manifest.
+    """
+
+    validate_nonempty(producer_pass, "producer_pass")
+    if type(mode) is not RectMeshCompileMode:
+        raise SchemaError("must be a RectMeshCompileMode", path="mode")
+    _validate_rect_mesh_compile_inputs(spec, fabric, rect_mesh)
+    if mode is RectMeshCompileMode.STANDARD:
+        raise UnsupportedFeatureError(
+            (
+                "RectMesh standard chain does not yet provide whole-workload "
+                "ordinary/fusion/standalone replacement"
+            ),
+            path="mode",
+            code=RectMeshFallbackReason.STANDARD_CHAIN_UNAVAILABLE.value,
+            hint="use mode=AUTO for an executable naive fallback",
+        )
+    baseline_spec = _rect_mesh_baseline_spec(spec)
+    compilation = compile_naive(
+        baseline_spec,
+        fabric,
+        hbm_address_spaces=hbm_address_spaces,
+        producer_pass=producer_pass,
+        registry=registry,
+        intra_die_refine_options=intra_die_refine_options,
+    )
+    manifests = tuple(entry.manifest for entry in compilation.linked.entries)
+    report = RectMeshCompileCapabilityReport.create(
+        producer_pass=producer_pass,
+        mesh=rect_mesh,
+        requested_mode=mode,
+        selected_chain=RectMeshCompileChain.NAIVE_FIXED_V1,
+        fallback_reasons=(
+            ()
+            if mode is RectMeshCompileMode.NAIVE
+            else (RectMeshFallbackReason.STANDARD_CHAIN_UNAVAILABLE,)
+        ),
+        profile_count=len(compilation.linked.source_profiles),
+        manifest_count=len(manifests),
+        fragment_count=sum(len(manifest.fragments) for manifest in manifests),
+        symbolic_record_count=sum(
+            len(stream.records)
+            for manifest in manifests
+            for stream in manifest.core_streams
+        ),
+    )
+    return RectMeshCompilation.create(
+        producer_pass=producer_pass,
+        requested_spec=spec,
+        mesh=rect_mesh,
+        requested_mode=mode,
+        compilation=compilation,
+        capability_report=report,
+    )

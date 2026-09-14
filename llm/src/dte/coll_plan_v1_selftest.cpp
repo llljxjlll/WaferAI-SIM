@@ -69,12 +69,20 @@ bool ReduceTarget(CollOp op, const IsaV1CollectiveSpec &spec, size_t rank) {
 
 IsaV1CollectiveSpec Make(CollTxKind tx, CollRxKind rx, size_t n,
                          uint64_t length = 32) {
-    static const uint16_t cores[] = {2, 7, 11, 19};
+    static const uint16_t small_cores[] = {2, 7, 11, 19};
+    std::vector<uint16_t> cores;
+    if (n <= 4) {
+        cores.assign(small_cores, small_cores + n);
+    } else {
+        cores.reserve(n);
+        for (size_t rank = 0; rank < n; ++rank)
+            cores.push_back(static_cast<uint16_t>(rank));
+    }
     IsaV1CollectiveSpec spec;
     spec.tx_kind = tx;
     spec.rx_kind = rx;
     spec.key = {17, 23, 5};
-    spec.group.assign(cores, cores + n);
+    spec.group = cores;
     spec.root_rank = n == 1 ? 0 : 1;
     spec.p2p_source_rank = 0;
     spec.p2p_destination_rank = static_cast<uint16_t>(n - 1);
@@ -320,6 +328,55 @@ void TestLayoutsAndWaves(Suite &suite) {
                 "non-contiguous group and non-zero root remain canonical");
 }
 
+void TestHundredRankRoundRobin(Suite &suite) {
+    const auto spec = Make(
+        CollTxKind::BROADCAST, CollRxKind::GATHER, 100, 32);
+    IsaV1PlannerCapacity capacity;
+    capacity.max_child_bytes = 32;
+    capacity.max_receive_bytes_per_rank_per_wave = 32;
+    capacity.max_sessions_per_rank_per_wave = 3;
+    capacity.max_derived_bytes = uint64_t{64} << 20;
+
+    const auto plan = PlanIsaV1Collective(spec, capacity);
+    bool bounded = plan.child_flows.size() == 9900 &&
+                   plan.waves.size() == 99 &&
+                   HasCanonicalChildren(plan) && HasRxFirstActions(plan);
+    for (size_t wave_index = 0; wave_index < plan.waves.size(); ++wave_index) {
+        const auto &wave = plan.waves[wave_index];
+        std::vector<uint32_t> sessions(100, 0);
+        std::vector<uint64_t> receive_bytes(100, 0);
+        bounded = bounded && wave.child_indices.size() == 100;
+        for (uint32_t index : wave.child_indices) {
+            const auto &flow = plan.child_flows[index];
+            ++sessions[flow.source_rank];
+            ++sessions[flow.destination_rank];
+            receive_bytes[flow.destination_rank] += flow.length_bytes;
+            const uint16_t delta = static_cast<uint16_t>(
+                (static_cast<uint32_t>(flow.destination_rank) + 100 -
+                 flow.source_rank) % 100);
+            bounded = bounded && delta == wave_index + 1;
+        }
+        bounded = bounded &&
+                  *std::max_element(sessions.begin(), sessions.end()) == 2 &&
+                  *std::max_element(receive_bytes.begin(),
+                                    receive_bytes.end()) == 32;
+    }
+    suite.Check(bounded,
+                "N=100 symmetric collective uses 99 capacity-safe cyclic waves");
+    suite.Check(plan == PlanIsaV1Collective(spec, capacity),
+                "N=100 cyclic wave schedule is byte-for-byte deterministic");
+
+    const uint64_t exact_derived_bytes = DerivedBytes(plan);
+    auto exact = capacity;
+    exact.max_derived_bytes = exact_derived_bytes;
+    suite.Check(PlanIsaV1Collective(spec, exact) == plan,
+                "N=100 exact derived-byte capacity is accepted");
+    --exact.max_derived_bytes;
+    suite.Throws<std::invalid_argument>([&] {
+        (void)PlanIsaV1Collective(spec, exact);
+    }, "N=100 derived-byte capacity minus one is rejected pre-allocation");
+}
+
 void TestContractFailures(Suite &suite) {
     suite.Throws<std::invalid_argument>([&] {
         auto spec = Make(CollTxKind::UNICAST, CollRxKind::GATHER, 4);
@@ -484,6 +541,7 @@ int RunCollPlanV1SelfTest() {
     std::cout << "==== ISA-v1 collective planner self-test ====" << std::endl;
     TestNineGrid(suite);
     TestLayoutsAndWaves(suite);
+    TestHundredRankRoundRobin(suite);
     TestContractFailures(suite);
     TestDerivedLimits(suite);
     TestOverflowBoundaries(suite);

@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from dataclasses import replace
 import unittest
+from unittest.mock import patch
 
+from llm.frontend.wafer_frontend.policies.swizzle.chunking import (
+    legal_wang_chunk_specs,
+)
 from llm.frontend.wafer_frontend.policies.swizzle.semantics import (
     analyze_ag_gemm,
     analyze_gemm_ar,
     analyze_gemm_rs,
 )
 from llm.frontend.wafer_frontend.policies.swizzle.wang_1d import (
+    estimate_wang_candidate,
     generate_wang_1d_drafts,
 )
 from llm.frontend.wafer_frontend.schema.ir0 import CollectiveKind, FusionPattern
@@ -73,6 +78,46 @@ def _group4() -> SwizzleGroupView:
     )
 
 
+def _rect_group(width: int, height: int) -> SwizzleGroupView:
+    rank_count = width * height
+    coords = tuple((rank % width, rank // width) for rank in range(rank_count))
+    routes = []
+    for source in range(rank_count):
+        for destination in range(rank_count):
+            if source == destination:
+                continue
+            x, y = coords[source]
+            destination_x, destination_y = coords[destination]
+            path = [source]
+            while x != destination_x:
+                x += 1 if destination_x > x else -1
+                path.append(y * width + x)
+            while y != destination_y:
+                y += 1 if destination_y > y else -1
+                path.append(y * width + x)
+            routes.append(
+                SwizzleRouteView(
+                    f"route.{source}.{destination}",
+                    source,
+                    destination,
+                    tuple(path),
+                    tuple(
+                        f"resource.{left}.{right}"
+                        for left, right in zip(path, path[1:])
+                    ),
+                )
+            )
+    return SwizzleGroupView(
+        group_ref=f"group{height}x{width}",
+        logical_shape=(height, width),
+        placements=tuple(
+            SwizzleRankPlacement(rank, *coords[rank])
+            for rank in range(rank_count)
+        ),
+        routes=tuple(routes),
+    )
+
+
 def _constraints() -> SwizzleConstraints:
     return SwizzleConstraints(
         allowed_algorithms=(
@@ -114,6 +159,52 @@ def _ag_problem():
         group=_group4(),
         hardware_profile=_profile(),
         constraints=_constraints(),
+    )
+    return problem, witness
+
+
+def _rect_ag_problem(width: int, height: int):
+    base, base_witness = _ag_problem()
+    rank_count = width * height
+    gemm = replace(
+        base.gemm,
+        m=rank_count,
+        n=rank_count,
+        k=rank_count,
+        lhs=replace(base.gemm.lhs, shape=(rank_count, rank_count)),
+        rhs=replace(base.gemm.rhs, shape=(rank_count, rank_count)),
+        output=replace(base.gemm.output, shape=(rank_count, rank_count)),
+        flops=2 * rank_count**3,
+    )
+    collective = replace(
+        base.collective,
+        participant_ranks=tuple(range(rank_count)),
+        logical_bytes=2 * rank_count**2,
+        rank_input_bytes=2 * rank_count,
+        rank_output_bytes=2 * rank_count**2,
+        input=replace(base.collective.input, shape=(rank_count, 1)),
+        output=gemm.lhs,
+    )
+    witness = analyze_ag_gemm(
+        gemm,
+        collective,
+        boundary_input_refs=base_witness.boundary_input_refs,
+        boundary_output_refs=base_witness.boundary_output_refs,
+    )
+    problem = SwizzleProblem.create(
+        source_ir1_id=base.source_ir1_id,
+        fused_op_id=f"fused.ag.{height}x{width}",
+        pattern=base.pattern,
+        gemm=gemm,
+        collective=collective,
+        group=_rect_group(width, height),
+        hardware_profile=base.hardware_profile,
+        constraints=replace(
+            base.constraints,
+            max_actions=80_000,
+            max_buffers=100,
+            max_chunk_count=100,
+        ),
     )
     return problem, witness
 
@@ -164,6 +255,74 @@ def _actions(draft):
 
 
 class Wang1DTest(unittest.TestCase):
+    def test_scale_estimator_exactly_matches_small_builders(self) -> None:
+        fixtures = (
+            _ag_problem(),
+            _post_problem(CollectiveKind.REDUCE_SCATTER),
+            _post_problem(CollectiveKind.ALL_REDUCE),
+        )
+        for problem, witness in fixtures:
+            specs = {
+                item.chunk_count: item
+                for item in legal_wang_chunk_specs(problem, witness)
+            }
+            for draft in generate_wang_1d_drafts(problem, witness):
+                estimate = estimate_wang_candidate(
+                    problem,
+                    witness,
+                    specs[draft.chunk_count],
+                    unroll_degree=draft.unroll_degree,
+                )
+                actions = _actions(draft)
+                self.assertEqual(estimate.action_count, len(actions))
+                self.assertEqual(
+                    estimate.logical_send_bytes,
+                    sum(
+                        item.logical_bytes
+                        for item in actions
+                        if item.kind is SwizzleActionKind.SEND
+                    ),
+                )
+
+    def test_large_rank_profile_is_bounded_and_r100_preflights(self) -> None:
+        problem30, witness30 = _rect_ag_problem(5, 6)
+        drafts = generate_wang_1d_drafts(problem30, witness30)
+        self.assertEqual(
+            tuple(item.topology_witness.kind for item in drafts),
+            (
+                SwizzleTopologyKind.BIDIRECTIONAL_LINE,
+                SwizzleTopologyKind.HAMILTONIAN_RING,
+            ),
+        )
+        self.assertTrue(
+            all(item.chunk_count == 30 and item.unroll_degree == 1 for item in drafts)
+        )
+
+        problem100, witness100 = _rect_ag_problem(10, 10)
+        spec = legal_wang_chunk_specs(problem100, witness100)[0]
+        estimate = estimate_wang_candidate(
+            problem100, witness100, spec, unroll_degree=1
+        )
+        self.assertEqual((spec.chunk_count, estimate.action_count), (100, 49_700))
+        rejected = SwizzleProblem.create(
+            source_ir1_id=problem100.source_ir1_id,
+            fused_op_id=problem100.fused_op_id,
+            pattern=problem100.pattern,
+            gemm=problem100.gemm,
+            collective=problem100.collective,
+            group=problem100.group,
+            hardware_profile=problem100.hardware_profile,
+            constraints=replace(
+                problem100.constraints,
+                max_actions=estimate.action_count - 1,
+            ),
+        )
+        with patch(
+            "llm.frontend.wafer_frontend.policies.swizzle.wang_1d._build_ag",
+            side_effect=AssertionError("action builder must not run"),
+        ):
+            self.assertEqual(generate_wang_1d_drafts(rejected, witness100), ())
+
     def test_four_way_ag_has_line_and_only_a_proven_ring(self) -> None:
         problem, witness = _ag_problem()
         drafts = generate_wang_1d_drafts(problem, witness)

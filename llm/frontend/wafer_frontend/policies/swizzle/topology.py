@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ...errors import SchemaError
 from ...schema.ir1 import PairRoute, PhysicalFabric, PhysicalGroup
+from .rect_mesh_topology import build_rect_mesh_topology
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,65 +104,6 @@ def _route_view(route: PairRoute, group_dies: frozenset[int]) -> TopologyRoute:
     )
 
 
-def _rank_lines(
-    rank_by_coord: dict[tuple[int, int], int],
-) -> tuple[tuple[tuple[int, ...], ...], tuple[tuple[int, ...], ...]]:
-    xs = sorted({coord[0] for coord in rank_by_coord})
-    ys = sorted({coord[1] for coord in rank_by_coord})
-    rows = tuple(
-        tuple(rank_by_coord[(x, y)] for x in xs if (x, y) in rank_by_coord)
-        for y in ys
-    )
-    columns = tuple(
-        tuple(rank_by_coord[(x, y)] for y in ys if (x, y) in rank_by_coord)
-        for x in xs
-    )
-    return rows, columns
-
-
-def _snake(rows: tuple[tuple[int, ...], ...]) -> tuple[int, ...]:
-    return tuple(
-        rank
-        for row_index, row in enumerate(rows)
-        for rank in (row if row_index % 2 == 0 else tuple(reversed(row)))
-    )
-
-
-def _hamiltonian_cycle(
-    ranks: tuple[int, ...],
-    direct_edges: frozenset[tuple[int, int]],
-) -> tuple[int, ...]:
-    """Return the lexicographically first real directed cycle, if one exists.
-
-    The search is intentionally anchored at the smallest rank so rotations of
-    the same cycle cannot perturb candidate identity.  It operates only on
-    one-hop routes in the frozen embedding; multi-hop XY routes cannot be used
-    to pretend that a physical wrap-around link exists.
-    """
-
-    if len(ranks) < 3:
-        return ()
-    start = min(ranks)
-    target_length = len(ranks)
-
-    def visit(path: tuple[int, ...], remaining: frozenset[int]) -> tuple[int, ...]:
-        if not remaining:
-            return path if (path[-1], start) in direct_edges else ()
-        current = path[-1]
-        for candidate in sorted(remaining):
-            if (current, candidate) not in direct_edges:
-                continue
-            found = visit(path + (candidate,), remaining - {candidate})
-            if found:
-                return found
-        return ()
-
-    result = visit((start,), frozenset(ranks) - {start})
-    if len(result) != target_length:
-        return ()
-    return result
-
-
 def build_topology_view(
     group: PhysicalGroup,
     fabric: PhysicalFabric,
@@ -246,36 +188,30 @@ def build_topology_view(
     )
 
     rank_by_coord = {item.physical_coord: item.rank for item in ranks}
-    xs = sorted({coord[0] for coord in rank_by_coord})
-    ys = sorted({coord[1] for coord in rank_by_coord})
-    origin = (xs[0], ys[0])
-    shape = (xs[-1] - xs[0] + 1, ys[-1] - ys[0] + 1)
-    rectangle_coords = {
-        (x, y)
-        for x in range(xs[0], xs[-1] + 1)
-        for y in range(ys[0], ys[-1] + 1)
-    }
-    is_rectangle = set(rank_by_coord) == rectangle_coords
-    rows, columns = _rank_lines(rank_by_coord)
-    snake = _snake(rows)
+    rectangle = build_rect_mesh_topology(rank_by_coord)
     direct_edges = frozenset(
         (route.source_rank, route.destination_rank)
         for route in routes
         if route.hop_count == 1 and not route.leaves_group
     )
-    cycle = _hamiltonian_cycle(rank_numbers, direct_edges)
+    cycle = rectangle.hamiltonian_cycle_rank_order
+    if cycle and any(
+        pair not in direct_edges
+        for pair in zip(cycle, cycle[1:] + cycle[:1])
+    ):
+        cycle = ()
     return SwizzleTopologyView(
         group_ref=group.id,
         logical_shape=group.logical_shape,
         ranks=ranks,
         routes=routes,
         resources=resources,
-        physical_origin=origin,
-        physical_shape=shape,
-        is_complete_rectangle=is_rectangle,
-        row_rank_orders=rows,
-        column_rank_orders=columns,
-        snake_rank_order=snake,
+        physical_origin=rectangle.physical_origin,
+        physical_shape=rectangle.physical_shape,
+        is_complete_rectangle=rectangle.is_complete_rectangle,
+        row_rank_orders=rectangle.row_rank_orders,
+        column_rank_orders=rectangle.column_rank_orders,
+        snake_rank_order=rectangle.snake_rank_order,
         hamiltonian_cycle_rank_order=cycle,
         cross_group_route_refs=tuple(route.id for route in routes if route.leaves_group),
     )

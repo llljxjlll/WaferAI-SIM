@@ -478,7 +478,6 @@ void ValidatePlatformCoresAndGroups(const ProgramArtifact &artifact) {
     }
 
     for (const ProgramCoreGroup &group : artifact.core_groups) {
-        std::optional<int> group_die;
         for (uint64_t member : group.members) {
             if (member >= static_cast<uint64_t>(TOTAL_CORES))
                 Fail("core group " + std::to_string(group.group_id) +
@@ -489,12 +488,6 @@ void ValidatePlatformCoresAndGroups(const ProgramArtifact &artifact) {
                 Fail("core group " + std::to_string(group.group_id) +
                      " member " + std::to_string(member) +
                      " is not an active platform program core");
-            const int member_die =
-                static_cast<int>(member) / CORES_PER_DIE;
-            if (group_die.has_value() && *group_die != member_die)
-                Fail("core group " + std::to_string(group.group_id) +
-                     " spans multiple dies");
-            group_die = member_die;
         }
     }
 }
@@ -551,11 +544,14 @@ void ApplyProgramRelocations(ProgramArtifact &artifact) {
 }
 
 config_helper_program::config_helper_program(
-    const std::vector<uint8_t> &artifact_bytes) {
+    const std::vector<uint8_t> &artifact_bytes, bool refill)
+    : refill_(refill) {
     LoadProgram(artifact_bytes);
 }
 
-config_helper_program::config_helper_program(const ProgramArtifact &artifact) {
+config_helper_program::config_helper_program(const ProgramArtifact &artifact,
+                                             bool refill)
+    : refill_(refill) {
     LoadProgram(EncodeProgramArtifact(artifact));
 }
 
@@ -579,6 +575,12 @@ void config_helper_program::LoadProgram(
         kDteEndpointP2pMaxBytes;
     image_config.planner_capacity.max_sessions_per_rank_per_wave =
         static_cast<uint32_t>(MAX_BUFFER_PACKET_SIZE);
+    // Validate() computes the exact plan-owned byte count before allocation.
+    // Use the program file ceiling as the production hard bound instead of
+    // the planner's small-unit-test default, so bounded N=100 plans can pass
+    // while oversized derived state still fails before materialization.
+    image_config.planner_capacity.max_derived_bytes =
+        kMaxProgramFileBytes;
     image_config.limits.max_endpoint_sessions_per_core_wave =
         static_cast<uint32_t>(MAX_BUFFER_PACKET_SIZE);
     image_config.limits.max_receive_bytes_per_core_wave =
@@ -1367,7 +1369,7 @@ std::vector<HostEnvelope> config_helper_program::BuildConfigMessages() {
                 ++emitted;
                 if (emitted == total_segments) {
                     message.is_end_ = true;
-                    message.refill_ = true;
+                    message.refill_ = refill_;
                 }
                 result.push_back({core.core_id, message});
             }
@@ -1491,7 +1493,7 @@ void config_helper_program::printSelf() {
 }
 
 config_helper_program *config_helper_program::clone() const {
-    auto *cloned = new config_helper_program(artifact_bytes_);
+    auto *cloned = new config_helper_program(artifact_bytes_, refill_);
     cloned->collective_program_image_ = collective_program_image_;
     cloned->collective_profile_program_image_ =
         collective_profile_program_image_;

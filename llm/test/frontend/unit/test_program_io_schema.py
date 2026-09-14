@@ -4,6 +4,10 @@ from dataclasses import replace
 import unittest
 
 from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.passes.program_io import (
+    _program_io_manifest_digest_context,
+    _source_manifest_digest_prevalidated,
+)
 from llm.frontend.wafer_frontend.schema.artifact_manifest import (
     BufferABI,
     LinkedProgramManifest,
@@ -26,6 +30,7 @@ from llm.frontend.wafer_frontend.schema.program_io import (
     ProgramSramTarget,
 )
 from llm.frontend.wafer_frontend.schema.serde import (
+    canonical_digest,
     canonical_json,
     loads_dataclass,
 )
@@ -247,6 +252,97 @@ class ProgramIoSchemaTest(unittest.TestCase):
                 ProgramIoContract,
                 raw[:-1] + ',"unknown":0}',
             )
+
+    def test_private_digest_context_is_identity_bound_and_byte_equivalent(self) -> None:
+        manifest, contract = _fixture()
+        digest = canonical_digest(manifest)
+        private = ProgramIoContract._create_with_source_manifest_digest(
+            producer_pass=contract.producer_pass,
+            mode=contract.mode,
+            source_manifest=manifest,
+            source_manifest_digest=digest,
+            program_artifact_sha256=contract.program_artifact_sha256,
+            blobs=contract.blobs,
+            initializations=contract.initializations,
+            output_probes=contract.output_probes,
+        )
+        self.assertEqual(private, contract)
+        self.assertEqual(canonical_json(private), canonical_json(contract))
+
+        equal_but_distinct = replace(manifest)
+        self.assertEqual(equal_but_distinct, manifest)
+        self.assertIsNot(equal_but_distinct, manifest)
+        with _program_io_manifest_digest_context(manifest, "0" * 64):
+            self.assertEqual(
+                _source_manifest_digest_prevalidated(manifest),
+                "0" * 64,
+            )
+            self.assertEqual(
+                _source_manifest_digest_prevalidated(equal_but_distinct),
+                digest,
+            )
+            with self.assertRaisesRegex(SchemaError, "exact identity"):
+                with _program_io_manifest_digest_context(
+                    equal_but_distinct, "0" * 64,
+                ):
+                    self.fail("mismatched nested context must not run")
+
+        self.assertEqual(_source_manifest_digest_prevalidated(manifest), digest)
+        with self.assertRaisesRegex(RuntimeError, "context reset sentinel"):
+            with _program_io_manifest_digest_context(manifest, "0" * 64):
+                raise RuntimeError("context reset sentinel")
+        self.assertEqual(_source_manifest_digest_prevalidated(manifest), digest)
+        with self.assertRaisesRegex(SchemaError, "manifest digest is invalid"):
+            with _program_io_manifest_digest_context(manifest, "invalid"):
+                self.fail("invalid digest context must not run")
+
+    def test_private_digest_cannot_bypass_public_manifest_closure(self) -> None:
+        manifest, contract = _fixture()
+        forged_digest = "0" * 64
+        forged = ProgramIoContract._create_with_source_manifest_digest(
+            producer_pass=contract.producer_pass,
+            mode=contract.mode,
+            source_manifest=manifest,
+            source_manifest_digest=forged_digest,
+            program_artifact_sha256=contract.program_artifact_sha256,
+            blobs=contract.blobs,
+            initializations=contract.initializations,
+            output_probes=contract.output_probes,
+        )
+        with self.assertRaisesRegex(SchemaError, "source id/digest"):
+            forged.validate_against(manifest)
+
+        forged_manifest = replace(manifest, id="linked_program_manifest_forged")
+        with self.assertRaisesRegex(SchemaError, "unstable artifact id"):
+            contract.validate_against(forged_manifest)
+
+        with _program_io_manifest_digest_context(manifest, forged_digest):
+            contract.validate_against(manifest)
+
+    def test_artifact_sha_rebind_is_exact_and_fail_closed(self) -> None:
+        manifest, contract = _fixture()
+        artifact_sha = "cd" * 32
+        rebound = contract.bind_program_artifact_sha256(artifact_sha)
+        expected = ProgramIoContract.create(
+            producer_pass=contract.producer_pass,
+            mode=contract.mode,
+            source_manifest=manifest,
+            program_artifact_sha256=artifact_sha,
+            blobs=contract.blobs,
+            initializations=contract.initializations,
+            output_probes=contract.output_probes,
+        )
+        self.assertEqual(rebound, expected)
+        self.assertIs(rebound.blobs, contract.blobs)
+        self.assertIs(rebound.initializations, contract.initializations)
+        self.assertIs(rebound.output_probes, contract.output_probes)
+        rebound.validate_against(manifest)
+        with self.assertRaises(SchemaError):
+            contract.bind_program_artifact_sha256("not-a-sha")
+        with self.assertRaisesRegex(SchemaError, "unstable artifact id"):
+            replace(
+                contract, id="program_io_contract_forged",
+            ).bind_program_artifact_sha256(artifact_sha)
 
     def test_old_v1alpha1_contract_fails_closed(self) -> None:
         _manifest, contract = _fixture()

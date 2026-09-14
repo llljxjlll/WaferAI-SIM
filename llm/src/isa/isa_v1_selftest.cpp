@@ -488,10 +488,22 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
             Check(result, lsu != nullptr,
                   "dynamic LSU manifest target has expected runtime type");
             if (lsu != nullptr) {
+                lsu->op = LsuMemOp::ISSUE;
+                lsu->refreshPrimType();
+                Check(result, PrimMainCategoryBits(lsu->prim_type) == MEM_PRIM,
+                      "LSU ISSUE dynamically classifies as asynchronous memory");
                 lsu->op = LsuMemOp::WAIT;
                 lsu->refreshPrimType();
                 Check(result, PrimMainCategoryBits(lsu->prim_type) == SYNC_PRIM,
                       "LSU WAIT dynamically classifies as synchronization");
+                lsu->op = LsuMemOp::LOAD_BLOCKING;
+                lsu->refreshPrimType();
+                Check(result, PrimMainCategoryBits(lsu->prim_type) == SYNC_PRIM,
+                      "LSU blocking load stays on the ordered executor path");
+                lsu->op = LsuMemOp::STORE_BLOCKING;
+                lsu->refreshPrimType();
+                Check(result, PrimMainCategoryBits(lsu->prim_type) == SYNC_PRIM,
+                      "LSU blocking store stays on the ordered executor path");
             }
         }
         if (entry.id == PrimId::DTE_SEND_ENDPOINT) {

@@ -15,6 +15,7 @@ from .action import (
     StandaloneCollectivePlan,
 )
 from .common import DType, stable_artifact_id, validate_nonempty, validate_uint64
+from ._validation_session import mark_validation_complete, validation_seen
 from .global_action import (
     STATE_TRANSFER_ENDPOINT_SESSION_CAPACITY,
     GlobalAction,
@@ -130,6 +131,7 @@ class RecordOpcode(IntEnum):
     SRAM_FREE = 0x86
     SRAM_ALLOC_AT = 0x89
     DTE_WAIT = 0xC0
+    DTE_FENCE = 0xC1
     EVENT_SET = 0xC3
     EVENT_WAIT = 0xC4
 
@@ -892,6 +894,7 @@ _OPERAND_SCHEMAS = {
         _addr("destination_address", SemanticOperandId.DESTINATION_ADDRESS),
     ),
     RecordOpcode.DTE_WAIT: (_run("token", RuntimeOperandField.DTE_TOKEN),),
+    RecordOpcode.DTE_FENCE: (),
     RecordOpcode.EVENT_SET: (
         _run("source_core", RuntimeOperandField.SOURCE_CORE),
         _run("destination_core", RuntimeOperandField.DESTINATION_CORE),
@@ -2467,6 +2470,8 @@ def _canonical_lifecycle_roots(
         starts = [root.lifetime_start]
         ends = [root.lifetime_end_exclusive]
         terminal_subviews = []
+        meshslice_full_views = []
+        meshslice_chunks = []
         for abi in group:
             if abi is not root:
                 exact_alias = (
@@ -2550,7 +2555,37 @@ def _canonical_lifecycle_roots(
                     and abi.region_offset_bytes + abi.size_bytes
                     <= root.region_offset_bytes + root.size_bytes
                 )
-                if exact_alias and not terminal_subview and not storage_subview and not moe_family_subview:
+                meshslice_packed_subview = (
+                    root.layout == "swizzle_meshslice_packed_root/v1"
+                    and abi.layout in (
+                        "swizzle_meshslice_packed_full_view/v1",
+                        "swizzle_meshslice_packed_chunk/v1",
+                    )
+                    and abi.ownership is BufferOwnership.ALIASED
+                    and abi.alias_of == root.binding_id
+                    and abi.schedule_id == root.schedule_id
+                    and abi.logical_core == root.logical_core
+                    and abi.region_ref == root.region_ref
+                    and abi.storage_id == root.storage_id
+                    and abi.alignment_bytes == (
+                        root.alignment_bytes
+                        if abi.layout == "swizzle_meshslice_packed_full_view/v1"
+                        else math.gcd(root.alignment_bytes, abi.size_bytes)
+                    )
+                    and abi.region_offset_bytes % abi.alignment_bytes == 0
+                    and abi.banks == root.banks
+                    and abi.dtype is root.dtype
+                    and root.region_offset_bytes <= abi.region_offset_bytes
+                    and abi.region_offset_bytes + abi.size_bytes
+                    <= root.region_offset_bytes + root.size_bytes
+                )
+                if (
+                    exact_alias
+                    and not terminal_subview
+                    and not storage_subview
+                    and not moe_family_subview
+                    and not meshslice_packed_subview
+                ):
                     raise SchemaError(
                         "lifecycle alias must exactly preserve its canonical root placement/view",
                         path=path,
@@ -2581,7 +2616,7 @@ def _canonical_lifecycle_roots(
                             path=path,
                         )
                     terminal_subviews.append(abi)
-                if storage_subview or moe_family_subview:
+                if storage_subview or moe_family_subview or meshslice_packed_subview:
                     element_bytes = {
                         DType.FP16: 2,
                         DType.FP32: 4,
@@ -2598,9 +2633,50 @@ def _canonical_lifecycle_roots(
                             "fused storage subview byte extent must be exact",
                             path=path,
                         )
+                if meshslice_packed_subview:
+                    if abi.layout == "swizzle_meshslice_packed_full_view/v1":
+                        meshslice_full_views.append(abi)
+                    else:
+                        meshslice_chunks.append(abi)
                 starts.append(abi.lifetime_start)
                 ends.append(abi.lifetime_end_exclusive)
             root_by_id[abi.id] = root
+        if meshslice_full_views or meshslice_chunks:
+            if (
+                root.layout != "swizzle_meshslice_packed_root/v1"
+                or len(meshslice_full_views) != 1
+                or not meshslice_chunks
+            ):
+                raise SchemaError(
+                    "MeshSlice packed root requires one full view and chunks",
+                    path=path,
+                )
+            full = meshslice_full_views[0]
+            if (
+                full.region_offset_bytes != root.region_offset_bytes
+                or full.size_bytes != root.size_bytes
+            ):
+                raise SchemaError(
+                    "MeshSlice full view must exactly span its root", path=path
+                )
+            physical = tuple(sorted(
+                (
+                    abi.region_offset_bytes - root.region_offset_bytes,
+                    abi.size_bytes,
+                )
+                for abi in meshslice_chunks
+            ))
+            cursor = 0
+            for offset, size in physical:
+                if offset != cursor:
+                    raise SchemaError(
+                        "MeshSlice chunks must exactly partition root", path=path
+                    )
+                cursor += size
+            if cursor != root.size_bytes:
+                raise SchemaError(
+                    "MeshSlice chunks must exactly partition root", path=path
+                )
         if terminal_subviews:
             physical = tuple(sorted(
                 (
@@ -2790,6 +2866,8 @@ class CommandFragment:
         )}
 
     def validate(self, path: str = "command_fragment") -> None:
+        if validation_seen(self, "command_fragment"):
+            return
         if self.schema_version != COMMAND_FRAGMENT_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -2863,6 +2941,39 @@ class CommandFragment:
             binding.validate(f"{path}.buffer_abi[{index}]")
             if binding.logical_core not in stream_cores:
                 raise SchemaError("buffer ABI references a non-target core", path=f"{path}.buffer_abi[{index}].logical_core")
+        meshslice_roots = {
+            binding.storage_id: binding
+            for binding in self.buffer_abi
+            if binding.layout == "swizzle_meshslice_packed_root/v1"
+        }
+        for index, binding in enumerate(self.buffer_abi):
+            if binding.layout not in (
+                "swizzle_meshslice_packed_full_view/v1",
+                "swizzle_meshslice_packed_chunk/v1",
+            ):
+                continue
+            root = meshslice_roots.get(binding.storage_id)
+            expected_alignment = (
+                root.alignment_bytes
+                if (
+                    root is not None
+                    and binding.layout
+                    == "swizzle_meshslice_packed_full_view/v1"
+                )
+                else math.gcd(root.alignment_bytes, binding.size_bytes)
+                if root is not None
+                else 0
+            )
+            if (
+                root is None
+                or binding.alias_of != root.binding_id
+                or binding.alignment_bytes != expected_alignment
+                or binding.region_offset_bytes % binding.alignment_bytes != 0
+            ):
+                raise SchemaError(
+                    "MeshSlice packed alias alignment witness is not exact",
+                    path=f"{path}.buffer_abi[{index}].alignment_bytes",
+                )
         if exact_moe_producer:
             terminal_storage_ids = {
                 binding.storage_id
@@ -3057,6 +3168,7 @@ class CommandFragment:
                 RecordOpcode.DTE_SEND,
                 RecordOpcode.DTE_RECV,
                 RecordOpcode.DTE_WAIT,
+                RecordOpcode.DTE_FENCE,
                 RecordOpcode.LOCAL_REDUCE,
                 RecordOpcode.DTE_ISSUE,
                 RecordOpcode.EVENT_SET,
@@ -3131,6 +3243,7 @@ class CommandFragment:
         expected_id = stable_artifact_id("command_fragment", self._semantic_key(), schema_version=COMMAND_FRAGMENT_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "command_fragment")
 
     def validate_against_lite_moe_intent(
         self,
@@ -3148,9 +3261,20 @@ class CommandFragment:
             self, intent, global_dag, schedule, source, path
         )
 
-    def validate_against(self, dag: GlobalActionDAG, path: str = "command_fragment") -> None:
+    def validate_against(
+        self,
+        dag: GlobalActionDAG,
+        path: str = "command_fragment",
+    ) -> None:
         self.validate(path)
         dag.validate("global_action_dag")
+        self._validate_against_validated_dag(dag, path)
+
+    def _validate_against_validated_dag(
+        self,
+        dag: GlobalActionDAG,
+        path: str,
+    ) -> None:
         if self.source_global_dag_id != dag.id:
             raise SchemaError("fragment references a different global DAG", path=f"{path}.source_global_dag_id")
         actions = {action.id: action for action in dag.actions}
@@ -3585,6 +3709,20 @@ class CommandFragment:
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
             elif (
+                self.kind is FragmentKind.UNFUSED_COMPARISON
+                and action.task_kind is SemanticTaskKind.WAIT
+            ):
+                actual = tuple(records[index] for index in indices)
+                if (
+                    tuple(record.opcode for record in actual)
+                    != (RecordOpcode.DTE_WAIT, RecordOpcode.DTE_FENCE)
+                    or actual[1].operands
+                ):
+                    raise SchemaError(
+                        "UNFUSED WAIT requires exact DTE_WAIT then no-operand DTE_FENCE",
+                        path=f"{path}.core_streams[{stream_index}].records",
+                    )
+            elif (
                 action.task_kind not in allowed_opcodes
                 or len(indices) != 1
                 or records[indices[0]].opcode not in allowed_opcodes[action.task_kind]
@@ -3927,9 +4065,23 @@ class RegionManifest:
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
 
-    def validate_against(self, dag: GlobalActionDAG, path: str = "region_manifest") -> None:
+    def validate_against(
+        self,
+        dag: GlobalActionDAG,
+        path: str = "region_manifest",
+    ) -> None:
         self.validate(path)
-        self.fragment.validate_against(dag, f"{path}.fragment")
+        dag.validate("global_action_dag")
+        self._validate_against_validated_dag(dag, path)
+
+    def _validate_against_validated_dag(
+        self,
+        dag: GlobalActionDAG,
+        path: str,
+    ) -> None:
+        self.fragment._validate_against_validated_dag(
+            dag, f"{path}.fragment"
+        )
         actions = {action.id: action for action in dag.actions}
         for action_id in self.fragment.claimed_action_ids:
             action = actions[action_id]
@@ -3982,6 +4134,12 @@ class ManifestInputKind(str, Enum):
     UNFUSED_COMPARISON_LOWERED = "unfused_comparison_lowered"
     UNFUSED_COMPARISON_CORE_ABI = "unfused_comparison_core_abi"
     UNFUSED_COMPARISON_OPERAND_ABI = "unfused_comparison_operand_abi"
+    FLEXIBLE_MOE_PLAN = "flexible_moe_plan"
+    FLEXIBLE_MOE_STANDARD_MAPPING = "flexible_moe_standard_mapping"
+    FLEXIBLE_DENSE_BACKWARD_IR = "flexible_dense_backward_ir"
+    FLEXIBLE_DENSE_BACKWARD_PROJECTION = "flexible_dense_backward_projection"
+    FLEXIBLE_DENSE_BACKWARD_SCHEDULE = "flexible_dense_backward_schedule"
+    FLEXIBLE_DENSE_BACKWARD_GLOBAL = "flexible_dense_backward_global"
 
 
 class EmptyCoreAckPolicy(str, Enum):
@@ -5076,6 +5234,123 @@ class LinkedProgramManifest:
                     path=f"{path}.input_digests",
                 )
 
+        flexible_moe_top = self.producer_pass == "flexible_moe_production_linker"
+        flexible_moe_kinds = {
+            ManifestInputKind.FLEXIBLE_MOE_PLAN,
+            ManifestInputKind.FLEXIBLE_MOE_STANDARD_MAPPING,
+            ManifestInputKind.COMMAND_FRAGMENT,
+        }
+        if flexible_moe_top:
+            by_kind = {
+                kind: tuple(
+                    digest for digest in self.input_digests if digest.kind is kind
+                )
+                for kind in flexible_moe_kinds
+            }
+            if (
+                set(digest.kind for digest in self.input_digests)
+                != flexible_moe_kinds
+                or len(by_kind[ManifestInputKind.FLEXIBLE_MOE_PLAN]) != 1
+                or len(by_kind[ManifestInputKind.FLEXIBLE_MOE_STANDARD_MAPPING])
+                != 1
+                or len(by_kind[ManifestInputKind.COMMAND_FRAGMENT]) != 2
+                or len(self.input_digests) != 4
+            ):
+                raise SchemaError(
+                    "Flexible MoE production manifest requires one plan, one mapping and two fragments",
+                    path=f"{path}.input_digests",
+                )
+            if (
+                by_kind[ManifestInputKind.FLEXIBLE_MOE_PLAN][0].schema_version
+                != "wafer_frontend.flexible_moe_plan/v2alpha1"
+                or by_kind[
+                    ManifestInputKind.FLEXIBLE_MOE_STANDARD_MAPPING
+                ][0].schema_version
+                != "wafer_frontend.flexible_moe_standard_lowering_plan/v1alpha1"
+                or any(
+                    digest.schema_version != COMMAND_FRAGMENT_SCHEMA_VERSION
+                    for digest in by_kind[ManifestInputKind.COMMAND_FRAGMENT]
+                )
+            ):
+                raise SchemaError(
+                    "Flexible MoE production input schemas are not exact",
+                    path=f"{path}.input_digests",
+                )
+            if (
+                by_kind[ManifestInputKind.FLEXIBLE_MOE_PLAN][0].artifact_id
+                != self.source_global_dag_id
+                or by_kind[
+                    ManifestInputKind.FLEXIBLE_MOE_STANDARD_MAPPING
+                ][0].artifact_id
+                != self.source_projection_id
+                or self.source_schedule_set_id
+                != "flexible_moe.production.schedule.core0"
+            ):
+                raise SchemaError(
+                    "Flexible MoE production source provenance is not exact",
+                    path=f"{path}.input_digests",
+                )
+
+        flexible_dense_top = (
+            self.producer_pass == "flexible_dense_backward_linker"
+        )
+        flexible_dense_schemas = {
+            ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_IR:
+                "wafer_frontend.flexible_dense_backward_ir/v1alpha1",
+            ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_PROJECTION:
+                "wafer_frontend.flexible_dense_backward_projection/v1alpha1",
+            ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_SCHEDULE:
+                "wafer_frontend.flexible_dense_backward_schedule/v1alpha1",
+            ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_GLOBAL:
+                "wafer_frontend.flexible_dense_backward_global/v1alpha1",
+            ManifestInputKind.COMMAND_FRAGMENT:
+                COMMAND_FRAGMENT_SCHEMA_VERSION,
+        }
+        if flexible_dense_top:
+            by_kind = {
+                kind: tuple(
+                    digest for digest in self.input_digests
+                    if digest.kind is kind
+                )
+                for kind in flexible_dense_schemas
+            }
+            if (
+                set(digest.kind for digest in self.input_digests)
+                != set(flexible_dense_schemas)
+                or any(len(values) != 1 for values in by_kind.values())
+                or len(self.input_digests) != 5
+            ):
+                raise SchemaError(
+                    "Flexible Dense backward requires four lineage inputs and one fragment",
+                    path=f"{path}.input_digests",
+                )
+            if any(
+                values[0].schema_version != flexible_dense_schemas[kind]
+                for kind, values in by_kind.items()
+            ):
+                raise SchemaError(
+                    "Flexible Dense backward input schemas are not exact",
+                    path=f"{path}.input_digests",
+                )
+            if (
+                by_kind[
+                    ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_IR
+                ][0].artifact_id != self.source_ir1_id
+                or by_kind[
+                    ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_PROJECTION
+                ][0].artifact_id != self.source_projection_id
+                or by_kind[
+                    ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_SCHEDULE
+                ][0].artifact_id != self.source_schedule_set_id
+                or by_kind[
+                    ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_GLOBAL
+                ][0].artifact_id != self.source_global_dag_id
+            ):
+                raise SchemaError(
+                    "Flexible Dense backward source provenance is not exact",
+                    path=f"{path}.input_digests",
+                )
+
         if not self.fragments:
             raise SchemaError("must contain lowering fragments", path=f"{path}.fragments")
         fragment_ids: list[str] = []
@@ -5213,6 +5488,27 @@ class LinkedProgramManifest:
                 "UNFUSED_COMPARISON fragments require the dedicated standard linker",
                 path=f"{path}.fragments",
             )
+        if flexible_moe_top:
+            command_ids = {
+                digest.artifact_id
+                for digest in self.input_digests
+                if digest.kind is ManifestInputKind.COMMAND_FRAGMENT
+            }
+            if (
+                len(self.fragments) != 2
+                or set(leaf_fragments) != command_ids
+                or {leaf.kind for leaf in leaf_fragments.values()}
+                != {FragmentKind.STATE_IO, FragmentKind.COARSE}
+                or any(
+                    leaf.producer_pass != "flexible_moe_production_lowering"
+                    or leaf.source_global_dag_id != self.source_global_dag_id
+                    for leaf in leaf_fragments.values()
+                )
+            ):
+                raise SchemaError(
+                    "Flexible MoE production requires exact STATE_IO and COARSE fragments",
+                    path=f"{path}.fragments",
+                )
         if train_inputs and {
             leaf.source_global_dag_id for leaf in leaf_fragments.values()
         } != train_lineage_ids[ManifestInputKind.GLOBAL_ACTION_DAG]:

@@ -1,8 +1,10 @@
 """Production physical allocation for the W10 UNFUSED comparison branch."""
 
 from __future__ import annotations
+from contextvars import ContextVar
 
 from ..errors import SchemaError
+from ..schema._validation_session import validation_seen
 from ..schema.artifact_manifest import PlanBarrierEventPhase, RecordOpcode
 from ..schema.common import DType, stable_artifact_id
 from ..schema.global_action import LogicalCoreRef
@@ -28,6 +30,16 @@ from ..schema.swizzle_unfused_lowering import (
     UnfusedComparisonReduceContract,
 )
 
+_PREVALIDATED_ABI_INPUTS: ContextVar[tuple[object, object, object] | None] = (
+    ContextVar("unfused_abi_prevalidated_inputs", default=None)
+)
+
+
+def _has_prevalidated_abi_inputs(*values: object) -> bool:
+    expected = _PREVALIDATED_ABI_INPUTS.get()
+    return expected is not None and all(a is b for a, b in zip(expected, values, strict=True))
+
+
 
 def _symbol(kind: str, semantic: object) -> str:
     return stable_artifact_id(
@@ -46,6 +58,7 @@ def _allocate_storage_intervals(
     region_size: int,
     storage_specs: dict[str, tuple[int, int, int]],
     contiguous_pairs: tuple[tuple[str, str], ...] = (),
+    priority_storage_refs: frozenset[str] = frozenset(),
     reuse_lifetimes: bool = True,
 ) -> tuple[UnfusedComparisonStorageBinding, ...]:
     """Place typed storage, enabling interval reuse only when explicitly requested."""
@@ -54,6 +67,11 @@ def _allocate_storage_intervals(
     if len(paired_refs) != 2 * len(contiguous_pairs):
         raise SchemaError(
             "one UNFUSED storage may belong to only one contiguous pair",
+            path=f"projection.ranks[{rank}]",
+        )
+    if not priority_storage_refs.issubset(storage_specs):
+        raise SchemaError(
+            "priority storage must reference exact typed storage",
             path=f"projection.ranks[{rank}]",
         )
     units = []
@@ -86,14 +104,21 @@ def _allocate_storage_intervals(
     result = []
     region_end = region_base + region_size
     aligned_region_start = (region_base + 63) // 64 * 64
-    ordered_units = sorted(
-        units,
-        key=(
-            (lambda item: (item[3], item[4], item[0]))
-            if reuse_lifetimes
-            else (lambda item: item[0])
-        ),
-    )
+    def unit_order(item):
+        is_priority = any(ref in priority_storage_refs for ref in item[0])
+        if reuse_lifetimes:
+            return (
+                0 if is_priority else 1,
+                item[2] if is_priority else 0,
+                item[3], item[4], item[0],
+            )
+        return (
+            0 if is_priority else 1,
+            item[2] if is_priority else 0,
+            item[0],
+        )
+
+    ordered_units = sorted(units, key=unit_order)
     for unit_key, members, unit_size, unit_start, unit_end in ordered_units:
         for storage_ref, _offset, size_bytes, _start, _end in members:
             if (
@@ -156,7 +181,8 @@ def allocate_unfused_comparison_core_abi(
 ) -> UnfusedComparisonCoreABI:
     """Allocate exact typed storage with deterministic interval coloring."""
 
-    projection.validate_against(ir1, plan)
+    if not _has_prevalidated_abi_inputs(ir1, plan, projection):
+        projection.validate_against(ir1, plan)
     actions = {
         action.id: action
         for program in plan.rank_programs
@@ -207,6 +233,12 @@ def allocate_unfused_comparison_core_abi(
         for operand in projection.operands:
             if actions[operand.task_ref].rank == rank_projection.rank:
                 views_by_task.setdefault(operand.task_ref, []).append(operand)
+        compute_storage_refs = frozenset(
+            view.storage_ref
+            for task_ref, task_views in views_by_task.items()
+            if actions[task_ref].kind is SwizzleActionKind.COMP
+            for view in task_views
+        )
         contiguous_pairs = tuple(sorted(set(
             (views[0].storage_ref, views[1].storage_ref)
             for task_ref, task_views in views_by_task.items()
@@ -226,7 +258,11 @@ def allocate_unfused_comparison_core_abi(
                 for ref, spec in storage_specs.items()
             },
             contiguous_pairs=contiguous_pairs,
-            reuse_lifetimes=len(projection.ranks) == 4,
+            priority_storage_refs=(
+                compute_storage_refs
+                if len(projection.ranks) > 4 else frozenset()
+            ),
+            reuse_lifetimes=False,
         ))
 
     flow_by_task = {
@@ -308,38 +344,48 @@ def allocate_unfused_comparison_core_abi(
     }
     if any(item is not None for item in barriers.values()):
         if any(item is None for item in barriers.values()):
-            raise SchemaError("barrier must cover both ranks", path="plan.rank_programs")
-        leader = barriers[0]
-        peer = barriers[1]
-        barrier_ref = _symbol("barrier", {"plan": plan.id, "stage": "complete"})
-        for owner, source, destination, phase, opcode in (
-            (peer, peer, leader, PlanBarrierEventPhase.ARRIVE, RecordOpcode.EVENT_SET),
-            (leader, peer, leader, PlanBarrierEventPhase.ARRIVE, RecordOpcode.EVENT_WAIT),
-            (leader, leader, peer, PlanBarrierEventPhase.RELEASE, RecordOpcode.EVENT_SET),
-            (peer, leader, peer, PlanBarrierEventPhase.RELEASE, RecordOpcode.EVENT_WAIT),
-        ):
-            semantic = {
-                "projection": projection.id,
-                "barrier": barrier_ref,
-                "source": source.id,
-                "destination": destination.id,
-                "phase": phase,
-            }
-            events.append(
-                SwizzleBarrierEventBinding(
-                    barrier_ref,
-                    owner.id,
-                    source.id,
-                    destination.id,
-                    phase,
-                    opcode,
-                    _symbol("barrier_event", semantic),
-                    _symbol("barrier_source_core", semantic),
-                    _symbol("barrier_destination_core", semantic),
-                    core_by_rank[source.rank],
-                    core_by_rank[destination.rank],
-                )
+            raise SchemaError(
+                "barrier must cover every participant rank",
+                path="plan.rank_programs",
             )
+        ranks = tuple(program.rank for program in plan.rank_programs)
+        leader_rank = (
+            ranks[2] if len(ranks) >= 3 and len(ranks) % 2 else ranks[0]
+        )
+        leader = barriers[leader_rank]
+        barrier_ref = _symbol("barrier", {"plan": plan.id, "stage": "complete"})
+        for rank in ranks:
+            if rank == leader_rank:
+                continue
+            peer = barriers[rank]
+            for owner, source, destination, phase, opcode in (
+                (peer, peer, leader, PlanBarrierEventPhase.ARRIVE, RecordOpcode.EVENT_SET),
+                (leader, peer, leader, PlanBarrierEventPhase.ARRIVE, RecordOpcode.EVENT_WAIT),
+                (leader, leader, peer, PlanBarrierEventPhase.RELEASE, RecordOpcode.EVENT_SET),
+                (peer, leader, peer, PlanBarrierEventPhase.RELEASE, RecordOpcode.EVENT_WAIT),
+            ):
+                semantic = {
+                    "projection": projection.id,
+                    "barrier": barrier_ref,
+                    "source": source.id,
+                    "destination": destination.id,
+                    "phase": phase,
+                }
+                events.append(
+                    SwizzleBarrierEventBinding(
+                        barrier_ref,
+                        owner.id,
+                        source.id,
+                        destination.id,
+                        phase,
+                        opcode,
+                        _symbol("barrier_event", semantic),
+                        _symbol("barrier_source_core", semantic),
+                        _symbol("barrier_destination_core", semantic),
+                        core_by_rank[source.rank],
+                        core_by_rank[destination.rank],
+                    )
+                )
     result = UnfusedComparisonCoreABI.create(
         source_ir1_id=ir1.id,
         source_plan_ref=plan.id,
@@ -359,7 +405,8 @@ def build_unfused_comparison_operand_abi(
 ) -> UnfusedComparisonOperandABI:
     """Freeze all record literals and contiguous reduction views without guessing."""
 
-    projection.validate_against(ir1, plan)
+    if not _has_prevalidated_abi_inputs(ir1, plan, projection):
+        projection.validate_against(ir1, plan)
     actions = {
         action.id: action
         for program in plan.rank_programs
@@ -473,7 +520,10 @@ def lower_unfused_comparison_opcodes(
         SwizzleActionKind.COMP: (RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL),
         SwizzleActionKind.SEND: (RecordOpcode.DTE_SEND,),
         SwizzleActionKind.RECV: (RecordOpcode.DTE_RECV,),
-        SwizzleActionKind.WAIT: (RecordOpcode.DTE_WAIT,),
+        SwizzleActionKind.WAIT: (
+            RecordOpcode.DTE_WAIT,
+            RecordOpcode.DTE_FENCE,
+        ),
         SwizzleActionKind.LOCAL_COPY: (RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_WAIT),
         SwizzleActionKind.REDUCE: (RecordOpcode.LOCAL_REDUCE,),
         SwizzleActionKind.BARRIER: (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT),
@@ -489,6 +539,56 @@ def lower_unfused_comparison_opcodes(
     )
     return result
 
+
+
+def _build_unfused_comparison_abis_prevalidated(
+    ir1: IR1,
+    plan: UnfusedComparisonPlan,
+    projection: UnfusedComparisonProjection,
+) -> tuple[
+    UnfusedComparisonCoreABI,
+    UnfusedComparisonOperandABI,
+    UnfusedComparisonLoweredProgram,
+]:
+    """Build ABIs only for exact objects from this builder session."""
+
+    if (
+        not validation_seen(plan, "unfused_comparison_plan_exact")
+        or not validation_seen(
+            projection, "unfused_comparison_projection_exact"
+        )
+    ):
+        raise SchemaError(
+            "requires exact plan/projection from this builder session",
+            path="projection",
+        )
+    if (
+        projection.source_ir1_id != ir1.id
+        or projection.source_plan_ref != plan.id
+        or projection.problem_ref != plan.problem.id
+        or projection.baseline_ref != plan.baseline.id
+        or projection.pattern is not plan.pattern
+    ):
+        raise SchemaError("prevalidated ABI input closure drifted", path="projection")
+    token = _PREVALIDATED_ABI_INPUTS.set((ir1, plan, projection))
+    try:
+        core_abi = allocate_unfused_comparison_core_abi(ir1, plan, projection)
+        operand_abi = build_unfused_comparison_operand_abi(ir1, plan, projection)
+        lowered = lower_unfused_comparison_opcodes(plan, projection)
+    finally:
+        _PREVALIDATED_ABI_INPUTS.reset(token)
+    if (
+        core_abi.source_ir1_id != ir1.id
+        or core_abi.source_plan_ref != plan.id
+        or core_abi.source_projection_ref != projection.id
+        or operand_abi.source_ir1_id != ir1.id
+        or operand_abi.source_plan_ref != plan.id
+        or operand_abi.source_projection_ref != projection.id
+        or lowered.source_plan_ref != plan.id
+        or lowered.source_projection_ref != projection.id
+    ):
+        raise SchemaError("prevalidated ABI output closure drifted", path="result")
+    return core_abi, operand_abi, lowered
 
 __all__ = [
     "allocate_unfused_comparison_core_abi",

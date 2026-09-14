@@ -84,6 +84,16 @@ class SwizzleTopologyTest(unittest.TestCase):
         self.assertEqual(resource_ids, tuple(sorted(resource_ids)))
         self.assertTrue(all(item.route_refs for item in view.resources))
 
+    def test_ten_by_ten_cycle_is_constructed_from_real_one_hop_routes(self) -> None:
+        fabric, group = _group(10, 10, 100)
+        view = build_topology_view(group, fabric)
+
+        self.assertEqual(view.physical_shape, (10, 10))
+        self.assertEqual(len(view.hamiltonian_cycle_rank_order), 100)
+        cycle = view.hamiltonian_cycle_rank_order
+        for source, destination in zip(cycle, cycle[1:] + cycle[:1]):
+            self.assertEqual(view.route(source, destination).hop_count, 1)
+
     def test_non_rectangle_and_cross_group_transit_are_explicit(self) -> None:
         fabric, group = _group(2, 2, 3, die_ids=(0, 1, 2))
         view = build_topology_view(group, fabric)

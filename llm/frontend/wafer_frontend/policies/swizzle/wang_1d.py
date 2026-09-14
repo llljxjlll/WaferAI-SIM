@@ -28,6 +28,22 @@ from ...schema.swizzle import (
 )
 from .chunking import WangChunkSpec, legal_wang_chunk_specs
 from .enumerate import SwizzleCandidateDraft
+from .rect_mesh_topology import RectMeshTopology, build_rect_mesh_topology
+
+
+_LARGE_RANK_THRESHOLD = 16
+_MAX_RECT_MESH_AXIS = 10
+_MAX_RECT_MESH_RANKS = 100
+
+
+@dataclass(frozen=True, slots=True)
+class WangScaleEstimate:
+    """Cheap exact size witness computed before action DAG materialization."""
+
+    action_count: int
+    buffer_count: int
+    per_rank_sram_bytes: int
+    logical_send_bytes: int
 
 
 @dataclass(slots=True)
@@ -148,53 +164,30 @@ def _rank_die_map(
     return result
 
 
-def _physical_orders(
-    problem: SwizzleProblem,
-) -> tuple[tuple[tuple[int, ...], ...], tuple[tuple[int, ...], ...], tuple[int, ...]]:
+def _physical_topology(problem: SwizzleProblem) -> RectMeshTopology:
     by_coord = {(item.x, item.y): item.rank for item in problem.group.placements}
-    xs = sorted({coord[0] for coord in by_coord})
-    ys = sorted({coord[1] for coord in by_coord})
-    rows = tuple(
-        tuple(by_coord[(x, y)] for x in xs if (x, y) in by_coord)
-        for y in ys
-    )
-    columns = tuple(
-        tuple(by_coord[(x, y)] for y in ys if (x, y) in by_coord)
-        for x in xs
-    )
-    snake = tuple(
-        rank
-        for index, row in enumerate(rows)
-        for rank in (row if index % 2 == 0 else tuple(reversed(row)))
-    )
-    return rows, columns, snake
+    return build_rect_mesh_topology(by_coord)
 
 
 def _real_cycle(
-    ranks: tuple[int, ...],
+    candidate: tuple[int, ...],
     routes: dict[tuple[int, int], object],
 ) -> tuple[int, ...]:
-    if len(ranks) < 3:
+    if not candidate:
         return ()
     direct = {
         pair
         for pair, route in routes.items()
         if len(route.die_path) == 2
     }
-    start = min(ranks)
-
-    def visit(path: tuple[int, ...], remaining: frozenset[int]) -> tuple[int, ...]:
-        if not remaining:
-            return path if (path[-1], start) in direct else ()
-        for candidate in sorted(remaining):
-            if (path[-1], candidate) not in direct:
-                continue
-            found = visit(path + (candidate,), remaining - {candidate})
-            if found:
-                return found
-        return ()
-
-    return visit((start,), frozenset(ranks) - {start})
+    return (
+        candidate
+        if all(
+            pair in direct
+            for pair in zip(candidate, candidate[1:] + candidate[:1])
+        )
+        else ()
+    )
 
 
 def _line_arcs(order: tuple[int, ...], owner: int) -> tuple[tuple[int, ...], ...]:
@@ -706,6 +699,64 @@ def _buffers(
     )
 
 
+def estimate_wang_candidate(
+    problem: SwizzleProblem,
+    semantic_witness: SwizzleSemanticWitness,
+    chunk_spec: WangChunkSpec,
+    *,
+    unroll_degree: int,
+) -> WangScaleEstimate:
+    """Return builder-exact sizes without creating action objects."""
+
+    problem.validate("swizzle_problem")
+    semantic_witness.validate("semantic_witness")
+    chunk_spec.validate_against(problem, semantic_witness)
+    if unroll_degree not in (1, 2):
+        raise SchemaError(
+            "must be one or two", path="wang_scale_estimate.unroll_degree"
+        )
+    ranks = len(problem.collective.participant_ranks)
+    chunks = chunk_spec.chunk_count
+    if problem.pattern is FusionPattern.AG_GEMM:
+        action_count = chunks * (4 * ranks - 3) + ranks
+        if semantic_witness.split_axis.role is SwizzleTensorAxisRole.CONTRACT:
+            action_count += ranks * (chunks - 1)
+    elif problem.pattern is FusionPattern.GEMM_RS:
+        action_count = chunks * (5 * ranks - 3)
+        if chunks > ranks:
+            action_count += ranks
+    elif problem.pattern is FusionPattern.GEMM_AR:
+        action_count = chunks * (8 * ranks - 7) + ranks
+    else:
+        raise SchemaError(
+            "unsupported Wang fusion pattern", path="swizzle_problem.pattern"
+        )
+    phase_multiplier = 2 if problem.pattern is FusionPattern.GEMM_AR else 1
+    return WangScaleEstimate(
+        action_count=action_count,
+        buffer_count=ranks,
+        per_rank_sram_bytes=chunk_spec.logical_bytes_per_chunk * unroll_degree,
+        logical_send_bytes=(
+            phase_multiplier
+            * chunks
+            * (ranks - 1)
+            * chunk_spec.logical_bytes_per_chunk
+        ),
+    )
+
+
+def _estimate_fits(
+    problem: SwizzleProblem,
+    estimate: WangScaleEstimate,
+) -> bool:
+    return (
+        estimate.action_count <= problem.constraints.max_actions
+        and estimate.buffer_count <= problem.constraints.max_buffers
+        and estimate.per_rank_sram_bytes
+        <= problem.hardware_profile.sram_budget_bytes
+    )
+
+
 def _checks(
     problem: SwizzleProblem,
     programs: tuple[SwizzleRankProgramWitness, ...],
@@ -761,11 +812,7 @@ def _topology_witness(
             }
         )
     )
-    width, height = problem.group.logical_shape
-    coordinates = {(item.x, item.y) for item in problem.group.placements}
-    xs = sorted({x for x, _ in coordinates})
-    ys = sorted({y for _, y in coordinates})
-    rectangle = len(coordinates) == width * height == len(xs) * len(ys)
+    rectangle = _physical_topology(problem).is_complete_rectangle
     return SwizzleTopologyWitness(
         kind=kind,
         rank_order=order,
@@ -795,20 +842,72 @@ def generate_wang_1d_drafts(
     chunk_specs = legal_wang_chunk_specs(problem, semantic_witness)
     if not chunk_specs:
         return ()
+    large_rank_profile = len(ranks) > _LARGE_RANK_THRESHOLD
+    if large_rank_profile:
+        # The first legal point is the canonical chunk_count=R decomposition;
+        # larger points only increase work and artifact size.
+        chunk_specs = chunk_specs[:1]
+    unroll_degrees = (
+        (1,)
+        if large_rank_profile
+        else ((1, 2) if problem.constraints.allow_unroll_two else (1,))
+    )
+    estimates = {
+        (chunk_spec.chunk_count, unroll_degree): estimate_wang_candidate(
+            problem,
+            semantic_witness,
+            chunk_spec,
+            unroll_degree=unroll_degree,
+        )
+        for chunk_spec in chunk_specs
+        for unroll_degree in unroll_degrees
+        if not (
+            unroll_degree == 2
+            and (
+                not problem.hardware_profile.double_buffer_supported
+                or problem.hardware_profile.max_inflight_dte < 2
+            )
+        )
+    }
+    estimates = {
+        key: estimate
+        for key, estimate in estimates.items()
+        if _estimate_fits(problem, estimate)
+    }
+    if not estimates:
+        return ()
+    physical_topology = _physical_topology(problem)
+    width, height = physical_topology.physical_shape
+    if (
+        not physical_topology.is_complete_rectangle
+        or len(ranks) > _MAX_RECT_MESH_RANKS
+        or width > _MAX_RECT_MESH_AXIS
+        or height > _MAX_RECT_MESH_AXIS
+    ):
+        return ()
     routes = _route_index(problem)
-    rows, columns, line_order = _physical_orders(problem)
-    cycle_order = _real_cycle(ranks, routes)
+    rows = physical_topology.row_rank_orders
+    columns = physical_topology.column_rank_orders
+    line_order = physical_topology.snake_rank_order
+    cycle_order = _real_cycle(
+        physical_topology.hamiltonian_cycle_rank_order,
+        routes,
+    )
     variants = [
         (SwizzleTopologyKind.BIDIRECTIONAL_LINE, line_order, _line_arcs),
     ]
     if cycle_order:
         variants.append((SwizzleTopologyKind.HAMILTONIAN_RING, cycle_order, _ring_arcs))
-    unroll_degrees = (1, 2) if problem.constraints.allow_unroll_two else (1,)
     drafts: list[SwizzleCandidateDraft] = []
-    candidate_cap = min(32, problem.constraints.max_candidates)
+    candidate_cap = min(
+        2 if large_rank_profile else 32,
+        problem.constraints.max_candidates,
+    )
     for chunk_spec in chunk_specs:
         for kind, order, arc_builder in variants:
             for unroll_degree in unroll_degrees:
+                if (chunk_spec.chunk_count, unroll_degree) not in estimates:
+                    continue
                 if unroll_degree == 2 and (
                     not problem.hardware_profile.double_buffer_supported
                     or problem.hardware_profile.max_inflight_dte < 2
@@ -901,4 +1000,8 @@ def generate_wang_1d_drafts(
     return tuple(drafts)
 
 
-__all__ = ["generate_wang_1d_drafts"]
+__all__ = [
+    "WangScaleEstimate",
+    "estimate_wang_candidate",
+    "generate_wang_1d_drafts",
+]

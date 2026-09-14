@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <tuple>
@@ -367,6 +368,7 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x86:
     case 0x89:
     case 0xc0:
+    case 0xc1:
     case 0xc3:
     case 0xc4:
         return static_cast<Opcode>(raw);
@@ -447,6 +449,18 @@ ManifestInputKindDto ParseInputKind(const Json &value,
         return ManifestInputKindDto::UNFUSED_COMPARISON_CORE_ABI;
     if (raw == "unfused_comparison_operand_abi")
         return ManifestInputKindDto::UNFUSED_COMPARISON_OPERAND_ABI;
+    if (raw == "flexible_moe_plan")
+        return ManifestInputKindDto::FLEXIBLE_MOE_PLAN;
+    if (raw == "flexible_moe_standard_mapping")
+        return ManifestInputKindDto::FLEXIBLE_MOE_STANDARD_MAPPING;
+    if (raw == "flexible_dense_backward_ir")
+        return ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_IR;
+    if (raw == "flexible_dense_backward_projection")
+        return ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_PROJECTION;
+    if (raw == "flexible_dense_backward_schedule")
+        return ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE;
+    if (raw == "flexible_dense_backward_global")
+        return ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL;
     Fail(path, "unknown ManifestInputKind");
 }
 
@@ -1293,6 +1307,18 @@ std::string_view InputKindKey(ManifestInputKindDto kind) {
         return "unfused_comparison_core_abi";
     case ManifestInputKindDto::UNFUSED_COMPARISON_OPERAND_ABI:
         return "unfused_comparison_operand_abi";
+    case ManifestInputKindDto::FLEXIBLE_MOE_PLAN:
+        return "flexible_moe_plan";
+    case ManifestInputKindDto::FLEXIBLE_MOE_STANDARD_MAPPING:
+        return "flexible_moe_standard_mapping";
+    case ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_IR:
+        return "flexible_dense_backward_ir";
+    case ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_PROJECTION:
+        return "flexible_dense_backward_projection";
+    case ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE:
+        return "flexible_dense_backward_schedule";
+    case ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL:
+        return "flexible_dense_backward_global";
     }
     Fail("linked_program_manifest.input_digests", "unknown input kind");
 }
@@ -2573,6 +2599,10 @@ ExternalRecord FinalizeRecord(
         result.operands = TokenOperands{runtime_value(
             record.operands[0], "token", RuntimeOperandFieldDto::DTE_TOKEN,
             path + ".operands[0]")};
+    } else if (record.opcode == Opcode::DTE_FENCE) {
+        if (!record.operands.empty())
+            Fail(path + ".operands", "DTE_FENCE requires no operands");
+        result.operands = NoOperands{};
     } else if (record.opcode == Opcode::EVENT_SET) {
         if (record.operands.size() != 3)
             Fail(path + ".operands", "EVENT_SET requires three operands");
@@ -2994,6 +3024,8 @@ std::set<std::string> ValidateActionSequence(
     bool moe_swizzle_link,
     bool moe_swizzle_c1_matmul_bind,
     bool moe_calibration_link,
+    bool flexible_dense_backward_link,
+    bool unfused_link,
     const std::set<std::string> &moe_terminal_labels) {
     std::set<std::string> completed;
     std::set<std::string> allocated_once;
@@ -3086,6 +3118,14 @@ std::set<std::string> ValidateActionSequence(
                  records[cursor]->opcode == Opcode::DTE_ISSUE &&
                  records[cursor + 1]->opcode == Opcode::DTE_WAIT)
             valid_body = true;
+        else if (unfused_link && suffix == cursor + 2 &&
+                 records[cursor]->opcode == Opcode::DTE_WAIT &&
+                 records[cursor + 1]->opcode == Opcode::DTE_FENCE)
+            valid_body = true;
+        else if (unfused_link && suffix == cursor + 2 &&
+                 records[cursor]->opcode == Opcode::DTE_SEND &&
+                 records[cursor + 1]->opcode == Opcode::DTE_FENCE)
+            valid_body = true;
         else if (suffix == cursor + 2 &&
                  records[cursor]->opcode == Opcode::EVENT_WAIT &&
                  records[cursor + 1]->opcode == Opcode::DTE_SEND)
@@ -3093,6 +3133,21 @@ std::set<std::string> ValidateActionSequence(
         else if (suffix == cursor + 2 &&
                  records[cursor]->opcode == Opcode::DTE_WAIT &&
                  records[cursor + 1]->opcode == Opcode::EVENT_SET)
+            valid_body = true;
+        else if (flexible_dense_backward_link && suffix == cursor + 4 &&
+                 records[cursor]->opcode == Opcode::DTE_SEND &&
+                 records[cursor + 1]->opcode == Opcode::DTE_RECV &&
+                 records[cursor + 2]->opcode == Opcode::DTE_WAIT &&
+                 records[cursor + 3]->opcode == Opcode::LOCAL_REDUCE)
+            valid_body = true;
+        else if (flexible_dense_backward_link && suffix == cursor + 3 &&
+                 records[cursor]->opcode == Opcode::DTE_RECV &&
+                 records[cursor + 1]->opcode == Opcode::DTE_WAIT &&
+                 records[cursor + 2]->opcode == Opcode::LOCAL_REDUCE)
+            valid_body = true;
+        else if (flexible_dense_backward_link && suffix == cursor + 2 &&
+                 records[cursor]->opcode == Opcode::DTE_RECV &&
+                 records[cursor + 1]->opcode == Opcode::DTE_WAIT)
             valid_body = true;
         else if (suffix == cursor + 1) {
             const Opcode opcode = records[cursor]->opcode;
@@ -3284,9 +3339,14 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         const bool unfused_link =
             manifest.producer_pass ==
                 "unfused_comparison_standard_linker";
+        const bool flexible_moe_v2_link =
+            manifest.producer_pass == "flexible_moe_production_linker";
+        const bool flexible_dense_backward_link =
+            manifest.producer_pass == "flexible_dense_backward_linker";
         bool unfused_s0_ag = false;
         bool unfused_s0_rs = false;
         bool unfused_s0_ar = false;
+        bool unfused_rectangular_rs = false;
         const bool scale_swizzle_alias_link =
             swizzle_link && manifest.core_streams.size() == 4;
         const bool dp4_rooted_ar_link =
@@ -4003,6 +4063,132 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 Fail("linked_program_manifest.input_digests",
                      "UNFUSED comparison source provenance is not exact");
         }
+        if (flexible_moe_v2_link) {
+            const std::map<ManifestInputKindDto, std::string>
+                flexible_moe_schemas{
+                    {ManifestInputKindDto::FLEXIBLE_MOE_PLAN,
+                     "wafer_frontend.flexible_moe_plan/v2alpha1"},
+                    {ManifestInputKindDto::FLEXIBLE_MOE_STANDARD_MAPPING,
+                     "wafer_frontend.flexible_moe_standard_lowering_plan/v1alpha1"},
+                    {ManifestInputKindDto::COMMAND_FRAGMENT,
+                     std::string(kCommandFragmentSchemaVersion)},
+                };
+            if (train_link || s3_lite_link || rooted_ar_link ||
+                swizzle_link || moe_swizzle_link || moe_calibration_link ||
+                unfused_link || manifest.input_digests.size() != 4)
+                Fail("linked_program_manifest.input_digests",
+                     "Flexible MoE production requires four exclusive typed inputs");
+            std::map<ManifestInputKindDto,
+                     std::vector<const ManifestInputDigestDto *>> inputs;
+            for (const ManifestInputDigestDto &digest :
+                 manifest.input_digests) {
+                const auto schema = flexible_moe_schemas.find(digest.kind);
+                if (schema == flexible_moe_schemas.end() ||
+                    digest.schema_version != schema->second)
+                    Fail("linked_program_manifest.input_digests",
+                         "Flexible MoE production input schema changed");
+                inputs[digest.kind].push_back(&digest);
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            if (inputs[ManifestInputKindDto::FLEXIBLE_MOE_PLAN].size() != 1 ||
+                inputs[ManifestInputKindDto::FLEXIBLE_MOE_STANDARD_MAPPING]
+                        .size() != 1 ||
+                inputs[ManifestInputKindDto::COMMAND_FRAGMENT].size() != 2 ||
+                inputs[ManifestInputKindDto::FLEXIBLE_MOE_PLAN].front()
+                        ->artifact_id != manifest.source_global_dag_id ||
+                inputs[
+                    ManifestInputKindDto::FLEXIBLE_MOE_STANDARD_MAPPING]
+                        .front()->artifact_id !=
+                    manifest.source_projection_id ||
+                manifest.source_schedule_set_id !=
+                    "flexible_moe.production.schedule.core0")
+                Fail("linked_program_manifest.input_digests",
+                     "Flexible MoE production provenance is not exact");
+            if (manifest.fragments.size() != 2)
+                Fail("linked_program_manifest.fragments",
+                     "Flexible MoE production requires two exact fragments");
+            std::set<FragmentKindDto> kinds;
+            std::set<std::string> fragment_ids;
+            for (const LinkedFragmentDto &linked : manifest.fragments) {
+                if (std::holds_alternative<RegionManifestDto>(linked))
+                    Fail("linked_program_manifest.fragments",
+                         "Flexible MoE production fragments must be unwrapped");
+                const CommandFragmentDto &fragment = Leaf(linked);
+                kinds.insert(fragment.kind);
+                fragment_ids.insert(fragment.id);
+                if (fragment.producer_pass !=
+                        "flexible_moe_production_lowering" ||
+                    fragment.source_global_dag_id !=
+                        manifest.source_global_dag_id)
+                    Fail("linked_program_manifest.fragments",
+                         "Flexible MoE production fragment provenance changed");
+            }
+            const std::set<FragmentKindDto> expected_kinds{
+                FragmentKindDto::STATE_IO, FragmentKindDto::COARSE};
+            std::set<std::string> command_ids;
+            for (const ManifestInputDigestDto *digest :
+                 inputs[ManifestInputKindDto::COMMAND_FRAGMENT])
+                command_ids.insert(digest->artifact_id);
+            if (kinds != expected_kinds || fragment_ids != command_ids)
+                Fail("linked_program_manifest.fragments",
+                     "Flexible MoE production fragment kind/digest closure changed");
+        }
+        if (flexible_dense_backward_link) {
+            const std::map<ManifestInputKindDto, std::string> schemas{
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_IR,
+                 "wafer_frontend.flexible_dense_backward_ir/v1alpha1"},
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_PROJECTION,
+                 "wafer_frontend.flexible_dense_backward_projection/v1alpha1"},
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE,
+                 "wafer_frontend.flexible_dense_backward_schedule/v1alpha1"},
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL,
+                 "wafer_frontend.flexible_dense_backward_global/v1alpha1"},
+                {ManifestInputKindDto::COMMAND_FRAGMENT,
+                 std::string(kCommandFragmentSchemaVersion)},
+            };
+            if (train_link || s3_lite_link || rooted_ar_link || swizzle_link ||
+                moe_swizzle_link || moe_calibration_link || unfused_link ||
+                flexible_moe_v2_link || manifest.input_digests.size() != 5)
+                Fail("linked_program_manifest.input_digests",
+                     "Flexible Dense backward requires five exclusive typed inputs");
+            std::map<ManifestInputKindDto,
+                     const ManifestInputDigestDto *> inputs;
+            for (const ManifestInputDigestDto &digest :
+                 manifest.input_digests) {
+                const auto schema = schemas.find(digest.kind);
+                if (schema == schemas.end() ||
+                    digest.schema_version != schema->second ||
+                    !inputs.emplace(digest.kind, &digest).second)
+                    Fail("linked_program_manifest.input_digests",
+                         "Flexible Dense backward kind/schema/cardinality changed");
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            if (inputs.size() != schemas.size() ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_IR)
+                        ->artifact_id != manifest.source_ir1_id ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_PROJECTION)
+                        ->artifact_id != manifest.source_projection_id ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE)
+                        ->artifact_id != manifest.source_schedule_set_id ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL)
+                        ->artifact_id != manifest.source_global_dag_id)
+                Fail("linked_program_manifest.input_digests",
+                     "Flexible Dense backward four-stage provenance is not exact");
+            if (manifest.fragments.size() != 1 ||
+                std::holds_alternative<RegionManifestDto>(manifest.fragments.front()))
+                Fail("linked_program_manifest.fragments",
+                     "Flexible Dense backward requires one unwrapped fragment");
+            const CommandFragmentDto &fragment = Leaf(manifest.fragments.front());
+            if (fragment.id !=
+                    inputs.at(ManifestInputKindDto::COMMAND_FRAGMENT)->artifact_id ||
+                fragment.producer_pass != "flexible_dense_backward_lowering" ||
+                fragment.source_global_dag_id != manifest.source_global_dag_id ||
+                fragment.kind != FragmentKindDto::STATE_IO)
+                Fail("linked_program_manifest.fragments",
+                     "Flexible Dense backward fragment closure changed");
+        }
         if (s3_lite_link) {
             const ManifestInputDigestDto &s3 = *s3_lite_inputs.front();
             if (s3.schema_version !=
@@ -4129,7 +4315,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::size_t s3_dp4_claims = 0;
         if (!train_link && !s3_lite_link && !rooted_ar_link &&
             !swizzle_link && !moe_swizzle_link && !moe_calibration_link &&
-            !unfused_link) {
+            !unfused_link && !flexible_moe_v2_link &&
+            !flexible_dense_backward_link) {
             for (const auto &entry : upstream_inputs)
                 expected_inputs.emplace(entry.first, entry.second.first,
                                         entry.second.second);
@@ -4406,6 +4593,21 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {Opcode::SRAM_BIND, 8},
                 {Opcode::SRAM_FREE, 20},
             };
+            const std::map<Opcode, std::size_t> meshslice_local_opcodes{
+                {Opcode::MATMUL, 1},
+                {Opcode::SRAM_ALLOC_AT, 3},
+                {Opcode::SRAM_BIND, 1},
+                {Opcode::SRAM_FREE, 3},
+            };
+            const std::map<Opcode, std::size_t> meshslice_linear3_opcodes{
+                {Opcode::MATMUL, 3},
+                {Opcode::DTE_SEND, 6},
+                {Opcode::DTE_RECV, 6},
+                {Opcode::DTE_WAIT, 6},
+                {Opcode::SRAM_ALLOC_AT, 9},
+                {Opcode::SRAM_BIND, 3},
+                {Opcode::SRAM_FREE, 9},
+            };
             auto scale_ag_opcodes = [](std::size_t matmuls,
                                        std::size_t transports,
                                        std::size_t allocations) {
@@ -4439,10 +4641,148 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     {Opcode::SRAM_FREE, allocations},
                 };
             };
+            const std::size_t packed_ranks = fragment.core_streams.size();
+            const auto packed_send_it = opcodes.find(Opcode::DTE_SEND);
+            const std::size_t packed_transports = packed_send_it != opcodes.end()
+                ? packed_send_it->second
+                : 0;
+            std::size_t packed_roots = 0;
+            std::size_t packed_full_views = 0;
+            std::size_t packed_chunks = 0;
+            std::map<std::string, std::size_t> standard_layouts;
+            for (const BufferAbiDto &abi : fragment.buffer_abi) {
+                ++standard_layouts[abi.layout];
+                if (abi.layout == "swizzle_meshslice_packed_root/v1")
+                    ++packed_roots;
+                else if (abi.layout ==
+                         "swizzle_meshslice_packed_full_view/v1")
+                    ++packed_full_views;
+                else if (abi.layout ==
+                         "swizzle_meshslice_packed_chunk/v1")
+                    ++packed_chunks;
+            }
+            const std::map<Opcode, std::size_t>
+                meshslice_packed_opcodes{
+                    {Opcode::MATMUL, packed_ranks},
+                    {Opcode::DTE_SEND, packed_transports},
+                    {Opcode::DTE_RECV, packed_transports},
+                    {Opcode::DTE_WAIT, packed_transports},
+                    {Opcode::SRAM_ALLOC_AT, 3 * packed_ranks},
+                    {Opcode::SRAM_BIND, packed_ranks},
+                    {Opcode::SRAM_FREE, 3 * packed_ranks},
+                };
+            const std::map<Opcode, std::size_t>
+                meshslice_rect2d_opcodes{
+                    {Opcode::MATMUL, packed_ranks},
+                    {Opcode::DTE_SEND, packed_transports},
+                    {Opcode::DTE_RECV, packed_transports},
+                    {Opcode::DTE_WAIT, packed_transports},
+                    {Opcode::SRAM_ALLOC_AT, 3 * packed_ranks},
+                    {Opcode::SRAM_BIND, packed_ranks},
+                    {Opcode::SRAM_FREE, 3 * packed_ranks},
+                };
+            const std::map<std::string, std::size_t>
+                meshslice_rect2d_layouts{
+                    {"KN_dp_tp", packed_ranks},
+                    {"MK_dp_tp", packed_ranks},
+                    {"MN_dp_tp", packed_ranks},
+                };
+            const bool meshslice_rect2d_integral_steps =
+                packed_ranks != 0 &&
+                packed_transports % packed_ranks == 0;
+            const std::size_t meshslice_rect2d_steps =
+                meshslice_rect2d_integral_steps
+                    ? packed_transports / packed_ranks
+                    : 0;
+            bool meshslice_rect2d_geometry = false;
+            if (meshslice_rect2d_integral_steps) {
+                for (std::size_t rows = 2; rows <= 10; ++rows)
+                    for (std::size_t columns = 2; columns <= 10; ++columns)
+                        if (rows * columns == packed_ranks &&
+                            rows + columns - 2 ==
+                                meshslice_rect2d_steps)
+                            meshslice_rect2d_geometry = true;
+            }
+            const bool meshslice_rect2d_streams =
+                meshslice_rect2d_geometry &&
+                std::all_of(
+                    fragment.core_streams.begin(),
+                    fragment.core_streams.end(),
+                    [&](const CoreFragmentStreamDto &stream) {
+                        std::map<Opcode, std::size_t> stream_opcodes;
+                        for (const RelocatableRecordDto &record :
+                             stream.records)
+                            ++stream_opcodes[record.opcode];
+                        return stream_opcodes ==
+                            std::map<Opcode, std::size_t>{
+                                {Opcode::MATMUL, 1},
+                                {Opcode::DTE_SEND,
+                                 meshslice_rect2d_steps},
+                                {Opcode::DTE_RECV,
+                                 meshslice_rect2d_steps},
+                                {Opcode::DTE_WAIT,
+                                 meshslice_rect2d_steps},
+                                {Opcode::SRAM_ALLOC_AT, 3},
+                                {Opcode::SRAM_BIND, 1},
+                                {Opcode::SRAM_FREE, 3},
+                            };
+                    });
+            const bool meshslice_rect2d_core_abis =
+                meshslice_rect2d_geometry &&
+                std::all_of(
+                    fragment.core_streams.begin(),
+                    fragment.core_streams.end(),
+                    [&](const CoreFragmentStreamDto &stream) {
+                        std::map<std::string, std::size_t> layouts;
+                        std::map<BufferOwnershipDto, std::size_t>
+                            ownerships;
+                        for (const BufferAbiDto &abi :
+                             fragment.buffer_abi) {
+                            if (!(abi.logical_core == stream.logical_core))
+                                continue;
+                            ++layouts[abi.layout];
+                            ++ownerships[abi.ownership];
+                        }
+                        return layouts ==
+                                std::map<std::string, std::size_t>{
+                                    {"KN_dp_tp", 1},
+                                    {"MK_dp_tp", 1},
+                                    {"MN_dp_tp", 1},
+                                } &&
+                            ownerships ==
+                                std::map<BufferOwnershipDto, std::size_t>{
+                                    {BufferOwnershipDto::OWNED, 1},
+                                    {BufferOwnershipDto::BORROWED, 2},
+                                };
+                    });
+            const bool meshslice_rect2d =
+                packed_ranks >= 4 && packed_ranks <= 100 &&
+                packed_transports >= 2 * packed_ranks &&
+                packed_transports <= 18 * packed_ranks &&
+                meshslice_rect2d_geometry &&
+                meshslice_rect2d_streams &&
+                meshslice_rect2d_core_abis &&
+                packed_roots == 0 && packed_full_views == 0 &&
+                packed_chunks == 0 &&
+                standard_layouts == meshslice_rect2d_layouts &&
+                opcodes == meshslice_rect2d_opcodes;
+            const bool meshslice_packed =
+                packed_ranks > 1 && packed_ranks <= 100 &&
+                packed_transports > 0 &&
+                (packed_roots == packed_ranks ||
+                 packed_roots == 2 * packed_ranks) &&
+                packed_full_views == packed_roots &&
+                packed_chunks == packed_transports + packed_roots &&
+                opcodes == meshslice_packed_opcodes;
             const bool ag = opcodes == ag_opcodes;
             const bool rs = opcodes == rs_opcodes;
             const bool ar = opcodes == ar_opcodes;
             const bool meshslice = opcodes == meshslice_opcodes;
+            const bool meshslice_local =
+                opcodes == meshslice_local_opcodes;
+            const bool meshslice_linear3 =
+                packed_roots == 0 &&
+                opcodes == meshslice_linear3_opcodes;
             const bool scale_ag32_a16 =
                 opcodes == scale_ag_opcodes(32, 24, 16);
             const bool scale_ag32_a20 =
@@ -4465,6 +4805,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     static_cast<unsigned>(rs) +
                     static_cast<unsigned>(ar) +
                     static_cast<unsigned>(meshslice) +
+                    static_cast<unsigned>(meshslice_local) +
+                    static_cast<unsigned>(meshslice_linear3) +
+                    static_cast<unsigned>(meshslice_rect2d) +
+                    static_cast<unsigned>(meshslice_packed) +
                     static_cast<unsigned>(scale_ag32_a16) +
                     static_cast<unsigned>(scale_ag32_a20) +
                     static_cast<unsigned>(scale_ag64_a20) +
@@ -4475,50 +4819,91 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                      "Swizzle opcode quotient does not identify exactly one supported pattern");
             const std::size_t expected_records =
                 ag ? 38 : rs ? 44 : ar ? 50 : meshslice ? 104 :
+                meshslice_local ? 8 : meshslice_linear3 ? 42 :
+                meshslice_rect2d ?
+                    8 * packed_ranks + 3 * packed_transports :
+                meshslice_packed ? 8 * packed_ranks + 3 * packed_transports :
                 scale_ag32_a16 ? 180 : scale_ag32_a20 ? 188 :
                 scale_ag64_a20 ? 324 : scale_ag64_a16 ? 316 :
                 scale_rs32 ? 244 : 444;
             const std::size_t expected_buffers =
                 ag ? 10 : (rs || ar) ? 14 : meshslice ? 20 :
+                meshslice_local ? 3 : meshslice_linear3 ? 9 :
+                meshslice_rect2d ? 3 * packed_ranks :
+                meshslice_packed ? 3 * packed_ranks + packed_roots + packed_chunks :
                 scale_ag32 ? 72 : scale_ag64 ? 136 :
                 scale_rs32 ? 104 : 192;
             const std::size_t expected_owned =
                 ag ? 6 : (rs || ar) ? 8 : meshslice ? 4 :
+                meshslice_local ? 1 : meshslice_linear3 ? 3 :
+                meshslice_rect2d ? packed_ranks :
+                meshslice_packed ? packed_ranks :
                 scale_ag32_a16 ? 8 : scale_ag32_a20 ? 12 :
                 scale_ag64_a20 ? 12 : scale_ag64_a16 ? 8 :
                 scale_rs32 ? 20 : 32;
             const std::size_t expected_borrowed =
-                meshslice ? 16 : scale ? 8 : 4;
+                meshslice ? 16 : meshslice_local ? 2 :
+                meshslice_linear3 ? 6 :
+                meshslice_rect2d ? 2 * packed_ranks :
+                meshslice_packed ? 2 * packed_ranks : scale ? 8 : 4;
             const std::size_t exact_aliased =
-                ag ? 0 : (rs || ar) ? 2 : meshslice ? 0 :
+                ag ? 0 : (rs || ar) ? 2 :
+                (meshslice || meshslice_local || meshslice_linear3) ? 0 :
+                meshslice_rect2d ? 0 :
+                meshslice_packed ? packed_roots + packed_chunks :
                 scale_ag32_a16 ? 56 : scale_ag32_a20 ? 52 :
                 scale_ag64_a20 ? 116 : scale_ag64_a16 ? 120 :
                 scale_rs32 ? 76 : 152;
             const std::size_t expected_fragment_runtime =
-                meshslice ? 64 : scale_ag32 ? 114 : scale_ag64 ? 210 :
+                meshslice ? 64 : meshslice_local ? 0 :
+                meshslice_linear3 ? 24 :
+                meshslice_rect2d ? 4 * packed_transports :
+                meshslice_packed ? 4 * packed_transports :
+                scale_ag32 ? 114 : scale_ag64 ? 210 :
                 scale_rs32 ? 122 : scale_rs64 ? 226 : 0;
             const std::size_t expected_fragment_program =
-                meshslice ? 41 : scale_ag32_a16 ? 85 :
+                meshslice ? 41 : meshslice_local ? 7 :
+                meshslice_linear3 ? 19 :
+                meshslice_rect2d ? 6 * packed_ranks + 1 :
+                meshslice_packed ? 6 * packed_ranks + packed_chunks + 1 :
+                scale_ag32_a16 ? 85 :
                 scale_ag32_a20 ? 89 : scale_ag64_a20 ? 153 :
                 scale_ag64_a16 ? 149 : scale_rs32 ? 145 :
                 scale_rs64 ? 265 : 0;
             const std::size_t expected_runtime =
                 ag ? 16 : rs ? 12 : ar ? 24 : meshslice ? 68 :
+                meshslice_local ? 1 : meshslice_linear3 ? 27 :
+                meshslice_rect2d ? 4 * packed_transports + packed_ranks :
+                meshslice_packed ? 4 * packed_transports + packed_ranks :
                 scale_ag32 ? 118 : scale_ag64 ? 214 :
                 scale_rs32 ? 126 : 230;
             const std::size_t expected_program =
                 ag ? 21 : (rs || ar) ? 29 : meshslice ? 41 :
+                meshslice_local ? 7 : meshslice_linear3 ? 19 :
+                meshslice_rect2d ? expected_fragment_program :
+                meshslice_packed ? expected_fragment_program :
                 expected_fragment_program;
             const std::size_t expected_addresses =
                 ag ? 54 : (rs || ar) ? 68 : meshslice ? 132 :
+                meshslice_local ? 14 : meshslice_linear3 ? 54 :
+                meshslice_rect2d ?
+                    14 * packed_ranks + 2 * packed_transports :
+                meshslice_packed ? 14 * packed_ranks + 2 * packed_transports :
                 scale_ag32_a16 ? 256 : scale_ag32_a20 ? 268 :
                 scale_ag64_a20 ? 476 : scale_ag64_a16 ? 464 :
                 scale_rs32 ? 356 : 664;
             const std::size_t expected_claims =
                 ag ? 12 : rs ? 14 : ar ? 20 : meshslice ? 56 :
+                meshslice_local ? 1 : meshslice_linear3 ? 21 :
+                meshslice_rect2d ?
+                    packed_ranks + 3 * packed_transports :
+                meshslice_packed ? packed_ranks + 3 * packed_transports :
                 scale_ag32 ? 108 : scale_ag64 ? 212 :
                 scale_rs32 ? 140 : 276;
             const std::size_t expected_cores =
+                meshslice_local ? 1 : meshslice_linear3 ? 3 :
+                meshslice_rect2d ? packed_ranks :
+                meshslice_packed ? packed_ranks :
                 (meshslice || scale) ? 4 : 2;
             std::map<BufferOwnershipDto, std::size_t> ownerships;
             for (const BufferAbiDto &abi : fragment.buffer_abi) {
@@ -4595,6 +4980,33 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                           {RuntimeSymbolKindDto::DTE_FSM, 4},
                           {RuntimeSymbolKindDto::RUNTIME_CORE, 12},
                       }
+                    : meshslice_local
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 1},
+                      }
+                    : meshslice_linear3
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 3},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 6},
+                          {RuntimeSymbolKindDto::DTE_FSM, 6},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE, 12},
+                      }
+                    : meshslice_rect2d
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, packed_ranks},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, packed_transports},
+                          {RuntimeSymbolKindDto::DTE_FSM, packed_transports},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE,
+                           2 * packed_transports},
+                      }
+                    : meshslice_packed
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, packed_ranks},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, packed_transports},
+                          {RuntimeSymbolKindDto::DTE_FSM, packed_transports},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE,
+                           2 * packed_transports},
+                      }
                     : std::map<RuntimeSymbolKindDto, std::size_t>{
                           {RuntimeSymbolKindDto::START_TAG, 4},
                           {RuntimeSymbolKindDto::DTE_TOKEN, 16},
@@ -4614,6 +5026,32 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                      scale_ag32_a16 || scale_ag64_a16 ? 16U :
                      scale_ag32_a20 || scale_ag64_a20 ? 20U :
                      scale_rs32 ? 28U : 40U},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_meshslice_local_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS, 3},
+                    {ProgramSymbolKind::SRAM_LABEL, 3},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_meshslice_linear3_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS, 9},
+                    {ProgramSymbolKind::SRAM_LABEL, 9},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_meshslice_rect2d_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS,
+                     3 * packed_ranks},
+                    {ProgramSymbolKind::SRAM_LABEL, 3 * packed_ranks},
+                    {ProgramSymbolKind::SRAM_REGION, 1},
+                };
+            const std::map<ProgramSymbolKind, std::size_t>
+                expected_meshslice_packed_program_kinds{
+                    {ProgramSymbolKind::ABSOLUTE_ADDRESS,
+                     3 * packed_ranks + packed_chunks},
+                    {ProgramSymbolKind::SRAM_LABEL, 3 * packed_ranks},
                     {ProgramSymbolKind::SRAM_REGION, 1},
                 };
             if (scale) {
@@ -4707,7 +5145,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 records += stream.records.size();
             const ProgramControlEnvelopeDto &envelope =
                 manifest.envelope;
-            if (((meshslice || scale) &&
+            if (((meshslice || meshslice_local || meshslice_linear3 ||
+                   meshslice_rect2d || meshslice_packed || scale) &&
                  (fragment.runtime_symbols.size() !=
                       expected_fragment_runtime ||
                   fragment.program_symbols.size() !=
@@ -4729,9 +5168,18 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     expected_program ||
                 (scale && program_kinds !=
                     expected_scale_program_kinds) ||
+                (meshslice_local && program_kinds !=
+                    expected_meshslice_local_program_kinds) ||
+                (meshslice_linear3 && program_kinds !=
+                    expected_meshslice_linear3_program_kinds) ||
+                (meshslice_rect2d && program_kinds !=
+                    expected_meshslice_rect2d_program_kinds) ||
+                (meshslice_packed && program_kinds !=
+                    expected_meshslice_packed_program_kinds) ||
                 manifest.address_operand_bindings.size() !=
                     expected_addresses ||
                 !manifest.state_operand_bindings.empty() ||
+                (meshslice_rect2d && !manifest.core_groups.empty()) ||
                 envelope.active_cores.size() != expected_cores ||
                 envelope.start_events.size() != expected_cores ||
                 envelope.terminal_cores.size() != expected_cores ||
@@ -4764,17 +5212,101 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                      "UNFUSED comparison fragment kind/producer/source/digest provenance changed");
             std::map<Opcode, std::size_t> opcodes;
             std::size_t records = 0;
+            std::set<std::string> local_wait_actions;
             for (const CoreFragmentStreamDto &stream :
                  fragment.core_streams) {
                 records += stream.records.size();
-                for (const RelocatableRecordDto &record : stream.records)
+                for (const RelocatableRecordDto &record : stream.records) {
                     ++opcodes[record.opcode];
+                    if (record.opcode == Opcode::DTE_ISSUE)
+                        local_wait_actions.insert(
+                            record.source_global_action_id);
+                }
             }
+            for (const CoreFragmentStreamDto &stream :
+                 fragment.core_streams) {
+                std::vector<const RelocatableRecordDto *> wave_records;
+                wave_records.reserve(stream.records.size());
+                for (const RelocatableRecordDto &record : stream.records) {
+                    if (record.opcode != Opcode::SRAM_ALLOC_AT &&
+                        record.opcode != Opcode::SRAM_FREE)
+                        wave_records.push_back(&record);
+                }
+                for (std::size_t index = 0;
+                     index < wave_records.size(); ++index) {
+                    const RelocatableRecordDto &record =
+                        *wave_records[index];
+                    if (record.opcode == Opcode::DTE_FENCE) {
+                        const bool wait_tail =
+                            index != 0 &&
+                            wave_records[index - 1]->opcode ==
+                                Opcode::DTE_WAIT &&
+                            wave_records[index - 1]->source_global_action_id ==
+                                record.source_global_action_id;
+                        const bool send_tail =
+                            index >= 2 &&
+                            wave_records[index - 1]->opcode ==
+                                Opcode::DTE_SEND &&
+                            wave_records[index - 1]->source_global_action_id ==
+                                record.source_global_action_id &&
+                            wave_records[index - 2]->opcode ==
+                                Opcode::DTE_WAIT &&
+                            wave_records[index - 2]->source_global_action_id !=
+                                record.source_global_action_id;
+                        if (wait_tail == send_tail)
+                            Fail("linked_program_manifest.fragments",
+                                 "UNFUSED DTE_FENCE must be exactly one WAIT or SEND wave tail");
+                        continue;
+                    }
+                    if (record.opcode != Opcode::DTE_WAIT) continue;
+                    const bool wait_tail =
+                        index + 1 < wave_records.size() &&
+                        wave_records[index + 1]->opcode ==
+                            Opcode::DTE_FENCE &&
+                        wave_records[index + 1]->source_global_action_id ==
+                            record.source_global_action_id;
+                    const bool local =
+                        local_wait_actions.count(
+                            record.source_global_action_id) != 0;
+                    const bool send_tail =
+                        index + 2 < wave_records.size() &&
+                        wave_records[index + 1]->opcode ==
+                            Opcode::DTE_SEND &&
+                        wave_records[index + 2]->opcode ==
+                            Opcode::DTE_FENCE &&
+                        wave_records[index + 2]->source_global_action_id ==
+                            wave_records[index + 1]->source_global_action_id;
+                    if (local ? (wait_tail || send_tail) :
+                                (wait_tail == send_tail))
+                        Fail("linked_program_manifest.fragments",
+                             "UNFUSED remote WAIT has no exact per-wave tail fence");
+                }
+            }
+            const std::size_t rectangular_ranks =
+                fragment.core_streams.size();
+            const std::size_t rectangular_transports =
+                rectangular_ranks * (rectangular_ranks - 1);
+            std::map<std::string, std::size_t> layouts;
+            for (const BufferAbiDto &abi : fragment.buffer_abi)
+                ++layouts[abi.layout];
+            const std::size_t s0_rs_terminal_roots =
+                static_cast<std::size_t>(std::count_if(
+                    fragment.buffer_abi.begin(), fragment.buffer_abi.end(),
+                    [](const BufferAbiDto &abi) {
+                        return abi.ownership == BufferOwnershipDto::OWNED &&
+                            !abi.alias_of &&
+                            abi.layout == "unfused_comparison_storage/v1" &&
+                            abi.dtype == BufferDTypeDto::FP16 &&
+                            abi.tensor_slice.shape ==
+                                std::vector<uint64_t>{4, 16} &&
+                            abi.size_bytes == 128;
+                    }));
             const std::map<Opcode, std::size_t> ag_opcodes{
                 {Opcode::MATMUL, 2},
                 {Opcode::DTE_SEND, 2},
                 {Opcode::DTE_RECV, 2},
                 {Opcode::DTE_WAIT, 2},
+                {Opcode::DTE_FENCE, 2},
                 {Opcode::SRAM_ALLOC_AT, 6},
                 {Opcode::SRAM_BIND, 2},
                 {Opcode::SRAM_FREE, 6},
@@ -4785,6 +5317,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {Opcode::DTE_ISSUE, 2},
                 {Opcode::DTE_RECV, 2},
                 {Opcode::DTE_WAIT, 4},
+                {Opcode::DTE_FENCE, 2},
                 {Opcode::LOCAL_REDUCE, 2},
                 {Opcode::SRAM_ALLOC_AT, 10},
                 {Opcode::SRAM_BIND, 2},
@@ -4796,6 +5329,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {Opcode::DTE_ISSUE, 2},
                 {Opcode::DTE_RECV, 4},
                 {Opcode::DTE_WAIT, 6},
+                {Opcode::DTE_FENCE, 4},
                 {Opcode::LOCAL_REDUCE, 2},
                 {Opcode::EVENT_SET, 2},
                 {Opcode::EVENT_WAIT, 2},
@@ -4803,11 +5337,20 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {Opcode::SRAM_BIND, 2},
                 {Opcode::SRAM_FREE, 8},
             };
+            const std::map<Opcode, std::size_t> local_copy_opcodes{
+                {Opcode::MATMUL, 1},
+                {Opcode::DTE_ISSUE, 1},
+                {Opcode::DTE_WAIT, 1},
+                {Opcode::SRAM_ALLOC_AT, 4},
+                {Opcode::SRAM_BIND, 1},
+                {Opcode::SRAM_FREE, 4},
+            };
             const std::map<Opcode, std::size_t> scale_ag_opcodes{
                 {Opcode::MATMUL, 4},
                 {Opcode::DTE_SEND, 12},
                 {Opcode::DTE_RECV, 12},
                 {Opcode::DTE_WAIT, 12},
+                {Opcode::DTE_FENCE, 12},
                 {Opcode::SRAM_ALLOC_AT, 12},
                 {Opcode::SRAM_BIND, 4},
                 {Opcode::SRAM_FREE, 12},
@@ -4818,48 +5361,190 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 {Opcode::DTE_ISSUE, 4},
                 {Opcode::DTE_RECV, 12},
                 {Opcode::DTE_WAIT, 16},
+                {Opcode::DTE_FENCE, 12},
                 {Opcode::LOCAL_REDUCE, 12},
                 {Opcode::SRAM_ALLOC_AT, 20},
                 {Opcode::SRAM_BIND, 4},
                 {Opcode::SRAM_FREE, 20},
             };
+            const bool rectangular_rank_range =
+                rectangular_ranks >= 2 && rectangular_ranks <= 100;
+            const std::map<Opcode, std::size_t> rectangular_rs_opcodes{
+                {Opcode::MATMUL, rectangular_ranks},
+                {Opcode::DTE_SEND, rectangular_transports},
+                {Opcode::DTE_ISSUE, rectangular_ranks},
+                {Opcode::DTE_RECV, rectangular_transports},
+                {Opcode::DTE_WAIT, rectangular_transports + rectangular_ranks},
+                {Opcode::DTE_FENCE, rectangular_transports},
+                {Opcode::LOCAL_REDUCE, rectangular_transports},
+                {Opcode::SRAM_ALLOC_AT, 5 * rectangular_ranks},
+                {Opcode::SRAM_BIND, rectangular_ranks},
+                {Opcode::SRAM_FREE, 5 * rectangular_ranks},
+            };
+            const std::map<Opcode, std::size_t> rectangular_ar_opcodes{
+                {Opcode::MATMUL, rectangular_ranks},
+                {Opcode::DTE_SEND, 2 * rectangular_transports},
+                {Opcode::DTE_ISSUE, rectangular_ranks},
+                {Opcode::DTE_RECV, 2 * rectangular_transports},
+                {Opcode::DTE_WAIT,
+                 2 * rectangular_transports + rectangular_ranks},
+                {Opcode::DTE_FENCE, 2 * rectangular_transports},
+                {Opcode::LOCAL_REDUCE, rectangular_transports},
+                {Opcode::EVENT_SET, 2 * (rectangular_ranks - 1)},
+                {Opcode::EVENT_WAIT, 2 * (rectangular_ranks - 1)},
+                {Opcode::SRAM_ALLOC_AT, 4 * rectangular_ranks},
+                {Opcode::SRAM_BIND, rectangular_ranks},
+                {Opcode::SRAM_FREE, 4 * rectangular_ranks},
+            };
+            const std::map<std::string, std::size_t>
+                rectangular_rs_layouts{
+                    {"MH_shard_tp",
+                     rectangular_transports + 4 * rectangular_ranks},
+                    {"unfused_comparison_storage/v1",
+                     5 * rectangular_ranks},
+                    {"MH_feature_tp", rectangular_ranks},
+                    {"MH_partial_tp", rectangular_ranks},
+                    {"KN_row_tp", rectangular_ranks},
+                };
+            const std::map<std::string, std::size_t>
+                rectangular_ar_layouts{
+                    {"flat_transport/v1",
+                     2 * rectangular_transports + 4 * rectangular_ranks},
+                    {"unfused_comparison_storage/v1",
+                     4 * rectangular_ranks},
+                    {"MK_shard_tp", rectangular_ranks},
+                    {"KN_shard_tp", rectangular_ranks},
+                    {"MN_replicated", rectangular_ranks},
+                    {"MN_partial_tp", rectangular_ranks},
+                };
             const bool ag = opcodes == ag_opcodes;
-            const bool rs = opcodes == rs_opcodes;
+            const bool rs =
+                opcodes == rs_opcodes && s0_rs_terminal_roots == 2;
             const bool ar = opcodes == ar_opcodes;
+            const bool local_copy = opcodes == local_copy_opcodes;
             const bool scale_ag = opcodes == scale_ag_opcodes;
-            const bool scale_rs = opcodes == scale_rs_opcodes;
+            const bool scale_rs =
+                opcodes == scale_rs_opcodes &&
+                layouts == rectangular_rs_layouts;
+            const bool rectangular_rs = rectangular_rank_range &&
+                !scale_rs && opcodes == rectangular_rs_opcodes &&
+                layouts == rectangular_rs_layouts;
+            const bool rectangular_ar = rectangular_rank_range &&
+                opcodes == rectangular_ar_opcodes &&
+                layouts == rectangular_ar_layouts;
+            const bool rectangular = rectangular_rs || rectangular_ar;
             const bool scale = scale_ag || scale_rs;
             if (static_cast<unsigned>(ag) +
                     static_cast<unsigned>(rs) +
                     static_cast<unsigned>(ar) +
+                    static_cast<unsigned>(local_copy) +
                     static_cast<unsigned>(scale_ag) +
-                    static_cast<unsigned>(scale_rs) != 1)
+                    static_cast<unsigned>(scale_rs) +
+                    static_cast<unsigned>(rectangular_rs) +
+                    static_cast<unsigned>(rectangular_ar) != 1)
                 Fail("linked_program_manifest.fragments",
                      "UNFUSED comparison opcode quotient does not identify exactly one supported pattern");
+            if (rectangular_ar && rectangular_ranks >= 3) {
+                std::size_t leader_streams = 0;
+                std::size_t peer_streams = 0;
+                for (const CoreFragmentStreamDto &stream :
+                     fragment.core_streams) {
+                    std::vector<Opcode> events;
+                    for (const RelocatableRecordDto &record : stream.records)
+                        if (record.opcode == Opcode::EVENT_SET ||
+                            record.opcode == Opcode::EVENT_WAIT)
+                            events.push_back(record.opcode);
+                    if (events.size() == 2) {
+                        ++peer_streams;
+                        if (events[0] != Opcode::EVENT_SET ||
+                            events[1] != Opcode::EVENT_WAIT)
+                            Fail("linked_program_manifest.fragments",
+                                 "UNFUSED rectangular AR peer barrier must ARRIVE before waiting for RELEASE");
+                        continue;
+                    }
+                    if (events.size() ==
+                        2 * (rectangular_ranks - 1)) {
+                        ++leader_streams;
+                        for (std::size_t index = 0;
+                             index < rectangular_ranks - 1; ++index)
+                            if (events[index] != Opcode::EVENT_WAIT ||
+                                events[index + rectangular_ranks - 1] !=
+                                    Opcode::EVENT_SET)
+                                Fail("linked_program_manifest.fragments",
+                                     "UNFUSED rectangular AR leader must wait for all ARRIVEs before RELEASE");
+                        continue;
+                    }
+                    Fail("linked_program_manifest.fragments",
+                         "UNFUSED rectangular AR barrier phase cardinality is not exact");
+                }
+                if (leader_streams != 1 ||
+                    peer_streams != rectangular_ranks - 1)
+                    Fail("linked_program_manifest.fragments",
+                         "UNFUSED rectangular AR barrier leader/peer quotient is not exact");
+            }
             unfused_s0_ag = ag;
             unfused_s0_rs = rs;
             unfused_s0_ar = ar;
-            const std::size_t expected_records =
-                ag ? 22 : rs ? 36 : ar ? 42 : scale_ag ? 68 : 104;
-            const std::size_t expected_buffers =
-                ag ? 16 : rs ? 26 : ar ? 28 : scale_ag ? 40 : 60;
-            const std::size_t expected_owned =
-                ag ? 2 : rs ? 6 : ar ? 4 : scale_ag ? 4 : 12;
-            const std::size_t expected_borrowed = scale ? 8 : 4;
-            const std::size_t expected_aliased =
-                ag ? 10 : rs ? 16 : ar ? 20 : scale_ag ? 28 : 40;
-            const std::size_t expected_fragment_runtime =
-                ag ? 8 : rs ? 10 : ar ? 24 : scale_ag ? 48 : 52;
-            const std::size_t expected_fragment_program =
-                scale_ag ? 41 : scale_rs ? 73 : 0;
-            const std::size_t expected_runtime =
-                ag ? 10 : rs ? 12 : ar ? 26 : scale_ag ? 52 : 56;
-            const std::size_t expected_program =
-                ag ? 17 : rs ? 27 : ar ? 29 : expected_fragment_program;
-            const std::size_t expected_addresses =
-                ag ? 32 : rs ? 52 : ar ? 50 : scale_ag ? 80 : 136;
-            const std::size_t expected_claims =
-                ag ? 8 : rs ? 12 : ar ? 20 : scale_ag ? 40 : 56;
+            unfused_rectangular_rs = rectangular_rs;
+            const std::size_t expected_records = rectangular_rs
+                ? 14 * rectangular_ranks + 5 * rectangular_transports
+                : rectangular_ar
+                ? 16 * rectangular_ranks + 9 * rectangular_transports - 4
+                : ag ? 24 : rs ? 38 : ar ? 46 : local_copy ? 12 :
+                  scale_ag ? 80 : 116;
+            const std::size_t expected_buffers = rectangular_rs
+                ? rectangular_transports + 12 * rectangular_ranks
+                : rectangular_ar
+                ? 2 * rectangular_transports + 12 * rectangular_ranks
+                : ag ? 16 : rs ? 26 : ar ? 28 : local_copy ? 8 :
+                  scale_ag ? 40 : 60;
+            const std::size_t expected_owned = rectangular_rs
+                ? 3 * rectangular_ranks
+                : rectangular_ar ? 2 * rectangular_ranks
+                : ag ? 2 : rs ? 6 : ar ? 4 : local_copy ? 2 :
+                  scale_ag ? 4 : 12;
+            const std::size_t expected_borrowed = rectangular
+                ? 2 * rectangular_ranks
+                : local_copy ? 2 : scale ? 8 : 4;
+            const std::size_t expected_aliased = rectangular_rs
+                ? rectangular_transports + 7 * rectangular_ranks
+                : rectangular_ar
+                ? 2 * rectangular_transports + 8 * rectangular_ranks
+                : ag ? 10 : rs ? 16 : ar ? 20 : local_copy ? 4 :
+                  scale_ag ? 28 : 40;
+            const std::size_t expected_fragment_runtime = rectangular_rs
+                ? 4 * rectangular_transports + rectangular_ranks
+                : rectangular_ar
+                ? 8 * rectangular_transports + 7 * rectangular_ranks - 6
+                : ag ? 8 : rs ? 10 : ar ? 24 : local_copy ? 1 :
+                  scale_ag ? 48 : 52;
+            const std::size_t expected_fragment_program = rectangular_rs
+                ? 2 * rectangular_transports + 12 * rectangular_ranks + 1
+                : rectangular_ar
+                ? 3 * rectangular_transports + 11 * rectangular_ranks + 1
+                : local_copy ? 9 : scale_ag ? 41 : scale_rs ? 73 : 0;
+            const std::size_t expected_runtime = rectangular_rs
+                ? 4 * rectangular_transports + 2 * rectangular_ranks
+                : rectangular_ar
+                ? 8 * rectangular_transports + 8 * rectangular_ranks - 6
+                : ag ? 10 : rs ? 12 : ar ? 26 : local_copy ? 2 :
+                  scale_ag ? 52 : 56;
+            const std::size_t expected_program = rectangular
+                ? expected_fragment_program
+                : ag ? 17 : rs ? 27 : ar ? 29 : local_copy ? 9 :
+                  expected_fragment_program;
+            const std::size_t expected_addresses = rectangular_rs
+                ? 4 * rectangular_transports + 22 * rectangular_ranks
+                : rectangular_ar
+                ? 6 * rectangular_transports + 19 * rectangular_ranks
+                : ag ? 32 : rs ? 52 : ar ? 50 : local_copy ? 19 :
+                  scale_ag ? 80 : 136;
+            const std::size_t expected_claims = rectangular_rs
+                ? 4 * rectangular_transports + 2 * rectangular_ranks
+                : rectangular_ar
+                ? 7 * rectangular_transports + 3 * rectangular_ranks
+                : ag ? 8 : rs ? 12 : ar ? 20 : local_copy ? 2 :
+                  scale_ag ? 40 : 56;
             std::map<BufferOwnershipDto, std::size_t> ownerships;
             for (const BufferAbiDto &abi : fragment.buffer_abi) {
                 ++ownerships[abi.ownership];
@@ -4878,7 +5563,30 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                  manifest.runtime_symbol_definitions)
                 ++runtime_kinds[definition.symbol.kind];
             const std::map<RuntimeSymbolKindDto, std::size_t>
-                expected_runtime_kinds = scale_ag
+                expected_runtime_kinds = rectangular_rs
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, rectangular_ranks},
+                          {RuntimeSymbolKindDto::DTE_FSM,
+                           rectangular_transports},
+                          {RuntimeSymbolKindDto::DTE_TOKEN,
+                           rectangular_transports + rectangular_ranks},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE,
+                           2 * rectangular_transports},
+                      }
+                    : rectangular_ar
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, rectangular_ranks},
+                          {RuntimeSymbolKindDto::DTE_FSM,
+                           2 * rectangular_transports},
+                          {RuntimeSymbolKindDto::DTE_TOKEN,
+                           2 * rectangular_transports + rectangular_ranks},
+                          {RuntimeSymbolKindDto::RUNTIME_CORE,
+                           4 * rectangular_transports +
+                               4 * rectangular_ranks - 4},
+                          {RuntimeSymbolKindDto::EVENT_TAG,
+                           2 * (rectangular_ranks - 1)},
+                      }
+                    : scale_ag
                     ? std::map<RuntimeSymbolKindDto, std::size_t>{
                           {RuntimeSymbolKindDto::START_TAG, 4},
                           {RuntimeSymbolKindDto::DTE_FSM, 12},
@@ -4906,6 +5614,11 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                           {RuntimeSymbolKindDto::DTE_TOKEN, 4},
                           {RuntimeSymbolKindDto::RUNTIME_CORE, 4},
                       }
+                    : local_copy
+                    ? std::map<RuntimeSymbolKindDto, std::size_t>{
+                          {RuntimeSymbolKindDto::START_TAG, 1},
+                          {RuntimeSymbolKindDto::DTE_TOKEN, 1},
+                      }
                     : std::map<RuntimeSymbolKindDto, std::size_t>{
                           {RuntimeSymbolKindDto::START_TAG, 2},
                           {RuntimeSymbolKindDto::DTE_FSM, 4},
@@ -4920,11 +5633,19 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             const std::map<ProgramSymbolKind, std::size_t>
                 expected_program_kinds{
                     {ProgramSymbolKind::ABSOLUTE_ADDRESS,
-                     ag ? 10U : rs ? 16U : ar ? 20U :
-                     scale_ag ? 28U : 52U},
+                     rectangular_rs
+                         ? 2 * rectangular_transports +
+                               7 * rectangular_ranks
+                         : rectangular_ar
+                         ? 3 * rectangular_transports +
+                               7 * rectangular_ranks
+                         : ag ? 10U : rs ? 16U : ar ? 20U :
+                           local_copy ? 4U : scale_ag ? 28U : 52U},
                     {ProgramSymbolKind::SRAM_LABEL,
+                     rectangular_rs ? 5 * rectangular_ranks :
+                     rectangular_ar ? 4 * rectangular_ranks :
                      ag ? 6U : rs ? 10U : ar ? 8U :
-                     scale_ag ? 12U : 20U},
+                     local_copy ? 4U : scale_ag ? 12U : 20U},
                     {ProgramSymbolKind::SRAM_REGION, 1},
                 };
             if (scale) {
@@ -5117,7 +5838,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             }
             const ProgramControlEnvelopeDto &envelope =
                 manifest.envelope;
-            const std::size_t expected_cores = scale ? 4 : 2;
+            const std::size_t expected_cores =
+                rectangular ? rectangular_ranks : local_copy ? 1 : scale ? 4 : 2;
             if (fragment.core_streams.size() != expected_cores ||
                 records != expected_records ||
                 fragment.claimed_action_ids.size() != expected_claims ||
@@ -5125,7 +5847,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 ownerships != expected_ownerships ||
                 fragment.runtime_symbols.size() !=
                     expected_fragment_runtime ||
-                (scale && fragment.program_symbols.size() !=
+                ((rectangular || scale || local_copy) && fragment.program_symbols.size() !=
                     expected_fragment_program) ||
                 !fragment.state_abi.empty() ||
                 manifest.fragment_interfaces.size() != 1 ||
@@ -5760,6 +6482,11 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         std::map<std::string, const BufferAbiDto *> scale_subview_roots;
         std::map<std::string, std::size_t> moe_subview_alias_counts;
         std::map<std::string, const BufferAbiDto *> moe_subview_roots;
+        std::map<std::string, std::size_t> meshslice_packed_full_counts;
+        std::map<std::string, std::vector<std::pair<uint64_t, uint64_t>>>
+            meshslice_packed_chunk_spans;
+        std::map<std::string, const BufferAbiDto *>
+            meshslice_packed_roots;
         const auto has_root_layout = [](const std::string &layout,
                                         std::string_view prefix) {
             constexpr std::string_view suffix = "_root/v1";
@@ -5810,6 +6537,17 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 root.logical_core == abi.logical_core &&
                 root.region_ref == abi.region_ref &&
                 root.alignment_bytes == abi.alignment_bytes &&
+                root.banks == abi.banks &&
+                root.storage_id == abi.storage_id &&
+                root.dtype == abi.dtype &&
+                root.lifetime_start <= abi.lifetime_start &&
+                root.lifetime_end_exclusive >=
+                    abi.lifetime_end_exclusive;
+            const bool meshslice_common_geometry =
+                root.ownership != BufferOwnershipDto::ALIASED &&
+                !root.alias_of && root.schedule_id == abi.schedule_id &&
+                root.logical_core == abi.logical_core &&
+                root.region_ref == abi.region_ref &&
                 root.banks == abi.banks &&
                 root.storage_id == abi.storage_id &&
                 root.dtype == abi.dtype &&
@@ -5899,6 +6637,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     abi.tensor_slice, abi.dtype,
                     "command_fragment.buffer_abi.unfused_s0_terminal_alias") ==
                     abi.size_bytes;
+            const bool exact_unfused_rectangular_rs_terminal_view =
+                unfused_link && unfused_rectangular_rs && common_geometry &&
+                root.ownership == BufferOwnershipDto::OWNED &&
+                !root.alias_of &&
+                root.layout == "unfused_comparison_storage/v1" &&
+                root.dtype == BufferDTypeDto::FP16 &&
+                root.tensor_slice.value_id == root.value_id &&
+                root.tensor_slice.shape.size() == 2 &&
+                root.tensor_slice.offset.size() == 2 &&
+                abi.layout == "MH_shard_tp" &&
+                abi.tensor_slice.value_id == abi.value_id &&
+                abi.tensor_slice.offset == zero_terminal_offset &&
+                abi.tensor_slice.shape == root.tensor_slice.shape &&
+                root.region_offset_bytes == abi.region_offset_bytes &&
+                root.size_bytes == abi.size_bytes &&
+                tensor_bytes(
+                    root.tensor_slice, root.dtype,
+                    "command_fragment.buffer_abi.unfused_rect_rs_root") ==
+                    root.size_bytes &&
+                tensor_bytes(
+                    abi.tensor_slice, abi.dtype,
+                    "command_fragment.buffer_abi.unfused_rect_rs_alias") ==
+                    abi.size_bytes;
             const bool scale_physical_subview =
                 scale_swizzle_alias_link && common_geometry &&
                 root.region_offset_bytes <= abi.region_offset_bytes &&
@@ -5946,6 +6707,34 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 tensor_bytes(abi.tensor_slice, abi.dtype,
                              "command_fragment.buffer_abi.storage_subview") ==
                     abi.size_bytes;
+            const bool exact_meshslice_packed_subview =
+                swizzle_link && meshslice_common_geometry &&
+                root.ownership == BufferOwnershipDto::BORROWED &&
+                root.layout == "swizzle_meshslice_packed_root/v1" &&
+                (abi.layout ==
+                     "swizzle_meshslice_packed_full_view/v1" ||
+                 abi.layout == "swizzle_meshslice_packed_chunk/v1") &&
+                abi.alignment_bytes ==
+                    (abi.layout ==
+                         "swizzle_meshslice_packed_full_view/v1"
+                         ? root.alignment_bytes
+                         : std::gcd(root.alignment_bytes,
+                                    abi.size_bytes)) &&
+                root.region_offset_bytes <= abi.region_offset_bytes &&
+                CheckedAdd(
+                    abi.region_offset_bytes, abi.size_bytes,
+                    "command_fragment.buffer_abi.meshslice_packed_view") <=
+                    CheckedAdd(
+                        root.region_offset_bytes, root.size_bytes,
+                        "command_fragment.buffer_abi.meshslice_packed_root") &&
+                tensor_bytes(
+                    root.tensor_slice, root.dtype,
+                    "command_fragment.buffer_abi.meshslice_packed_root") ==
+                    root.size_bytes &&
+                tensor_bytes(
+                    abi.tensor_slice, abi.dtype,
+                    "command_fragment.buffer_abi.meshslice_packed_view") ==
+                    abi.size_bytes;
             bool exact_moe_subview =
                 moe_swizzle_link &&
                 root.ownership != BufferOwnershipDto::ALIASED &&
@@ -5978,8 +6767,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 !exact_unfused_value_view &&
                 !exact_scale_unfused_value_view &&
                 !exact_unfused_s0_terminal_view &&
+                !exact_unfused_rectangular_rs_terminal_view &&
                 !exact_scale_terminal_subview &&
                 !exact_scale_storage_subview &&
+                !exact_meshslice_packed_subview &&
                 !exact_moe_subview)
                 Fail("command_fragment.buffer_abi",
                      "aliased BufferABI must preserve one enclosing canonical root geometry");
@@ -5995,6 +6786,20 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             if (exact_scale_storage_subview) {
                 ++scale_storage_alias_counts[*abi.alias_of];
                 scale_subview_roots.emplace(*abi.alias_of, &root);
+            }
+            if (exact_meshslice_packed_subview) {
+                const auto inserted =
+                    meshslice_packed_roots.emplace(*abi.alias_of, &root);
+                if (!inserted.second && inserted.first->second != &root)
+                    Fail("command_fragment.buffer_abi",
+                         "MeshSlice packed views disagree on canonical root");
+                if (abi.layout ==
+                    "swizzle_meshslice_packed_full_view/v1")
+                    ++meshslice_packed_full_counts[*abi.alias_of];
+                else
+                    meshslice_packed_chunk_spans[*abi.alias_of].push_back(
+                        {abi.region_offset_bytes - root.region_offset_bytes,
+                         abi.size_bytes});
             }
             if (exact_moe_subview) {
                 ++moe_subview_alias_counts[*abi.alias_of];
@@ -6138,6 +6943,62 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     Fail("command_fragment.buffer_abi",
                          "MoE root requires one or more exact typed subviews");
             }
+            if (root.layout == "swizzle_meshslice_packed_root/v1") {
+                if (!swizzle_link || root.alias_of ||
+                    root.ownership != BufferOwnershipDto::BORROWED)
+                    Fail("command_fragment.buffer_abi",
+                         "MeshSlice packed root is reserved for exact borrowed Swizzle standard storage");
+                const auto tracked =
+                    meshslice_packed_roots.find(root.binding_id);
+                const auto full =
+                    meshslice_packed_full_counts.find(root.binding_id);
+                const auto chunks =
+                    meshslice_packed_chunk_spans.find(root.binding_id);
+                if (tracked == meshslice_packed_roots.end() ||
+                    tracked->second != &root ||
+                    full == meshslice_packed_full_counts.end() ||
+                    full->second != 1 ||
+                    chunks == meshslice_packed_chunk_spans.end() ||
+                    chunks->second.empty())
+                    Fail("command_fragment.buffer_abi",
+                         "MeshSlice packed root requires one full view and chunks");
+                const auto full_view = std::find_if(
+                    known_buffer_abi.begin(), known_buffer_abi.end(),
+                    [&](const auto &candidate) {
+                        const BufferAbiDto &abi = *candidate.second;
+                        return abi.alias_of &&
+                            *abi.alias_of == root.binding_id &&
+                            abi.layout ==
+                                "swizzle_meshslice_packed_full_view/v1";
+                    });
+                if (full_view == known_buffer_abi.end() ||
+                    full_view->second->region_offset_bytes !=
+                        root.region_offset_bytes ||
+                    full_view->second->size_bytes != root.size_bytes)
+                    Fail("command_fragment.buffer_abi",
+                         "MeshSlice packed full view must exactly span root");
+                auto spans = chunks->second;
+                std::sort(spans.begin(), spans.end());
+                uint64_t cursor = 0;
+                for (const auto &[offset, size] : spans) {
+                    if (offset != cursor)
+                        Fail("command_fragment.buffer_abi",
+                             "MeshSlice packed chunks must uniquely cover root");
+                    cursor = CheckedAdd(
+                        cursor, size,
+                        "command_fragment.buffer_abi.meshslice_packed_cover");
+                }
+                if (cursor != root.size_bytes)
+                    Fail("command_fragment.buffer_abi",
+                         "MeshSlice packed chunks must uniquely cover root");
+                continue;
+            }
+            if ((root.layout == "swizzle_meshslice_packed_full_view/v1" ||
+                 root.layout == "swizzle_meshslice_packed_chunk/v1") &&
+                (!root.alias_of ||
+                 root.ownership != BufferOwnershipDto::ALIASED))
+                Fail("command_fragment.buffer_abi",
+                     "MeshSlice packed view layouts are reserved for exact aliases");
             if (root.alias_of ||
                 (root.layout != "swizzle_standard_terminal_root/v1" &&
                  root.layout != "swizzle_standard_storage_root/v1"))
@@ -6749,6 +7610,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         moe_swizzle_link,
                         moe_swizzle_c1_matmul_bind,
                         moe_calibration_link,
+                        flexible_dense_backward_link,
+                        unfused_link,
                         moe_terminal_labels);
                 }();
             std::size_t persistent_tape_allocations = 0;
@@ -7074,10 +7937,55 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                             return (c >= 48 && c <= 57) ||
                                    (c >= 97 && c <= 102);
                         });
+                const bool exact_unfused_rectangular_rs_reduce_span_source =
+                    unfused_rectangular_rs &&
+                    owner_fragment != fragments.end() &&
+                    owner_fragment->second->kind ==
+                        FragmentKindDto::UNFUSED_COMPARISON &&
+                    record.opcode == Opcode::LOCAL_REDUCE &&
+                    binding.operand_id ==
+                        SemanticOperandId::SOURCE_ADDRESS &&
+                    abis.size() == 2 &&
+                    abis[0]->ownership == BufferOwnershipDto::ALIASED &&
+                    abis[1]->ownership == BufferOwnershipDto::ALIASED &&
+                    abis[0]->alias_of && abis[1]->alias_of &&
+                    abis[0]->alias_of != abis[1]->alias_of &&
+                    abis[0]->layout == "MH_shard_tp" &&
+                    abis[1]->layout == "MH_shard_tp" &&
+                    abis[0]->dtype == BufferDTypeDto::FP16 &&
+                    abis[1]->dtype == BufferDTypeDto::FP16 &&
+                    abis[0]->size_bytes == abis[1]->size_bytes &&
+                    abis[0]->tensor_slice.offset ==
+                        std::vector<uint64_t>{0, 0} &&
+                    abis[1]->tensor_slice.offset ==
+                        std::vector<uint64_t>{0, 0} &&
+                    abis[0]->tensor_slice.shape ==
+                        abis[1]->tensor_slice.shape &&
+                    abis[0]->tensor_slice.shape.size() == 2 &&
+                    tensor_bytes(
+                        abis[0]->tensor_slice, abis[0]->dtype,
+                        "unfused_rect_rs.reduce_span") ==
+                        abis[0]->size_bytes &&
+                    abis[0]->region_ref == abis[1]->region_ref &&
+                    abis[0]->logical_core == abis[1]->logical_core &&
+                    source_ref.size() ==
+                        kUnfusedReduceSpanPrefix.size() + 16 &&
+                    source_ref.compare(
+                        0, kUnfusedReduceSpanPrefix.size(),
+                        kUnfusedReduceSpanPrefix) == 0 &&
+                    std::all_of(
+                        source_ref.begin() +
+                            kUnfusedReduceSpanPrefix.size(),
+                        source_ref.end(), [](char c) {
+                            return std::isdigit(
+                                       static_cast<unsigned char>(c)) ||
+                                   (c >= 'a' && c <= 'f');
+                        });
                 if ((!exact_symbol_source &&
                      !exact_swizzle_reduce_span_source &&
                      !exact_unfused_reduce_span_source &&
                      !exact_unfused_s0_rs_reduce_span_source &&
+                     !exact_unfused_rectangular_rs_reduce_span_source &&
                      !exact_scale_unfused_reduce_span_source) ||
                     definition.value != region->value + span_offset ||
                     definition.size_bytes != span_size ||

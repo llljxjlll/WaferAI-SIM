@@ -1,4 +1,4 @@
-"""Fail-closed production bridge for 2x2 MeshSlice output-stationary plans."""
+"""Fail-closed production bridge for rectangular MeshSlice OS plans."""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ from collections import Counter
 from dataclasses import dataclass
 
 from ..errors import SchemaError
+from ..schema._validation_session import builder_validation_session
 from ..passes.project_swizzle_ir2 import project_swizzle_adapter
 from ..policies.swizzle.cost import build_unfused_baseline
 from ..policies.swizzle.decide import decide_swizzle
 from ..policies.swizzle.enumerate import materialize_drafts
 from ..policies.swizzle.materialize import materialize_swizzle_selection
 from ..policies.swizzle.materialize_ir1 import materialize_swizzle_plan
-from ..policies.swizzle.meshslice_2d import generate_meshslice_2d_drafts
+from ..policies.swizzle.meshslice_2d import (
+    generate_meshslice_2d_drafts,
+    meshslice_execution_mode,
+    MeshSliceExecutionMode,
+)
 from ..policies.swizzle.problem import build_swizzle_problem
 from ..schema.artifact_manifest import RecordOpcode
 from ..schema.common import MeshAxisName, validate_uint64
@@ -40,7 +45,9 @@ from ..schema.swizzle_operand_abi import build_swizzle_operand_abi
 from ..schema.swizzle_standard import SwizzleStandardLinkedProgram
 from .swizzle import lower_swizzle_projection
 from .swizzle_abi import allocate_swizzle_core_address_abi
-from .swizzle_standard import link_swizzle_standard_program
+from .swizzle_standard import (
+    _link_swizzle_standard_program_prevalidated,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +55,9 @@ class MeshSlice2DStandardAudit:
     """Observable compression boundary of one standard MeshSlice manifest."""
 
     ranks: int
+    rows: int
+    columns: int
+    mode: MeshSliceExecutionMode
     chunks: int
     row_flows: int
     column_flows: int
@@ -59,8 +69,15 @@ class MeshSlice2DStandardAudit:
     event_records: int
 
     def validate(self, path: str = "meshslice_standard_audit") -> None:
+        if type(self.mode) is not MeshSliceExecutionMode:
+            raise SchemaError(
+                "requires an exact MeshSlice execution mode",
+                path=f"{path}.mode",
+            )
         for name in (
             "ranks",
+            "rows",
+            "columns",
             "chunks",
             "row_flows",
             "column_flows",
@@ -72,18 +89,38 @@ class MeshSlice2DStandardAudit:
             "event_records",
         ):
             validate_uint64(getattr(self, name), f"{path}.{name}")
-        if self.ranks != 4 or self.chunks < 2:
-            raise SchemaError(
-                "production MeshSlice audit requires four ranks and multiple chunks",
-                path=path,
-            )
-        expected_direction_flows = self.ranks * self.chunks
         if (
-            self.row_flows != expected_direction_flows
-            or self.column_flows != expected_direction_flows
+            self.rows < 1
+            or self.columns < 1
+            or self.rows > 10
+            or self.columns > 10
+            or self.ranks != self.rows * self.columns
+            or self.ranks > 100
+            or self.chunks < 1
         ):
             raise SchemaError(
-                "every rank/chunk must expose one row and one column flow",
+                "production MeshSlice audit requires one complete rectangle within 10x10",
+                path=path,
+            )
+        if self.mode is not meshslice_execution_mode(
+            self.rows, self.columns
+        ):
+            raise SchemaError(
+                "execution mode disagrees with rectangle dimensions",
+                path=f"{path}.mode",
+            )
+        expected_row_flows = (
+            self.chunks * self.ranks * (self.columns - 1)
+        )
+        expected_column_flows = (
+            self.chunks * self.ranks * (self.rows - 1)
+        )
+        if (
+            self.row_flows != expected_row_flows
+            or self.column_flows != expected_column_flows
+        ):
+            raise SchemaError(
+                "every rank/chunk must expose every row and column peer flow",
                 path=path,
             )
         if (
@@ -112,6 +149,7 @@ class MeshSlice2DStandardAudit:
             )
 
 
+@builder_validation_session()
 def decide_meshslice_2d_standard(
     ir1: IR1,
     fused_op: FusedOpSkeleton,
@@ -229,17 +267,29 @@ def _validate_2d_contract(
     candidate: SwizzleCandidate,
 ) -> None:
     topology = candidate.topology_witness
+    row_count = len(topology.row_orders)
+    column_count = len(topology.column_orders)
+    rank_count = row_count * column_count
     if (
         topology.kind is not SwizzleTopologyKind.RECTANGLE_2D
-        or len(topology.row_orders) != 2
-        or any(len(row) != 2 for row in topology.row_orders)
-        or len(topology.column_orders) != 2
-        or any(len(column) != 2 for column in topology.column_orders)
-        or set(topology.rank_order) != set(range(4))
-        or candidate.chunk_count < 2
+        or row_count < 1
+        or column_count < 1
+        or row_count > 10
+        or column_count > 10
+        or rank_count > 100
+        or any(
+            len(row) != column_count
+            for row in topology.row_orders
+        )
+        or any(
+            len(column) != row_count
+            for column in topology.column_orders
+        )
+        or set(topology.rank_order) != set(range(rank_count))
+        or candidate.chunk_count < 1
     ):
         raise SchemaError(
-            "production MeshSlice requires an exact 2x2 rectangle and multiple K slices",
+            "production MeshSlice requires one complete rectangle within 10x10",
             path="candidate.topology_witness",
         )
     group = next(
@@ -250,9 +300,13 @@ def _validate_2d_contract(
         ),
         None,
     )
-    if group is None or group.logical_shape != (2, 2):
+    if group is None or group.logical_shape != (
+        row_count,
+        column_count,
+    ):
         raise SchemaError(
-            "production MeshSlice requires a typed 2x2 physical group",
+            "production MeshSlice requires a typed 2x2 physical group or "
+            "a matching rectangular physical group",
             path="ir1.groups",
         )
     dies = {item.id: item for item in ir1.fabric.dies}
@@ -264,9 +318,9 @@ def _validate_2d_contract(
     rows = tuple(tuple(physical[(x, y)] for x in xs) for y in ys)
     columns = tuple(tuple(physical[(x, y)] for y in ys) for x in xs)
     if (
-        len(physical) != 4
-        or len(xs) != 2
-        or len(ys) != 2
+        len(physical) != rank_count
+        or len(xs) != column_count
+        or len(ys) != row_count
         or topology.row_orders != rows
         or topology.column_orders != columns
     ):
@@ -302,24 +356,37 @@ def _validate_2d_contract(
     actions_by_rank = {
         program.rank: program.actions for program in candidate.rank_programs
     }
-    for rank in range(4):
+    if set(actions_by_rank) != set(range(rank_count)):
+        raise SchemaError(
+            "MeshSlice rank programs must exactly cover the rectangle",
+            path="candidate.rank_programs",
+        )
+    for rank in range(rank_count):
         row = next(item for item in rows if rank in item)
         column = next(item for item in columns if rank in item)
-        row_peer = next(item for item in row if item != rank)
-        column_peer = next(item for item in column if item != rank)
+        row_peers = {item for item in row if item != rank}
+        column_peers = {item for item in column if item != rank}
+        expected_peers = row_peers | column_peers
         output_ref = f"buffer.meshslice.rank.{rank}.output"
         requirements = {
             item.buffer_ref: item
             for item in candidate.buffer_requirements
             if item.rank == rank
         }
+        double_buffered_inputs = candidate.chunk_count > 1
         if (
-            not requirements[f"buffer.meshslice.rank.{rank}.lhs"].double_buffered
-            or not requirements[f"buffer.meshslice.rank.{rank}.rhs"].double_buffered
+            requirements[
+                f"buffer.meshslice.rank.{rank}.lhs"
+            ].double_buffered
+            is not double_buffered_inputs
+            or requirements[
+                f"buffer.meshslice.rank.{rank}.rhs"
+            ].double_buffered
+            is not double_buffered_inputs
             or requirements[output_ref].double_buffered
         ):
             raise SchemaError(
-                "MeshSlice must retain two input slots and one stationary output",
+                "MeshSlice input slots must match slice reuse and output must remain stationary",
                 path="candidate.buffer_requirements",
             )
         prior_compute = None
@@ -350,22 +417,31 @@ def _validate_2d_contract(
                 if action.kind is SwizzleActionKind.COMP
             )
             if (
-                len(sends) != 2
-                or {item.peer_rank for item in sends} !=
-                    {row_peer, column_peer}
-                or len(receives) != 2
-                or {item.peer_rank for item in receives} !=
-                    {row_peer, column_peer}
-                or len(waits) != 2
+                len(sends) != len(expected_peers)
+                or {item.peer_rank for item in sends} != expected_peers
+                or len(receives) != len(expected_peers)
+                or {item.peer_rank for item in receives} != expected_peers
+                or len(waits) != len(expected_peers)
                 or len(computes) != 1
-                or sends[0].deps != sends[1].deps
+                or (
+                    sends
+                    and len({item.deps for item in sends}) != 1
+                )
             ):
                 raise SchemaError(
                     "every rank/chunk must expose independent row/column traffic",
                     path="candidate.rank_programs",
                 )
-            row_resources = set(routes[(rank, row_peer)].resource_ids)
-            column_resources = set(routes[(rank, column_peer)].resource_ids)
+            row_resources = {
+                resource
+                for peer in row_peers
+                for resource in routes[(rank, peer)].resource_ids
+            }
+            column_resources = {
+                resource
+                for peer in column_peers
+                for resource in routes[(rank, peer)].resource_ids
+            }
             if row_resources.intersection(column_resources):
                 raise SchemaError(
                     "row and column sends must use disjoint physical resources",
@@ -399,6 +475,13 @@ def audit_meshslice_2d_standard_program(
     source: SwizzleStandardLinkedProgram,
 ) -> MeshSlice2DStandardAudit:
     source.validate_against()
+    return _audit_meshslice_2d_standard_program_prevalidated(source)
+
+
+
+def _audit_meshslice_2d_standard_program_prevalidated(
+    source: SwizzleStandardLinkedProgram,
+) -> MeshSlice2DStandardAudit:
     candidate = source.plan.candidate
     rows = candidate.topology_witness.row_orders
     columns = candidate.topology_witness.column_orders
@@ -442,6 +525,9 @@ def audit_meshslice_2d_standard_program(
     }
     result = MeshSlice2DStandardAudit(
         ranks=len(source.projection.rank_dags),
+        rows=len(rows),
+        columns=len(columns),
+        mode=meshslice_execution_mode(len(rows), len(columns)),
         chunks=candidate.chunk_count,
         row_flows=row_flows,
         column_flows=column_flows,
@@ -461,13 +547,14 @@ def audit_meshslice_2d_standard_program(
     return result
 
 
+@builder_validation_session()
 def link_meshslice_2d_standard_program(
     ir1: IR1,
     decision: SwizzleDecision,
     *,
     candidate_ref: str,
 ) -> tuple[SwizzleStandardLinkedProgram, MeshSlice2DStandardAudit]:
-    """Close one ranked 2x2 MeshSlice candidate through the standard manifest."""
+    """Close one ranked rectangular MeshSlice candidate through the manifest."""
 
     ir1.validate("ir1")
     candidate = _selected_meshslice(decision, candidate_ref)
@@ -488,7 +575,13 @@ def link_meshslice_2d_standard_program(
         ir1.profile,
         deployment_selection=selection,
     )
-    projection = project_swizzle_adapter(adapter)
+    group = next(item for item in ir1.groups if item.id == plan.group_ref)
+    projection = project_swizzle_adapter(
+        adapter,
+        rank_die_ids={
+            item.rank: item.die_id for item in group.placements
+        },
+    )
     lowered = lower_swizzle_projection(plan, projection)
     core_abi = allocate_swizzle_core_address_abi(
         ir1, plan, projection
@@ -496,10 +589,10 @@ def link_meshslice_2d_standard_program(
     operand_abi = build_swizzle_operand_abi(
         ir1, plan, projection
     )
-    source = link_swizzle_standard_program(
+    source = _link_swizzle_standard_program_prevalidated(
         ir1, plan, projection, lowered, core_abi, operand_abi
     )
-    return source, audit_meshslice_2d_standard_program(source)
+    return source, _audit_meshslice_2d_standard_program_prevalidated(source)
 
 
 __all__ = [

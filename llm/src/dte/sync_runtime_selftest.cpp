@@ -168,9 +168,21 @@ void TestRegistryAndPureFailures(Checks &checks,
     checks.Reject("out-of-range member", [] {
         CoreGroupRegistry({{1, {8}}}, 8, 8);
     });
-    checks.Reject("cross-die group", [] {
-        CoreGroupRegistry({{1, {0, 8}}}, 16, 8);
+    checks.Reject("unsorted group members", [] {
+        CoreGroupRegistry({{1, {8, 0}}}, 16, 8);
     });
+    const CoreGroupRegistry cross_die({{1, {0, 8}}}, 16, 8);
+    checks.Check(cross_die.Members(1) == std::vector<uint16_t>({0, 8}) &&
+                     cross_die.RankOf(1, 8) == 1,
+                 "sorted cross-die group is accepted");
+    std::vector<uint16_t> hundred_members;
+    for (uint16_t core = 0; core < 100; ++core)
+        hundred_members.push_back(core);
+    const CoreGroupRegistry hundred(
+        {{100, std::move(hundred_members)}}, 100, 1);
+    checks.Check(hundred.Members(100).size() == 100 &&
+                     hundred.RankOf(100, 99) == 99,
+                 "cross-die N=100 group preserves u16 ranks");
     checks.Reject("invalid group topology", [] {
         CoreGroupRegistry({{1, {0}}}, 10, 8);
     });

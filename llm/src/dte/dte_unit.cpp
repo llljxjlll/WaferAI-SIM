@@ -51,6 +51,7 @@ DTEUnit::DTEUnit(const sc_module_name &name, const DTEConfig &config,
     resource_owners_.fill(nullptr);
     statistics_.area_um2 = computeAreaUm2();
     SC_THREAD(scheduler);
+    SC_THREAD(cleanupRetired);
 }
 
 void DTEUnit::ValidateConfig(const DTEConfig &config) {
@@ -202,6 +203,7 @@ bool DTEUnit::Cancel(uint64_t xfer_id) {
         --inflight_count_;
         ++statistics_.cancelled;
         traceStage(*ctx, "DTE_cancel", "E");
+        ctx->done.notify(SC_ZERO_TIME);
         credit_available_.notify(SC_ZERO_TIME);
         state_changed_.notify(SC_ZERO_TIME);
         return true;
@@ -216,10 +218,25 @@ bool DTEUnit::Release(uint64_t xfer_id) {
         if ((*it)->state != DteTransferState::COMPLETED &&
             (*it)->state != DteTransferState::CANCELLED)
             return false;
-        contexts_.erase(it);
+        if ((*it)->state == DteTransferState::CANCELLED) {
+            retired_contexts_.splice(retired_contexts_.end(), contexts_, it);
+            retired_changed_.notify(SC_ZERO_TIME);
+        } else {
+            contexts_.erase(it);
+        }
         return true;
     }
     return false;
+}
+
+void DTEUnit::cleanupRetired() {
+    while (true) {
+        wait(retired_changed_);
+        // Keep cancelled contexts alive for an extra delta so all waiters on
+        // `done` can observe CANCELLED without dereferencing freed storage.
+        wait(SC_ZERO_TIME);
+        retired_contexts_.clear();
+    }
 }
 
 sc_time DTEUnit::launchTime() const {
@@ -412,6 +429,7 @@ bool DTEUnit::finishPortServices() {
         last_completion_time_ = now;
         traceStatistics(*ctx);
         credit_available_.notify(SC_ZERO_TIME);
+        state_changed_.notify(SC_ZERO_TIME);
         progressed = true;
     }
     return progressed;

@@ -8,6 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from ..errors import SchemaError
+from ._validation_session import mark_validation_complete, validation_seen
 from .action import StandaloneCollectivePlan
 from .common import DType, stable_artifact_id, validate_nonempty, validate_uint64
 from .global_action import GlobalActionDAG
@@ -967,6 +968,8 @@ class TrainProjectedReplica:
         }
 
     def validate(self, path: str) -> None:
+        if validation_seen(self, "train_projected_replica"):
+            return
         validate_uint64(self.replica_index, f"{path}.replica_index")
         validate_nonempty(
             self.source_replica_plan_id,
@@ -1124,6 +1127,7 @@ class TrainProjectedReplica:
                 f"unstable replica id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_projected_replica")
 
     def validate_against(
         self,
@@ -1207,6 +1211,8 @@ class TrainProjectedIR2:
         }
 
     def validate(self, path: str = "train_projected_ir2") -> None:
+        if validation_seen(self, "train_projected_ir2"):
+            return
         if self.schema_version != TRAIN_PROJECTED_IR2_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         if self.producer_pass != "train_project_to_ir2":
@@ -1285,6 +1291,7 @@ class TrainProjectedIR2:
                 f"unstable artifact id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_projected_ir2")
 
     def validate_against(
         self,
@@ -1606,8 +1613,9 @@ class TrainScheduledReplica:
             "projected_id": self.projected.id,
             "schedule_set_id": self.schedule_set.id,
         }
-
     def validate(self, path: str) -> None:
+        if validation_seen(self, "train_scheduled_replica"):
+            return
         validate_uint64(self.replica_index, f"{path}.replica_index")
         validate_nonempty(
             self.source_projected_replica_id,
@@ -1818,6 +1826,7 @@ class TrainScheduledReplica:
                 f"unstable replica id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_scheduled_replica")
 
     def validate_against(
         self,
@@ -1900,6 +1909,8 @@ class TrainScheduledIR2:
         }
 
     def validate(self, path: str = "train_scheduled_ir2") -> None:
+        if validation_seen(self, "train_scheduled_ir2"):
+            return
         if self.schema_version != TRAIN_SCHEDULED_IR2_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         if self.producer_pass != "train_intra_die_schedule":
@@ -1980,6 +1991,7 @@ class TrainScheduledIR2:
                 f"unstable artifact id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+        mark_validation_complete(self, "train_scheduled_ir2")
 
     def validate_against(
         self,
