@@ -17,13 +17,18 @@ EXTERNAL_DMA_ACTION_GRAPH_SCHEMA_VERSION = (
     "wafer_frontend.external_dma_action_graph/v1alpha1"
 )
 EXTERNAL_DMA_RUNTIME_BINDING_SCHEMA_VERSION = (
-    "wafer_frontend.external_dma_runtime_binding/v1alpha1"
+    "wafer_frontend.external_dma_runtime_binding/v1alpha2"
 )
 
 
 class ExternalDmaBoundActionKind(str, Enum):
     DMA_TRANSFER = "dma_transfer"
     LOGICAL_OPERATION = "logical_operation"
+
+
+class ExternalDmaRuntimePhaseMode(str, Enum):
+    EXECUTE_ALL_BEFORE_COMPUTE = "execute_all_before_compute"
+    BRING_IN_THEN_FINAL_WRITEBACK = "bring_in_then_final_writeback"
 
 
 def _digest(value: str, path: str) -> None:
@@ -176,6 +181,7 @@ class ExternalDmaRuntimeBinding:
     id: str
     action_graph_digest: str
     program_relative_path: str
+    phase_mode: ExternalDmaRuntimePhaseMode
     case_digest: str
     request_digest: str
     logical_graph_digest: str
@@ -183,7 +189,7 @@ class ExternalDmaRuntimeBinding:
     blocking_offload_plan_digest: str
 
     @classmethod
-    def create(cls, **key: str) -> "ExternalDmaRuntimeBinding":
+    def create(cls, **key: object) -> "ExternalDmaRuntimeBinding":
         result = cls(
             schema_version=EXTERNAL_DMA_RUNTIME_BINDING_SCHEMA_VERSION,
             id=stable_artifact_id(
@@ -210,6 +216,11 @@ class ExternalDmaRuntimeBinding:
         validate_nonempty(self.program_relative_path, f"{path}.program_relative_path")
         if self.program_relative_path != "artifacts/external_dma_program.json":
             raise SchemaError("unsupported program path", path=f"{path}.program_relative_path")
+        if type(self.phase_mode) is not ExternalDmaRuntimePhaseMode:
+            raise SchemaError(
+                "must be an ExternalDmaRuntimePhaseMode",
+                path=f"{path}.phase_mode",
+            )
         expected = stable_artifact_id(
             "external_dma_runtime_binding", self._key(),
             schema_version=EXTERNAL_DMA_RUNTIME_BINDING_SCHEMA_VERSION,
@@ -225,4 +236,5 @@ __all__ = [
     "ExternalDmaBoundAction",
     "ExternalDmaBoundActionKind",
     "ExternalDmaRuntimeBinding",
+    "ExternalDmaRuntimePhaseMode",
 ]

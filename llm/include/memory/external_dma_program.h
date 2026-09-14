@@ -16,7 +16,12 @@ namespace external_memory {
 inline constexpr const char *kExternalDmaProgramSchemaVersion =
     "wafer_frontend.external_dma_program/v1alpha1";
 inline constexpr const char *kExternalDmaRuntimeBindingSchemaVersion =
-    "wafer_frontend.external_dma_runtime_binding/v1alpha1";
+    "wafer_frontend.external_dma_runtime_binding/v1alpha2";
+
+enum class ExternalDmaRuntimePhaseMode {
+    kExecuteAllBeforeCompute,
+    kBringInThenFinalWriteback,
+};
 
 struct DmaBackendBinding {
     std::string id;
@@ -86,6 +91,8 @@ struct ExternalDmaRuntimeBinding {
     std::string id;
     std::string action_graph_digest;
     std::filesystem::path program_relative_path;
+    ExternalDmaRuntimePhaseMode phase_mode =
+        ExternalDmaRuntimePhaseMode::kExecuteAllBeforeCompute;
     ExternalDmaExpectedSource expected_source;
 };
 
@@ -125,11 +132,16 @@ public:
         const sc_core::sc_module_name &name,
         ExternalDmaProgram program,
         std::map<HbmEndpoint, HBMBackend *> hbm_backends,
-        sc_core::sc_time cycle_time);
+        sc_core::sc_time cycle_time,
+        ExternalDmaRuntimePhaseMode phase_mode =
+            ExternalDmaRuntimePhaseMode::kExecuteAllBeforeCompute);
     ~ExternalDmaProgramExecutor() override;
 
     std::optional<ExternalDmaProgramExecution> Poll() const;
     ExternalDmaProgramExecution Wait();
+    RuntimeStats WaitForBringIn();
+    void ReleaseFinalWriteback();
+    const std::string &ProgramRef() const noexcept { return program_.id; }
     const sc_core::sc_event &CompletionEvent() const;
 
 private:
@@ -139,7 +151,14 @@ private:
     std::unique_ptr<ExternalMemoryRuntimeBridge> runtime_;
     std::optional<ExternalDmaProgramExecution> execution_;
     sc_core::sc_event done_;
+    sc_core::sc_event bring_in_ready_event_;
+    sc_core::sc_event final_writeback_gate_;
     sc_core::sc_time cycle_time_;
+    ExternalDmaRuntimePhaseMode phase_mode_;
+    RuntimeStats bring_in_stats_;
+    bool bring_in_ready_ = false;
+    bool final_writeback_released_ = false;
+    std::string phase_error_;
 };
 
 } // namespace external_memory

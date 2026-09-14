@@ -865,7 +865,7 @@ ExternalDmaRuntimeBinding LoadExternalDmaRuntimeBinding(
     ExactObject(
         value, object_path,
         {"schema_version", "id", "action_graph_digest",
-         "program_relative_path", "case_digest", "request_digest",
+         "program_relative_path", "phase_mode", "case_digest", "request_digest",
          "logical_graph_digest", "source_memory_plan_digest",
          "blocking_offload_plan_digest"});
     const std::string schema_version = String(
@@ -891,6 +891,17 @@ ExternalDmaRuntimeBinding LoadExternalDmaRuntimeBinding(
             object_path + ".program_relative_path",
             "must be artifacts/external_dma_program.json");
     result.program_relative_path = program_relative_path;
+    const std::string phase_mode = String(
+        Field(value, "phase_mode", object_path),
+        object_path + ".phase_mode");
+    if (phase_mode == "execute_all_before_compute")
+        result.phase_mode =
+            ExternalDmaRuntimePhaseMode::kExecuteAllBeforeCompute;
+    else if (phase_mode == "bring_in_then_final_writeback")
+        result.phase_mode =
+            ExternalDmaRuntimePhaseMode::kBringInThenFinalWriteback;
+    else
+        Fail(object_path + ".phase_mode", "unsupported phase mode");
     result.expected_source = {
         String(
             Field(value, "case_digest", object_path),
@@ -929,7 +940,8 @@ ExternalDmaProgramExecutor::ExternalDmaProgramExecutor(
     const sc_core::sc_module_name &name,
     ExternalDmaProgram program,
     std::map<HbmEndpoint, HBMBackend *> hbm_backends,
-    sc_core::sc_time cycle_time)
+    sc_core::sc_time cycle_time,
+    ExternalDmaRuntimePhaseMode phase_mode)
     : sc_core::sc_module(name),
       program_(std::move(program)),
       runtime_(std::make_unique<ExternalMemoryRuntimeBridge>(
@@ -937,10 +949,31 @@ ExternalDmaProgramExecutor::ExternalDmaProgramExecutor(
           program_.fabric,
           ResolveBackends(program_, hbm_backends),
           cycle_time)),
-      cycle_time_(cycle_time) {
+      cycle_time_(cycle_time), phase_mode_(phase_mode) {
     if (cycle_time_ <= sc_core::SC_ZERO_TIME)
         throw std::invalid_argument(
             "external DMA executor cycle time must be > 0");
+    if (phase_mode_ ==
+        ExternalDmaRuntimePhaseMode::kBringInThenFinalWriteback) {
+        bool saw_bring_in = false;
+        bool saw_writeback = false;
+        for (const auto &descriptor : program_.descriptors) {
+            if (descriptor.direction ==
+                TransferDirection::kExternalToHbm) {
+                if (saw_writeback)
+                    throw std::invalid_argument(
+                        "external DMA split phases must order all bring-ins "
+                        "before final writebacks");
+                saw_bring_in = true;
+            } else {
+                saw_writeback = true;
+            }
+        }
+        if (!saw_bring_in || !saw_writeback)
+            throw std::invalid_argument(
+                "external DMA split phases require both bring-in and "
+                "dirty-writeback descriptors");
+    }
     SC_THREAD(Run);
 }
 
@@ -956,6 +989,21 @@ void ExternalDmaProgramExecutor::Run() {
                 seed.address, seed.payload);
         std::set<std::string> completed;
         for (const auto &descriptor : program_.descriptors) {
+            if (phase_mode_ ==
+                    ExternalDmaRuntimePhaseMode::
+                        kBringInThenFinalWriteback &&
+                descriptor.direction ==
+                    TransferDirection::kHbmToExternal &&
+                !bring_in_ready_) {
+                if (runtime_->Outstanding() != 0)
+                    throw std::logic_error(
+                        "external DMA bring-in phase did not drain");
+                bring_in_stats_ = runtime_->Stats();
+                bring_in_ready_ = true;
+                bring_in_ready_event_.notify(sc_core::SC_ZERO_TIME);
+                while (!final_writeback_released_)
+                    sc_core::wait(final_writeback_gate_);
+            }
             for (const auto &dependency : descriptor.depends_on)
                 if (completed.count(dependency) == 0)
                     throw std::logic_error(
@@ -1009,6 +1057,9 @@ void ExternalDmaProgramExecutor::Run() {
         result.completed = true;
     } catch (const std::exception &error) {
         result.error = error.what();
+        phase_error_ = result.error;
+        if (!bring_in_ready_)
+            bring_in_ready_event_.notify(sc_core::SC_ZERO_TIME);
     }
     result.stats = runtime_->Stats();
     result.pending_requests = runtime_->Outstanding();
@@ -1024,6 +1075,33 @@ ExternalDmaProgramExecutor::Poll() const {
 ExternalDmaProgramExecution ExternalDmaProgramExecutor::Wait() {
     while (!execution_.has_value()) sc_core::wait(done_);
     return *execution_;
+}
+
+RuntimeStats ExternalDmaProgramExecutor::WaitForBringIn() {
+    if (phase_mode_ !=
+        ExternalDmaRuntimePhaseMode::kBringInThenFinalWriteback)
+        throw std::logic_error(
+            "external DMA bring-in wait requires split phase mode");
+    while (!bring_in_ready_ && phase_error_.empty())
+        sc_core::wait(bring_in_ready_event_);
+    if (!phase_error_.empty())
+        throw std::runtime_error(phase_error_);
+    return bring_in_stats_;
+}
+
+void ExternalDmaProgramExecutor::ReleaseFinalWriteback() {
+    if (phase_mode_ !=
+        ExternalDmaRuntimePhaseMode::kBringInThenFinalWriteback)
+        throw std::logic_error(
+            "external DMA final gate requires split phase mode");
+    if (!bring_in_ready_ || !phase_error_.empty() || execution_.has_value())
+        throw std::logic_error(
+            "external DMA final gate released outside the ready boundary");
+    if (final_writeback_released_)
+        throw std::logic_error(
+            "external DMA final gate was released more than once");
+    final_writeback_released_ = true;
+    final_writeback_gate_.notify(sc_core::SC_ZERO_TIME);
 }
 
 const sc_core::sc_event &

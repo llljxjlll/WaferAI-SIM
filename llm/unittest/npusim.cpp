@@ -826,8 +826,9 @@ public:
 
     ExternalDmaStartupCoordinator(
         const sc_module_name &name,
-        external_memory::ExternalDmaProgramExecutor &executor)
-        : sc_module(name), executor_(executor) {
+        external_memory::ExternalDmaProgramExecutor &executor,
+        external_memory::ExternalDmaRuntimePhaseMode phase_mode)
+        : sc_module(name), executor_(executor), phase_mode_(phase_mode) {
         SC_THREAD(Run);
     }
 
@@ -835,20 +836,36 @@ public:
     const std::optional<external_memory::ExternalDmaProgramExecution> &
     Execution() const { return execution_; }
     const std::string &Error() const { return error_; }
+    void ReleaseFinalWriteback() { executor_.ReleaseFinalWriteback(); }
 
 private:
     void Run() {
         try {
+            if (phase_mode_ == external_memory::ExternalDmaRuntimePhaseMode::
+                                   kBringInThenFinalWriteback) {
+                const auto stats = executor_.WaitForBringIn();
+                if (stats.submitted_requests == 0 ||
+                    stats.submitted_requests != stats.completed_requests ||
+                    stats.failed_requests != 0 ||
+                    stats.external_write_bytes != 0 ||
+                    stats.hbm_read_bytes != 0)
+                    throw std::runtime_error(
+                        "external DMA bring-in phase did not complete and drain");
+                std::cout
+                    << "[EXTERNAL_DMA_READY] program="
+                    << executor_.ProgramRef()
+                    << " completed=" << stats.completed_requests
+                    << " external_read_bytes=" << stats.external_read_bytes
+                    << " hbm_write_bytes=" << stats.hbm_write_bytes
+                    << " pending=0" << std::endl;
+                ready_.notify(SC_ZERO_TIME);
+                execution_ = executor_.Wait();
+                ValidateFinalExecution();
+                sc_pause();
+                return;
+            }
             execution_ = executor_.Wait();
-            if (!execution_->completed || !execution_->error.empty() ||
-                execution_->pending_requests != 0 ||
-                std::any_of(
-                    execution_->probes.begin(), execution_->probes.end(),
-                    [](const external_memory::DmaProbeResult &probe) {
-                        return !probe.matched;
-                    }))
-                throw std::runtime_error(
-                    "external DMA startup program did not complete and drain");
+            ValidateFinalExecution();
             std::cout
                 << "[EXTERNAL_DMA_READY] program="
                 << execution_->program_ref
@@ -864,7 +881,20 @@ private:
         }
     }
 
+    void ValidateFinalExecution() const {
+        if (!execution_.has_value() || !execution_->completed ||
+            !execution_->error.empty() || execution_->pending_requests != 0 ||
+            std::any_of(
+                execution_->probes.begin(), execution_->probes.end(),
+                [](const external_memory::DmaProbeResult &probe) {
+                    return !probe.matched;
+                }))
+            throw std::runtime_error(
+                "external DMA program did not complete and drain");
+    }
+
     external_memory::ExternalDmaProgramExecutor &executor_;
+    external_memory::ExternalDmaRuntimePhaseMode phase_mode_;
     std::optional<external_memory::ExternalDmaProgramExecution> execution_;
     std::string error_;
     sc_event ready_;
@@ -1385,6 +1415,13 @@ int sc_main(int argc, char *argv[]) {
                             binding_path.parent_path() /
                                 external_dma_binding->program_relative_path,
                             external_dma_binding->expected_source);
+                    if (external_dma_binding->phase_mode ==
+                            external_memory::ExternalDmaRuntimePhaseMode::
+                                kBringInThenFinalWriteback &&
+                        !dense_training_sequence)
+                        throw std::runtime_error(
+                            "external DMA final writeback phase requires a "
+                            "Dense training sequence");
                 }
             } else {
                 program_bytes = ReadProgramFile(g_flag_program);
@@ -1493,7 +1530,11 @@ int sc_main(int argc, char *argv[]) {
             if (sequence_mode)
                 sequence_helper =
                     std::make_unique<config_helper_program_sequence>(
-                        sequence_program_bytes, false);
+                        sequence_program_bytes, false,
+                        external_dma_binding.has_value() &&
+                            external_dma_binding->phase_mode ==
+                                external_memory::ExternalDmaRuntimePhaseMode::
+                                    kBringInThenFinalWriteback);
             else
                 program_helper =
                     std::make_unique<config_helper_program>(
@@ -1563,11 +1604,13 @@ int sc_main(int argc, char *argv[]) {
                 external_memory::ExternalDmaProgramExecutor>(
                     "external_dma_startup_executor",
                     *external_dma_program, std::move(backends),
-                    sc_time(CYCLE, SC_NS));
+                    sc_time(CYCLE, SC_NS),
+                    external_dma_binding->phase_mode);
             external_dma_coordinator =
                 std::make_unique<ExternalDmaStartupCoordinator>(
                     "external_dma_startup_coordinator",
-                    *external_dma_executor);
+                    *external_dma_executor,
+                    external_dma_binding->phase_mode);
             monitor->GateStartupUntil(
                 external_dma_coordinator->ReadyEvent());
         } catch (const std::exception &error) {
@@ -1795,6 +1838,17 @@ int sc_main(int argc, char *argv[]) {
         if (!sequence_helper->final_complete())
             throw std::runtime_error(
                 "Dense sequence did not reach its final one-shot drain");
+        if (external_dma_binding.has_value() &&
+            external_dma_binding->phase_mode ==
+                external_memory::ExternalDmaRuntimePhaseMode::
+                    kBringInThenFinalWriteback) {
+            external_dma_coordinator->ReleaseFinalWriteback();
+            sc_start();
+            if (!external_dma_coordinator->Error().empty())
+                throw std::runtime_error(
+                    "external DMA final writeback failed: " +
+                    external_dma_coordinator->Error());
+        }
         if (external_dma_coordinator) {
             const auto &execution = external_dma_coordinator->Execution();
             if (!execution.has_value() || !execution->completed ||

@@ -4,8 +4,10 @@
 #include <stdexcept>
 
 config_helper_program_sequence::config_helper_program_sequence(
-    const std::vector<std::vector<uint8_t>> &artifact_bytes, bool refill)
-    : artifacts_(artifact_bytes), refill_(refill) {
+    const std::vector<std::vector<uint8_t>> &artifact_bytes, bool refill,
+    bool pause_on_final)
+    : artifacts_(artifact_bytes), refill_(refill),
+      pause_on_final_(pause_on_final) {
     if (artifacts_.size() < 2)
         throw ConfigHelperProgramError(
             "Program sequence requires at least two artifacts");
@@ -82,7 +84,10 @@ void config_helper_program_sequence::parse_done_msg(
     if (completed_segments_ == artifacts_.size()) {
         std::cout << "[DENSE_SEQUENCE_DRAIN] segments=" << artifacts_.size()
                   << " one_shot=1" << std::endl;
-        sc_stop();
+        if (pause_on_final_)
+            sc_pause();
+        else
+            sc_stop();
         return;
     }
     if (notify_event == nullptr)
@@ -106,7 +111,8 @@ void config_helper_program_sequence::printSelf() {
 }
 
 config_helper_program_sequence *config_helper_program_sequence::clone() const {
-    return new config_helper_program_sequence(artifacts_, refill_);
+    return new config_helper_program_sequence(
+        artifacts_, refill_, pause_on_final_);
 }
 
 std::shared_ptr<const CoreGroupRegistry>

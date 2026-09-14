@@ -7,13 +7,14 @@
 #include <vector>
 
 // Runs multiple finalized Program artifacts through one MemInterface and one
-// Monitor.  Intermediate Program DONE sets pause at a host-visible boundary;
-// only the final DONE set stops the workload.
+// Monitor.  Intermediate Program DONE sets pause at a host-visible boundary.
+// The final DONE set normally stops the workload, but a caller that owns a
+// typed post-compute phase may request one final host-visible pause.
 class config_helper_program_sequence final : public config_helper_base {
 public:
     explicit config_helper_program_sequence(
         const std::vector<std::vector<uint8_t>> &artifact_bytes,
-        bool refill = false);
+        bool refill = false, bool pause_on_final = false);
 
     void fill_queue_config(std::queue<Msg> *queue) override;
     void fill_queue_start(std::queue<Msg> *queue) override;
@@ -51,6 +52,7 @@ private:
 
     std::vector<std::vector<uint8_t>> artifacts_;
     bool refill_ = false;
+    bool pause_on_final_ = false;
     std::size_t current_segment_ = 0;
     std::size_t completed_segments_ = 0;
     std::unique_ptr<config_helper_program> current_;

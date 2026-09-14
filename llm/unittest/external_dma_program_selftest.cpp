@@ -71,6 +71,19 @@ struct Driver : sc_module {
         try {
             Check(!executor.Poll().has_value(),
                   "program completed before its runtime event");
+            const auto bring_in = executor.WaitForBringIn();
+            Check(bring_in.submitted_requests == 1 &&
+                      bring_in.completed_requests == 1 &&
+                      bring_in.failed_requests == 0 &&
+                      bring_in.external_read_bytes == 16 &&
+                      bring_in.hbm_write_bytes == 16 &&
+                      bring_in.external_write_bytes == 0 &&
+                      bring_in.hbm_read_bytes == 0,
+                  "split bring-in phase statistics are incorrect");
+            wait(5, SC_NS);
+            Check(!executor.Poll().has_value(),
+                  "dirty writeback ran before the explicit final gate");
+            executor.ReleaseFinalWriteback();
             const auto result = executor.Wait();
             Check(result.completed && result.error.empty(),
                   "program execution failed: " + result.error);
@@ -146,10 +159,11 @@ int sc_main(int argc, char **argv) {
             "npusim_external_dma_runtime_binding_selftest.json";
         const std::string binding =
             "{"
-            "\"schema_version\":\"wafer_frontend.external_dma_runtime_binding/v1alpha1\","
+            "\"schema_version\":\"wafer_frontend.external_dma_runtime_binding/v1alpha2\","
             "\"id\":\"external_dma_runtime_binding_selftest\","
             "\"action_graph_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\","
             "\"program_relative_path\":\"artifacts/external_dma_program.json\","
+            "\"phase_mode\":\"bring_in_then_final_writeback\","
             "\"case_digest\":\"" + kExpected.case_digest + "\","
             "\"request_digest\":\"" + kExpected.request_digest + "\","
             "\"logical_graph_digest\":\"" + kExpected.logical_graph_digest + "\","
@@ -165,6 +179,9 @@ int sc_main(int argc, char **argv) {
                 runtime_binding.action_graph_digest == std::string(64, 'd') &&
                 runtime_binding.program_relative_path ==
                     "artifacts/external_dma_program.json" &&
+                runtime_binding.phase_mode ==
+                    em::ExternalDmaRuntimePhaseMode::
+                        kBringInThenFinalWriteback &&
                 runtime_binding.expected_source.case_digest ==
                     kExpected.case_digest &&
                 runtime_binding.expected_source.request_digest ==
@@ -195,11 +212,19 @@ int sc_main(int argc, char **argv) {
             binding_path,
             ReplaceOnce(
                 binding,
-                "wafer_frontend.external_dma_runtime_binding/v1alpha1",
+                "wafer_frontend.external_dma_runtime_binding/v1alpha2",
                 "wafer_frontend.external_dma_runtime_binding/v0"));
         Rejects(
             [&] { em::LoadExternalDmaRuntimeBinding(binding_path); },
             "wrong runtime binding schema was accepted");
+        Write(
+            binding_path,
+            ReplaceOnce(
+                binding, "bring_in_then_final_writeback",
+                "writeback_before_compute"));
+        Rejects(
+            [&] { em::LoadExternalDmaRuntimeBinding(binding_path); },
+            "unknown runtime binding phase was accepted");
         Write(
             binding_path,
             ReplaceOnce(
@@ -217,7 +242,9 @@ int sc_main(int argc, char **argv) {
         BehavioralHBMBackend backend(config);
         em::ExternalDmaProgramExecutor executor(
             "external_dma_program_executor", program,
-            {{{0, 0}, &backend}}, sc_time(1, SC_NS));
+            {{{0, 0}, &backend}}, sc_time(1, SC_NS),
+            em::ExternalDmaRuntimePhaseMode::
+                kBringInThenFinalWriteback);
         Driver driver("driver", executor);
         sc_start(1000, SC_NS);
         if (!driver.passed)

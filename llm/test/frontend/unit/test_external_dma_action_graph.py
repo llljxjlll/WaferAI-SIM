@@ -31,6 +31,8 @@ from llm.frontend.wafer_frontend.schema.external_dma_program import (
 from llm.frontend.wafer_frontend.schema.external_dma_action_graph import (
     ExternalDmaActionGraph,
     ExternalDmaBoundAction,
+    ExternalDmaRuntimeBinding,
+    ExternalDmaRuntimePhaseMode,
 )
 from llm.frontend.wafer_frontend.schema.external_memory import (
     ExternalMemoryConnection,
@@ -248,6 +250,23 @@ def _runtime_derivation(request, runtime_binary: Path):
 
 
 class ExternalDmaActionGraphTest(unittest.TestCase):
+    def test_runtime_binding_requires_typed_phase_mode(self) -> None:
+        binding = ExternalDmaRuntimeBinding.create(
+            action_graph_digest="1" * 64,
+            program_relative_path="artifacts/external_dma_program.json",
+            phase_mode=(
+                ExternalDmaRuntimePhaseMode.BRING_IN_THEN_FINAL_WRITEBACK
+            ),
+            case_digest="2" * 64,
+            request_digest="3" * 64,
+            logical_graph_digest="4" * 64,
+            source_memory_plan_digest="5" * 64,
+            blocking_offload_plan_digest="6" * 64,
+        )
+        binding.validate()
+        with self.assertRaisesRegex(SchemaError, "phase_mode"):
+            replace(binding, phase_mode="writeback_before_compute").validate()
+
     def test_action_graph_covers_logical_dma_and_residency_sources(self) -> None:
         _, _, _, manifest, plan, program, _, _ = _fixture()
         graph = build_external_dma_action_graph(

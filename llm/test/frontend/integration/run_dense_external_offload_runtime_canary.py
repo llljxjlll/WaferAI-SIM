@@ -26,6 +26,7 @@ from llm.frontend.wafer_frontend.passes.workload_materialization import (
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RegionManifest
 from llm.frontend.wafer_frontend.schema.external_dma_action_graph import (
     ExternalDmaRuntimeBinding,
+    ExternalDmaRuntimePhaseMode,
 )
 from llm.frontend.wafer_frontend.schema.external_dma_program import (
     ExternalDmaBackendBinding,
@@ -146,7 +147,13 @@ def _useful_graph_projection_digest(graph) -> str:
     return canonical_digest({"operations": operations, "routes": routes})
 
 
-def _build_offload_case(base_manifest):
+def _build_offload_case(
+    base_manifest,
+    *,
+    hbm_bytes_override: int | None = None,
+    dirty_writeback: bool = False,
+    payload_override: bytes | None = None,
+):
     parameter_bytes = sum(
         item.size_bytes
         for item in base_manifest.state_inventory
@@ -157,7 +164,11 @@ def _build_offload_case(base_manifest):
         for item in base_manifest.state_inventory
         if item.object_kind is MemoryObjectKind.KV
     )
-    hbm_bytes = parameter_bytes + kv_bytes
+    hbm_bytes = (
+        parameter_bytes + kv_bytes
+        if hbm_bytes_override is None
+        else hbm_bytes_override
+    )
     resident_peak_bytes = max(
         item.peak_bytes for item in base_manifest.memory_plan.peaks
     )
@@ -187,7 +198,7 @@ def _build_offload_case(base_manifest):
         tier=MemoryTier.EXTERNAL,
         location_ref="host:0",
         base_address=0,
-        capacity_bytes=parameter_bytes,
+        capacity_bytes=((parameter_bytes + 63) // 64) * 64,
         alignment_bytes=64,
     )
     source = base_manifest.request
@@ -283,12 +294,22 @@ def _build_offload_case(base_manifest):
         events=(
             OffloadTraceEvent.create(
                 ordinal=0,
-                kind=OffloadEventKind.READ,
+                kind=(
+                    OffloadEventKind.WRITE
+                    if dirty_writeback
+                    else OffloadEventKind.READ
+                ),
                 chunk_ref=chunk.id,
             ),
         ),
     )
-    payload = bytes((index % 251) + 1 for index in range(parameter_bytes))
+    payload = (
+        bytes((index % 251) + 1 for index in range(parameter_bytes))
+        if payload_override is None
+        else payload_override
+    )
+    if len(payload) != parameter_bytes:
+        raise RuntimeError("external payload must cover the parameter shard exactly")
     program = finalize_external_dma_program(
         plan=plan,
         case_digest=canonical_digest(request.case_id),
@@ -323,6 +344,11 @@ def _build_offload_case(base_manifest):
     binding = ExternalDmaRuntimeBinding.create(
         action_graph_digest=action_graph.digest,
         program_relative_path="artifacts/external_dma_program.json",
+        phase_mode=(
+            ExternalDmaRuntimePhaseMode.BRING_IN_THEN_FINAL_WRITEBACK
+            if dirty_writeback
+            else ExternalDmaRuntimePhaseMode.EXECUTE_ALL_BEFORE_COMPUTE
+        ),
         case_digest=program.case_digest,
         request_digest=program.request_digest,
         logical_graph_digest=program.logical_graph_digest,

@@ -19,6 +19,7 @@ from .passes.external_dma_program import (
 from .schema.external_dma_action_graph import (
     ExternalDmaActionGraph,
     ExternalDmaRuntimeBinding,
+    ExternalDmaRuntimePhaseMode,
 )
 from .schema.external_dma_program import ExternalDmaProgram
 from .schema.offload import BlockingOffloadPlan
@@ -131,6 +132,9 @@ def create_external_dma_workload_adapter(
         binding = ExternalDmaRuntimeBinding.create(
             action_graph_digest=action_graph.digest,
             program_relative_path="artifacts/external_dma_program.json",
+            phase_mode=(
+                ExternalDmaRuntimePhaseMode.EXECUTE_ALL_BEFORE_COMPUTE
+            ),
             case_digest=program.case_digest,
             request_digest=program.request_digest,
             logical_graph_digest=program.logical_graph_digest,
