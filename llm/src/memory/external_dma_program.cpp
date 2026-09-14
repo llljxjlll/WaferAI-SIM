@@ -899,6 +899,7 @@ void ExternalDmaProgramExecutor::Run() {
         result.error = error.what();
     }
     result.stats = runtime_->Stats();
+    result.pending_requests = runtime_->Outstanding();
     execution_ = std::move(result);
     done_.notify(sc_core::SC_ZERO_TIME);
 }

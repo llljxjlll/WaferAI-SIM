@@ -60,6 +60,7 @@ list(FILTER SRC_FILES EXCLUDE REGEX ".*/unittest/.*")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/test_dramsys\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/main\\.cpp")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/program_finalizer_main\\.cpp$")
+list(FILTER SRC_FILES EXCLUDE REGEX ".*/external_dma_program_runner\\.cpp$")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/build/.*")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/test/.*")
 list(FILTER SRC_FILES EXCLUDE REGEX ".*/config_generation/.*")
@@ -285,6 +286,13 @@ add_executable(npusim_external_dma_program_selftest
 target_link_libraries(npusim_external_dma_program_selftest PRIVATE
     npusim_external_dma_program)
 target_compile_options(npusim_external_dma_program_selftest PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(npusim_external_dma_program_runner
+    ./llm/src/memory/external_dma_program_runner.cpp)
+target_link_libraries(npusim_external_dma_program_runner PRIVATE
+    npusim_external_dma_program nlohmann_json::nlohmann_json)
+target_compile_options(npusim_external_dma_program_runner PRIVATE
     -Wall -Wextra -Werror)
 
 if(BUILD_TESTING)

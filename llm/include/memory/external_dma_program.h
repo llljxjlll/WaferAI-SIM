@@ -100,6 +100,7 @@ struct ExternalDmaProgramExecution {
     std::vector<RuntimeCompletion> completions;
     std::vector<DmaProbeResult> probes;
     RuntimeStats stats;
+    uint64_t pending_requests = 0;
     bool completed = false;
     std::string error;
 };
