@@ -244,7 +244,70 @@ if(BUILD_SANITIZER_TESTS)
         -fsanitize=address,undefined)
 endif()
 
+# Standalone external-memory component.  This target deliberately has no
+# SystemC or workload-action dependency; it models the finite backing and
+# deterministic shared-link service used before N6/npup integration.
+add_library(npusim_external_memory_service STATIC
+    ./llm/src/memory/external_memory_service.cpp)
+target_compile_options(npusim_external_memory_service PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(npusim_external_memory_service_selftest
+    ./llm/unittest/external_memory_service_selftest.cpp)
+target_link_libraries(npusim_external_memory_service_selftest PRIVATE
+    npusim_external_memory_service)
+target_compile_options(npusim_external_memory_service_selftest PRIVATE
+    -Wall -Wextra -Werror)
+
+add_library(npusim_external_memory_runtime STATIC
+    ./llm/src/memory/external_memory_runtime.cpp)
+target_link_libraries(npusim_external_memory_runtime PUBLIC
+    npusim_external_memory_service systemc)
+target_compile_options(npusim_external_memory_runtime PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(npusim_external_memory_runtime_selftest
+    ./llm/unittest/external_memory_runtime_selftest.cpp)
+target_link_libraries(npusim_external_memory_runtime_selftest PRIVATE
+    npusim_external_memory_runtime)
+target_compile_options(npusim_external_memory_runtime_selftest PRIVATE
+    -Wall -Wextra -Werror)
+
+add_library(npusim_external_dma_program STATIC
+    ./llm/src/memory/external_dma_program.cpp)
+target_link_libraries(npusim_external_dma_program PUBLIC
+    npusim_external_memory_runtime nlohmann_json::nlohmann_json)
+target_compile_options(npusim_external_dma_program PRIVATE
+    -Wall -Wextra -Werror)
+
+add_executable(npusim_external_dma_program_selftest
+    ./llm/unittest/external_dma_program_selftest.cpp)
+target_link_libraries(npusim_external_dma_program_selftest PRIVATE
+    npusim_external_dma_program)
+target_compile_options(npusim_external_dma_program_selftest PRIVATE
+    -Wall -Wextra -Werror)
+
 if(BUILD_TESTING)
+    add_test(NAME external_memory_service_selftest
+             COMMAND npusim_external_memory_service_selftest)
+    set_tests_properties(external_memory_service_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "external-memory;component-runtime")
+
+    add_test(NAME external_memory_runtime_bridge_selftest
+             COMMAND npusim_external_memory_runtime_selftest)
+    set_tests_properties(external_memory_runtime_bridge_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "external-memory;hbm;component-runtime")
+
+    add_test(NAME external_dma_program_cross_language_selftest
+             COMMAND npusim_external_dma_program_selftest
+                     ${CMAKE_SOURCE_DIR}/llm/test/frontend/golden/external_dma_program_v1alpha1.json)
+    set_tests_properties(
+        external_dma_program_cross_language_selftest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "external-memory;hbm;cross-language;component-runtime")
+
     add_test(NAME dte_control_core_selftest
              COMMAND npusim --dte-control-core-selftest)
     set_tests_properties(dte_control_core_selftest PROPERTIES
