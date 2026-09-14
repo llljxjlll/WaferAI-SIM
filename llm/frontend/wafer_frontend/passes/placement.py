@@ -244,6 +244,7 @@ def _place_persistent_state_manifest(
     cursors = {
         die_id: space.base_address for die_id, space in spaces_by_die.items()
     }
+    reservation_policy = context.persistent_state_reservation_policy
     bindings: list[HbmBinding] = []
     for _key, declaration, home_die in sorted(
         placements, key=lambda item: item[0]
@@ -259,9 +260,24 @@ def _place_persistent_state_manifest(
             )
         address = cursor + padding
         space_end = space.base_address + space.size_bytes
+        reserved_bytes = declaration.tensor_bytes
+        if reservation_policy is not None:
+            configured_slot = reservation_policy.slot_bytes(
+                declaration.identity.kind
+            )
+            if configured_slot is not None:
+                if declaration.tensor_bytes > configured_slot:
+                    raise SchemaError(
+                        "persistent state exceeds its configured fixed slot",
+                        path=(
+                            "persistent_state_placement"
+                            f".{declaration.id}.tensor_bytes"
+                        ),
+                    )
+                reserved_bytes = configured_slot
         if (
             address > space_end
-            or declaration.tensor_bytes > space_end - address
+            or reserved_bytes > space_end - address
         ):
             raise SchemaError(
                 "persistent state exceeds its home HBM capacity",
@@ -274,7 +290,10 @@ def _place_persistent_state_manifest(
             size_bytes=declaration.tensor_bytes,
         )
         bindings.append(binding)
-        cursors[home_die] = address + declaration.tensor_bytes
+        # The binding exposes the segment's true accessible extent.  Only the
+        # allocator cursor consumes the fixed slot, leaving deterministic gaps
+        # that keep following state addresses stable across profile programs.
+        cursors[home_die] = address + reserved_bytes
 
     return PersistentStateManifest.create(
         address_spaces=context.hbm_address_spaces,

@@ -305,7 +305,8 @@ void AccessUnit::TraceStage(const char *stage, const char *phase,
 
 void AccessUnit::DebugSeed(
     uint64_t address, const std::vector<uint8_t> &payload) {
-    if (sc_core::sc_is_running())
+    if (sc_core::sc_is_running() &&
+        sc_core::sc_get_status() != sc_core::SC_PAUSED)
         throw std::logic_error(
             "SRAM DebugSeed is forbidden while simulation is running");
     if (!storage_.payload_mode())
@@ -320,7 +321,8 @@ void AccessUnit::DebugSeed(
 
 DebugSnapshot AccessUnit::DebugPeek(
     uint64_t address, uint64_t size_bytes) const {
-    if (sc_core::sc_is_running())
+    if (sc_core::sc_is_running() &&
+        sc_core::sc_get_status() != sc_core::SC_PAUSED)
         throw std::logic_error(
             "SRAM DebugPeek is forbidden while simulation is running");
     if (!storage_.payload_mode())
@@ -332,7 +334,8 @@ DebugSnapshot AccessUnit::DebugPeek(
 
 void AccessUnit::DebugRestore(
     uint64_t address, const DebugSnapshot &snapshot) {
-    if (sc_core::sc_is_running())
+    if (sc_core::sc_is_running() &&
+        sc_core::sc_get_status() != sc_core::SC_PAUSED)
         throw std::logic_error(
             "SRAM DebugRestore is forbidden while simulation is running");
     if (!storage_.payload_mode())

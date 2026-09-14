@@ -18,6 +18,7 @@ from llm.frontend.wafer_frontend.schema.dense_compile_sequence import (
     DenseKvSegmentBinding,
 )
 from llm.frontend.wafer_frontend.schema.memory_plan import MemoryTier, MemoryTierCapacity
+from llm.frontend.wafer_frontend.schema.persistent_state import StateKind
 from llm.frontend.wafer_frontend.schema.serde import canonical_json, loads_dataclass
 from llm.frontend.wafer_frontend.schema.workload_run import (
     WorkloadMeshSpec,
@@ -128,6 +129,30 @@ class DenseCompileSequenceTest(unittest.TestCase):
         self.assertEqual(
             len({item.linked_manifest_digest for item in sequence.segments}),
             3,
+        )
+        physical_layouts = []
+        physical_extents = []
+        for segment in sequence.segments:
+            abis = {
+                abi.id: abi
+                for fragment in segment.linked_manifest.fragments
+                for abi in fragment.state_abi
+                if abi.kind in (StateKind.KV_KEY, StateKind.KV_VALUE)
+            }
+            ordered = tuple(
+                sorted(
+                    abis.values(),
+                    key=lambda abi: (abi.kind.value, abi.die_id, abi.address),
+                )
+            )
+            physical_layouts.append(
+                tuple((abi.kind, abi.die_id, abi.address) for abi in ordered)
+            )
+            physical_extents.append(tuple(abi.size_bytes for abi in ordered))
+        self.assertEqual(len(set(physical_layouts)), 1)
+        self.assertEqual(
+            physical_extents,
+            [(128,) * 4, (160,) * 4, (192,) * 4],
         )
         for layer in range(2):
             chain = tuple(

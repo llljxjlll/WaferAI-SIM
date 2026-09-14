@@ -61,7 +61,7 @@ from .schema.n5 import (
     PROJECTED_IR2_BUNDLE_SCHEMA_VERSION,
 )
 from .schema.n6 import LinkedProgramBundle
-from .schema.placement import PlacementContext
+from .schema.placement import PlacementContext, PersistentStateReservationPolicy
 from .schema.policy import PolicySelection
 from .schema.persistent_state import HbmAddressSpace
 from .schema.serde import canonical_digest
@@ -413,6 +413,7 @@ def compile_naive(
     fabric: PhysicalFabric,
     *,
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
+    persistent_state_reservation_policy: PersistentStateReservationPolicy | None = None,
     producer_pass: str = "naive_frontend",
     registry: PolicyRegistry | None = None,
     intra_die_refine_options: SplitKRefineOptions | IntraDieOptimizationOptions | None = None,
@@ -448,6 +449,7 @@ def compile_naive(
         fabric=fabric,
         placement=spec.placement,
         hbm_address_spaces=hbm_address_spaces,
+        persistent_state_reservation_policy=persistent_state_reservation_policy,
     )
     partition_context = FusionPartitionContext.create(
         producer_pass=producer_pass
@@ -665,6 +667,7 @@ def compile_rect_mesh(
     *,
     rect_mesh: RectMeshSpec,
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
+    persistent_state_reservation_policy: PersistentStateReservationPolicy | None = None,
     mode: RectMeshCompileMode = RectMeshCompileMode.AUTO,
     producer_pass: str = "rect_mesh_frontend",
     registry: PolicyRegistry | None = None,
@@ -700,6 +703,7 @@ def compile_rect_mesh(
         baseline_spec,
         fabric,
         hbm_address_spaces=hbm_address_spaces,
+        persistent_state_reservation_policy=persistent_state_reservation_policy,
         producer_pass=producer_pass,
         registry=registry,
         intra_die_refine_options=intra_die_refine_options,

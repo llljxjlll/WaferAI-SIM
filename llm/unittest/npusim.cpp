@@ -31,6 +31,7 @@
 #include "dte/coll_innetwork_reduce.h"
 #include "monitor/monitor.h"
 #include "monitor/config_helper_program.h"
+#include "monitor/config_helper_program_sequence.h"
 #include "monitor/watchdog.h"
 #include "monitor/start_data_tracker.h"
 #include "monitor/workload_rendezvous_selftest.h"
@@ -130,6 +131,15 @@ Define_bool_opt("--p5-memory-probe-selftest",
 Define_bool_opt("--program-one-shot", g_flag_program_one_shot, false,
                 "execute a Program artifact once without primitive refill");
 
+Define_string_opt("--linked-manifest-sequence",
+                  g_flag_linked_manifest_sequence, std::string{},
+                  "comma-separated linked manifests for --program-sequence");
+Define_string_opt("--program-sequence", g_flag_program_sequence,
+                  std::string{},
+                  "comma-separated Program artifacts executed in one instance");
+Define_string_opt("--program-io-sequence", g_flag_program_io_sequence,
+                  std::string{},
+                  "comma-separated ProgramIo sidecars for --program-sequence");
 Define_string_opt("--linked-manifest", g_flag_linked_manifest,
                   std::string{},
                   "linked Program manifest JSON required by --program-io");
@@ -382,6 +392,122 @@ std::string ReadRegularTextFile(
     return text;
 }
 
+std::vector<std::string> SplitSequencePaths(const std::string &value,
+                                            const std::string &flag) {
+    std::vector<std::string> result;
+    std::size_t begin = 0;
+    while (begin <= value.size()) {
+        const std::size_t end = value.find(',', begin);
+        const std::string item = value.substr(
+            begin, end == std::string::npos ? std::string::npos : end - begin);
+        if (item.empty())
+            throw std::runtime_error(flag + " contains an empty path");
+        result.push_back(item);
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    if (result.size() != 3)
+        throw std::runtime_error(flag + " requires exactly three paths");
+    return result;
+}
+
+struct DenseSequenceKvRange {
+    std::string id;
+    frontend::StateKindDto kind = frontend::StateKindDto::KV_KEY;
+    uint64_t die_id = 0;
+    uint64_t address = 0;
+    uint64_t size_bytes = 0;
+};
+
+std::vector<DenseSequenceKvRange> DenseKvRanges(
+    const std::string &manifest_text) {
+    const frontend::LinkedProgramManifestDto manifest =
+        frontend::ProgramArtifactFinalizer::Parse(manifest_text);
+    std::map<std::string, DenseSequenceKvRange> unique;
+    for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
+        const frontend::CommandFragmentDto *fragment =
+            std::get_if<frontend::CommandFragmentDto>(&linked);
+        if (fragment == nullptr)
+            fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+        for (const frontend::StateAbiDto &abi : fragment->state_abi) {
+            if (abi.kind != frontend::StateKindDto::KV_KEY &&
+                abi.kind != frontend::StateKindDto::KV_VALUE)
+                continue;
+            DenseSequenceKvRange range{
+                abi.id, abi.kind, abi.die_id, abi.address, abi.size_bytes};
+            auto [it, inserted] = unique.emplace(abi.id, range);
+            if (!inserted &&
+                (it->second.kind != range.kind ||
+                 it->second.die_id != range.die_id ||
+                 it->second.address != range.address ||
+                 it->second.size_bytes != range.size_bytes))
+                throw std::runtime_error(
+                    "Dense sequence manifest has conflicting KV StateABI");
+        }
+    }
+    std::vector<DenseSequenceKvRange> result;
+    for (const auto &entry : unique) result.push_back(entry.second);
+    std::sort(result.begin(), result.end(),
+              [](const DenseSequenceKvRange &left,
+                 const DenseSequenceKvRange &right) {
+                  return std::tie(left.kind, left.die_id, left.address) <
+                         std::tie(right.kind, right.die_id, right.address);
+              });
+    if (result.size() != 4 ||
+        std::any_of(result.begin(), result.end(),
+                    [](const DenseSequenceKvRange &range) {
+                        return range.die_id != 0 || range.size_bytes == 0;
+                    }))
+        throw std::runtime_error(
+            "Dense sequence runtime canary requires 1x1/TP1 and two layers");
+    return result;
+}
+
+void ValidateDenseKvContinuity(
+    const std::vector<std::vector<DenseSequenceKvRange>> &segments) {
+    if (segments.size() != 3)
+        throw std::runtime_error("Dense sequence requires three KV layouts");
+    for (std::size_t segment = 1; segment < segments.size(); ++segment) {
+        for (std::size_t index = 0; index < segments[0].size(); ++index) {
+            const auto &first = segments[0][index];
+            const auto &next = segments[segment][index];
+            if (first.kind != next.kind || first.die_id != next.die_id ||
+                first.address != next.address ||
+                segments[segment - 1][index].size_bytes >= next.size_bytes)
+                throw std::runtime_error(
+                    "Dense sequence KV address/extent continuity failed");
+        }
+    }
+}
+
+void PrintDenseKvBoundary(
+    HBMRuntime &runtime, std::size_t segment,
+    const std::vector<DenseSequenceKvRange> &ranges) {
+    std::vector<uint8_t> aggregate;
+    for (const auto &range : ranges) {
+        const HBMRuntimeDebugSnapshot snapshot = runtime.DebugPeek(
+            range.address, static_cast<int>(range.die_id), range.size_bytes);
+        const bool present = std::all_of(
+            snapshot.chunks.begin(), snapshot.chunks.end(),
+            [](const HBMRuntimeDebugChunkSnapshot &chunk) {
+                return chunk.backend.present.size() ==
+                           chunk.backend.payload.size() &&
+                       std::all_of(chunk.backend.present.begin(),
+                                   chunk.backend.present.end(),
+                                   [](uint8_t value) { return value != 0; });
+            });
+        if (!present)
+            throw std::runtime_error(
+                "Dense sequence KV output contains unwritten bytes");
+        aggregate.insert(aggregate.end(), snapshot.payload.begin(),
+                         snapshot.payload.end());
+    }
+    std::cout << "[DENSE_SEQUENCE_KV] index=" << segment
+              << " bytes=" << aggregate.size()
+              << " digest=" << frontend::program_io::Sha256Hex(aggregate)
+              << " pass=1" << std::endl;
+}
+
 const char *ProgramIoModeName(frontend::program_io::Mode mode) {
     switch (mode) {
     case frontend::program_io::Mode::TIMING:
@@ -573,6 +699,26 @@ int sc_main(int argc, char *argv[]) {
     if (g_flag_help) {
         simple_flags::print_args_info();
         return 0;
+    }
+
+    const bool sequence_any = !g_flag_program_sequence.empty() ||
+                              !g_flag_linked_manifest_sequence.empty() ||
+                              !g_flag_program_io_sequence.empty();
+    if (sequence_any &&
+        (g_flag_program_sequence.empty() ||
+         g_flag_linked_manifest_sequence.empty() ||
+         g_flag_program_io_sequence.empty())) {
+        LOG_ERROR(CONFIG) << "--program-sequence, --linked-manifest-sequence, "
+                             "and --program-io-sequence must be paired";
+        return 2;
+    }
+    const bool sequence_mode = sequence_any;
+    if (sequence_mode &&
+        (!g_flag_program.empty() || !g_flag_linked_manifest.empty() ||
+         !g_flag_program_io.empty() || g_flag_program_one_shot)) {
+        LOG_ERROR(CONFIG) << "Dense program sequence flags are mutually "
+                             "exclusive with single-program flags";
+        return 2;
     }
 
     const bool program_io_any =
@@ -899,7 +1045,7 @@ int sc_main(int argc, char *argv[]) {
         return fails == 0 ? 0 : 1;
     }
 
-    const bool program_mode = !g_flag_program.empty();
+    const bool program_mode = !g_flag_program.empty() || sequence_mode;
     const bool p5_memory_probe_requested =
         !g_flag_p5_memory_probe.empty();
     if (p5_memory_probe_requested && !program_mode) {
@@ -930,6 +1076,10 @@ int sc_main(int argc, char *argv[]) {
         g_flag_workload_config = kDefaultWorkloadConfig;
 
     std::vector<uint8_t> program_bytes;
+    std::vector<std::vector<uint8_t>> sequence_program_bytes;
+    std::vector<std::vector<DenseSequenceKvRange>> sequence_kv_ranges;
+    std::vector<frontend::program_io::ResolvedContract>
+        sequence_program_io_resolved;
     std::optional<p5_probe::Spec> p5_memory_probe_spec;
     std::optional<p6_probe::Spec> p6_memory_probe_spec;
     std::optional<p8_double_buffer_probe::Spec>
@@ -945,9 +1095,42 @@ int sc_main(int argc, char *argv[]) {
             ValidatePlatformConfigInputs(
                 g_flag_hardware_config, g_flag_simulation_config,
                 g_flag_mapping_config);
-            program_bytes = ReadProgramFile(g_flag_program);
-            const ProgramArtifact decoded_program =
-                DecodeProgramArtifact(program_bytes);
+            if (sequence_mode) {
+                const auto program_paths = SplitSequencePaths(
+                    g_flag_program_sequence, "--program-sequence");
+                const auto manifest_paths = SplitSequencePaths(
+                    g_flag_linked_manifest_sequence,
+                    "--linked-manifest-sequence");
+                const auto sidecar_paths = SplitSequencePaths(
+                    g_flag_program_io_sequence, "--program-io-sequence");
+                for (std::size_t index = 0; index < 3; ++index) {
+                    auto bytes = ReadProgramFile(program_paths[index]);
+                    (void)DecodeProgramArtifact(bytes);
+                    const std::string manifest = ReadRegularTextFile(
+                        "Dense sequence linked Program manifest",
+                        manifest_paths[index], kMaxLinkedProgramManifestBytes);
+                    const ProgramArtifact finalized =
+                        frontend::ProgramArtifactFinalizer{}.Finalize(
+                            frontend::ProgramArtifactFinalizer::Parse(manifest));
+                    if (EncodeProgramArtifact(finalized) != bytes)
+                        throw std::runtime_error(
+                            "Dense sequence manifest/artifact closure failed");
+                    sequence_program_bytes.push_back(std::move(bytes));
+                    sequence_kv_ranges.push_back(DenseKvRanges(manifest));
+                    const std::string sidecar = ReadRegularTextFile(
+                        "Dense sequence ProgramIo sidecar",
+                        sidecar_paths[index]);
+                    sequence_program_io_resolved.push_back(
+                        frontend::program_io::ParseAndResolve(
+                            sidecar, manifest,
+                            sequence_program_bytes.back()));
+                }
+                ValidateDenseKvContinuity(sequence_kv_ranges);
+            } else {
+                program_bytes = ReadProgramFile(g_flag_program);
+            }
+            const ProgramArtifact decoded_program = DecodeProgramArtifact(
+                sequence_mode ? sequence_program_bytes.front() : program_bytes);
             if (program_io_requested) {
                 const std::string manifest = ReadRegularTextFile(
                     "linked Program manifest", g_flag_linked_manifest,
@@ -1041,19 +1224,28 @@ int sc_main(int argc, char *argv[]) {
     // 收集所有配置文件，统一解析。Program v1 固定使用 dataflow，
     // 不读取或伪造 workload JSON。
     std::unique_ptr<config_helper_program> program_helper;
+    std::unique_ptr<config_helper_program_sequence> sequence_helper;
     try {
         if (program_mode) {
             SYSTEM_MODE = SIM_DATAFLOW;
             InitPlatform(g_flag_hardware_config, g_flag_simulation_config,
                          g_flag_mapping_config);
-            program_helper =
-                std::make_unique<config_helper_program>(
-                    program_bytes, !g_flag_program_one_shot);
+            if (sequence_mode)
+                sequence_helper =
+                    std::make_unique<config_helper_program_sequence>(
+                        sequence_program_bytes, false);
+            else
+                program_helper =
+                    std::make_unique<config_helper_program>(
+                        program_bytes, !g_flag_program_one_shot);
+            const uint64_t loaded_capabilities = sequence_mode
+                ? DecodeProgramArtifact(sequence_program_bytes.front()).capabilities
+                : program_helper->artifact().capabilities;
             std::cout << "Loaded Program Format " << kProgramFormatMajor
                       << "." << kProgramFormatMinor << ", ISA "
                       << kProgramIsaMajor << "." << kProgramIsaMinor
                       << ", capabilities=0x" << std::hex
-                      << program_helper->artifact().capabilities << std::dec
+                      << loaded_capabilities << std::dec
                       << "\n";
         } else {
             InitGrid(g_flag_workload_config, g_flag_hardware_config,
@@ -1075,7 +1267,10 @@ int sc_main(int argc, char *argv[]) {
     std::unique_ptr<Monitor> monitor;
     if (program_mode)
         monitor = std::make_unique<Monitor>(
-            "monitor", event_engine, program_helper.get());
+            "monitor", event_engine,
+            sequence_mode
+                ? static_cast<config_helper_base *>(sequence_helper.get())
+                : static_cast<config_helper_base *>(program_helper.get()));
     else
         monitor = std::make_unique<Monitor>(
             "monitor", event_engine, g_flag_workload_config.c_str());
@@ -1167,6 +1362,9 @@ int sc_main(int argc, char *argv[]) {
     }
 
     std::optional<frontend::program_io::Applied> program_io_applied;
+    std::optional<frontend::program_io::Bindings> sequence_program_io_bindings;
+    std::optional<frontend::program_io::Applied>
+        sequence_program_io_applied;
     if (program_io_resolved.has_value()) {
         try {
             frontend::program_io::Bindings bindings;
@@ -1199,11 +1397,63 @@ int sc_main(int argc, char *argv[]) {
             return 2;
         }
     }
+    if (sequence_mode) {
+        try {
+            frontend::program_io::Bindings bindings;
+            for (int core = 0; core < TOTAL_CORES; ++core) {
+                WorkerCore *worker = monitor->workerCores[core];
+                if (worker == nullptr || !worker->sram_access)
+                    throw std::runtime_error(
+                        "Dense sequence ProgramIo found a missing SRAM AccessUnit");
+                bindings.sram_by_runtime_core.emplace(
+                    static_cast<uint32_t>(core),
+                    worker->sram_access.get());
+            }
+            bindings.hbm_runtime = monitor->hbmRuntime;
+            sequence_program_io_bindings = bindings;
+            sequence_program_io_applied =
+                frontend::program_io::ApplyBeforeSequenceSegment(
+                    sequence_program_io_resolved.front(), bindings, false);
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG)
+                << "Dense sequence ProgramIo initial apply failed: "
+                << error.what();
+            return 2;
+        }
+    }
 
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
     sc_clock clk("clk", CYCLE, SC_NS);
 
-    sc_start();
+    if (sequence_mode) {
+        for (std::size_t expected = 0; expected < 3; ++expected) {
+            sc_start();
+            if (sequence_helper->completed_segments() != expected + 1)
+                throw std::runtime_error(
+                    "Dense sequence paused outside an exact segment boundary");
+            const frontend::program_io::Result io_result =
+                frontend::program_io::VerifyAfterSimulation(
+                    *sequence_program_io_applied);
+            if (!io_result.Passed())
+                throw std::runtime_error(
+                    "Dense sequence ProgramIo segment verification failed");
+            std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
+                      << " probes=" << io_result.probes.size()
+                      << " pass=1" << std::endl;
+            PrintDenseKvBoundary(
+                *monitor->hbmRuntime, expected, sequence_kv_ranges[expected]);
+            if (expected + 1 < 3)
+                sequence_program_io_applied =
+                    frontend::program_io::ApplyBeforeSequenceSegment(
+                        sequence_program_io_resolved[expected + 1],
+                        *sequence_program_io_bindings, true);
+        }
+        if (!sequence_helper->final_complete())
+            throw std::runtime_error(
+                "Dense sequence did not reach its final one-shot drain");
+    } else {
+        sc_start();
+    }
 
     const uint64_t makespan_cycles =
         sc_time_stamp().value() / sc_time(CYCLE, SC_NS).value();
@@ -1326,11 +1576,14 @@ int sc_main(int argc, char *argv[]) {
         }
     }
     if (program_mode) {
-        if (!program_helper)
+        const ProgramArtifact *runtime_artifact = sequence_mode
+            ? (sequence_helper ? &sequence_helper->artifact() : nullptr)
+            : (program_helper ? &program_helper->artifact() : nullptr);
+        if (runtime_artifact == nullptr)
             throw std::logic_error(
                 "Program runtime lacks its decoded artifact");
         for (const auto &program_core :
-             program_helper->artifact().cores) {
+             runtime_artifact->cores) {
             if (program_core.core_id >=
                 static_cast<uint64_t>(TOTAL_CORES))
                 throw std::logic_error(

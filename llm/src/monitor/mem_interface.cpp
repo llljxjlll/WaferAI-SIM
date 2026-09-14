@@ -7,6 +7,10 @@
 #include "monitor/config_helper_gpu_pd.h"
 #include "monitor/config_helper_pd.h"
 #include "monitor/config_helper_pds.h"
+#pragma push_macro("DUMMY")
+#undef DUMMY
+#include "monitor/config_helper_program_sequence.h"
+#pragma pop_macro("DUMMY")
 #include "monitor/mem_interface.h"
 #include "monitor/start_data_tracker.h"
 #include "monitor/watchdog.h"
@@ -376,9 +380,14 @@ void MemInterface::recv_ack() {
 void MemInterface::recv_done() {
     while (true) {
         sc_event *notify_event = nullptr;
+        auto *sequence =
+            dynamic_cast<config_helper_program_sequence *>(config_helper);
+        const std::size_t completed_before =
+            sequence == nullptr ? 0 : sequence->completed_segments();
         switch (SYSTEM_MODE) {
         case SIM_DATAFLOW:
-            notify_event = nullptr;
+            if (sequence != nullptr)
+                notify_event = &ev_dis_config;
             break;
         case SIM_GPU:
             notify_event = &ev_switch_phase;
@@ -391,6 +400,16 @@ void MemInterface::recv_done() {
         }
 
         config_helper->parse_done_msg(event_engine, notify_event);
+        // A DATAFLOW Program sequence reuses this MemInterface instance.  Its
+        // normal phase machine ends every static Program in PRO_START, so the
+        // next Program's CONFIG ACK would otherwise dispatch START directly
+        // and skip its weight DATA phase.  Reset only after the sequence
+        // helper has accepted a complete, non-final DONE set.  Single-Program
+        // helpers and incomplete DONE sets retain their existing behavior.
+        if (SYSTEM_MODE == SIM_DATAFLOW && sequence != nullptr &&
+            sequence->completed_segments() == completed_before + 1 &&
+            !sequence->final_complete())
+            phase = PRO_CONF;
         LOG_INFO(MEM_INTF) << "End DONE reception";
         wait();
     }

@@ -80,7 +80,8 @@ public:
     void DebugSeed(
         uint64_t address,
         const std::vector<uint8_t> &payload) override {
-        if (sc_core::sc_is_running())
+        if (sc_core::sc_is_running() &&
+            sc_core::sc_get_status() != sc_core::SC_PAUSED)
             throw std::logic_error(
                 "HBM DebugSeed is forbidden while simulation is running");
         if (payload.empty())
@@ -95,7 +96,8 @@ public:
 
     HBMDebugSnapshot DebugPeek(
         uint64_t address, uint64_t size_bytes) const override {
-        if (sc_core::sc_is_running())
+        if (sc_core::sc_is_running() &&
+            sc_core::sc_get_status() != sc_core::SC_PAUSED)
             throw std::logic_error(
                 "HBM DebugPeek is forbidden while simulation is running");
         if (size_bytes == 0 ||
@@ -119,7 +121,8 @@ public:
 
     void DebugRestore(
         const HBMDebugSnapshot &snapshot) override {
-        if (sc_core::sc_is_running())
+        if (sc_core::sc_is_running() &&
+            sc_core::sc_get_status() != sc_core::SC_PAUSED)
             throw std::logic_error(
                 "HBM DebugRestore is forbidden while simulation is running");
         if (snapshot.payload.empty() ||

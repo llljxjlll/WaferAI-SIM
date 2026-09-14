@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from ..compiler import compile_rect_mesh
 from ..errors import SchemaError, UnsupportedFeatureError
+from ..schema.common import DType
 from ..schema.dense_compile_sequence import (
     DenseCompileSegment,
     DenseCompileSequence,
@@ -20,7 +21,13 @@ from ..schema.experiment import (
 )
 from ..schema.ir1 import PhysicalFabric
 from ..schema.memory_plan import MemoryPlanExecution
+from ..schema.n6 import LinkedProgramProfile
+from ..schema.placement import (
+    PersistentStateReservationPolicy,
+    PersistentStateSlotReservation,
+)
 from ..schema.persistent_state import HbmAddressSpace
+from ..schema.persistent_state import StateKind
 from ..schema.rect_mesh import RectMeshSpec
 from ..schema.rect_mesh_compile import RectMeshCompileChain, RectMeshCompileMode
 from ..schema.serde import canonical_digest
@@ -182,14 +189,52 @@ def _segment_spec(
     return spec
 
 
-def compile_dense_e2e_sequence(
+def _kv_reservation_policy(
+    manifest: WorkloadMaterializationManifest,
+) -> PersistentStateReservationPolicy:
+    """Reserve every compiler KV tensor at the final Decode capacity."""
+
+    request = manifest.request
+    final_profile = expected_segment_profile(manifest, 2)
+    element_bytes = {
+        DType.FP16: 2,
+        DType.FP32: 4,
+    }.get(request.model.dtype)
+    if element_bytes is None:
+        raise UnsupportedFeatureError(
+            "Dense KV fixed slots require fp16 or fp32",
+            path="dense_compile_sequence.request.model.dtype",
+            code="dense_compile_sequence_kv_dtype_unsupported",
+        )
+    raw_bytes = (
+        final_profile.context_sum
+        * (request.model.num_kv_heads // request.parallel.tp)
+        * request.model.head_dim
+        * element_bytes
+    )
+    slot_bytes = ((raw_bytes + 63) // 64) * 64
+    slots = tuple(
+        PersistentStateSlotReservation.create(
+            producer_pass="compile_dense_e2e_sequence",
+            kind=kind,
+            slot_bytes=slot_bytes,
+        )
+        for kind in (StateKind.KV_KEY, StateKind.KV_VALUE)
+    )
+    return PersistentStateReservationPolicy.create(
+        producer_pass="compile_dense_e2e_sequence",
+        slots=slots,
+    )
+
+
+def _compile_dense_e2e_sequence_with_profiles(
     manifest: WorkloadMaterializationManifest,
     legacy_template: ExperimentSpec,
     fabric: PhysicalFabric,
     *,
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
-) -> DenseCompileSequence:
-    """Compile three independent linked programs; do not claim runtime splice."""
+) -> tuple[DenseCompileSequence, tuple[LinkedProgramProfile, ...]]:
+    """Compile the sequence while retaining sources needed for ProgramIO."""
 
     if type(manifest) is not WorkloadMaterializationManifest:
         raise SchemaError("must be a WorkloadMaterializationManifest", path="manifest")
@@ -199,7 +244,9 @@ def compile_dense_e2e_sequence(
         raise SchemaError("must be a PhysicalFabric", path="fabric")
     _validate_inputs(manifest, legacy_template, fabric, hbm_address_spaces)
     mesh = RectMeshSpec(manifest.request.mesh.rows, manifest.request.mesh.columns)
+    reservation_policy = _kv_reservation_policy(manifest)
     segments: list[DenseCompileSegment] = []
+    linked_profiles: list[LinkedProgramProfile] = []
     for segment_index in range(3):
         spec = _segment_spec(legacy_template, manifest, segment_index)
         compilation = compile_rect_mesh(
@@ -207,6 +254,7 @@ def compile_dense_e2e_sequence(
             fabric,
             rect_mesh=mesh,
             hbm_address_spaces=hbm_address_spaces,
+            persistent_state_reservation_policy=reservation_policy,
             mode=RectMeshCompileMode.AUTO,
             producer_pass=f"dense_e2e_segment_{segment_index}",
         )
@@ -230,6 +278,7 @@ def compile_dense_e2e_sequence(
                 path=f"dense_compile_sequence.segments[{segment_index}].profile",
             )
         linked = entries[0]
+        linked_profiles.append(linked)
         segment = DenseCompileSegment.create(
             segment_index=segment_index,
             phase="prefill" if segment_index == 0 else "decode",
@@ -250,10 +299,59 @@ def compile_dense_e2e_sequence(
             one_shot_workload_end=segment_index == 2,
         )
         segments.append(segment)
-    return DenseCompileSequence.create(
+    sequence = DenseCompileSequence.create(
         materialization=manifest,
         segments=tuple(segments),
     )
+    profiles = tuple(linked_profiles)
+    if any(
+        profile.id != segment.linked_profile_id
+        or profile.manifest != segment.linked_manifest
+        for profile, segment in zip(profiles, sequence.segments)
+    ):
+        raise SchemaError(
+            "retained linked profile drifted from the sequence artifact",
+            path="dense_compile_sequence.linked_profiles",
+        )
+    return sequence, profiles
 
 
-__all__ = ["compile_dense_e2e_sequence"]
+def compile_dense_e2e_sequence(
+    manifest: WorkloadMaterializationManifest,
+    legacy_template: ExperimentSpec,
+    fabric: PhysicalFabric,
+    *,
+    hbm_address_spaces: tuple[HbmAddressSpace, ...],
+) -> DenseCompileSequence:
+    """Compile three independent linked programs; do not claim runtime splice."""
+
+    sequence, _profiles = _compile_dense_e2e_sequence_with_profiles(
+        manifest,
+        legacy_template,
+        fabric,
+        hbm_address_spaces=hbm_address_spaces,
+    )
+    return sequence
+
+
+def compile_dense_e2e_sequence_runtime_profiles(
+    manifest: WorkloadMaterializationManifest,
+    legacy_template: ExperimentSpec,
+    fabric: PhysicalFabric,
+    *,
+    hbm_address_spaces: tuple[HbmAddressSpace, ...],
+) -> tuple[DenseCompileSequence, tuple[LinkedProgramProfile, ...]]:
+    """Return exact sequence and linked sources for typed ProgramIO creation."""
+
+    return _compile_dense_e2e_sequence_with_profiles(
+        manifest,
+        legacy_template,
+        fabric,
+        hbm_address_spaces=hbm_address_spaces,
+    )
+
+
+__all__ = [
+    "compile_dense_e2e_sequence",
+    "compile_dense_e2e_sequence_runtime_profiles",
+]

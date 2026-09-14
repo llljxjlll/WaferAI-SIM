@@ -678,15 +678,70 @@ void TestHbmSeedProbeAndRollback() {
         },
         "non-behavioral HBM debug access");
 }
+
+void TestSequenceSegmentPreservesHbm() {
+    HbmTopologyGuard topology_guard;
+    ConfigureBehavioralHbm();
+    BehavioralHBMBackendConfig hbm_config;
+    hbm_config.bandwidth_GBps = 1.0;
+    HBMRuntime runtime;
+    io::HBMRuntimeSelfTestPeer::Add(
+        &runtime, 0, 0,
+        std::make_unique<BehavioralHBMBackend>(hbm_config));
+
+    sram::RegionTable regions(MemoryConfig(true));
+    sram::Storage storage(1024, true);
+    sram::AccessUnit access("program_io_sequence_access", regions, storage);
+    io::Bindings bindings;
+    bindings.sram_by_runtime_core.emplace(0, &access);
+    bindings.hbm_runtime = &runtime;
+    runtime.DebugSeed(64, 0, {1, 2, 3, 4});
+
+    io::ResolvedContract next;
+    next.id = "sequence_next";
+    next.mode = io::Mode::TIMING;
+    next.initializations = {
+        ResolvedInput(0, 256, {5, 6, 7, 8}),
+        ResolvedHbmInput(64, {9, 9, 9, 9}),
+    };
+    next.output_probes = {ResolvedProbe(0, 320, {4, 3, 2, 1})};
+    const io::Applied applied =
+        io::ApplyBeforeSequenceSegment(next, bindings, true);
+    Require(
+        runtime.DebugPeek(64, 0, 4).payload ==
+            std::vector<uint8_t>({1, 2, 3, 4}),
+        "sequence segment overwrote persistent HBM state");
+    Require(
+        access.DebugPeek(256, 4).payload ==
+            std::vector<uint8_t>({5, 6, 7, 8}) &&
+            applied.contract.initializations.size() == 1,
+        "sequence segment did not refresh only its SRAM input");
+
+    io::ResolvedContract missing = next;
+    missing.initializations[0] = ResolvedInput(0, 384, {8, 8, 8, 8});
+    missing.initializations[1] = ResolvedHbmInput(128, {7, 7, 7, 7});
+    (void)io::ApplyBeforeSequenceSegment(missing, bindings, true);
+    Require(
+        runtime.DebugPeek(128, 0, 4).payload ==
+            std::vector<uint8_t>({7, 7, 7, 7}) &&
+            access.DebugPeek(384, 4).payload ==
+                std::vector<uint8_t>({8, 8, 8, 8}),
+        "sequence did not transactionally fill missing HBM/SRAM bytes");
+    Require(
+        runtime.DebugPeek(64, 0, 4).payload ==
+            std::vector<uint8_t>({1, 2, 3, 4}),
+        "filling a missing sequence range changed existing HBM bytes");
+}
 int RunSelftest() {
     TestStrictParser();
     TestTaggedTargets();
     TestInt32SramDType();
     TestSeedAndProbe();
     TestHbmSeedProbeAndRollback();
+    TestSequenceSegmentPreservesHbm();
     io::RunExactFourStreamUnfusedTerminalReuseSelfTest();
     io::RunExactMoeCalibrationDynamicRootByteClosureSelfTest();
-    std::cout << "ProgramIo C++ selftest: 7/7 PASS\n";
+    std::cout << "ProgramIo C++ selftest: 8/8 PASS\n";
     return 0;
 }
 

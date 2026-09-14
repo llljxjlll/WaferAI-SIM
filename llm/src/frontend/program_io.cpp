@@ -1589,7 +1589,8 @@ HBMRuntimeDebugSnapshot PeekHbmRuntimeRange(
 }
 
 void RequireBoundary(const char *operation) {
-    if (sc_core::sc_is_running())
+    if (sc_core::sc_is_running() &&
+        sc_core::sc_get_status() != sc_core::SC_PAUSED)
         throw Error(std::string(operation) +
                     " is forbidden while simulation is running");
 }
@@ -2295,6 +2296,58 @@ Applied ApplyBeforeSimulation(const ResolvedContract &contract,
         std::rethrow_exception(failure);
     }
     return Applied{contract, bindings};
+}
+
+Applied ApplyBeforeSequenceSegment(const ResolvedContract &contract,
+                                   const Bindings &bindings,
+                                   bool preserve_existing_hbm) {
+    RequireBoundary("ProgramIo ApplyBeforeSequenceSegment");
+    if (!preserve_existing_hbm)
+        return ApplyBeforeSimulation(contract, bindings);
+
+    ResolvedContract local = contract;
+    local.initializations.clear();
+    for (const ResolvedInitialization &entry : contract.initializations) {
+        if (!std::holds_alternative<HbmTarget>(entry.source.target)) {
+            local.initializations.push_back(entry);
+            continue;
+        }
+        const HBMRuntimeDebugSnapshot snapshot =
+            PeekHbmRuntimeRange(entry, bindings);
+        std::vector<uint8_t> present(snapshot.payload.size(), 0);
+        for (const HBMRuntimeDebugChunkSnapshot &chunk : snapshot.chunks) {
+            std::copy(
+                chunk.backend.present.begin(), chunk.backend.present.end(),
+                present.begin() + static_cast<std::size_t>(chunk.physical_offset));
+        }
+        std::size_t cursor = 0;
+        while (cursor < present.size()) {
+            while (cursor < present.size() && present[cursor] != 0) ++cursor;
+            if (cursor == present.size()) break;
+            const std::size_t begin = cursor;
+            while (cursor < present.size() && present[cursor] == 0) ++cursor;
+            ResolvedInitialization missing = entry;
+            const std::size_t length = cursor - begin;
+            // Resolution already proved the whole typed StateABI. Normalize
+            // the missing subrange as an internal exact physical transaction
+            // so the ordinary rollback machinery can snapshot and restore it.
+            missing.source.offset_bytes = 0;
+            missing.source.length_bytes = length;
+            missing.region_base_bytes += begin;
+            missing.region_size_bytes = length;
+            missing.absolute_address_bytes += begin;
+            missing.bytes.assign(
+                entry.bytes.begin() + static_cast<std::ptrdiff_t>(begin),
+                entry.bytes.begin() + static_cast<std::ptrdiff_t>(cursor));
+            missing.hbm_range->address_bytes += begin;
+            missing.hbm_range->size_bytes = length;
+            local.initializations.push_back(std::move(missing));
+        }
+    }
+    if (local.initializations.empty())
+        throw Error(
+            "ProgramIo sequence segment has no missing state or SRAM input");
+    return ApplyBeforeSimulation(local, bindings);
 }
 
 bool Result::Passed() const noexcept {

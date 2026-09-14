@@ -188,6 +188,13 @@ struct Result {
 // validity bitmap before rethrowing.
 Applied ApplyBeforeSimulation(const ResolvedContract &contract,
                               const Bindings &bindings);
+// Sequence segments after the first must refresh program-local SRAM inputs
+// while preserving persistent HBM bytes produced by earlier segments. Missing
+// HBM tails are filled from the next segment's typed seed in the same rollback
+// transaction; already-present bytes are never overwritten.
+Applied ApplyBeforeSequenceSegment(const ResolvedContract &contract,
+                                   const Bindings &bindings,
+                                   bool preserve_existing_hbm);
 Result VerifyAfterSimulation(const Applied &applied);
 
 std::string Sha256Hex(std::string_view bytes);

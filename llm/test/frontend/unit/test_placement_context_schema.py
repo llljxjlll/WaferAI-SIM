@@ -20,6 +20,11 @@ from llm.frontend.wafer_frontend.schema.serde import (
     from_data,
     loads_dataclass,
 )
+from llm.frontend.wafer_frontend.schema.persistent_state import StateKind
+from llm.frontend.wafer_frontend.schema.placement import (
+    PersistentStateReservationPolicy,
+    PersistentStateSlotReservation,
+)
 
 from _fixtures import valid_hbm_address_spaces, valid_ir1
 
@@ -41,7 +46,7 @@ class PlacementContextSchemaTest(unittest.TestCase):
         context = compact_context()
         self.assertEqual(
             context.schema_version,
-            "wafer_frontend.placement_context/v1alpha2",
+            "wafer_frontend.placement_context/v1alpha3",
         )
         self.assertEqual(context.schema_version, PLACEMENT_CONTEXT_SCHEMA_VERSION)
         self.assertEqual(
@@ -140,6 +145,47 @@ class PlacementContextSchemaTest(unittest.TestCase):
             from_data(PlacementContext, raw, path="placement_context")
         with self.assertRaisesRegex(SchemaError, "producer_pass"):
             replace(context, producer_pass="").validate()
+
+    def test_persistent_state_reservation_policy_round_trip_and_validation(self) -> None:
+        slots = tuple(
+            PersistentStateSlotReservation.create(
+                producer_pass="sequence_test",
+                kind=kind,
+                slot_bytes=192,
+            )
+            for kind in (StateKind.KV_KEY, StateKind.KV_VALUE)
+        )
+        policy = PersistentStateReservationPolicy.create(
+            producer_pass="sequence_test",
+            slots=slots,
+        )
+        context = PlacementContext.create(
+            producer_pass="sequence_test",
+            fabric=valid_ir1().fabric,
+            placement=PlacementSpec(PlacementStrategy.COMPACT, ()),
+            hbm_address_spaces=valid_hbm_address_spaces(valid_ir1().fabric),
+            persistent_state_reservation_policy=policy,
+        )
+        decoded = loads_dataclass(
+            PlacementContext,
+            canonical_json(context),
+            path="placement_context",
+        )
+        self.assertEqual(decoded, context)
+        self.assertEqual(decoded.persistent_state_reservation_policy, policy)
+        self.assertNotEqual(decoded.id, compact_context().id)
+
+        with self.assertRaisesRegex(SchemaError, "positive multiple of 64"):
+            PersistentStateSlotReservation.create(
+                producer_pass="sequence_test",
+                kind=StateKind.KV_KEY,
+                slot_bytes=160,
+            )
+        with self.assertRaisesRegex(SchemaError, "duplicate state kind"):
+            PersistentStateReservationPolicy.create(
+                producer_pass="sequence_test",
+                slots=(slots[0], slots[0]),
+            )
 
 
 if __name__ == "__main__":

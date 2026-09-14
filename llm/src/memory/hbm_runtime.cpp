@@ -26,7 +26,7 @@ struct HBMRuntimeDebugRoute {
 };
 
 void RequireDebugBoundary(const char *operation) {
-    if (sc_is_running())
+    if (sc_is_running() && sc_get_status() != SC_PAUSED)
         throw std::logic_error(
             std::string("HBMRuntime ") + operation +
             " is forbidden while simulation is running");

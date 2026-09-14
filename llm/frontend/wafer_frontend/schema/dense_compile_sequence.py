@@ -11,6 +11,7 @@ from .common import ProfileKey, stable_artifact_id, validate_nonempty, validate_
 from .e2e_workload_graph import E2EStateKind
 from .experiment import ExperimentSpec, InferSource, InstanceRole, WorkloadMode
 from .memory_plan import MemoryObjectKind, MemoryTier
+from .persistent_state import StateKind
 from .rect_mesh_compile import RectMeshCompileCapabilityReport, RectMeshCompileChain
 from .serde import canonical_digest
 from .workload_materialization import (
@@ -375,6 +376,7 @@ class DenseCompileSequence:
         graph = self.materialization.logical_graph
         ranks = tuple(range(request.parallel.logical_rank_count))
         previous: dict[tuple[int, int], DenseKvSegmentBinding] = {}
+        previous_physical_layout: tuple[tuple[StateKind, int, int], ...] | None = None
         for index, segment in enumerate(self.segments):
             segment_path = f"{path}.segments[{index}]"
             segment.validate(segment_path)
@@ -425,6 +427,48 @@ class DenseCompileSequence:
                 raise SchemaError("segment operations do not exactly cover graph step", path=f"{segment_path}.operation_refs")
             if segment.layer_bindings != tuple(range(request.model.num_layers)):
                 raise SchemaError("segment does not cover every model layer", path=f"{segment_path}.layer_bindings")
+            state_abis = {
+                abi.id: abi
+                for fragment in segment.linked_manifest.fragments
+                for abi in fragment.state_abi
+            }
+            physical_kv = tuple(
+                sorted(
+                    (
+                        abi
+                        for abi in state_abis.values()
+                        if abi.kind in (StateKind.KV_KEY, StateKind.KV_VALUE)
+                    ),
+                    key=lambda abi: (abi.kind.value, abi.die_id, abi.address),
+                )
+            )
+            expected_state_count = 2 * request.model.num_layers * len(ranks)
+            if len(physical_kv) != expected_state_count:
+                raise SchemaError(
+                    "linked program must expose every physical KV StateABI",
+                    path=f"{segment_path}.linked_manifest.fragments",
+                )
+            dtype_bytes = 2 if request.model.dtype.value == "fp16" else 4
+            expected_state_bytes = (
+                infer.profile.context_sum
+                * (request.model.num_kv_heads // request.parallel.tp)
+                * request.model.head_dim
+                * dtype_bytes
+            )
+            if any(abi.size_bytes != expected_state_bytes for abi in physical_kv):
+                raise SchemaError(
+                    "physical KV StateABI must retain the segment's true extent",
+                    path=f"{segment_path}.linked_manifest.fragments",
+                )
+            physical_layout = tuple(
+                (abi.kind, abi.die_id, abi.address) for abi in physical_kv
+            )
+            if previous_physical_layout is not None and physical_layout != previous_physical_layout:
+                raise SchemaError(
+                    "physical KV StateABI address changed between segments",
+                    path=f"{segment_path}.linked_manifest.fragments",
+                )
+            previous_physical_layout = physical_layout
             expected_keys = tuple(
                 (layer, rank)
                 for layer in range(request.model.num_layers)
