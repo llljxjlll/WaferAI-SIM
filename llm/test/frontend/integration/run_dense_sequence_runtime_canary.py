@@ -1,4 +1,4 @@
-"""Run the strict 1x1 Dense Prefill -> Decode -> Decode sequence canary."""
+"""Run a strict Dense Prefill -> Decode -> Decode sequence canary."""
 
 from __future__ import annotations
 
@@ -13,10 +13,14 @@ from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
     compile_dense_e2e_sequence_runtime_profiles,
 )
 from llm.frontend.wafer_frontend.passes.program_io import build_timing_program_io
+from llm.frontend.wafer_frontend.schema.artifact_manifest import RegionManifest
 from llm.frontend.wafer_frontend.schema.ir2 import StateUseAccess
 from llm.frontend.wafer_frontend.schema.serde import canonical_digest, canonical_json
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
-from llm.test.frontend.unit.test_dense_compile_sequence import _one_die_case
+from llm.test.frontend.unit.test_dense_compile_sequence import (
+    _one_die_case,
+    _two_by_two_case,
+)
 
 from .flexible_mesh_release_hardware import (
     specialize_p5_large_release_hardware,
@@ -45,12 +49,16 @@ def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
 
 
 def run(args: argparse.Namespace) -> None:
-    manifest, template, fabric = _one_die_case()
+    rows, columns = (1, 1) if args.mesh_size == "1x1" else (2, 2)
+    manifest, template, fabric = (
+        _one_die_case() if args.mesh_size == "1x1" else _two_by_two_case()
+    )
+    hbm_address_spaces = valid_hbm_address_spaces(fabric)
     sequence, linked_profiles = compile_dense_e2e_sequence_runtime_profiles(
         manifest,
         template,
         fabric,
-        hbm_address_spaces=valid_hbm_address_spaces(fabric),
+        hbm_address_spaces=hbm_address_spaces,
     )
     sequence.validate()
 
@@ -95,7 +103,11 @@ def run(args: argparse.Namespace) -> None:
         abi_by_binding = {
             abi.hbm_binding_ref: abi
             for fragment in linked_profiles[index].manifest.fragments
-            for abi in fragment.state_abi
+            for abi in (
+                fragment.fragment.state_abi
+                if isinstance(fragment, RegionManifest)
+                else fragment.state_abi
+            )
         }
         first_access: dict[str, StateUseAccess] = {}
         for action in linked_profiles[index].lowering_context.global_dag.actions:
@@ -120,11 +132,28 @@ def run(args: argparse.Namespace) -> None:
 
     hardware_path = output / "hardware.json"
     mapping_path = output / "mapping.spec"
-    hardware = json.loads(specialize_p5_large_release_hardware(1, 1))
+    hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
     hardware["memory"]["sram_size"] = 65536
     hardware["memory"]["sram"]["capacity_bytes"] = 65536
     hardware["memory"]["sram"]["regions"][0]["name"] = "sram"
     hardware["memory"]["sram"]["regions"][0]["size_bytes"] = 65536
+    address_spaces_by_die = {
+        space.die_id: space for space in hbm_address_spaces
+    }
+    for stack in hardware["memory_system"]["hbm_stacks"]:
+        space = address_spaces_by_die[stack["compute_die_id"]]
+        stack["capacity_bytes"] = space.size_bytes
+    hardware["memory_system"]["address_policy"]["home_ranges"] = [
+        {
+            "die_id": space.die_id,
+            "base": space.base_address,
+            "size_bytes": space.size_bytes,
+        }
+        for space in hbm_address_spaces
+    ]
+    hardware["memory_system"]["address_policy"]["stack_interleave_bytes"] = max(
+        space.size_bytes for space in hbm_address_spaces
+    )
     hardware_path.write_text(
         json.dumps(hardware, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
@@ -168,18 +197,19 @@ def run(args: argparse.Namespace) -> None:
     )
     if segment_markers != [("0", "0"), ("1", "0"), ("2", "1")]:
         raise RuntimeError(f"segment marker closure failed: {segment_markers}")
-    if [tuple(item[:2]) for item in kv_markers] != [
-        ("0", "512"),
-        ("1", "640"),
-        ("2", "768"),
-    ]:
+    expected_kv_bytes = (
+        [("0", "512"), ("1", "640"), ("2", "768")]
+        if args.mesh_size == "1x1"
+        else [("0", "4096"), ("1", "5120"), ("2", "6144")]
+    )
+    if [tuple(item[:2]) for item in kv_markers] != expected_kv_bytes:
         raise RuntimeError(f"KV boundary closure failed: {kv_markers}")
     if drain_markers != [("3", "1")]:
         raise RuntimeError(f"one-shot drain closure failed: {drain_markers}")
     if runtime_output.count("[SIM_RESULT]") != 1:
         raise RuntimeError("runtime did not emit exactly one SIM_RESULT")
     print(
-        "Dense sequence runtime canary PASS "
+        f"Dense sequence runtime canary PASS mesh={args.mesh_size} "
         f"sequence={sequence.digest} artifacts={','.join(artifact_digests)} "
         f"kv={','.join(item[2] for item in kv_markers)}"
     )
@@ -190,6 +220,12 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output", type=Path, default=build / "dense-sequence-runtime-canary"
+    )
+    parser.add_argument(
+        "--mesh-size",
+        choices=("1x1", "2x2"),
+        default="1x1",
+        help="physical mesh and matching full-participation Dense fixture",
     )
     parser.add_argument(
         "--finalizer", type=Path, default=build / "npusim_program_finalizer"

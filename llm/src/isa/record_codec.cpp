@@ -579,7 +579,7 @@ void ValidateAttentionExact(const AttentionExactOperands &o) {
     Require(o.context_sum != 0,
             "ATTENTION_EXACT context_sum must be non-zero");
     RequirePositiveU32(o.context_max, "ATTENTION_EXACT context_max");
-    if (o.mode != ExactAttentionMode::EXACT_PROFILE) {
+    if (o.mode == ExactAttentionMode::DECODE) {
         Require(o.query_tokens <= o.context_max,
                 "ATTENTION_EXACT context_max must cover query tokens");
     }
@@ -587,12 +587,19 @@ void ValidateAttentionExact(const AttentionExactOperands &o) {
     uint64_t expected_pairs = 0;
     uint64_t expected_read = 0;
     if (o.mode == ExactAttentionMode::PREFILL) {
-        expected_pairs = Product(
-            {o.query_tokens,
-             CheckedAdd(o.query_tokens, 1,
-                        "ATTENTION_EXACT prefill pairs")},
-            "ATTENTION_EXACT prefill pairs") /
+        Require(o.context_sum == o.query_tokens,
+                "ATTENTION_EXACT prefill context_sum must equal query_tokens");
+        Require(o.query_tokens % o.context_max == 0,
+                "ATTENTION_EXACT prefill requests must have equal context length");
+        const uint64_t request_count = o.query_tokens / o.context_max;
+        const uint64_t pairs_per_request =
+            Product({o.context_max,
+                     CheckedAdd(o.context_max, 1,
+                                "ATTENTION_EXACT prefill pairs")},
+                    "ATTENTION_EXACT prefill pairs") /
             2;
+        expected_pairs = CheckedMul(request_count, pairs_per_request,
+                                    "ATTENTION_EXACT prefill pairs");
     } else if (o.mode == ExactAttentionMode::DECODE) {
         expected_pairs = o.context_sum;
         expected_read =
@@ -619,12 +626,19 @@ void ValidateAttentionExact(const AttentionExactOperands &o) {
         expected_pairs = o.query_key_pairs;
         expected_read = o.rank_kv_read_bytes;
     } else {
-        expected_pairs = Product(
-            {o.query_tokens,
-             CheckedAdd(o.query_tokens, 1,
-                        "ATTENTION_EXACT train-forward pairs")},
-            "ATTENTION_EXACT train-forward pairs") /
+        Require(o.context_sum == o.query_tokens,
+                "ATTENTION_EXACT train-forward context_sum must equal query_tokens");
+        Require(o.query_tokens % o.context_max == 0,
+                "ATTENTION_EXACT train-forward requests must have equal context length");
+        const uint64_t request_count = o.query_tokens / o.context_max;
+        const uint64_t pairs_per_request =
+            Product({o.context_max,
+                     CheckedAdd(o.context_max, 1,
+                                "ATTENTION_EXACT train-forward pairs")},
+                    "ATTENTION_EXACT train-forward pairs") /
             2;
+        expected_pairs = CheckedMul(request_count, pairs_per_request,
+                                    "ATTENTION_EXACT train-forward pairs");
     }
     const uint64_t expected_write =
         o.mode == ExactAttentionMode::TRAIN_FORWARD

@@ -1330,7 +1330,10 @@ class DenseIR0Validator:
             write_tokens = exact_profile.capacity.kv_write_tokens
         else:
             expected_pairs = (
-                tokens * (tokens + 1) // 2
+                profile.num_seqs
+                * profile.context_max
+                * (profile.context_max + 1)
+                // 2
                 if profile.prefill_tokens
                 else profile.context_sum
             )

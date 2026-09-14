@@ -781,9 +781,22 @@ class AttentionWorkload:
         elif self.mode is AttentionMode.PREFILL:
             if self.profile.decode_tokens or not self.profile.prefill_tokens:
                 raise SchemaError("prefill mode requires a pure prefill profile", path=f"{path}.mode")
-            if self.query_tokens != self.profile.prefill_tokens:
-                raise SchemaError("must equal profile.prefill_tokens", path=f"{path}.query_tokens")
-            expected_pairs = self.query_tokens * (self.query_tokens + 1) // 2
+            if (
+                self.query_tokens != self.profile.prefill_tokens
+                or self.context_sum != self.query_tokens
+                or self.profile.num_seqs * self.context_max
+                != self.query_tokens
+            ):
+                raise SchemaError(
+                    "prefill rows must equal num_seqs * uniform sequence length",
+                    path=f"{path}.query_tokens",
+                )
+            expected_pairs = (
+                self.profile.num_seqs
+                * self.context_max
+                * (self.context_max + 1)
+                // 2
+            )
             expected_read = 0
             expected_write = 4 * self.query_tokens * self.num_kv_heads * self.head_dim
         else:

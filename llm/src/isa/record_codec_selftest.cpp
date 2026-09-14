@@ -1355,6 +1355,21 @@ void CheckExactStage2Rejections(Checks &checks) {
     checks.Reject("ATTENTION causal exact",
                   [&] { EncodeExternalRecord(record); });
     attention.causal = true;
+    attention.query_tokens = 32;
+    attention.context_sum = 32;
+    attention.context_max = 8;
+    attention.query_key_pairs = 144;
+    attention.rank_kv_write_bytes = 1024;
+    checks.Accept("ATTENTION equal-length multi-request prefill",
+                  [&] { EncodeExternalRecord(record); });
+    attention.context_sum = 31;
+    checks.Reject("ATTENTION prefill aggregate context identity",
+                  [&] { EncodeExternalRecord(record); });
+    attention.context_sum = 32;
+    attention.context_max = 7;
+    checks.Reject("ATTENTION prefill equal-length request contexts",
+                  [&] { EncodeExternalRecord(record); });
+    attention.context_max = 8;
     attention.mode = ExactAttentionMode::DECODE;
     attention.query_tokens = 1;
     attention.context_sum = 8;
@@ -1401,6 +1416,12 @@ void CheckExactStage2Rejections(Checks &checks) {
     attention.rank_kv_read_bytes = 0;
     attention.rank_kv_write_bytes = 0;
     checks.Accept("ATTENTION train-forward exact",
+                  [&] { EncodeExternalRecord(record); });
+    attention.query_tokens = 32;
+    attention.context_sum = 32;
+    attention.context_max = 8;
+    attention.query_key_pairs = 144;
+    checks.Accept("ATTENTION equal-length multi-request train-forward",
                   [&] { EncodeExternalRecord(record); });
     attention.rank_kv_write_bytes = 256;
     checks.Reject("ATTENTION train-forward rejects KV write",

@@ -152,12 +152,13 @@ def _validate_scope(template: IR0Template) -> None:
                     path="template.instance.role",
                 )
             if (
-                profile.num_seqs != 1
-                or profile.context_sum != profile.prefill_tokens
-                or profile.context_max != profile.prefill_tokens
+                profile.context_sum != profile.prefill_tokens
+                or profile.num_seqs * profile.context_max
+                != profile.prefill_tokens
             ):
                 _unsupported(
-                    "prefill requires one sequence and context_sum == context_max == prefill_tokens",
+                    "prefill requires uniform full-length sequences with "
+                    "context_sum == prefill_tokens == num_seqs * context_max",
                     path=profile_path,
                 )
             continue
@@ -185,7 +186,12 @@ def _query_key_pairs(
     if exact_profile is not None:
         return exact_profile.capacity.query_key_pairs
     if profile.prefill_tokens:
-        return profile.prefill_tokens * (profile.prefill_tokens + 1) // 2
+        return (
+            profile.num_seqs
+            * profile.context_max
+            * (profile.context_max + 1)
+            // 2
+        )
     return profile.context_sum
 
 

@@ -21,9 +21,11 @@ from llm.frontend.wafer_frontend.schema.memory_plan import MemoryTier, MemoryTie
 from llm.frontend.wafer_frontend.schema.persistent_state import StateKind
 from llm.frontend.wafer_frontend.schema.serde import canonical_json, loads_dataclass
 from llm.frontend.wafer_frontend.schema.workload_run import (
+    WorkloadInferenceSteps,
     WorkloadMeshSpec,
     WorkloadParallelSpec,
     WorkloadRunRequest,
+    WorkloadStepSpec,
 )
 from llm.test.frontend.flexible_mesh_fixtures import minimal_hardware
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
@@ -72,6 +74,61 @@ def _one_die_case():
     template.validate()
     fabric = physical_fabric_from_data(
         minimal_hardware(1, 1, sram_bytes=65536)
+    )
+    return manifest, template, fabric
+
+
+def _two_by_two_case():
+    base = _request(layers=2, prefill=4, decode=2)
+    model = replace(base.model, num_kv_heads=4)
+    steps = WorkloadStepSpec(
+        inference=WorkloadInferenceSteps(
+            prefill_tokens=4,
+            decode_steps=2,
+            request_count=4,
+        )
+    )
+    request = WorkloadRunRequest.create(
+        family=base.family,
+        model=model,
+        steps=steps,
+        mesh=WorkloadMeshSpec(2, 2),
+        parallel=WorkloadParallelSpec(
+            tp=4,
+            active_die_ids=(0, 1, 2, 3),
+        ),
+        memory=base.memory,
+        execution=base.execution,
+    )
+    capacity = tuple(
+        MemoryTierCapacity.create(
+            tier=MemoryTier.HBM,
+            location_ref=f"die:{rank}",
+            base_address=0,
+            capacity_bytes=1 << 30,
+            alignment_bytes=64,
+        )
+        for rank in range(4)
+    )
+    manifest = materialize_workload_preflight(
+        request,
+        _capability(),
+        capacities=capacity,
+    )
+    template = _legacy_spec(layers=2, prefill=4, decode=0)
+    template = replace(
+        template,
+        model=replace(template.model, KVH=4),
+        parallel=replace(
+            template.parallel,
+            instances=(
+                replace(template.parallel.instances[0], tp=4, sp=True),
+            ),
+        ),
+    )
+    template.validate()
+    fabric = physical_fabric_from_data(
+        minimal_hardware(2, 2, sram_bytes=65536)
     )
     return manifest, template, fabric
 
@@ -174,6 +231,44 @@ class DenseCompileSequenceTest(unittest.TestCase):
         self.sequence.validate()
         self.assertEqual(self.sequence.digest, self.sequence.digest)
 
+    def test_real_two_by_two_tp4_four_request_compiler_canary(self) -> None:
+        manifest, template, fabric = _two_by_two_case()
+        sequence = compile_dense_e2e_sequence(
+            manifest,
+            template,
+            fabric,
+            hbm_address_spaces=valid_hbm_address_spaces(fabric),
+        )
+        self.assertEqual(
+            tuple(segment.legacy_spec.workload.infer.profile.num_seqs
+                  for segment in sequence.segments),
+            (4, 4, 4),
+        )
+        self.assertEqual(
+            tuple(segment.legacy_spec.parallel.instances[0].tp
+                  for segment in sequence.segments),
+            (4, 4, 4),
+        )
+        self.assertEqual(
+            tuple(segment.legacy_spec.parallel.instances[0].sp
+                  for segment in sequence.segments),
+            (True, True, True),
+        )
+        self.assertTrue(
+            all(
+                {binding.logical_rank for binding in segment.kv_bindings}
+                == {0, 1, 2, 3}
+                for segment in sequence.segments
+            )
+        )
+        self.assertTrue(
+            all(
+                len(segment.linked_manifest.fragments) > 0
+                for segment in sequence.segments
+            )
+        )
+        sequence.validate()
+
     def test_sequence_strict_json_round_trip(self) -> None:
         decoded = loads_dataclass(
             DenseCompileSequence,
@@ -251,6 +346,57 @@ class DenseCompileSequenceTest(unittest.TestCase):
             compile_dense_e2e_sequence(
                 manifest,
                 _legacy_spec(layers=2, prefill=4, decode=0),
+                fabric,
+                hbm_address_spaces=valid_hbm_address_spaces(fabric),
+            )
+
+    def test_two_by_two_active_subset_remains_fail_closed(self) -> None:
+        base = _request(layers=2, prefill=4, decode=2)
+        request = WorkloadRunRequest.create(
+            family=base.family,
+            model=replace(base.model, num_kv_heads=4),
+            steps=WorkloadStepSpec(
+                inference=WorkloadInferenceSteps(4, 2, 2)
+            ),
+            mesh=WorkloadMeshSpec(2, 2),
+            parallel=WorkloadParallelSpec(tp=2, active_die_ids=(0, 1)),
+            memory=base.memory,
+            execution=base.execution,
+        )
+        capacities = tuple(
+            MemoryTierCapacity.create(
+                tier=MemoryTier.HBM,
+                location_ref=f"die:{rank}",
+                base_address=0,
+                capacity_bytes=1 << 30,
+                alignment_bytes=64,
+            )
+            for rank in range(4)
+        )
+        manifest = materialize_workload_preflight(
+            request,
+            _capability(),
+            capacities=capacities,
+        )
+        template = _legacy_spec(layers=2, prefill=4, decode=0)
+        template = replace(
+            template,
+            model=replace(template.model, KVH=4),
+            parallel=replace(
+                template.parallel,
+                instances=(replace(template.parallel.instances[0], tp=2, sp=True),),
+            ),
+        )
+        fabric = physical_fabric_from_data(
+            minimal_hardware(2, 2, sram_bytes=65536)
+        )
+        with self.assertRaisesRegex(
+            UnsupportedFeatureError,
+            "full_row_major_mesh.*tp_must_cover_mesh",
+        ):
+            compile_dense_e2e_sequence(
+                manifest,
+                template,
                 fabric,
                 hbm_address_spaces=valid_hbm_address_spaces(fabric),
             )

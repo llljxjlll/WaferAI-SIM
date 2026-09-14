@@ -1348,8 +1348,20 @@ def _validate_fixed_compute_operands(
         ):
             raise SchemaError("ATTENTION_EXACT head shards are inconsistent", path=path)
         if values["mode"] == 0:
+            if (
+                values["context_sum"] != values["query_tokens"]
+                or values["query_tokens"] % values["context_max"]
+            ):
+                raise SchemaError(
+                    "ATTENTION_EXACT prefill requires equal-length request contexts",
+                    path=path,
+                )
+            request_count = values["query_tokens"] // values["context_max"]
             expected_pairs = (
-                values["query_tokens"] * (values["query_tokens"] + 1) // 2
+                request_count
+                * values["context_max"]
+                * (values["context_max"] + 1)
+                // 2
             )
             expected_read = 0
         elif values["mode"] == 1:
@@ -1380,8 +1392,20 @@ def _validate_fixed_compute_operands(
             expected_pairs = values["query_key_pairs"]
             expected_read = values["rank_kv_read_bytes"]
         else:
+            if (
+                values["context_sum"] != values["query_tokens"]
+                or values["query_tokens"] % values["context_max"]
+            ):
+                raise SchemaError(
+                    "ATTENTION_EXACT train-forward requires equal-length request contexts",
+                    path=path,
+                )
+            request_count = values["query_tokens"] // values["context_max"]
             expected_pairs = (
-                values["query_tokens"] * (values["query_tokens"] + 1) // 2
+                request_count
+                * values["context_max"]
+                * (values["context_max"] + 1)
+                // 2
             )
             expected_read = 0
         expected_write = (

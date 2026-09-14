@@ -290,6 +290,28 @@ class LogicalExpandTest(unittest.TestCase):
             {StateAccessMode.READ_WRITE},
         )
 
+    def test_uniform_multi_request_prefill_has_per_request_causal_work(self) -> None:
+        raw = valid_spec()
+        raw["parallel"]["instances"][0].update(tp=4, sp=True)  # type: ignore[index]
+        raw["model"]["KVH"] = 4  # type: ignore[index]
+        raw["workload"]["infer"]["profile"].update(  # type: ignore[index]
+            prefill_tokens=32,
+            decode_tokens=0,
+            num_seqs=4,
+            context_sum=32,
+            context_max=8,
+            kv_pages=4,
+        )
+        graph = logical_expand(build_ir0(decode(raw))).entries[0].graph
+        graph.validate()
+        attention = next(
+            node.workload for node in graph.nodes if node.kind is OpKind.ATTENTION
+        )
+        self.assertEqual(attention.query_tokens, 32)
+        self.assertEqual(attention.query_key_pairs, 4 * 8 * 9 // 2)
+        self.assertEqual(attention.rank_num_heads, 1)
+        self.assertEqual(attention.rank_num_kv_heads, 1)
+
     def test_direct_ambiguous_profiles_fail_closed(self) -> None:
         base = n2_template()
 

@@ -229,6 +229,22 @@ class BuildIR0Test(unittest.TestCase):
                 with self.assertRaises(UnsupportedFeatureError):
                     build_ir0(decode(raw))
 
+    def test_uniform_multi_request_prefill_is_supported(self) -> None:
+        raw = valid_spec()
+        set_static_profile(
+            raw,
+            profile(
+                prefill_tokens=32,
+                decode_tokens=0,
+                num_seqs=4,
+                context_sum=32,
+                context_max=8,
+            ),
+        )
+        template = build_ir0(decode(raw))
+        self.assertEqual(template.profiles[0].key.num_seqs, 4)
+        self.assertEqual(template.profiles[0].key.context_max, 8)
+
     def test_role_compatibility_and_both_profile_manifest(self) -> None:
         prefill = profile(
             prefill_tokens=32,

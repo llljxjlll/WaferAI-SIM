@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..errors import SchemaError
-from .artifact_manifest import LinkedProgramManifest
+from .artifact_manifest import LinkedProgramManifest, RegionManifest
 from .common import ProfileKey, stable_artifact_id, validate_nonempty, validate_uint64
 from .e2e_workload_graph import E2EStateKind
 from .experiment import ExperimentSpec, InferSource, InstanceRole, WorkloadMode
@@ -430,7 +430,11 @@ class DenseCompileSequence:
             state_abis = {
                 abi.id: abi
                 for fragment in segment.linked_manifest.fragments
-                for abi in fragment.state_abi
+                for abi in (
+                    fragment.fragment.state_abi
+                    if isinstance(fragment, RegionManifest)
+                    else fragment.state_abi
+                )
             }
             physical_kv = tuple(
                 sorted(

@@ -97,14 +97,13 @@ def _validate_attention_profile(
             path=path,
         )
     if prefill:
-        if key.num_seqs != 1:
+        if (
+            key.context_sum != prefill
+            or key.num_seqs * key.context_max != prefill
+        ):
             _unsupported(
-                "prefill MVP requires exactly one sequence",
-                path=f"{path}.num_seqs",
-            )
-        if key.context_sum != prefill or key.context_max != prefill:
-            _unsupported(
-                "prefill MVP requires context_sum == context_max == prefill_tokens",
+                "prefill requires uniform full-length sequences with "
+                "context_sum == prefill_tokens == num_seqs * context_max",
                 path=f"{path}.context_sum",
             )
         return

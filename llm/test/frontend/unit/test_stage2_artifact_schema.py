@@ -152,6 +152,25 @@ class Stage2ArtifactSchemaTest(unittest.TestCase):
             8,
         ).validate("rope_batch_record")
 
+        multi_request_prefill = records[RecordOpcode.ATTENTION_EXACT]
+        for name, value in (
+            ("query_tokens", 16),
+            ("context_sum", 16),
+            ("context_max", 4),
+            ("query_key_pairs", 40),
+            ("rank_kv_write_bytes", 512),
+        ):
+            multi_request_prefill = _tamper(multi_request_prefill, name, value)
+        multi_request_prefill.validate("multi_request_prefill")
+        with self.assertRaisesRegex(SchemaError, "equal-length request contexts"):
+            _tamper(multi_request_prefill, "context_sum", 15).validate(
+                "ragged_prefill"
+            )
+        with self.assertRaisesRegex(SchemaError, "equal-length request contexts"):
+            _tamper(multi_request_prefill, "context_max", 6).validate(
+                "non_integral_request_count"
+            )
+
         tampered = (
             _tamper(records[RecordOpcode.ROPE_QK_EXACT], "rotary_dim", 7),
             _tamper(records[RecordOpcode.ATTENTION_EXACT], "query_key_pairs", 9),
