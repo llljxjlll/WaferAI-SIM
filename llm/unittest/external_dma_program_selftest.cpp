@@ -2,6 +2,7 @@
 #include "memory/external_dma_program.h"
 
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -29,6 +30,23 @@ std::string Read(const std::string &path) {
     std::ostringstream content;
     content << input.rdbuf();
     return content.str();
+}
+
+void Write(const std::filesystem::path &path, const std::string &content) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot write " + path.string());
+    output << content;
+    if (!output) throw std::runtime_error("failed writing " + path.string());
+}
+
+std::string ReplaceOnce(
+    std::string source, const std::string &before,
+    const std::string &after) {
+    const auto position = source.find(before);
+    if (position == std::string::npos)
+        throw std::runtime_error("selftest replacement source is absent");
+    source.replace(position, before.size(), after);
+    return source;
 }
 
 template <typename Operation>
@@ -122,6 +140,75 @@ int sc_main(int argc, char **argv) {
                 em::ParseExternalDmaProgram(unknown, kExpected);
             },
             "unknown DMA program field was accepted");
+
+        const std::filesystem::path binding_path =
+            std::filesystem::temp_directory_path() /
+            "npusim_external_dma_runtime_binding_selftest.json";
+        const std::string binding =
+            "{"
+            "\"schema_version\":\"wafer_frontend.external_dma_runtime_binding/v1alpha1\","
+            "\"id\":\"external_dma_runtime_binding_selftest\","
+            "\"action_graph_digest\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\","
+            "\"program_relative_path\":\"artifacts/external_dma_program.json\","
+            "\"case_digest\":\"" + kExpected.case_digest + "\","
+            "\"request_digest\":\"" + kExpected.request_digest + "\","
+            "\"logical_graph_digest\":\"" + kExpected.logical_graph_digest + "\","
+            "\"source_memory_plan_digest\":\"" +
+                kExpected.source_memory_plan_digest + "\","
+            "\"blocking_offload_plan_digest\":\"" +
+                kExpected.blocking_offload_plan_digest + "\"}";
+        Write(binding_path, binding);
+        const auto runtime_binding =
+            em::LoadExternalDmaRuntimeBinding(binding_path);
+        Check(
+            runtime_binding.id == "external_dma_runtime_binding_selftest" &&
+                runtime_binding.action_graph_digest == std::string(64, 'd') &&
+                runtime_binding.program_relative_path ==
+                    "artifacts/external_dma_program.json" &&
+                runtime_binding.expected_source.case_digest ==
+                    kExpected.case_digest &&
+                runtime_binding.expected_source.request_digest ==
+                    kExpected.request_digest &&
+                runtime_binding.expected_source.logical_graph_digest ==
+                    kExpected.logical_graph_digest &&
+                runtime_binding.expected_source.source_memory_plan_digest ==
+                    kExpected.source_memory_plan_digest &&
+                runtime_binding.expected_source.blocking_offload_plan_digest ==
+                    kExpected.blocking_offload_plan_digest,
+            "external DMA runtime binding fields changed during load");
+
+        Write(binding_path, ReplaceOnce(binding, "{", "{\"unknown\":0,"));
+        Rejects(
+            [&] { em::LoadExternalDmaRuntimeBinding(binding_path); },
+            "unknown runtime binding field was accepted");
+        Write(
+            binding_path,
+            ReplaceOnce(
+                binding,
+                "\"request_digest\":",
+                "\"request_digest\":\"" + kExpected.request_digest +
+                    "\",\"request_digest\":"));
+        Rejects(
+            [&] { em::LoadExternalDmaRuntimeBinding(binding_path); },
+            "duplicate runtime binding key was accepted");
+        Write(
+            binding_path,
+            ReplaceOnce(
+                binding,
+                "wafer_frontend.external_dma_runtime_binding/v1alpha1",
+                "wafer_frontend.external_dma_runtime_binding/v0"));
+        Rejects(
+            [&] { em::LoadExternalDmaRuntimeBinding(binding_path); },
+            "wrong runtime binding schema was accepted");
+        Write(
+            binding_path,
+            ReplaceOnce(
+                binding, "artifacts/external_dma_program.json",
+                "../external_dma_program.json"));
+        Rejects(
+            [&] { em::LoadExternalDmaRuntimeBinding(binding_path); },
+            "traversing runtime binding program path was accepted");
+        std::filesystem::remove(binding_path);
 
         BehavioralHBMBackendConfig config;
         config.bandwidth_GBps = 8.0;

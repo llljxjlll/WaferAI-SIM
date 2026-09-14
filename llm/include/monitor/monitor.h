@@ -77,8 +77,10 @@ public:
             config_helper_base *input_config);
     ~Monitor();
 
+    void GateStartupUntil(const sc_event &ready_event);
     void start_simu();
 
 private:
     void init();
+    const sc_event *startup_ready_event_ = nullptr;
 };

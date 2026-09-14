@@ -18,6 +18,7 @@
 #include "memory/hbm_r2_selftest.h"
 #include "memory/hbm_r3_selftest.h"
 #include "memory/hbm_r4_selftest.h"
+#include "memory/external_dma_program.h"
 #include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_control_core.h"
@@ -140,6 +141,9 @@ Define_string_opt("--program-sequence", g_flag_program_sequence,
 Define_string_opt("--program-io-sequence", g_flag_program_io_sequence,
                   std::string{},
                   "comma-separated ProgramIo sidecars for --program-sequence");
+Define_string_opt(
+    "--external-dma-binding", g_flag_external_dma_binding, std::string{},
+    "typed external DMA startup binding for --program-sequence");
 Define_string_opt("--linked-manifest", g_flag_linked_manifest,
                   std::string{},
                   "linked Program manifest JSON required by --program-io");
@@ -789,6 +793,82 @@ MoeSwizzleRuntimeManifestCounts CountMoeSwizzleRuntimeManifest(
     }
     return result;
 }
+
+struct DenseSequenceProgramWitness {
+    std::size_t compute_records = 0;
+    std::size_t lsu_load_records = 0;
+};
+
+DenseSequenceProgramWitness CountDenseSequenceProgramRecords(
+    const ProgramArtifact &artifact) {
+    DenseSequenceProgramWitness result;
+    for (const ProgramCore &core : artifact.cores) {
+        for (const ExternalRecord &record : core.records) {
+            const OpcodeManifestEntry *entry = LookupOpcode(record.opcode);
+            if (entry == nullptr)
+                throw std::runtime_error(
+                    "Dense sequence contains an unknown opcode");
+            if (entry->category == OpcodeCategory::COMPUTE)
+                ++result.compute_records;
+            if (record.opcode == Opcode::LSU_LOAD)
+                ++result.lsu_load_records;
+        }
+    }
+    if (result.compute_records == 0 || result.lsu_load_records == 0)
+        throw std::runtime_error(
+            "Dense sequence lacks compute or parameter-load records");
+    return result;
+}
+
+class ExternalDmaStartupCoordinator : public sc_module {
+public:
+    SC_HAS_PROCESS(ExternalDmaStartupCoordinator);
+
+    ExternalDmaStartupCoordinator(
+        const sc_module_name &name,
+        external_memory::ExternalDmaProgramExecutor &executor)
+        : sc_module(name), executor_(executor) {
+        SC_THREAD(Run);
+    }
+
+    const sc_event &ReadyEvent() const { return ready_; }
+    const std::optional<external_memory::ExternalDmaProgramExecution> &
+    Execution() const { return execution_; }
+    const std::string &Error() const { return error_; }
+
+private:
+    void Run() {
+        try {
+            execution_ = executor_.Wait();
+            if (!execution_->completed || !execution_->error.empty() ||
+                execution_->pending_requests != 0 ||
+                std::any_of(
+                    execution_->probes.begin(), execution_->probes.end(),
+                    [](const external_memory::DmaProbeResult &probe) {
+                        return !probe.matched;
+                    }))
+                throw std::runtime_error(
+                    "external DMA startup program did not complete and drain");
+            std::cout
+                << "[EXTERNAL_DMA_READY] program="
+                << execution_->program_ref
+                << " completed=" << execution_->stats.completed_requests
+                << " external_read_bytes="
+                << execution_->stats.external_read_bytes
+                << " hbm_write_bytes=" << execution_->stats.hbm_write_bytes
+                << " pending=0" << std::endl;
+            ready_.notify(SC_ZERO_TIME);
+        } catch (const std::exception &error) {
+            error_ = error.what();
+            sc_stop();
+        }
+    }
+
+    external_memory::ExternalDmaProgramExecutor &executor_;
+    std::optional<external_memory::ExternalDmaProgramExecution> execution_;
+    std::string error_;
+    sc_event ready_;
+};
 } // namespace
 
 int sc_main(int argc, char *argv[]) {
@@ -827,6 +907,13 @@ int sc_main(int argc, char *argv[]) {
         return 2;
     }
     const bool sequence_mode = sequence_any;
+    const bool external_dma_requested =
+        !g_flag_external_dma_binding.empty();
+    if (external_dma_requested && !sequence_mode) {
+        LOG_ERROR(CONFIG)
+            << "--external-dma-binding requires --program-sequence";
+        return 2;
+    }
     if (sequence_mode &&
         (!g_flag_program.empty() || !g_flag_linked_manifest.empty() ||
          !g_flag_program_io.empty() || g_flag_program_one_shot)) {
@@ -1191,6 +1278,8 @@ int sc_main(int argc, char *argv[]) {
 
     std::vector<uint8_t> program_bytes;
     std::vector<std::vector<uint8_t>> sequence_program_bytes;
+    std::vector<DenseSequenceProgramWitness>
+        sequence_program_witnesses;
     std::vector<std::vector<DenseSequenceKvRange>> sequence_kv_ranges;
     std::vector<std::vector<DenseSequenceKvRange>>
         sequence_training_state_ranges;
@@ -1209,6 +1298,10 @@ int sc_main(int argc, char *argv[]) {
         moe_swizzle_runtime_core_to_die;
     std::optional<MoeSwizzleRuntimeManifestCounts>
         moe_swizzle_runtime_manifest_counts;
+    std::optional<external_memory::ExternalDmaRuntimeBinding>
+        external_dma_binding;
+    std::optional<external_memory::ExternalDmaProgram>
+        external_dma_program;
     try {
         if (program_mode) {
             ValidatePlatformConfigInputs(
@@ -1229,7 +1322,10 @@ int sc_main(int argc, char *argv[]) {
                 for (std::size_t index = 0;
                      index < program_paths.size(); ++index) {
                     auto bytes = ReadProgramFile(program_paths[index]);
-                    (void)DecodeProgramArtifact(bytes);
+                    const ProgramArtifact decoded =
+                        DecodeProgramArtifact(bytes);
+                    sequence_program_witnesses.push_back(
+                        CountDenseSequenceProgramRecords(decoded));
                     const std::string manifest = ReadRegularTextFile(
                         "Dense sequence linked Program manifest",
                         manifest_paths[index], kMaxLinkedProgramManifestBytes);
@@ -1278,6 +1374,18 @@ int sc_main(int argc, char *argv[]) {
                         sequence_training_state_ranges);
                 else
                     ValidateDenseKvContinuity(sequence_kv_ranges);
+                if (external_dma_requested) {
+                    const std::filesystem::path binding_path(
+                        g_flag_external_dma_binding);
+                    external_dma_binding =
+                        external_memory::LoadExternalDmaRuntimeBinding(
+                            binding_path);
+                    external_dma_program =
+                        external_memory::LoadExternalDmaProgram(
+                            binding_path.parent_path() /
+                                external_dma_binding->program_relative_path,
+                            external_dma_binding->expected_source);
+                }
             } else {
                 program_bytes = ReadProgramFile(g_flag_program);
             }
@@ -1426,6 +1534,49 @@ int sc_main(int argc, char *argv[]) {
     else
         monitor = std::make_unique<Monitor>(
             "monitor", event_engine, g_flag_workload_config.c_str());
+
+    std::unique_ptr<external_memory::ExternalDmaProgramExecutor>
+        external_dma_executor;
+    std::unique_ptr<ExternalDmaStartupCoordinator>
+        external_dma_coordinator;
+    if (external_dma_program.has_value()) {
+        try {
+            if (monitor->hbmRuntime == nullptr)
+                throw std::runtime_error(
+                    "external DMA startup requires distributed HBM runtime");
+            std::map<external_memory::HbmEndpoint, HBMBackend *> backends;
+            for (const auto &binding :
+                 external_dma_program->backend_bindings) {
+                HBMRuntimeInstance *instance = monitor->hbmRuntime->Find(
+                    static_cast<int>(binding.stack_id),
+                    static_cast<int>(binding.channel_id));
+                if (instance == nullptr || !instance->backend)
+                    throw std::runtime_error(
+                        "external DMA binding has no matching HBM backend");
+                const auto endpoint = std::make_pair(
+                    binding.stack_id, binding.channel_id);
+                if (!backends.emplace(endpoint, instance->backend.get()).second)
+                    throw std::runtime_error(
+                        "external DMA binding repeats an HBM endpoint");
+            }
+            external_dma_executor = std::make_unique<
+                external_memory::ExternalDmaProgramExecutor>(
+                    "external_dma_startup_executor",
+                    *external_dma_program, std::move(backends),
+                    sc_time(CYCLE, SC_NS));
+            external_dma_coordinator =
+                std::make_unique<ExternalDmaStartupCoordinator>(
+                    "external_dma_startup_coordinator",
+                    *external_dma_executor);
+            monitor->GateStartupUntil(
+                external_dma_coordinator->ReadyEvent());
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG)
+                << "External DMA startup initialization failed: "
+                << error.what();
+            return 2;
+        }
+    }
 
     std::optional<p5_probe::Applied> p5_memory_probe_applied;
     if (p5_memory_probe_spec.has_value()) {
@@ -1588,6 +1739,11 @@ int sc_main(int argc, char *argv[]) {
         for (std::size_t expected = 0;
              expected < sequence_program_bytes.size(); ++expected) {
             sc_start();
+            if (external_dma_coordinator &&
+                !external_dma_coordinator->Error().empty())
+                throw std::runtime_error(
+                    "external DMA startup failed: " +
+                    external_dma_coordinator->Error());
             if (sequence_helper->completed_segments() != expected + 1)
                 throw std::runtime_error(
                     "Dense sequence paused outside an exact segment boundary");
@@ -1600,6 +1756,13 @@ int sc_main(int argc, char *argv[]) {
             std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
                       << " probes=" << io_result.probes.size()
                       << " pass=1" << std::endl;
+            std::cout
+                << "[DENSE_SEQUENCE_COMPUTE] index=" << expected
+                << " records="
+                << sequence_program_witnesses[expected].compute_records
+                << " lsu_loads="
+                << sequence_program_witnesses[expected].lsu_load_records
+                << " status=done" << std::endl;
             if (dense_training_sequence) {
                 dense_training_state_digest =
                     PrintDenseTrainingStateBoundary(
@@ -1632,6 +1795,28 @@ int sc_main(int argc, char *argv[]) {
         if (!sequence_helper->final_complete())
             throw std::runtime_error(
                 "Dense sequence did not reach its final one-shot drain");
+        if (external_dma_coordinator) {
+            const auto &execution = external_dma_coordinator->Execution();
+            if (!execution.has_value() || !execution->completed ||
+                execution->pending_requests != 0 ||
+                std::any_of(
+                    execution->probes.begin(), execution->probes.end(),
+                    [](const external_memory::DmaProbeResult &probe) {
+                        return !probe.matched;
+                    }))
+                throw std::runtime_error(
+                    "external DMA final drain verification failed");
+            std::cout
+                << "[EXTERNAL_DMA_DRAIN] probes="
+                << execution->probes.size()
+                << " external_read_bytes="
+                << execution->stats.external_read_bytes
+                << " external_write_bytes="
+                << execution->stats.external_write_bytes
+                << " hbm_read_bytes=" << execution->stats.hbm_read_bytes
+                << " hbm_write_bytes=" << execution->stats.hbm_write_bytes
+                << " pending=0" << std::endl;
+        }
     } else {
         sc_start();
     }

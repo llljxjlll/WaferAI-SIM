@@ -564,7 +564,8 @@ void Monitor::start_simu() {
     // t.msg_type = DATA;
     // t.is_end = true;
 
-
+    if (startup_ready_event_ != nullptr)
+        wait(*startup_ready_event_);
     start_o.write(true);
     wait(preparations_done_i.posedge_event());
     // 开始发送数据
@@ -577,4 +578,13 @@ void Monitor::start_simu() {
     // if (globalMemInterface) {
     //     globalMemInterface->execute_prims();
     // }
+}
+
+void Monitor::GateStartupUntil(const sc_event &ready_event) {
+    if (sc_is_running())
+        throw std::logic_error(
+            "Monitor startup gate must be installed before sc_start");
+    if (startup_ready_event_ != nullptr)
+        throw std::logic_error("Monitor startup gate is already installed");
+    startup_ready_event_ = &ready_event;
 }

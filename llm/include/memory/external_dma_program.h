@@ -15,6 +15,8 @@ namespace external_memory {
 
 inline constexpr const char *kExternalDmaProgramSchemaVersion =
     "wafer_frontend.external_dma_program/v1alpha1";
+inline constexpr const char *kExternalDmaRuntimeBindingSchemaVersion =
+    "wafer_frontend.external_dma_runtime_binding/v1alpha1";
 
 struct DmaBackendBinding {
     std::string id;
@@ -79,6 +81,16 @@ struct ExternalDmaExpectedSource {
     std::string source_memory_plan_digest;
     std::string blocking_offload_plan_digest;
 };
+
+struct ExternalDmaRuntimeBinding {
+    std::string id;
+    std::string action_graph_digest;
+    std::filesystem::path program_relative_path;
+    ExternalDmaExpectedSource expected_source;
+};
+
+ExternalDmaRuntimeBinding LoadExternalDmaRuntimeBinding(
+    const std::filesystem::path &path);
 
 ExternalDmaProgram ParseExternalDmaProgram(
     std::string_view json,

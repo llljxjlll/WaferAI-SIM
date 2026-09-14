@@ -813,6 +813,118 @@ ExternalDmaProgram LoadExternalDmaProgram(
     return ParseExternalDmaProgram(content.str(), expected_source);
 }
 
+ExternalDmaRuntimeBinding LoadExternalDmaRuntimeBinding(
+    const std::filesystem::path &path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        throw std::invalid_argument(
+            "external DMA runtime binding JSON: cannot open " +
+            path.string());
+    std::ostringstream content;
+    content << input.rdbuf();
+    if (input.bad())
+        throw std::invalid_argument(
+            "external DMA runtime binding JSON: failed reading " +
+            path.string());
+
+    Json value;
+    try {
+        std::vector<std::set<std::string>> object_keys;
+        auto callback = [&object_keys](
+                            int, Json::parse_event_t event,
+                            Json &parsed) {
+            if (event == Json::parse_event_t::object_start) {
+                object_keys.emplace_back();
+            } else if (event == Json::parse_event_t::key) {
+                if (object_keys.empty())
+                    throw std::invalid_argument(
+                        "invalid duplicate-key parser state");
+                const std::string key = parsed.get<std::string>();
+                if (!object_keys.back().insert(key).second)
+                    throw std::invalid_argument(
+                        "duplicate object key " + key);
+            } else if (event == Json::parse_event_t::object_end) {
+                if (object_keys.empty())
+                    throw std::invalid_argument(
+                        "invalid duplicate-key parser state");
+                object_keys.pop_back();
+            }
+            return true;
+        };
+        value = Json::parse(
+            content.str(), callback, true, false);
+        if (value.is_discarded())
+            throw std::invalid_argument("invalid JSON");
+    } catch (const std::exception &error) {
+        throw std::invalid_argument(
+            std::string("external DMA runtime binding JSON: ") +
+            error.what());
+    }
+
+    const std::string object_path = "external_dma_runtime_binding";
+    ExactObject(
+        value, object_path,
+        {"schema_version", "id", "action_graph_digest",
+         "program_relative_path", "case_digest", "request_digest",
+         "logical_graph_digest", "source_memory_plan_digest",
+         "blocking_offload_plan_digest"});
+    const std::string schema_version = String(
+        Field(value, "schema_version", object_path),
+        object_path + ".schema_version");
+    if (schema_version != kExternalDmaRuntimeBindingSchemaVersion)
+        Fail(object_path + ".schema_version", "unsupported schema version");
+
+    ExternalDmaRuntimeBinding result;
+    result.id = String(
+        Field(value, "id", object_path), object_path + ".id");
+    result.action_graph_digest = String(
+        Field(value, "action_graph_digest", object_path),
+        object_path + ".action_graph_digest");
+    RequireDigest(
+        result.action_graph_digest,
+        object_path + ".action_graph_digest");
+    const std::string program_relative_path = String(
+        Field(value, "program_relative_path", object_path),
+        object_path + ".program_relative_path");
+    if (program_relative_path != "artifacts/external_dma_program.json")
+        Fail(
+            object_path + ".program_relative_path",
+            "must be artifacts/external_dma_program.json");
+    result.program_relative_path = program_relative_path;
+    result.expected_source = {
+        String(
+            Field(value, "case_digest", object_path),
+            object_path + ".case_digest"),
+        String(
+            Field(value, "request_digest", object_path),
+            object_path + ".request_digest"),
+        String(
+            Field(value, "logical_graph_digest", object_path),
+            object_path + ".logical_graph_digest"),
+        String(
+            Field(value, "source_memory_plan_digest", object_path),
+            object_path + ".source_memory_plan_digest"),
+        String(
+            Field(value, "blocking_offload_plan_digest", object_path),
+            object_path + ".blocking_offload_plan_digest")};
+    RequireDigest(
+        result.expected_source.case_digest,
+        object_path + ".case_digest");
+    RequireDigest(
+        result.expected_source.request_digest,
+        object_path + ".request_digest");
+    RequireDigest(
+        result.expected_source.logical_graph_digest,
+        object_path + ".logical_graph_digest");
+    RequireDigest(
+        result.expected_source.source_memory_plan_digest,
+        object_path + ".source_memory_plan_digest");
+    RequireDigest(
+        result.expected_source.blocking_offload_plan_digest,
+        object_path + ".blocking_offload_plan_digest");
+    return result;
+}
+
 ExternalDmaProgramExecutor::ExternalDmaProgramExecutor(
     const sc_core::sc_module_name &name,
     ExternalDmaProgram program,
