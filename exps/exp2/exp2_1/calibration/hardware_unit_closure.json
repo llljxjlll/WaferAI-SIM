@@ -1,0 +1,223 @@
+{
+  "allowed_cycle_evidence_use": "structural_lifecycle_prior_only",
+  "closure_status": "failed_target_unit_closure",
+  "failure_reasons": [
+    "D2D single-lane realized business bandwidth is 8 GB/s, 125x below the 1 TB/s target.",
+    "No target-bound isolated GEMM has validated the configured 8 TFLOP/s/core arithmetic.",
+    "No target-bound NoC/DTE/SRAM/HBM byte sweep has validated saturation rates.",
+    "The retained Stage3/Stage4/Flexible cases use tiny, different hardware bindings and are structural priors only.",
+    "The vector rate is not calibrated on this target binding."
+  ],
+  "generated_from": {
+    "cycle_time_ns": 2,
+    "hardware_path": "exps/exp2/exp2_1/configs/target_hardware.json",
+    "hardware_sha256": "a1eec704c3ccad5d9bfdea8a1376a7ab0fe2e031591ffa94c4b0770fe04e160a",
+    "implementation_sources": {
+      "compute_cost": {
+        "path": "llm/src/isa/npu_cost_model.cpp",
+        "sha256": "1bcbbe939b506c9213aaafae62ce986da634bfb26e586aae2d083355c1482852"
+      },
+      "cycle_constant": {
+        "path": "llm/include/macros/macros.h",
+        "sha256": "249fcabeaf62b6cc470d0b1a39514d89893eb7fd9dfec395935b13015c81978b"
+      },
+      "d2d_rate_parser": {
+        "path": "llm/src/die/port_config.cpp",
+        "sha256": "f7a0cc7b11a76cb6658fc0373eddd915956e2945c8fe1ed2c5986fd0edaddb1a"
+      },
+      "geometry_loader": {
+        "path": "llm/src/utils/config_utils.cpp",
+        "sha256": "baa182e55407617e1745c748cd663e5765075bea418f6c46f09c827bdecd03b9"
+      },
+      "hbm2_config": {
+        "path": "DRAMSys/configs/hbm2-example.json",
+        "sha256": "ea23201734e0e72170847a7988fc4a45da17c0680a6bc50be8e6efdedbf35e09"
+      },
+      "hbm2_memspec": {
+        "path": "DRAMSys/configs/memspec/HBM2.json",
+        "sha256": "56fd5865a8307b7531ae0cc530a8eafaa3d8a9cd8fd614966df32e50777df2d8"
+      },
+      "hbm_address_map": {
+        "path": "llm/src/memory/hbm_address_map.cpp",
+        "sha256": "1c961008f6fa0da9dbf744a7a8dca411865dcab791ea68e6f582fb86c04425d2"
+      },
+      "hbm_memspec": {
+        "path": "llm/src/memory/hbm_memspec.cpp",
+        "sha256": "bd7cfa3cfc37192179cc4849becbdbdb329d94d6d9bc0a42fa0f7f5429d1ee0c"
+      },
+      "p2p_payload": {
+        "path": "llm/include/dte/p2p_payload.h",
+        "sha256": "5eaf8b541e2d245d08ec213e3cac7afe99d8eb5e107cacba4d0293bb9fd071a8"
+      }
+    },
+    "simulation_path": "exps/exp2/exp2_1/configs/target_simulation.json",
+    "simulation_sha256": "6ce4b7362a2237da82d8b98423a930b256205639dadcd9a848df3aa9e861c1f9"
+  },
+  "publish_target_absolute_cycles": false,
+  "schema_version": "exp2_1.hardware_unit_closure/v1",
+  "simulator_unit_closure": false,
+  "structural_closure": {
+    "control": {
+      "dedicated_control_is_not_addressed_as_worker": true,
+      "gate_pass": true,
+      "mode": "dual_dte_dedicated",
+      "worker_count_remains_16": true
+    },
+    "hbm_edge_placement": {
+      "gate_pass": true,
+      "home_die_coordinates_xy": [
+        [
+          1,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          1,
+          5
+        ],
+        [
+          4,
+          5
+        ]
+      ],
+      "home_die_ids_row_major": [
+        1,
+        4,
+        31,
+        34
+      ]
+    },
+    "wafer": {
+      "core_mesh_per_die": [
+        4,
+        4
+      ],
+      "die_count": 36,
+      "die_mesh": [
+        6,
+        6
+      ],
+      "gate_pass": true,
+      "worker_cores_per_die": 16
+    }
+  },
+  "unit_gates": {
+    "compute": {
+      "compute_utilization": 1.0,
+      "configuration_arithmetic_match": true,
+      "derived_core_TFLOPs": 7.999999999999999,
+      "derived_die_TFLOPs": 127.99999999999999,
+      "expected_core_TFLOPs": 8.0,
+      "expected_die_TFLOPs": 128.0,
+      "exu_x": 40,
+      "gate_pass": false,
+      "logical_flops_per_cycle": 16000.0,
+      "sa_count": 5,
+      "target_bound_isolated_gemm_validated": false
+    },
+    "d2d_single_lane": {
+      "arithmetic_match": false,
+      "configured_Bps": 7999999999.999999,
+      "configured_match": false,
+      "derived_Bps": 7999999999.999999,
+      "direct_saturation_sweep_validated": false,
+      "expected_Bps": 1000000000000.0,
+      "failure": "single-lane target needs 125 business packets/cycle, but parser rejects rates above 1 packet/cycle",
+      "gate_pass": false,
+      "packet_payload_bytes": 16,
+      "packets_per_cycle": 1.0,
+      "representability_limit": "rate.num <= rate.den; one sc_bv<256> per cycle",
+      "target_to_realized_ratio": 125.00000000000001
+    },
+    "dte_injection": {
+      "arithmetic_match": true,
+      "configured_Bps": 255999999999.99997,
+      "configured_match": true,
+      "derived_Bps": 255999999999.99997,
+      "direct_saturation_sweep_validated": false,
+      "expected_Bps": 256000000000.0,
+      "gate_pass": false,
+      "shared_aggregate_width_bits": 4096
+    },
+    "hbm": {
+      "address_ranges": [
+        [
+          0,
+          17179869184
+        ],
+        [
+          17179869184,
+          34359738368
+        ],
+        [
+          34359738368,
+          51539607552
+        ],
+        [
+          51539607552,
+          68719476736
+        ]
+      ],
+      "address_ranges_contiguous": true,
+      "address_ranges_nonoverlap": true,
+      "aggregate_capacity_bytes": 68719476736,
+      "configuration_arithmetic_match": true,
+      "direct_saturation_sweep_validated": false,
+      "expected_home_die_ids": [
+        1,
+        4,
+        31,
+        34
+      ],
+      "expected_stack_count": 4,
+      "gate_pass": false,
+      "home_die_ids": [
+        1,
+        4,
+        31,
+        34
+      ],
+      "per_stack_capacity_bytes": [
+        17179869184,
+        17179869184,
+        17179869184,
+        17179869184
+      ],
+      "per_stack_configured_Bps": [
+        256000000000.0,
+        256000000000.0,
+        256000000000.0,
+        256000000000.0
+      ],
+      "per_stack_expected_Bps": 256000000000.0,
+      "profile_derived_stack_Bps": 256000000000.0,
+      "stack_count": 4
+    },
+    "noc_logical_payload": {
+      "arithmetic_match": true,
+      "configured_Bps": 255999999999.99997,
+      "configured_match": true,
+      "derived_Bps": 255999999999.99997,
+      "direct_saturation_sweep_validated": false,
+      "expected_Bps": 256000000000.0,
+      "gate_pass": false,
+      "interpretation": "collective logical-payload grouping arithmetic, not a measured per-core router byte sweep",
+      "payload_group_scale": 32
+    },
+    "sram_read_port": {
+      "arithmetic_match": true,
+      "capacity_bytes": 3145728,
+      "configured_Bps": 255999999999.99997,
+      "configured_match": true,
+      "derived_Bps": 255999999999.99997,
+      "direct_saturation_sweep_validated": false,
+      "expected_Bps": 256000000000.0,
+      "gate_pass": false,
+      "read_port_width_bits": 4096,
+      "regions_nonoverlap_and_in_bounds": true
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "config_sha256": "feeb37c1e1bc28b7ad085f211b23d0579b9e8462cf86e3b5ccf423032dc4886a",
+  "evidence": "analytical_preflight_model_not_npusim",
+  "limitations": [
+    "No current runner composes exact 2x3 personalized A2A Ring, blocking inter schedule, arbitrary grouped-GEMM shape, and 16-core intra-die ON/OFF.",
+    "Rows are deterministic timing-model preflight results, not NpuSim measurements.",
+    "Dispatch+GEMM values must not be compared numerically with GEMM+ReduceScatter because the fixed Ring has personalized-A2A hop amplification."
+  ],
+  "pair_invariants": {
+    "only_intra_composition_changes": true,
+    "same_average_remote_hops": 1.8,
+    "same_fixed_personalized_ring": true,
+    "same_logical_work": true,
+    "same_ring_order": [
+      0,
+      1,
+      2,
+      5,
+      4,
+      3
+    ]
+  },
+  "schema_version": "exp3_2_dispatch_audit/v1alpha1",
+  "status": "analytical_preflight_model"
+}

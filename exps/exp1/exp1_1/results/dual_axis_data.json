@@ -1,0 +1,3074 @@
+[
+  {
+    "mesh": "1x4",
+    "operator": "AG_GEMM",
+    "max_tflops": 106.86091433157844,
+    "points": [
+      {
+        "case_id": "1x4_ag_gemm_llama_2_7b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 0.0,
+        "naive_tflops": 24.734649422187903,
+        "optimized_tflops": 99.62053940661156,
+        "naive_normalized": 0.23146582243755492,
+        "optimized_normalized": 0.9322448720352444,
+        "theoretical_speedup": 5.297400585746828,
+        "actual_speedup": 4.02757030052135,
+        "attainment_rate": 0.7602918139432234
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_2_7b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 1.0,
+        "naive_tflops": 24.734649607665066,
+        "optimized_tflops": 104.62676262838173,
+        "naive_normalized": 0.23146582417324252,
+        "optimized_normalized": 0.9790929011119597,
+        "theoretical_speedup": 5.299017191219254,
+        "actual_speedup": 4.229967445989562,
+        "attainment_rate": 0.7982550902078289
+      },
+      {
+        "case_id": "1x4_ag_gemm_gpt_3_175b_attention_s2048",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 2.65,
+        "naive_tflops": 25.38330835676521,
+        "optimized_tflops": 102.66077548649346,
+        "naive_normalized": 0.23753594581835047,
+        "optimized_normalized": 0.9606952750558321,
+        "theoretical_speedup": 5.1635215740171425,
+        "actual_speedup": 4.044420610725163,
+        "attainment_rate": 0.7832678827327265
+      },
+      {
+        "case_id": "1x4_ag_gemm_gpt_3_175b_attention_s32768",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 3.65,
+        "naive_tflops": 25.383308183135977,
+        "optimized_tflops": 106.22421118440144,
+        "naive_normalized": 0.23753594419353533,
+        "optimized_normalized": 0.9940417583813538,
+        "theoretical_speedup": 5.163696660480277,
+        "actual_speedup": 4.184805637547831,
+        "attainment_rate": 0.8104282479595928
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_8b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 5.300000000000001,
+        "naive_tflops": 24.164637522754152,
+        "optimized_tflops": 98.49119955512367,
+        "naive_normalized": 0.2261316747466128,
+        "optimized_normalized": 0.9216765565893962,
+        "theoretical_speedup": 5.417071521456437,
+        "actual_speedup": 4.075840138813644,
+        "attainment_rate": 0.7524065581688704
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_8b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 6.300000000000001,
+        "naive_tflops": 24.16463469032262,
+        "optimized_tflops": 103.64756002140487,
+        "naive_normalized": 0.22613164824083615,
+        "optimized_normalized": 0.9699295637673203,
+        "theoretical_speedup": 5.423683619497111,
+        "actual_speedup": 4.289225198298293,
+        "attainment_rate": 0.7908324856706879
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_1_405b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 7.950000000000001,
+        "naive_tflops": 25.402524550107835,
+        "optimized_tflops": 100.4050275989301,
+        "naive_normalized": 0.23771577015789336,
+        "optimized_normalized": 0.9395860799710511,
+        "theoretical_speedup": 5.159055692174164,
+        "actual_speedup": 3.952560990576973,
+        "attainment_rate": 0.7661403997969362
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_1_405b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 8.950000000000001,
+        "naive_tflops": 25.402524713131793,
+        "optimized_tflops": 105.01637059529209,
+        "naive_normalized": 0.2377157716834648,
+        "optimized_normalized": 0.9827388362917903,
+        "theoretical_speedup": 5.159755427558705,
+        "actual_speedup": 4.134091858239746,
+        "attainment_rate": 0.8012185686474981
+      },
+      {
+        "case_id": "1x4_ag_gemm_mixtral_8x7b_single_expert_attention_s2048",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 10.600000000000001,
+        "naive_tflops": 24.164637522754152,
+        "optimized_tflops": 98.49119955512367,
+        "naive_normalized": 0.2261316747466128,
+        "optimized_normalized": 0.9216765565893962,
+        "theoretical_speedup": 5.417071521456437,
+        "actual_speedup": 4.075840138813644,
+        "attainment_rate": 0.7524065581688704
+      },
+      {
+        "case_id": "1x4_ag_gemm_mixtral_8x7b_single_expert_attention_s32768",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 11.600000000000001,
+        "naive_tflops": 24.16463469032262,
+        "optimized_tflops": 103.64756002140487,
+        "naive_normalized": 0.22613164824083615,
+        "optimized_normalized": 0.9699295637673203,
+        "theoretical_speedup": 5.423683619497111,
+        "actual_speedup": 4.289225198298293,
+        "attainment_rate": 0.7908324856706879
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_2_7b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 13.500000000000002,
+        "naive_tflops": 22.158123440709996,
+        "optimized_tflops": 89.24339988508952,
+        "naive_normalized": 0.20735479926697628,
+        "optimized_normalized": 0.8351360311982398,
+        "theoretical_speedup": 5.297400585746828,
+        "actual_speedup": 4.02757030052135,
+        "attainment_rate": 0.7602918139432234
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_2_7b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 14.500000000000002,
+        "naive_tflops": 22.158123606866617,
+        "optimized_tflops": 93.72814152125864,
+        "naive_normalized": 0.20735480082186303,
+        "optimized_normalized": 0.8771040572461306,
+        "theoretical_speedup": 5.299017191219254,
+        "actual_speedup": 4.229967445989562,
+        "attainment_rate": 0.7982550902078289
+      },
+      {
+        "case_id": "1x4_ag_gemm_gpt_3_175b_mlp_s2048",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 16.150000000000002,
+        "naive_tflops": 25.396116065215768,
+        "optimized_tflops": 103.79242475067426,
+        "naive_normalized": 0.2376557998223207,
+        "optimized_normalized": 0.9712852018897856,
+        "theoretical_speedup": 5.160999165869835,
+        "actual_speedup": 4.086940872538985,
+        "attainment_rate": 0.7918894658162907
+      },
+      {
+        "case_id": "1x4_ag_gemm_gpt_3_175b_mlp_s32768",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 17.150000000000002,
+        "naive_tflops": 25.39611598374491,
+        "optimized_tflops": 106.86091433157844,
+        "naive_normalized": 0.2376557990599198,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 5.161097603991694,
+        "actual_speedup": 4.2077660379239115,
+        "attainment_rate": 0.8152851119633047
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_8b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 18.8,
+        "naive_tflops": 24.755504449324267,
+        "optimized_tflops": 100.5609953891772,
+        "naive_normalized": 0.23166098291570367,
+        "optimized_normalized": 0.9410456200772038,
+        "theoretical_speedup": 5.293394755718499,
+        "actual_speedup": 4.062167086719258,
+        "attainment_rate": 0.7674030134123031
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_8b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 19.8,
+        "naive_tflops": 24.75550508631878,
+        "optimized_tflops": 105.4427559014713,
+        "naive_normalized": 0.23166098887667189,
+        "optimized_normalized": 0.9867289322856929,
+        "theoretical_speedup": 5.294581574135431,
+        "actual_speedup": 4.259365968652549,
+        "attainment_rate": 0.8044764083832394
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_1_405b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 21.45,
+        "naive_tflops": 25.469764440604106,
+        "optimized_tflops": 103.58184801344386,
+        "naive_normalized": 0.23834499826170347,
+        "optimized_normalized": 0.9693146335248455,
+        "theoretical_speedup": 5.146091078765045,
+        "actual_speedup": 4.066855359224006,
+        "attainment_rate": 0.7902804860966368
+      },
+      {
+        "case_id": "1x4_ag_gemm_llama_3_1_405b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 22.45,
+        "naive_tflops": 25.46976449733462,
+        "optimized_tflops": 106.51305451904342,
+        "naive_normalized": 0.23834499879258525,
+        "optimized_normalized": 0.9967447423156455,
+        "theoretical_speedup": 5.146174712764894,
+        "actual_speedup": 4.181941082737137,
+        "attainment_rate": 0.8126309960608196
+      },
+      {
+        "case_id": "1x4_ag_gemm_mixtral_8x7b_single_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 24.099999999999998,
+        "naive_tflops": 24.755504449324267,
+        "optimized_tflops": 100.5609953891772,
+        "naive_normalized": 0.23166098291570367,
+        "optimized_normalized": 0.9410456200772038,
+        "theoretical_speedup": 5.293394755718499,
+        "actual_speedup": 4.062167086719258,
+        "attainment_rate": 0.7674030134123031
+      },
+      {
+        "case_id": "1x4_ag_gemm_mixtral_8x7b_single_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 25.099999999999998,
+        "naive_tflops": 24.75550508631878,
+        "optimized_tflops": 105.4427559014713,
+        "naive_normalized": 0.23166098887667189,
+        "optimized_normalized": 0.9867289322856929,
+        "theoretical_speedup": 5.294581574135431,
+        "actual_speedup": 4.259365968652549,
+        "attainment_rate": 0.8044764083832394
+      },
+      {
+        "case_id": "1x4_ag_gemm_deepseek_v3_single_routed_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 2048,
+        "x": 26.749999999999996,
+        "naive_tflops": 23.84087281493347,
+        "optimized_tflops": 97.16099980448078,
+        "naive_normalized": 0.2231018980518704,
+        "optimized_normalized": 0.9092286025459241,
+        "theoretical_speedup": 5.434104798676227,
+        "actual_speedup": 4.075396087999806,
+        "attainment_rate": 0.7499664137858717
+      },
+      {
+        "case_id": "1x4_ag_gemm_deepseek_v3_single_routed_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 32768,
+        "x": 27.749999999999996,
+        "naive_tflops": 23.840871042550187,
+        "optimized_tflops": 101.90610118320782,
+        "naive_normalized": 0.22310188146598123,
+        "optimized_normalized": 0.9536330642558761,
+        "theoretical_speedup": 5.493761962848081,
+        "actual_speedup": 4.274428606292534,
+        "attainment_rate": 0.7780512943951035
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "1x4",
+    "operator": "GEMM_RS",
+    "max_tflops": 85.55805143359436,
+    "points": [
+      {
+        "case_id": "1x4_gemm_rs_llama_2_7b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 0.0,
+        "naive_tflops": 23.37892578461354,
+        "optimized_tflops": 81.17598588780807,
+        "naive_normalized": 0.27325220003121536,
+        "optimized_normalized": 0.9487825462085538,
+        "theoretical_speedup": 4.484257501790015,
+        "actual_speedup": 3.4721863029837206,
+        "attainment_rate": 0.7743057354752044
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_2_7b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 1.0,
+        "naive_tflops": 23.378925950315647,
+        "optimized_tflops": 84.97555103500079,
+        "naive_normalized": 0.27325220196793676,
+        "optimized_normalized": 0.9931917523969597,
+        "theoretical_speedup": 4.485078583838902,
+        "actual_speedup": 3.634707223744533,
+        "attainment_rate": 0.810399897304249
+      },
+      {
+        "case_id": "1x4_gemm_rs_gpt_3_175b_attention_s2048",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 2.65,
+        "naive_tflops": 24.12602466718344,
+        "optimized_tflops": 83.03304148385503,
+        "naive_normalized": 0.28198426989549646,
+        "optimized_normalized": 0.9704877576402133,
+        "theoretical_speedup": 4.34615012695037,
+        "actual_speedup": 3.4416379254058276,
+        "attainment_rate": 0.7918819702210275
+      },
+      {
+        "case_id": "1x4_gemm_rs_gpt_3_175b_attention_s32768",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 3.65,
+        "naive_tflops": 24.126024510328595,
+        "optimized_tflops": 85.48790667526771,
+        "naive_normalized": 0.28198426806218163,
+        "optimized_normalized": 0.9991801501185299,
+        "theoretical_speedup": 4.346238549481134,
+        "actual_speedup": 3.5433896968259093,
+        "attainment_rate": 0.8152773154269061
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_8b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 5.300000000000001,
+        "naive_tflops": 22.341185774616292,
+        "optimized_tflops": 81.11881155786607,
+        "naive_normalized": 0.2611231251795904,
+        "optimized_normalized": 0.948114294314267,
+        "theoretical_speedup": 4.6916339971365355,
+        "actual_speedup": 3.6309089578419775,
+        "attainment_rate": 0.7739113835516678
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_8b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 6.300000000000001,
+        "naive_tflops": 22.341183353524283,
+        "optimized_tflops": 84.93083799363579,
+        "naive_normalized": 0.26112309688193786,
+        "optimized_normalized": 0.9926691476786919,
+        "theoretical_speedup": 4.693352082875581,
+        "actual_speedup": 3.8015371276310708,
+        "attainment_rate": 0.8099833680710989
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_1_405b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 7.950000000000001,
+        "naive_tflops": 23.74660035209341,
+        "optimized_tflops": 83.47355231864984,
+        "naive_normalized": 0.27754956961033955,
+        "optimized_normalized": 0.9756364353790549,
+        "theoretical_speedup": 4.415545153695083,
+        "actual_speedup": 3.515179060622508,
+        "attainment_rate": 0.7960917481912472
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_1_405b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 8.950000000000001,
+        "naive_tflops": 23.74660049455591,
+        "optimized_tflops": 85.54058669454558,
+        "naive_normalized": 0.2775495712754371,
+        "optimized_normalized": 0.9997958726413687,
+        "theoretical_speedup": 4.415679905165123,
+        "actual_speedup": 3.6022245253233787,
+        "attainment_rate": 0.8157802654829607
+      },
+      {
+        "case_id": "1x4_gemm_rs_mixtral_8x7b_single_expert_attention_s2048",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 10.600000000000001,
+        "naive_tflops": 22.341185774616292,
+        "optimized_tflops": 81.11881155786607,
+        "naive_normalized": 0.2611231251795904,
+        "optimized_normalized": 0.948114294314267,
+        "theoretical_speedup": 4.6916339971365355,
+        "actual_speedup": 3.6309089578419775,
+        "attainment_rate": 0.7739113835516678
+      },
+      {
+        "case_id": "1x4_gemm_rs_mixtral_8x7b_single_expert_attention_s32768",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 11.600000000000001,
+        "naive_tflops": 22.341183353524283,
+        "optimized_tflops": 84.93083799363579,
+        "naive_normalized": 0.26112309688193786,
+        "optimized_normalized": 0.9926691476786919,
+        "theoretical_speedup": 4.693352082875581,
+        "actual_speedup": 3.8015371276310708,
+        "attainment_rate": 0.8099833680710989
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_2_7b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 13.500000000000002,
+        "naive_tflops": 22.751513871156106,
+        "optimized_tflops": 79.3261590091725,
+        "naive_normalized": 0.2659190279574638,
+        "optimized_normalized": 0.9271618238143405,
+        "theoretical_speedup": 4.503113257118512,
+        "actual_speedup": 3.4866321185659888,
+        "attainment_rate": 0.7742714694226995
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_2_7b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 14.500000000000002,
+        "naive_tflops": 22.751513695981036,
+        "optimized_tflops": 83.04047946895236,
+        "naive_normalized": 0.26591902591002275,
+        "optimized_normalized": 0.9705746925922453,
+        "theoretical_speedup": 4.504012748409778,
+        "actual_speedup": 3.6498881163946955,
+        "attainment_rate": 0.8103636291179135
+      },
+      {
+        "case_id": "1x4_gemm_rs_gpt_3_175b_mlp_s2048",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 16.150000000000002,
+        "naive_tflops": 24.222782704567244,
+        "optimized_tflops": 83.03662650583323,
+        "naive_normalized": 0.2831151750033448,
+        "optimized_normalized": 0.9705296592721244,
+        "theoretical_speedup": 4.328812877394573,
+        "actual_speedup": 3.428038286046158,
+        "attainment_rate": 0.791911866633844
+      },
+      {
+        "case_id": "1x4_gemm_rs_gpt_3_175b_mlp_s32768",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 17.150000000000002,
+        "naive_tflops": 24.222782630450606,
+        "optimized_tflops": 85.49119485196657,
+        "naive_normalized": 0.2831151741370717,
+        "optimized_normalized": 0.9992185822315077,
+        "theoretical_speedup": 4.328878929769969,
+        "actual_speedup": 3.529371342518472,
+        "attainment_rate": 0.8153083973420384
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_8b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 18.8,
+        "naive_tflops": 23.53509674796931,
+        "optimized_tflops": 81.18386793378193,
+        "naive_normalized": 0.27507752167820243,
+        "optimized_normalized": 0.9488746713311086,
+        "theoretical_speedup": 4.454625676505049,
+        "actual_speedup": 3.4494809519228657,
+        "attainment_rate": 0.7743593294755158
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_8b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 19.8,
+        "naive_tflops": 23.535097323706264,
+        "optimized_tflops": 84.98160716072304,
+        "naive_normalized": 0.2750775284073991,
+        "optimized_normalized": 0.9932625362170769,
+        "theoretical_speedup": 4.455324811752109,
+        "actual_speedup": 3.610845793066824,
+        "attainment_rate": 0.8104562395860014
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_1_405b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 21.45,
+        "naive_tflops": 24.24522169040576,
+        "optimized_tflops": 83.4920864293041,
+        "naive_normalized": 0.28337744121280767,
+        "optimized_normalized": 0.9758530615216996,
+        "theoretical_speedup": 4.324828190788115,
+        "actual_speedup": 3.443651186012595,
+        "attainment_rate": 0.7962515582347462
+      },
+      {
+        "case_id": "1x4_gemm_rs_llama_3_1_405b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 22.45,
+        "naive_tflops": 24.245221741812394,
+        "optimized_tflops": 85.55805143359436,
+        "naive_normalized": 0.2833774418136469,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 4.324873877276698,
+        "actual_speedup": 3.528862402031332,
+        "attainment_rate": 0.8159457367236334
+      },
+      {
+        "case_id": "1x4_gemm_rs_mixtral_8x7b_single_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 24.099999999999998,
+        "naive_tflops": 23.53509674796931,
+        "optimized_tflops": 81.18386793378193,
+        "naive_normalized": 0.27507752167820243,
+        "optimized_normalized": 0.9488746713311086,
+        "theoretical_speedup": 4.454625676505049,
+        "actual_speedup": 3.4494809519228657,
+        "attainment_rate": 0.7743593294755158
+      },
+      {
+        "case_id": "1x4_gemm_rs_mixtral_8x7b_single_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 25.099999999999998,
+        "naive_tflops": 23.535097323706264,
+        "optimized_tflops": 84.98160716072304,
+        "naive_normalized": 0.2750775284073991,
+        "optimized_normalized": 0.9932625362170769,
+        "theoretical_speedup": 4.455324811752109,
+        "actual_speedup": 3.610845793066824,
+        "attainment_rate": 0.8104562395860014
+      },
+      {
+        "case_id": "1x4_gemm_rs_deepseek_v3_single_routed_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 2048,
+        "x": 26.749999999999996,
+        "naive_tflops": 18.972571171821556,
+        "optimized_tflops": 73.92479621533634,
+        "naive_normalized": 0.22175085633579517,
+        "optimized_normalized": 0.8640308536329029,
+        "theoretical_speedup": 5.021306834313527,
+        "actual_speedup": 3.896403684342528,
+        "attainment_rate": 0.7759740268641069
+      },
+      {
+        "case_id": "1x4_gemm_rs_deepseek_v3_single_routed_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 32768,
+        "x": 27.749999999999996,
+        "naive_tflops": 18.97257004937485,
+        "optimized_tflops": 76.84400697198856,
+        "naive_normalized": 0.2217508432166709,
+        "optimized_normalized": 0.8981505034816136,
+        "theoretical_speedup": 5.02417247720384,
+        "actual_speedup": 4.0502687180496455,
+        "attainment_rate": 0.806156384245747
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "2x3",
+    "operator": "AG_GEMM",
+    "max_tflops": 160.03590035206557,
+    "points": [
+      {
+        "case_id": "2x3_ag_gemm_llama_2_7b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 0.0,
+        "naive_tflops": 36.9566779694682,
+        "optimized_tflops": 150.33235853402957,
+        "naive_normalized": 0.2309274224606267,
+        "optimized_normalized": 0.939366468419342,
+        "theoretical_speedup": 5.315632460562694,
+        "actual_speedup": 4.06779956407951,
+        "attainment_rate": 0.7652522243136629
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_2_7b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 1.0,
+        "naive_tflops": 36.9566804538369,
+        "optimized_tflops": 158.10645843687115,
+        "naive_normalized": 0.2309274379844479,
+        "optimized_normalized": 0.9879436931904041,
+        "theoretical_speedup": 5.319687760021972,
+        "actual_speedup": 4.278156384590983,
+        "attainment_rate": 0.8042119345315322
+      },
+      {
+        "case_id": "2x3_ag_gemm_gpt_3_175b_attention_s2048",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 2.65,
+        "naive_tflops": 38.023825442539795,
+        "optimized_tflops": 153.46254631226472,
+        "naive_normalized": 0.2375955979807691,
+        "optimized_normalized": 0.9589257533757112,
+        "theoretical_speedup": 5.170185276938933,
+        "actual_speedup": 4.03595757465728,
+        "attainment_rate": 0.780621459091465
+      },
+      {
+        "case_id": "2x3_ag_gemm_gpt_3_175b_attention_s32768",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 3.65,
+        "naive_tflops": 38.02382568605049,
+        "optimized_tflops": 159.79232384855231,
+        "naive_normalized": 0.23759559950236955,
+        "optimized_normalized": 0.9984779883577535,
+        "theoretical_speedup": 5.170623556498454,
+        "actual_speedup": 4.202426267359365,
+        "attainment_rate": 0.8127503813496041
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_8b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 5.300000000000001,
+        "naive_tflops": 35.97063530948836,
+        "optimized_tflops": 148.70719132563633,
+        "naive_normalized": 0.22476603830987907,
+        "optimized_normalized": 0.9292114519210563,
+        "theoretical_speedup": 5.448057105775471,
+        "actual_speedup": 4.134127463865234,
+        "attainment_rate": 0.7588260151463272
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_8b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 6.300000000000001,
+        "naive_tflops": 35.97063530948836,
+        "optimized_tflops": 156.2258545550544,
+        "naive_normalized": 0.22476603830987907,
+        "optimized_normalized": 0.9761925556164,
+        "theoretical_speedup": 5.464679874699972,
+        "actual_speedup": 4.343149716731444,
+        "attainment_rate": 0.7947674550597342
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_1_405b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 7.950000000000001,
+        "naive_tflops": 38.00149674883746,
+        "optimized_tflops": 149.43192834905793,
+        "naive_normalized": 0.23745607495091633,
+        "optimized_normalized": 0.9337400422050316,
+        "theoretical_speedup": 5.17182037746764,
+        "actual_speedup": 3.9322642825543275,
+        "attainment_rate": 0.7603249911165214
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_1_405b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 8.950000000000001,
+        "naive_tflops": 38.00149660290259,
+        "optimized_tflops": 156.9409317165879,
+        "naive_normalized": 0.23745607403902802,
+        "optimized_normalized": 0.9806607853071154,
+        "theoretical_speedup": 5.173574020407886,
+        "actual_speedup": 4.129861867192899,
+        "attainment_rate": 0.7982609025988767
+      },
+      {
+        "case_id": "2x3_ag_gemm_mixtral_8x7b_single_expert_attention_s2048",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 10.600000000000001,
+        "naive_tflops": 35.97063530948836,
+        "optimized_tflops": 148.70719132563633,
+        "naive_normalized": 0.22476603830987907,
+        "optimized_normalized": 0.9292114519210563,
+        "theoretical_speedup": 5.448057105775471,
+        "actual_speedup": 4.134127463865234,
+        "attainment_rate": 0.7588260151463272
+      },
+      {
+        "case_id": "2x3_ag_gemm_mixtral_8x7b_single_expert_attention_s32768",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 11.600000000000001,
+        "naive_tflops": 35.97063530948836,
+        "optimized_tflops": 156.2258545550544,
+        "naive_normalized": 0.22476603830987907,
+        "optimized_normalized": 0.9761925556164,
+        "theoretical_speedup": 5.464679874699972,
+        "actual_speedup": 4.343149716731444,
+        "attainment_rate": 0.7947674550597342
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_2_7b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 13.500000000000002,
+        "naive_tflops": 33.107024014315265,
+        "optimized_tflops": 134.6727378534015,
+        "naive_normalized": 0.20687248262097807,
+        "optimized_normalized": 0.8415157946256605,
+        "theoretical_speedup": 5.315632460562694,
+        "actual_speedup": 4.06779956407951,
+        "attainment_rate": 0.7652522243136629
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_2_7b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 14.500000000000002,
+        "naive_tflops": 33.10702623989556,
+        "optimized_tflops": 141.6370356830304,
+        "naive_normalized": 0.20687249652773457,
+        "optimized_normalized": 0.8850328918164037,
+        "theoretical_speedup": 5.319687760021972,
+        "actual_speedup": 4.278156384590983,
+        "attainment_rate": 0.8042119345315322
+      },
+      {
+        "case_id": "2x3_ag_gemm_gpt_3_175b_mlp_s2048",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 16.150000000000002,
+        "naive_tflops": 38.05576968970971,
+        "optimized_tflops": 154.39231947381194,
+        "naive_normalized": 0.23779520473837565,
+        "optimized_normalized": 0.9647355320535066,
+        "theoretical_speedup": 5.16604974112238,
+        "actual_speedup": 4.057001625053445,
+        "attainment_rate": 0.7853198920558628
+      },
+      {
+        "case_id": "2x3_ag_gemm_gpt_3_175b_mlp_s32768",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 17.150000000000002,
+        "naive_tflops": 38.05576994582572,
+        "optimized_tflops": 160.03590035206557,
+        "naive_normalized": 0.23779520633874163,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 5.166296076787069,
+        "actual_speedup": 4.205299237931188,
+        "attainment_rate": 0.8139872696855718
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_8b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 18.8,
+        "naive_tflops": 34.560574805419265,
+        "optimized_tflops": 138.08725339996232,
+        "naive_normalized": 0.21595513712478823,
+        "optimized_normalized": 0.8628517294943319,
+        "theoretical_speedup": 5.306777719937532,
+        "actual_speedup": 3.9955137950515103,
+        "attainment_rate": 0.7529076976486859
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_8b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 19.8,
+        "naive_tflops": 34.56057263275783,
+        "optimized_tflops": 145.24736903270144,
+        "naive_normalized": 0.21595512354870045,
+        "optimized_normalized": 0.90759241340955,
+        "theoretical_speedup": 5.309368835649881,
+        "actual_speedup": 4.202689885266266,
+        "attainment_rate": 0.7915611093068552
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_1_405b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 21.45,
+        "naive_tflops": 36.75849867274768,
+        "optimized_tflops": 148.28480033834742,
+        "naive_normalized": 0.2296890797120025,
+        "optimized_normalized": 0.9265721004607922,
+        "theoretical_speedup": 5.1503358436276825,
+        "actual_speedup": 4.034027658705333,
+        "attainment_rate": 0.7832552635759635
+      },
+      {
+        "case_id": "2x3_ag_gemm_llama_3_1_405b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 22.45,
+        "naive_tflops": 36.75849879091091,
+        "optimized_tflops": 153.43230793583092,
+        "naive_normalized": 0.22968908045035705,
+        "optimized_normalized": 0.9587368059185014,
+        "theoretical_speedup": 5.150529887308788,
+        "actual_speedup": 4.174063495045923,
+        "attainment_rate": 0.810414381893223
+      },
+      {
+        "case_id": "2x3_ag_gemm_mixtral_8x7b_single_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 24.099999999999998,
+        "naive_tflops": 34.560574805419265,
+        "optimized_tflops": 138.08725339996232,
+        "naive_normalized": 0.21595513712478823,
+        "optimized_normalized": 0.8628517294943319,
+        "theoretical_speedup": 5.306777719937532,
+        "actual_speedup": 3.9955137950515103,
+        "attainment_rate": 0.7529076976486859
+      },
+      {
+        "case_id": "2x3_ag_gemm_mixtral_8x7b_single_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 25.099999999999998,
+        "naive_tflops": 34.56057263275783,
+        "optimized_tflops": 145.24736903270144,
+        "naive_normalized": 0.21595512354870045,
+        "optimized_normalized": 0.90759241340955,
+        "theoretical_speedup": 5.309368835649881,
+        "actual_speedup": 4.202689885266266,
+        "attainment_rate": 0.7915611093068552
+      },
+      {
+        "case_id": "2x3_ag_gemm_deepseek_v3_single_routed_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 2048,
+        "x": 26.749999999999996,
+        "naive_tflops": 23.75086489830065,
+        "optimized_tflops": 96.99204950132513,
+        "naive_normalized": 0.14840960588249724,
+        "optimized_normalized": 0.606064322367361,
+        "theoretical_speedup": 5.447685640837312,
+        "actual_speedup": 4.083727052325778,
+        "attainment_rate": 0.7496260470158309
+      },
+      {
+        "case_id": "2x3_ag_gemm_deepseek_v3_single_routed_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 32768,
+        "x": 27.749999999999996,
+        "naive_tflops": 23.750869589037308,
+        "optimized_tflops": 101.84283220924772,
+        "naive_normalized": 0.14840963519302472,
+        "optimized_normalized": 0.636374913286344,
+        "theoretical_speedup": 5.514131635806055,
+        "actual_speedup": 4.287962250285577,
+        "attainment_rate": 0.7776314628475067
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "2x3",
+    "operator": "GEMM_RS",
+    "max_tflops": 128.2831947808329,
+    "points": [
+      {
+        "case_id": "2x3_gemm_rs_llama_2_7b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 0.0,
+        "naive_tflops": 34.241326155267394,
+        "optimized_tflops": 121.7078848064118,
+        "naive_normalized": 0.26691981138891524,
+        "optimized_normalized": 0.948743793092659,
+        "theoretical_speedup": 4.591971884152294,
+        "actual_speedup": 3.5544150438136373,
+        "attainment_rate": 0.774049827282382
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_2_7b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 1.0,
+        "naive_tflops": 34.24132828797515,
+        "optimized_tflops": 127.41966883551436,
+        "naive_normalized": 0.26691982801391245,
+        "optimized_normalized": 0.9932685965079537,
+        "theoretical_speedup": 4.593373214249384,
+        "actual_speedup": 3.7212244736505014,
+        "attainment_rate": 0.8101289183527833
+      },
+      {
+        "case_id": "2x3_gemm_rs_gpt_3_175b_attention_s2048",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 2.65,
+        "naive_tflops": 35.89083473118132,
+        "optimized_tflops": 124.53516403906325,
+        "naive_normalized": 0.27977814859147754,
+        "optimized_normalized": 0.9707831509172108,
+        "theoretical_speedup": 4.382197055951391,
+        "actual_speedup": 3.469831921486889,
+        "attainment_rate": 0.7918018923349343
+      },
+      {
+        "case_id": "2x3_gemm_rs_gpt_3_175b_attention_s32768",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 3.65,
+        "naive_tflops": 35.890834948138256,
+        "optimized_tflops": 128.21861071067252,
+        "naive_normalized": 0.2797781502827118,
+        "optimized_normalized": 0.999496550812671,
+        "theoretical_speedup": 4.3823456489943915,
+        "actual_speedup": 3.5724610724700776,
+        "attainment_rate": 0.8151938159624272
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_8b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 5.300000000000001,
+        "naive_tflops": 32.03301996298834,
+        "optimized_tflops": 121.55682495117878,
+        "naive_normalized": 0.2497055052122421,
+        "optimized_normalized": 0.9475662432546533,
+        "theoretical_speedup": 4.906938711776188,
+        "actual_speedup": 3.794735091840489,
+        "attainment_rate": 0.7733406334856975
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_8b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 6.300000000000001,
+        "naive_tflops": 32.03301996298834,
+        "optimized_tflops": 127.29828705932913,
+        "naive_normalized": 0.2497055052122421,
+        "optimized_normalized": 0.9923223948141731,
+        "theoretical_speedup": 4.90993354762583,
+        "actual_speedup": 3.9739708340460056,
+        "attainment_rate": 0.8093736494595933
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_1_405b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 7.950000000000001,
+        "naive_tflops": 35.04668354456202,
+        "optimized_tflops": 125.18110809521997,
+        "naive_normalized": 0.27319777625150343,
+        "optimized_normalized": 0.9758184484654226,
+        "theoretical_speedup": 4.487667639559486,
+        "actual_speedup": 3.571838914117269,
+        "attainment_rate": 0.7959232280552497
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_1_405b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 8.950000000000001,
+        "naive_tflops": 35.04668342043924,
+        "optimized_tflops": 128.2831947808329,
+        "naive_normalized": 0.2731977752839349,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 4.487895893365162,
+        "actual_speedup": 3.660351915240519,
+        "attainment_rate": 0.8156053532016926
+      },
+      {
+        "case_id": "2x3_gemm_rs_mixtral_8x7b_single_expert_attention_s2048",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 10.600000000000001,
+        "naive_tflops": 32.03301996298834,
+        "optimized_tflops": 121.55682495117878,
+        "naive_normalized": 0.2497055052122421,
+        "optimized_normalized": 0.9475662432546533,
+        "theoretical_speedup": 4.906938711776188,
+        "actual_speedup": 3.794735091840489,
+        "attainment_rate": 0.7733406334856975
+      },
+      {
+        "case_id": "2x3_gemm_rs_mixtral_8x7b_single_expert_attention_s32768",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 11.600000000000001,
+        "naive_tflops": 32.03301996298834,
+        "optimized_tflops": 127.29828705932913,
+        "naive_normalized": 0.2497055052122421,
+        "optimized_normalized": 0.9923223948141731,
+        "theoretical_speedup": 4.90993354762583,
+        "actual_speedup": 3.9739708340460056,
+        "attainment_rate": 0.8093736494595933
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_2_7b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 13.500000000000002,
+        "naive_tflops": 30.67452134742704,
+        "optimized_tflops": 109.02998013907724,
+        "naive_normalized": 0.23911566436923656,
+        "optimized_normalized": 0.849916314645507,
+        "theoretical_speedup": 4.591971884152294,
+        "actual_speedup": 3.5544150438136373,
+        "attainment_rate": 0.774049827282382
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_2_7b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 14.500000000000002,
+        "naive_tflops": 30.67452325797774,
+        "optimized_tflops": 114.14678666514827,
+        "naive_normalized": 0.23911567926246324,
+        "optimized_normalized": 0.8898031177050418,
+        "theoretical_speedup": 4.593373214249384,
+        "actual_speedup": 3.7212244736505014,
+        "attainment_rate": 0.8101289183527833
+      },
+      {
+        "case_id": "2x3_gemm_rs_gpt_3_175b_mlp_s2048",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 16.150000000000002,
+        "naive_tflops": 36.10826505517925,
+        "optimized_tflops": 124.54424437342352,
+        "naive_normalized": 0.2814730730464648,
+        "optimized_normalized": 0.9708539344237783,
+        "theoretical_speedup": 4.355848506713686,
+        "actual_speedup": 3.449189380411932,
+        "attainment_rate": 0.7918524657355928
+      },
+      {
+        "case_id": "2x3_gemm_rs_gpt_3_175b_mlp_s32768",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 17.150000000000002,
+        "naive_tflops": 36.10826528575252,
+        "optimized_tflops": 128.22696865087536,
+        "naive_normalized": 0.2814730748438419,
+        "optimized_normalized": 0.9995617030737846,
+        "theoretical_speedup": 4.3559592814817965,
+        "actual_speedup": 3.5511805298902224,
+        "attainment_rate": 0.8152464934617555
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_8b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 18.8,
+        "naive_tflops": 32.4053704746725,
+        "optimized_tflops": 113.62057495509846,
+        "naive_normalized": 0.2526080717746068,
+        "optimized_normalized": 0.8857011641253167,
+        "theoretical_speedup": 4.528953918250456,
+        "actual_speedup": 3.5062266930076427,
+        "attainment_rate": 0.7741802536074611
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_8b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 19.8,
+        "naive_tflops": 32.40536856453723,
+        "optimized_tflops": 118.94581102261253,
+        "naive_normalized": 0.25260805688461846,
+        "optimized_normalized": 0.9272127282597464,
+        "theoretical_speedup": 4.5300596018945,
+        "actual_speedup": 3.6705588083568577,
+        "attainment_rate": 0.8102672218312109
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_1_405b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 21.45,
+        "naive_tflops": 35.82017764086132,
+        "optimized_tflops": 124.0361035014301,
+        "naive_normalized": 0.2792273586735875,
+        "optimized_normalized": 0.9668928476044053,
+        "theoretical_speedup": 4.349100053942449,
+        "actual_speedup": 3.462743952445893,
+        "attainment_rate": 0.7961978132250427
+      },
+      {
+        "case_id": "2x3_gemm_rs_llama_3_1_405b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 22.45,
+        "naive_tflops": 35.82017764086132,
+        "optimized_tflops": 127.10608688026443,
+        "naive_normalized": 0.2792273586735875,
+        "optimized_normalized": 0.9908241457302376,
+        "theoretical_speedup": 4.349175896140373,
+        "actual_speedup": 3.5484493727152855,
+        "attainment_rate": 0.815890057669159
+      },
+      {
+        "case_id": "2x3_gemm_rs_mixtral_8x7b_single_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 24.099999999999998,
+        "naive_tflops": 32.4053704746725,
+        "optimized_tflops": 113.62057495509846,
+        "naive_normalized": 0.2526080717746068,
+        "optimized_normalized": 0.8857011641253167,
+        "theoretical_speedup": 4.528953918250456,
+        "actual_speedup": 3.5062266930076427,
+        "attainment_rate": 0.7741802536074611
+      },
+      {
+        "case_id": "2x3_gemm_rs_mixtral_8x7b_single_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 25.099999999999998,
+        "naive_tflops": 32.40536856453723,
+        "optimized_tflops": 118.94581102261253,
+        "naive_normalized": 0.25260805688461846,
+        "optimized_normalized": 0.9272127282597464,
+        "theoretical_speedup": 4.5300596018945,
+        "actual_speedup": 3.6705588083568577,
+        "attainment_rate": 0.8102672218312109
+      },
+      {
+        "case_id": "2x3_gemm_rs_deepseek_v3_single_routed_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 2048,
+        "x": 26.749999999999996,
+        "naive_tflops": 18.91552536486511,
+        "optimized_tflops": 73.8901852294693,
+        "naive_normalized": 0.1474513118977243,
+        "optimized_normalized": 0.5759927117165109,
+        "theoretical_speedup": 5.036108692713262,
+        "actual_speedup": 3.906324767839522,
+        "attainment_rate": 0.7756633159033237
+      },
+      {
+        "case_id": "2x3_gemm_rs_deepseek_v3_single_routed_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 32768,
+        "x": 27.749999999999996,
+        "naive_tflops": 18.915528340084474,
+        "optimized_tflops": 76.8116008295665,
+        "naive_normalized": 0.14745133509031294,
+        "optimized_normalized": 0.5987658863719155,
+        "theoretical_speedup": 5.039302112836816,
+        "actual_speedup": 4.060769514261607,
+        "attainment_rate": 0.8058198185652428
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "3x3",
+    "operator": "AG_GEMM",
+    "max_tflops": 238.98133685463316,
+    "points": [
+      {
+        "case_id": "3x3_ag_gemm_llama_2_7b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 0.0,
+        "naive_tflops": 48.22636015652633,
+        "optimized_tflops": 196.87555109817018,
+        "naive_normalized": 0.2017996919393807,
+        "optimized_normalized": 0.8238114059003906,
+        "theoretical_speedup": 5.427323574730354,
+        "actual_speedup": 4.082322415773847,
+        "attainment_rate": 0.7521796626943639
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_2_7b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 1.0,
+        "naive_tflops": 48.22636368200365,
+        "optimized_tflops": 207.2261499942108,
+        "naive_normalized": 0.20179970669148375,
+        "optimized_normalized": 0.8671227331875782,
+        "theoretical_speedup": 5.4351748481049285,
+        "actual_speedup": 4.296947440628624,
+        "attainment_rate": 0.7905812712035992
+      },
+      {
+        "case_id": "3x3_ag_gemm_gpt_3_175b_attention_s2048",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 2.65,
+        "naive_tflops": 56.92106758406661,
+        "optimized_tflops": 228.29418999412601,
+        "naive_normalized": 0.23818206196867325,
+        "optimized_normalized": 0.9552804122649632,
+        "theoretical_speedup": 5.179945324365373,
+        "actual_speedup": 4.010715183037611,
+        "attainment_rate": 0.7742775129637085
+      },
+      {
+        "case_id": "3x3_ag_gemm_gpt_3_175b_attention_s32768",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 3.65,
+        "naive_tflops": 56.92106682008921,
+        "optimized_tflops": 238.98133685463316,
+        "naive_normalized": 0.23818205877186543,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 5.1809991726457705,
+        "actual_speedup": 4.198469041523467,
+        "attainment_rate": 0.8103589484611793
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_8b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 5.300000000000001,
+        "naive_tflops": 35.924990190604646,
+        "optimized_tflops": 148.6349290474776,
+        "naive_normalized": 0.15032550517723897,
+        "optimized_normalized": 0.6219520361035089,
+        "theoretical_speedup": 5.453799307958477,
+        "actual_speedup": 4.1373686745320155,
+        "attainment_rate": 0.7586213648336023
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_8b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 6.300000000000001,
+        "naive_tflops": 35.92499175566917,
+        "optimized_tflops": 156.18037751871046,
+        "naive_normalized": 0.15032551172613748,
+        "optimized_normalized": 0.6535254157261301,
+        "theoretical_speedup": 5.471548709047516,
+        "actual_speedup": 4.347401902856785,
+        "attainment_rate": 0.7945468703711089
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_1_405b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 7.950000000000001,
+        "naive_tflops": 56.77363000712246,
+        "optimized_tflops": 225.49101513621056,
+        "naive_normalized": 0.2375651201652477,
+        "optimized_normalized": 0.9435507312161852,
+        "theoretical_speedup": 5.19001908065915,
+        "actual_speedup": 3.9717561675714923,
+        "attainment_rate": 0.7652681244222065
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_1_405b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 8.950000000000001,
+        "naive_tflops": 56.77362984426,
+        "optimized_tflops": 237.14911056026008,
+        "naive_normalized": 0.23756511948376158,
+        "optimized_normalized": 0.9923331825050106,
+        "theoretical_speedup": 5.194242499864373,
+        "actual_speedup": 4.177099671287561,
+        "attainment_rate": 0.8041787943856354
+      },
+      {
+        "case_id": "3x3_ag_gemm_mixtral_8x7b_single_expert_attention_s2048",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 10.600000000000001,
+        "naive_tflops": 35.924990190604646,
+        "optimized_tflops": 148.6349290474776,
+        "naive_normalized": 0.15032550517723897,
+        "optimized_normalized": 0.6219520361035089,
+        "theoretical_speedup": 5.453799307958477,
+        "actual_speedup": 4.1373686745320155,
+        "attainment_rate": 0.7586213648336023
+      },
+      {
+        "case_id": "3x3_ag_gemm_mixtral_8x7b_single_expert_attention_s32768",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 11.600000000000001,
+        "naive_tflops": 35.92499175566917,
+        "optimized_tflops": 156.18037751871046,
+        "naive_normalized": 0.15032551172613748,
+        "optimized_normalized": 0.6535254157261301,
+        "theoretical_speedup": 5.471548709047516,
+        "actual_speedup": 4.347401902856785,
+        "attainment_rate": 0.7945468703711089
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_2_7b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 13.500000000000002,
+        "naive_tflops": 43.20278097355484,
+        "optimized_tflops": 176.36768119211078,
+        "naive_normalized": 0.18077889069569517,
+        "optimized_normalized": 0.7379977177857666,
+        "theoretical_speedup": 5.427323574730354,
+        "actual_speedup": 4.082322415773847,
+        "attainment_rate": 0.7521796626943639
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_2_7b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 14.500000000000002,
+        "naive_tflops": 43.202784131794935,
+        "optimized_tflops": 185.6400927031472,
+        "naive_normalized": 0.18077890391112086,
+        "optimized_normalized": 0.7767974484805388,
+        "theoretical_speedup": 5.4351748481049285,
+        "actual_speedup": 4.296947440628624,
+        "attainment_rate": 0.7905812712035992
+      },
+      {
+        "case_id": "3x3_ag_gemm_gpt_3_175b_mlp_s2048",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 16.150000000000002,
+        "naive_tflops": 55.27701184791887,
+        "optimized_tflops": 221.85092604903855,
+        "naive_normalized": 0.23130263047085808,
+        "optimized_normalized": 0.9283190435242454,
+        "theoretical_speedup": 5.172899919660278,
+        "actual_speedup": 4.0134391971007215,
+        "attainment_rate": 0.7758586594430572
+      },
+      {
+        "case_id": "3x3_ag_gemm_gpt_3_175b_mlp_s32768",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 17.150000000000002,
+        "naive_tflops": 55.27701200230802,
+        "optimized_tflops": 231.33577222746115,
+        "naive_normalized": 0.23130263111688823,
+        "optimized_normalized": 0.9680076916139162,
+        "theoretical_speedup": 5.173456572424727,
+        "actual_speedup": 4.185026719928386,
+        "attainment_rate": 0.8089420798920367
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_8b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 18.8,
+        "naive_tflops": 43.08800083124,
+        "optimized_tflops": 175.35297131646232,
+        "naive_normalized": 0.18029860154916383,
+        "optimized_normalized": 0.7337517382084338,
+        "theoretical_speedup": 5.318813529921942,
+        "actual_speedup": 4.06964741769422,
+        "attainment_rate": 0.7651419616047238
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_8b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 19.8,
+        "naive_tflops": 43.088004690773765,
+        "optimized_tflops": 184.43060762879261,
+        "naive_normalized": 0.18029861769910177,
+        "optimized_normalized": 0.7717364462689298,
+        "theoretical_speedup": 5.323141756632126,
+        "actual_speedup": 4.280323699191481,
+        "attainment_rate": 0.8040972596415653
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_1_405b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 21.45,
+        "naive_tflops": 55.06350679645257,
+        "optimized_tflops": 221.6593132166265,
+        "naive_normalized": 0.23040923413172817,
+        "optimized_normalized": 0.927517253581424,
+        "theoretical_speedup": 5.156989873661877,
+        "actual_speedup": 4.025521186582085,
+        "attainment_rate": 0.7805951311135001
+      },
+      {
+        "case_id": "3x3_ag_gemm_llama_3_1_405b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 22.45,
+        "naive_tflops": 55.06350642524007,
+        "optimized_tflops": 230.80267145979548,
+        "naive_normalized": 0.2304092325784165,
+        "optimized_normalized": 0.9657769702752454,
+        "theoretical_speedup": 5.157456178529016,
+        "actual_speedup": 4.191572357876575,
+        "attainment_rate": 0.8127208865732087
+      },
+      {
+        "case_id": "3x3_ag_gemm_mixtral_8x7b_single_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 24.099999999999998,
+        "naive_tflops": 43.08800083124,
+        "optimized_tflops": 175.35297131646232,
+        "naive_normalized": 0.18029860154916383,
+        "optimized_normalized": 0.7337517382084338,
+        "theoretical_speedup": 5.318813529921942,
+        "actual_speedup": 4.06964741769422,
+        "attainment_rate": 0.7651419616047238
+      },
+      {
+        "case_id": "3x3_ag_gemm_mixtral_8x7b_single_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 25.099999999999998,
+        "naive_tflops": 43.088004690773765,
+        "optimized_tflops": 184.43060762879261,
+        "naive_normalized": 0.18029861769910177,
+        "optimized_normalized": 0.7717364462689298,
+        "theoretical_speedup": 5.323141756632126,
+        "actual_speedup": 4.280323699191481,
+        "attainment_rate": 0.8040972596415653
+      },
+      {
+        "case_id": "3x3_ag_gemm_deepseek_v3_single_routed_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 2048,
+        "x": 26.749999999999996,
+        "naive_tflops": 23.69124557642504,
+        "optimized_tflops": 96.8383435476312,
+        "naive_normalized": 0.09913429177457433,
+        "optimized_normalized": 0.40521299622043594,
+        "theoretical_speedup": 5.456720156555773,
+        "actual_speedup": 4.087515923772037,
+        "attainment_rate": 0.7490792649245983
+      },
+      {
+        "case_id": "3x3_ag_gemm_deepseek_v3_single_routed_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 32768,
+        "x": 27.749999999999996,
+        "naive_tflops": 23.691244993023062,
+        "optimized_tflops": 101.76901535802692,
+        "naive_normalized": 0.09913428933337125,
+        "optimized_normalized": 0.4258450333296556,
+        "theoretical_speedup": 5.52770957749969,
+        "actual_speedup": 4.295638130794617,
+        "attainment_rate": 0.7771099531494622
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "3x3",
+    "operator": "GEMM_RS",
+    "max_tflops": 192.34708595077277,
+    "points": [
+      {
+        "case_id": "3x3_gemm_rs_llama_2_7b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 0.0,
+        "naive_tflops": 44.59438832542211,
+        "optimized_tflops": 162.18121088359382,
+        "naive_normalized": 0.23184332689518944,
+        "optimized_normalized": 0.8431695758837788,
+        "theoretical_speedup": 4.700549745488201,
+        "actual_speedup": 3.636807611309661,
+        "attainment_rate": 0.7736983561976836
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_2_7b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 1.0,
+        "naive_tflops": 44.59439133988107,
+        "optimized_tflops": 169.81347502795316,
+        "naive_normalized": 0.23184334256716568,
+        "optimized_normalized": 0.8828492211803687,
+        "theoretical_speedup": 4.702589855617604,
+        "actual_speedup": 3.8079558869567487,
+        "attainment_rate": 0.8097571771877689
+      },
+      {
+        "case_id": "3x3_gemm_rs_gpt_3_175b_attention_s2048",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 2.65,
+        "naive_tflops": 53.17895215571809,
+        "optimized_tflops": 186.7638547095311,
+        "naive_normalized": 0.27647391637286434,
+        "optimized_normalized": 0.9709731436083696,
+        "theoretical_speedup": 4.436265493895029,
+        "actual_speedup": 3.511988242315324,
+        "attainment_rate": 0.7916542071587802
+      },
+      {
+        "case_id": "3x3_gemm_rs_gpt_3_175b_attention_s32768",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 3.65,
+        "naive_tflops": 53.17895148888984,
+        "optimized_tflops": 192.2913227713541,
+        "naive_normalized": 0.27647391290606754,
+        "optimized_normalized": 0.9997100908540255,
+        "theoretical_speedup": 4.436506175831251,
+        "actual_speedup": 3.6159291860338327,
+        "attainment_rate": 0.8150398179838733
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_8b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 5.300000000000001,
+        "naive_tflops": 40.89090127041238,
+        "optimized_tflops": 161.86376379142214,
+        "naive_normalized": 0.2125891383708176,
+        "optimized_normalized": 0.8415191890811791,
+        "theoretical_speedup": 5.12390749306198,
+        "actual_speedup": 3.958429840443323,
+        "attainment_rate": 0.7725412384597555
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_8b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 6.300000000000001,
+        "naive_tflops": 40.890902284235736,
+        "optimized_tflops": 169.54883182568312,
+        "naive_normalized": 0.21258914364161935,
+        "optimized_normalized": 0.8814733583698565,
+        "theoretical_speedup": 5.128355072044442,
+        "actual_speedup": 4.146370521421525,
+        "attainment_rate": 0.8085186113621721
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_1_405b_attention_s2048",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 7.950000000000001,
+        "naive_tflops": 51.3309515116843,
+        "optimized_tflops": 187.6911535133713,
+        "naive_normalized": 0.26686628111860966,
+        "optimized_normalized": 0.9757941098281413,
+        "theoretical_speedup": 4.595845499522611,
+        "actual_speedup": 3.656490830306307,
+        "attainment_rate": 0.7956078659924756
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_1_405b_attention_s32768",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 8.950000000000001,
+        "naive_tflops": 51.33095137855111,
+        "optimized_tflops": 192.34708595077277,
+        "naive_normalized": 0.2668662804264589,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 4.596219508357702,
+        "actual_speedup": 3.747195031166828,
+        "attainment_rate": 0.8152776481525698
+      },
+      {
+        "case_id": "3x3_gemm_rs_mixtral_8x7b_single_expert_attention_s2048",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 10.600000000000001,
+        "naive_tflops": 40.89090127041238,
+        "optimized_tflops": 161.86376379142214,
+        "naive_normalized": 0.2125891383708176,
+        "optimized_normalized": 0.8415191890811791,
+        "theoretical_speedup": 5.12390749306198,
+        "actual_speedup": 3.958429840443323,
+        "attainment_rate": 0.7725412384597555
+      },
+      {
+        "case_id": "3x3_gemm_rs_mixtral_8x7b_single_expert_attention_s32768",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 11.600000000000001,
+        "naive_tflops": 40.890902284235736,
+        "optimized_tflops": 169.54883182568312,
+        "naive_normalized": 0.21258914364161935,
+        "optimized_normalized": 0.8814733583698565,
+        "theoretical_speedup": 5.128355072044442,
+        "actual_speedup": 4.146370521421525,
+        "attainment_rate": 0.8085186113621721
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_2_7b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 2048,
+        "x": 13.500000000000002,
+        "naive_tflops": 47.08605115065127,
+        "optimized_tflops": 174.27995199373404,
+        "naive_normalized": 0.24479732000048063,
+        "optimized_normalized": 0.9060701446672157,
+        "theoretical_speedup": 4.785252637423653,
+        "actual_speedup": 3.7013074516724154,
+        "attainment_rate": 0.7734821402585702
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_2_7b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 32768,
+        "x": 14.500000000000002,
+        "naive_tflops": 47.08605340155808,
+        "optimized_tflops": 182.49650992888476,
+        "naive_normalized": 0.24479733170279885,
+        "optimized_normalized": 0.948787495411243,
+        "theoretical_speedup": 4.787744869969792,
+        "actual_speedup": 3.8758081585755906,
+        "attainment_rate": 0.8095268782774644
+      },
+      {
+        "case_id": "3x3_gemm_rs_gpt_3_175b_mlp_s2048",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 2048,
+        "x": 16.150000000000002,
+        "naive_tflops": 52.07881094600561,
+        "optimized_tflops": 181.12942313142966,
+        "naive_normalized": 0.2707543537172905,
+        "optimized_normalized": 0.9416800999927079,
+        "theoretical_speedup": 4.392776734985901,
+        "actual_speedup": 3.4779869171594844,
+        "attainment_rate": 0.7917513515902936
+      },
+      {
+        "case_id": "3x3_gemm_rs_gpt_3_175b_mlp_s32768",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 32768,
+        "x": 17.150000000000002,
+        "naive_tflops": 52.078811083046375,
+        "optimized_tflops": 186.48768316312334,
+        "naive_normalized": 0.27075435442975654,
+        "optimized_normalized": 0.9695373456858659,
+        "theoretical_speedup": 4.392950060632206,
+        "actual_speedup": 3.580874434052357,
+        "attainment_rate": 0.8151411658745376
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_8b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 2048,
+        "x": 18.8,
+        "naive_tflops": 45.178938958566064,
+        "optimized_tflops": 162.22334313749295,
+        "naive_normalized": 0.23488236764932677,
+        "optimized_normalized": 0.8433886187337958,
+        "theoretical_speedup": 4.640038080126934,
+        "actual_speedup": 3.5906851040983763,
+        "attainment_rate": 0.7738481973837914
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_8b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 32768,
+        "x": 19.8,
+        "naive_tflops": 45.17894214097118,
+        "optimized_tflops": 169.84756790370616,
+        "naive_normalized": 0.23488238419444415,
+        "optimized_normalized": 0.8830264678258506,
+        "theoretical_speedup": 4.641764241958284,
+        "actual_speedup": 3.7594410106755785,
+        "attainment_rate": 0.809916405640096
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_1_405b_mlp_s2048",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 2048,
+        "x": 21.45,
+        "naive_tflops": 51.83136631297574,
+        "optimized_tflops": 180.86291507986607,
+        "naive_normalized": 0.2694679051505927,
+        "optimized_normalized": 0.9402945419519075,
+        "theoretical_speedup": 4.3831546540898705,
+        "actual_speedup": 3.4894491105589065,
+        "attainment_rate": 0.7961044922982451
+      },
+      {
+        "case_id": "3x3_gemm_rs_llama_3_1_405b_mlp_s32768",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 32768,
+        "x": 22.45,
+        "naive_tflops": 51.83136598406339,
+        "optimized_tflops": 185.3409616829946,
+        "naive_normalized": 0.2694679034405988,
+        "optimized_normalized": 0.9635756152314611,
+        "theoretical_speedup": 4.383273554554481,
+        "actual_speedup": 3.5758455939590985,
+        "attainment_rate": 0.8157933903631415
+      },
+      {
+        "case_id": "3x3_gemm_rs_mixtral_8x7b_single_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 2048,
+        "x": 24.099999999999998,
+        "naive_tflops": 45.178938958566064,
+        "optimized_tflops": 162.22334313749295,
+        "naive_normalized": 0.23488236764932677,
+        "optimized_normalized": 0.8433886187337958,
+        "theoretical_speedup": 4.640038080126934,
+        "actual_speedup": 3.5906851040983763,
+        "attainment_rate": 0.7738481973837914
+      },
+      {
+        "case_id": "3x3_gemm_rs_mixtral_8x7b_single_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 32768,
+        "x": 25.099999999999998,
+        "naive_tflops": 45.17894214097118,
+        "optimized_tflops": 169.84756790370616,
+        "naive_normalized": 0.23488238419444415,
+        "optimized_normalized": 0.8830264678258506,
+        "theoretical_speedup": 4.641764241958284,
+        "actual_speedup": 3.7594410106755785,
+        "attainment_rate": 0.809916405640096
+      },
+      {
+        "case_id": "3x3_gemm_rs_deepseek_v3_single_routed_expert_mlp_s2048",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 2048,
+        "x": 26.749999999999996,
+        "naive_tflops": 30.694421078799962,
+        "optimized_tflops": 73.84889433865865,
+        "naive_normalized": 0.1595783004825743,
+        "optimized_normalized": 0.38393560252614767,
+        "theoretical_speedup": 3.103377072819034,
+        "actual_speedup": 2.4059386606142783,
+        "attainment_rate": 0.7752646888084344
+      },
+      {
+        "case_id": "3x3_gemm_rs_deepseek_v3_single_routed_expert_mlp_s32768",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 32768,
+        "x": 27.749999999999996,
+        "naive_tflops": 30.694421078799962,
+        "optimized_tflops": 76.77088345871232,
+        "naive_normalized": 0.1595783004825743,
+        "optimized_normalized": 0.3991268340730685,
+        "theoretical_speedup": 3.105476123912161,
+        "actual_speedup": 2.5011347587114607,
+        "attainment_rate": 0.8053949407154437
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "6x6",
+    "operator": "AG_GEMM",
+    "max_tflops": 953.8972362143522,
+    "points": [
+      {
+        "case_id": "6x6_ag_gemm_llama_2_7b_attention_s36864",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 36864,
+        "x": 0.0,
+        "naive_tflops": 137.63114261904317,
+        "optimized_tflops": 610.4776267287687,
+        "naive_normalized": 0.14428298709119627,
+        "optimized_normalized": 0.6399825930427446,
+        "theoretical_speedup": 5.709237285277182,
+        "actual_speedup": 4.435606761026051,
+        "attainment_rate": 0.776917570489576
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_2_7b_attention_s147456",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 147456,
+        "x": 1.0,
+        "naive_tflops": 137.63114389518765,
+        "optimized_tflops": 625.3891500833402,
+        "naive_normalized": 0.14428298842901802,
+        "optimized_normalized": 0.6556148045519734,
+        "theoretical_speedup": 5.712850225707104,
+        "actual_speedup": 4.543950826708251,
+        "attainment_rate": 0.7953912052973219
+      },
+      {
+        "case_id": "6x6_ag_gemm_gpt_3_175b_attention_s36864",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 36864,
+        "x": 2.65,
+        "naive_tflops": 222.320497740996,
+        "optimized_tflops": 937.92935751634,
+        "naive_normalized": 0.23306545957015215,
+        "optimized_normalized": 0.9832603784854409,
+        "theoretical_speedup": 5.304950175683901,
+        "actual_speedup": 4.2188163801658565,
+        "attainment_rate": 0.7952603211060275
+      },
+      {
+        "case_id": "6x6_ag_gemm_gpt_3_175b_attention_s147456",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 147456,
+        "x": 3.65,
+        "naive_tflops": 222.320497740996,
+        "optimized_tflops": 953.8972362143522,
+        "naive_normalized": 0.23306545957015215,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 5.305789582978569,
+        "actual_speedup": 4.2906400710097605,
+        "attainment_rate": 0.8086713586936248
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_8b_attention_s36864",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 36864,
+        "x": 5.300000000000001,
+        "naive_tflops": 68.81557130952159,
+        "optimized_tflops": 305.2388133643843,
+        "naive_normalized": 0.07214149354559814,
+        "optimized_normalized": 0.3199912965213723,
+        "theoretical_speedup": 5.709237285277182,
+        "actual_speedup": 4.435606761026051,
+        "attainment_rate": 0.776917570489576
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_8b_attention_s147456",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 147456,
+        "x": 6.300000000000001,
+        "naive_tflops": 68.81557194759382,
+        "optimized_tflops": 312.6945750416701,
+        "naive_normalized": 0.07214149421450901,
+        "optimized_normalized": 0.3278074022759867,
+        "theoretical_speedup": 5.712850225707104,
+        "actual_speedup": 4.543950826708251,
+        "attainment_rate": 0.7953912052973219
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_1_405b_attention_s36864",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 36864,
+        "x": 7.950000000000001,
+        "naive_tflops": 217.13422129880416,
+        "optimized_tflops": 915.716402431693,
+        "naive_normalized": 0.22762852543794507,
+        "optimized_normalized": 0.9599738500824427,
+        "theoretical_speedup": 5.4282244440696745,
+        "actual_speedup": 4.217282733943405,
+        "attainment_rate": 0.7769175312105561
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_1_405b_attention_s147456",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 147456,
+        "x": 8.950000000000001,
+        "naive_tflops": 217.13422076941907,
+        "optimized_tflops": 938.0837152440681,
+        "naive_normalized": 0.22762852488297428,
+        "optimized_normalized": 0.9834221964694626,
+        "theoretical_speedup": 5.431659552925152,
+        "actual_speedup": 4.32029420291261,
+        "attainment_rate": 0.795391198733354
+      },
+      {
+        "case_id": "6x6_ag_gemm_mixtral_8x7b_single_expert_attention_s36864",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 36864,
+        "x": 10.600000000000001,
+        "naive_tflops": 68.81557130952159,
+        "optimized_tflops": 305.2388133643843,
+        "naive_normalized": 0.07214149354559814,
+        "optimized_normalized": 0.3199912965213723,
+        "theoretical_speedup": 5.709237285277182,
+        "actual_speedup": 4.435606761026051,
+        "attainment_rate": 0.776917570489576
+      },
+      {
+        "case_id": "6x6_ag_gemm_mixtral_8x7b_single_expert_attention_s147456",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 147456,
+        "x": 11.600000000000001,
+        "naive_tflops": 68.81557194759382,
+        "optimized_tflops": 312.6945750416701,
+        "naive_normalized": 0.07214149421450901,
+        "optimized_normalized": 0.3278074022759867,
+        "theoretical_speedup": 5.712850225707104,
+        "actual_speedup": 4.543950826708251,
+        "attainment_rate": 0.7953912052973219
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_2_7b_mlp_s36864",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 36864,
+        "x": 13.500000000000002,
+        "naive_tflops": 123.29456526289285,
+        "optimized_tflops": 546.8862072778553,
+        "naive_normalized": 0.12925350926919665,
+        "optimized_normalized": 0.5733177396007921,
+        "theoretical_speedup": 5.709237285277182,
+        "actual_speedup": 4.435606761026051,
+        "attainment_rate": 0.776917570489576
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_2_7b_mlp_s147456",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 147456,
+        "x": 14.500000000000002,
+        "naive_tflops": 123.29456640610559,
+        "optimized_tflops": 560.2444469496588,
+        "naive_normalized": 0.12925351046766195,
+        "optimized_normalized": 0.5873215957444761,
+        "theoretical_speedup": 5.712850225707104,
+        "actual_speedup": 4.543950826708251,
+        "attainment_rate": 0.7953912052973219
+      },
+      {
+        "case_id": "6x6_ag_gemm_gpt_3_175b_mlp_s36864",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 36864,
+        "x": 16.150000000000002,
+        "naive_tflops": 199.1385465953915,
+        "optimized_tflops": 829.7944429712949,
+        "naive_normalized": 0.20876310260180128,
+        "optimized_normalized": 0.8698992003210186,
+        "theoretical_speedup": 5.265066472354755,
+        "actual_speedup": 4.166920253050085,
+        "attainment_rate": 0.7914278527971682
+      },
+      {
+        "case_id": "6x6_ag_gemm_gpt_3_175b_mlp_s147456",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 147456,
+        "x": 17.150000000000002,
+        "naive_tflops": 199.13854615011905,
+        "optimized_tflops": 840.6860805429058,
+        "naive_normalized": 0.2087631021350084,
+        "optimized_normalized": 0.8813172411309864,
+        "theoretical_speedup": 5.265436748297252,
+        "actual_speedup": 4.221614031013167,
+        "attainment_rate": 0.8017595183112515
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_8b_mlp_s36864",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 36864,
+        "x": 18.8,
+        "naive_tflops": 160.56966638888372,
+        "optimized_tflops": 712.2238978502301,
+        "naive_normalized": 0.16833015160639567,
+        "optimized_normalized": 0.7466463585498687,
+        "theoretical_speedup": 5.709237285277182,
+        "actual_speedup": 4.435606761026051,
+        "attainment_rate": 0.776917570489576
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_8b_mlp_s147456",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 147456,
+        "x": 19.8,
+        "naive_tflops": 160.56966787771893,
+        "optimized_tflops": 729.6206750972301,
+        "naive_normalized": 0.1683301531671877,
+        "optimized_normalized": 0.7648839386439689,
+        "theoretical_speedup": 5.712850225707104,
+        "actual_speedup": 4.543950826708251,
+        "attainment_rate": 0.7953912052973219
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_1_405b_mlp_s36864",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 36864,
+        "x": 21.45,
+        "naive_tflops": 216.64415595173503,
+        "optimized_tflops": 898.9439798855694,
+        "naive_normalized": 0.2271147747649543,
+        "optimized_normalized": 0.9423908003477702,
+        "theoretical_speedup": 5.242933131163219,
+        "actual_speedup": 4.149403319634619,
+        "attainment_rate": 0.791427854566975
+      },
+      {
+        "case_id": "6x6_ag_gemm_llama_3_1_405b_mlp_s147456",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 147456,
+        "x": 22.45,
+        "naive_tflops": 216.64415595173503,
+        "optimized_tflops": 910.7432517722408,
+        "naive_normalized": 0.2271147747649543,
+        "optimized_normalized": 0.9547603423054534,
+        "theoretical_speedup": 5.243301850535857,
+        "actual_speedup": 4.203867156126474,
+        "attainment_rate": 0.801759516419381
+      },
+      {
+        "case_id": "6x6_ag_gemm_mixtral_8x7b_single_expert_mlp_s36864",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 36864,
+        "x": 24.099999999999998,
+        "naive_tflops": 160.56966638888372,
+        "optimized_tflops": 712.2238978502301,
+        "naive_normalized": 0.16833015160639567,
+        "optimized_normalized": 0.7466463585498687,
+        "theoretical_speedup": 5.709237285277182,
+        "actual_speedup": 4.435606761026051,
+        "attainment_rate": 0.776917570489576
+      },
+      {
+        "case_id": "6x6_ag_gemm_mixtral_8x7b_single_expert_mlp_s147456",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 147456,
+        "x": 25.099999999999998,
+        "naive_tflops": 160.56966787771893,
+        "optimized_tflops": 729.6206750972301,
+        "naive_normalized": 0.1683301531671877,
+        "optimized_normalized": 0.7648839386439689,
+        "theoretical_speedup": 5.712850225707104,
+        "actual_speedup": 4.543950826708251,
+        "attainment_rate": 0.7953912052973219
+      },
+      {
+        "case_id": "6x6_ag_gemm_deepseek_v3_single_routed_expert_mlp_s36864",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 36864,
+        "x": 26.749999999999996,
+        "naive_tflops": 23.602367463925564,
+        "optimized_tflops": 101.74626155664674,
+        "naive_normalized": 0.024743092408564045,
+        "optimized_normalized": 0.10666375548003279,
+        "theoretical_speedup": 5.548658518872893,
+        "actual_speedup": 4.31084982098335,
+        "attainment_rate": 0.7769174848876841
+      },
+      {
+        "case_id": "6x6_ag_gemm_deepseek_v3_single_routed_expert_mlp_s147456",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 147456,
+        "x": 27.749999999999996,
+        "naive_tflops": 23.602367206577597,
+        "optimized_tflops": 104.23152438652862,
+        "naive_normalized": 0.024743092138778205,
+        "optimized_normalized": 0.10926913343431319,
+        "theoretical_speedup": 5.552169841260276,
+        "actual_speedup": 4.416147053143083,
+        "attainment_rate": 0.7953912036921175
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  },
+  {
+    "mesh": "6x6",
+    "operator": "GEMM_RS",
+    "max_tflops": 769.0035705661063,
+    "points": [
+      {
+        "case_id": "6x6_gemm_rs_llama_2_7b_attention_s36864",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 36864,
+        "x": 0.0,
+        "naive_tflops": 112.92730072378306,
+        "optimized_tflops": 461.22328657204935,
+        "naive_normalized": 0.14684886396645858,
+        "optimized_normalized": 0.5997674188073239,
+        "theoretical_speedup": 5.0643791270573635,
+        "actual_speedup": 4.084249633312217,
+        "attainment_rate": 0.8064660111031918
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_2_7b_attention_s147456",
+        "layer": "attention",
+        "model": "LLaMA-2-7B",
+        "seq_len": 147456,
+        "x": 1.0,
+        "naive_tflops": 112.92730158292379,
+        "optimized_tflops": 463.9317698934008,
+        "naive_normalized": 0.14684886508367148,
+        "optimized_normalized": 0.6032894873971454,
+        "theoretical_speedup": 5.064670533750767,
+        "actual_speedup": 4.108233911466755,
+        "attainment_rate": 0.8111552141624305
+      },
+      {
+        "case_id": "6x6_gemm_rs_gpt_3_175b_attention_s36864",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 36864,
+        "x": 2.65,
+        "naive_tflops": 191.65599937743028,
+        "optimized_tflops": 767.3761837276618,
+        "naive_normalized": 0.24922641027055523,
+        "optimized_normalized": 0.9978837720646128,
+        "theoretical_speedup": 4.923952963303066,
+        "actual_speedup": 4.003924668261803,
+        "attainment_rate": 0.813152501273267
+      },
+      {
+        "case_id": "6x6_gemm_rs_gpt_3_175b_attention_s147456",
+        "layer": "attention",
+        "model": "GPT-3-175B",
+        "seq_len": 147456,
+        "x": 3.65,
+        "naive_tflops": 191.65599937743028,
+        "optimized_tflops": 769.0035705661063,
+        "naive_normalized": 0.24922641027055523,
+        "optimized_normalized": 1.0,
+        "theoretical_speedup": 4.924004907309775,
+        "actual_speedup": 4.012415854782084,
+        "attainment_rate": 0.8148683704245663
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_8b_attention_s36864",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 36864,
+        "x": 5.300000000000001,
+        "naive_tflops": 91.63619603333507,
+        "optimized_tflops": 230.61164328602467,
+        "naive_normalized": 0.11916225039875507,
+        "optimized_normalized": 0.29988370940366194,
+        "theoretical_speedup": 3.1205282633425906,
+        "actual_speedup": 2.5165999165017023,
+        "attainment_rate": 0.8064659904108725
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_8b_attention_s147456",
+        "layer": "attention",
+        "model": "LLaMA-3-8B",
+        "seq_len": 147456,
+        "x": 6.300000000000001,
+        "naive_tflops": 91.63619377046047,
+        "optimized_tflops": 231.9658849467004,
+        "naive_normalized": 0.11916224745614895,
+        "optimized_normalized": 0.3016447436985727,
+        "theoretical_speedup": 3.120707819967416,
+        "actual_speedup": 2.5313784368625334,
+        "attainment_rate": 0.8111552195517503
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_1_405b_attention_s36864",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 36864,
+        "x": 7.950000000000001,
+        "naive_tflops": 169.39095237438568,
+        "optimized_tflops": 695.8976548401013,
+        "naive_normalized": 0.2202732976255072,
+        "optimized_normalized": 0.9049342310957181,
+        "theoretical_speedup": 5.064670533750767,
+        "actual_speedup": 4.108233911466755,
+        "attainment_rate": 0.8111552141624305
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_1_405b_attention_s147456",
+        "layer": "attention",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 147456,
+        "x": 8.950000000000001,
+        "naive_tflops": 169.3909520522079,
+        "optimized_tflops": 697.0172298959992,
+        "naive_normalized": 0.22027329720655237,
+        "optimized_normalized": 0.9063901086738597,
+        "theoretical_speedup": 5.06474339066409,
+        "actual_speedup": 4.114843334023956,
+        "attainment_rate": 0.8124485322610622
+      },
+      {
+        "case_id": "6x6_gemm_rs_mixtral_8x7b_single_expert_attention_s36864",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 36864,
+        "x": 10.600000000000001,
+        "naive_tflops": 91.63619603333507,
+        "optimized_tflops": 230.61164328602467,
+        "naive_normalized": 0.11916225039875507,
+        "optimized_normalized": 0.29988370940366194,
+        "theoretical_speedup": 3.1205282633425906,
+        "actual_speedup": 2.5165999165017023,
+        "attainment_rate": 0.8064659904108725
+      },
+      {
+        "case_id": "6x6_gemm_rs_mixtral_8x7b_single_expert_attention_s147456",
+        "layer": "attention",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 147456,
+        "x": 11.600000000000001,
+        "naive_tflops": 91.63619377046047,
+        "optimized_tflops": 231.9658849467004,
+        "naive_normalized": 0.11916224745614895,
+        "optimized_normalized": 0.3016447436985727,
+        "theoretical_speedup": 3.120707819967416,
+        "actual_speedup": 2.5313784368625334,
+        "attainment_rate": 0.8111552195517503
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_2_7b_mlp_s36864",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 36864,
+        "x": 13.500000000000002,
+        "naive_tflops": 101.16404023172232,
+        "optimized_tflops": 413.1791942207942,
+        "naive_normalized": 0.1315521073032858,
+        "optimized_normalized": 0.5372916460148943,
+        "theoretical_speedup": 5.0643791270573635,
+        "actual_speedup": 4.084249633312217,
+        "attainment_rate": 0.8064660111031918
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_2_7b_mlp_s147456",
+        "layer": "mlp",
+        "model": "LLaMA-2-7B",
+        "seq_len": 147456,
+        "x": 14.500000000000002,
+        "naive_tflops": 101.16404100136921,
+        "optimized_tflops": 415.60554386283826,
+        "naive_normalized": 0.13155210830412237,
+        "optimized_normalized": 0.5404468324599428,
+        "theoretical_speedup": 5.064670533750767,
+        "actual_speedup": 4.108233911466755,
+        "attainment_rate": 0.8111552141624305
+      },
+      {
+        "case_id": "6x6_gemm_rs_gpt_3_175b_mlp_s36864",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 36864,
+        "x": 16.150000000000002,
+        "naive_tflops": 178.16708812701015,
+        "optimized_tflops": 682.8834229150585,
+        "naive_normalized": 0.2316856448349797,
+        "optimized_normalized": 0.8880107310975813,
+        "theoretical_speedup": 4.708237331665111,
+        "actual_speedup": 3.83282586079114,
+        "attainment_rate": 0.8140681088894103
+      },
+      {
+        "case_id": "6x6_gemm_rs_gpt_3_175b_mlp_s147456",
+        "layer": "mlp",
+        "model": "GPT-3-175B",
+        "seq_len": 147456,
+        "x": 17.150000000000002,
+        "naive_tflops": 178.16708777058355,
+        "optimized_tflops": 684.3305719793493,
+        "naive_normalized": 0.23168564437148823,
+        "optimized_normalized": 0.8898925807009914,
+        "theoretical_speedup": 4.708270443949764,
+        "actual_speedup": 3.840948294897911,
+        "attainment_rate": 0.8157875255092065
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_8b_mlp_s36864",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 36864,
+        "x": 18.8,
+        "naive_tflops": 131.74851751108022,
+        "optimized_tflops": 538.0938343340575,
+        "naive_normalized": 0.17132367462753498,
+        "optimized_normalized": 0.6997286552752112,
+        "theoretical_speedup": 5.0643791270573635,
+        "actual_speedup": 4.084249633312217,
+        "attainment_rate": 0.8064660111031918
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_8b_mlp_s147456",
+        "layer": "mlp",
+        "model": "LLaMA-3-8B",
+        "seq_len": 147456,
+        "x": 19.8,
+        "naive_tflops": 131.74851851341108,
+        "optimized_tflops": 541.253731542301,
+        "naive_normalized": 0.17132367593095008,
+        "optimized_normalized": 0.7038377352966697,
+        "theoretical_speedup": 5.064670533750767,
+        "actual_speedup": 4.108233911466755,
+        "attainment_rate": 0.8111552141624305
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_1_405b_mlp_s36864",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 36864,
+        "x": 21.45,
+        "naive_tflops": 193.01434508479883,
+        "optimized_tflops": 740.3035764717972,
+        "naive_normalized": 0.2509927814024456,
+        "optimized_normalized": 0.9626789846070787,
+        "theoretical_speedup": 4.708248369041579,
+        "actual_speedup": 3.8354847467246667,
+        "attainment_rate": 0.8146309298261226
+      },
+      {
+        "case_id": "6x6_gemm_rs_llama_3_1_405b_mlp_s147456",
+        "layer": "mlp",
+        "model": "LLaMA-3.1-405B",
+        "seq_len": 147456,
+        "x": 22.45,
+        "naive_tflops": 193.01434508479883,
+        "optimized_tflops": 741.4926565445352,
+        "naive_normalized": 0.2509927814024456,
+        "optimized_normalized": 0.9642252454025424,
+        "theoretical_speedup": 4.708273203327841,
+        "actual_speedup": 3.8416453254744773,
+        "attainment_rate": 0.8159350911835734
+      },
+      {
+        "case_id": "6x6_gemm_rs_mixtral_8x7b_single_expert_mlp_s36864",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 36864,
+        "x": 24.099999999999998,
+        "naive_tflops": 131.74851751108022,
+        "optimized_tflops": 538.0938343340575,
+        "naive_normalized": 0.17132367462753498,
+        "optimized_normalized": 0.6997286552752112,
+        "theoretical_speedup": 5.0643791270573635,
+        "actual_speedup": 4.084249633312217,
+        "attainment_rate": 0.8064660111031918
+      },
+      {
+        "case_id": "6x6_gemm_rs_mixtral_8x7b_single_expert_mlp_s147456",
+        "layer": "mlp",
+        "model": "Mixtral-8x7B-single-expert",
+        "seq_len": 147456,
+        "x": 25.099999999999998,
+        "naive_tflops": 131.74851851341108,
+        "optimized_tflops": 541.253731542301,
+        "naive_normalized": 0.17132367593095008,
+        "optimized_normalized": 0.7038377352966697,
+        "theoretical_speedup": 5.064670533750767,
+        "actual_speedup": 4.108233911466755,
+        "attainment_rate": 0.8111552141624305
+      },
+      {
+        "case_id": "6x6_gemm_rs_deepseek_v3_single_routed_expert_mlp_s36864",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 36864,
+        "x": 26.749999999999996,
+        "naive_tflops": 30.545397815730887,
+        "optimized_tflops": 76.64988288570162,
+        "naive_normalized": 0.03972074901192555,
+        "optimized_normalized": 0.09967428737590305,
+        "theoretical_speedup": 3.120630864598038,
+        "actual_speedup": 2.5093758263716865,
+        "attainment_rate": 0.8041245297030395
+      },
+      {
+        "case_id": "6x6_gemm_rs_deepseek_v3_single_routed_expert_mlp_s147456",
+        "layer": "mlp",
+        "model": "DeepSeek-V3-single-routed-expert",
+        "seq_len": 147456,
+        "x": 27.749999999999996,
+        "naive_tflops": 30.54539803124275,
+        "optimized_tflops": 76.92236545729229,
+        "naive_normalized": 0.03972074929217375,
+        "optimized_normalized": 0.10002861937385474,
+        "theoretical_speedup": 3.120733472600653,
+        "actual_speedup": 2.5182963855509026,
+        "attainment_rate": 0.8069565721202999
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 0.0,
+        "end_x": 1.0
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 2.65,
+        "end_x": 3.6500000000000004
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 5.300000000000001,
+        "end_x": 6.300000000000001
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 7.950000000000001,
+        "end_x": 8.950000000000001
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 10.600000000000001,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MHA-S / LLaMA-2-7B",
+        "start_x": 13.500000000000002,
+        "end_x": 14.500000000000002
+      },
+      {
+        "label": "MHA-L / GPT-3-175B",
+        "start_x": 16.150000000000002,
+        "end_x": 17.150000000000002
+      },
+      {
+        "label": "GQA-S / LLaMA-3-8B",
+        "start_x": 18.8,
+        "end_x": 19.8
+      },
+      {
+        "label": "GQA-L / LLaMA-3.1-405B",
+        "start_x": 21.45,
+        "end_x": 22.45
+      },
+      {
+        "label": "MoE-S / Mixtral",
+        "start_x": 24.099999999999998,
+        "end_x": 25.099999999999998
+      },
+      {
+        "label": "MoE-L / DeepSeek-V3",
+        "start_x": 26.749999999999996,
+        "end_x": 27.749999999999996
+      }
+    ],
+    "layer_spans": [
+      {
+        "label": "Attn",
+        "start_x": 0.0,
+        "end_x": 11.600000000000001
+      },
+      {
+        "label": "MLP",
+        "start_x": 13.500000000000002,
+        "end_x": 27.749999999999996
+      }
+    ]
+  }
+]

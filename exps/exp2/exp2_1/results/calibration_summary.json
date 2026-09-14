@@ -1,0 +1,21 @@
+{
+  "calibration_summary_digest": "2fbdd5feace2c9eee52644fdc7b69ecb0675d803c10d161a2614226c5cb0f0af",
+  "direct_validation_passed": false,
+  "evidence_signatures": [
+    "flexible_moe_inference_1x2:0e0f413bc79307aadc0a617d952711841aef8b04f96abd3fa80ed39908015f65",
+    "flexible_moe_train_1x2:58c0005da1b35676a98f20d8f05b83ebbac8a7a54ea0b13e015acee5271a7f75",
+    "isolated_group_gemm_1x8x32:c30e7b61556903c7f6b654c280fd49f8614794fa52a2dd675f185bf46ecaaf27",
+    "source_evidence:94fece7d4df90be52b801fec894924e17258cbe14fef4dc51ee8bb35045bec68",
+    "stage3_prefill_decode:91b367350666cb07f2e7ece0795f1bc6f966f876da876e4b90cba46f62fbf465",
+    "stage4_pds:a6c69338865d88ef22174597408f89b512de0fd0e8ed5ecec5232cc92119056c"
+  ],
+  "hardware_unit_closure_digest": "3d389a2daefcbcb37797704585dad1cedeaabf61a480db5dfd6dae63458afe25",
+  "hardware_unit_closure_path": "calibration/hardware_unit_closure.json",
+  "p95_relative_error": null,
+  "publish_status": "analytical_only_target_binding_unclosed",
+  "repeatability_passed": true,
+  "schema_version": "exp2.calibration_summary.v1",
+  "source_evidence_digest": "94fece7d4df90be52b801fec894924e17258cbe14fef4dc51ee8bb35045bec68",
+  "source_evidence_path": "calibration/source_evidence.json",
+  "target_unit_closure_passed": false
+}

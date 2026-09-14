@@ -1,0 +1,157 @@
+{
+  "schema_version": "exp1_2.calibration_source_evidence/v1",
+  "captured_at_utc": "2026-08-27",
+  "source_status": "current_build_smoke_complete_target_unit_closure_pending",
+  "current_release_binding": {
+    "binding_id": "flexible_mesh_release_binding_c9159583ad0c5853",
+    "binding_sha256": "03976915393b028b40acd97f04c669b838ad3185c6db762208722786401769a8",
+    "runtime_profile_version": "flexible-mesh-timing-v3-one-shot",
+    "environment_profile_version": "p5-rect-release-v1",
+    "npusim": {
+      "path": "/workspace/build-release-final/npusim",
+      "sha256": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29"
+    },
+    "finalizer": {
+      "path": "/workspace/build-release-final/npusim_program_finalizer",
+      "sha256": "d39bb8c69349f8492e77862e28324eb9621fb472982dc5ba87c3c1715f971ed9"
+    },
+    "resolver": {
+      "path": "/workspace/build-release-final/npusim_program_io_selftest",
+      "sha256": "36bdc79c3d13338285ccf70e6949fc46f2f71369123e2afb1620c925b311c980"
+    },
+    "hardware_template": {
+      "path": "/workspace/llm/test/program/p5_large_hardware.json",
+      "sha256": "2e040e5b6b80fc2e0869f26f9cf771c7e0714e9b04347c1be2b74d8ece6cc732"
+    },
+    "specialized_1x2_hardware_sha256": "f3d0a5fcd437dd8a9b6516d5863571c25e7619891814e085c739b05baab3df03",
+    "simulation": {
+      "path": "/workspace/llm/test/program/p5_behavioral_simulation.json",
+      "sha256": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb"
+    },
+    "mapping": {
+      "path": "/workspace/llm/test/default/mapping.spec",
+      "sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c"
+    }
+  },
+  "flexible_mesh_smokes": [
+    {
+      "family": "moe_inference",
+      "mesh": "1x2",
+      "case_id": "flexible_mesh_release_case_e24871ed9ad73fde",
+      "evidence_path": "calibration/flexible_moe_inference_1x2_case_evidence.json",
+      "evidence_sha256": "0e0f413bc79307aadc0a617d952711841aef8b04f96abd3fa80ed39908015f65",
+      "executions": 2,
+      "makespan_cycles": [2727, 2727],
+      "artifact_sha256": "4bc5d38dc216f14e746d99d04add7b8c363a601b83971bd11ed748e44b3ec1a8",
+      "marker_digest": "ddc0779b0ae5af331eb233f5d8ce2023a806207c50edaf4c3c256ffe0f9b0452",
+      "spec_digest": "3c2abe20c80273757865036a2da376ebf3861663088215756b3a8ada7e218334",
+      "plan_digest": "9d5f6528aafa0c810629660c8bd4dc92e6708aabf1f7a807ef63640e5ceed825",
+      "program_io_phases": ["resolved", "applied_actual_artifact_sha", "verify_pass"],
+      "all_stage_exit_codes_zero": true,
+      "all_residual_fields_zero": true,
+      "repeatability_verified": true
+    },
+    {
+      "family": "moe_train",
+      "mesh": "1x2",
+      "case_id": "flexible_mesh_release_case_a4f29edd31a89cca",
+      "evidence_path": "calibration/flexible_moe_train_1x2_case_evidence.json",
+      "evidence_sha256": "58c0005da1b35676a98f20d8f05b83ebbac8a7a54ea0b13e015acee5271a7f75",
+      "executions": 2,
+      "makespan_cycles": [3566, 3566],
+      "artifact_sha256": "3dd512777772756aa14f25382e7af485ee447ee9312d4afb2b268072ec6a336b",
+      "marker_digest": "596d702c18358b05a1741adcf5190e7f61d80b4fc66e36e06e5e82539b41a7e1",
+      "spec_digest": "f369db3778fd8559bc4c84735a9cc5e0ec4a9e69971f179579903d57ab35f524",
+      "plan_digest": "1202c9ddde5299c0a93ddfbccc1918072ccafd837d61005a49b00233fa428c15",
+      "program_io_phases": ["resolved", "applied_actual_artifact_sha", "verify_pass"],
+      "all_stage_exit_codes_zero": true,
+      "all_residual_fields_zero": true,
+      "repeatability_verified": true
+    }
+  ],
+  "smoke_workload_boundary": {
+    "hidden_size": 16,
+    "intermediate_size": 32,
+    "top_k": 1,
+    "tokens_per_rank": 1,
+    "total_tokens": 2,
+    "expert_count": 2,
+    "expert_parallel_degree": 2,
+    "routing": "static_round_robin_direct_xy",
+    "hardware": {
+      "cores_per_die": 16,
+      "exu_x": 32,
+      "sa_cnt": 1,
+      "compute_utilization": 0.7,
+      "sram_bytes_per_core": 1048576,
+      "hbm_stacks": 2,
+      "hbm_capacity_bytes_per_stack": 1048576,
+      "hbm_bandwidth_cap_GBps_per_stack": 8.0
+    }
+  },
+  "isolated_group_gemm_smoke": {
+    "summary_path": "calibration/group_gemm_1x8x32_smoke_summary.json",
+    "status": "provisional_single_sample",
+    "shape": [1, 8, 32],
+    "cycles": 6,
+    "makespan_cycles": 70,
+    "program_io_verify_pass": true,
+    "all_residual_fields_zero": true
+  },
+  "legacy_measured_168_profile": {
+    "path": "/workspace/build/moe-calibration-actual168-profile-20260822-w.json",
+    "sha256": "a4809736fca9174eb3990a3ed5a29edd203aa53376b3926302b71fc42ffb1cd0",
+    "profile_id": "moe_swizzle_calibration_profile_d4571bbe696767a9",
+    "status": "measured",
+    "sample_count": 168,
+    "missing_measurements": 0,
+    "bound_npusim_sha256": "21ee2cd55b39c3a0b341939d5a834ec0a27b7aba514b144853f64f8d5deae57a",
+    "current_npusim_sha256": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29",
+    "digest_match_current_build": false,
+    "hardware_sha256": "91f620842d7b8b322ba71c831a6c814b103d0fc8fa37a62e3855920cbbf82fed",
+    "simulation_sha256": "fc43af3fde0aab4c432995fad54211d0b5103b9f2b298cb0d269ec0389a204f8",
+    "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+    "entry_preflight_result": "rejected_runtime_config_sha_differs_from_measured_profile",
+    "workload_boundary": {
+      "mesh": "2x2",
+      "hidden_size": 16,
+      "intermediate_size": 32,
+      "expert_count": 4,
+      "top_k": 1,
+      "c1_tokens": 32,
+      "c2_tokens": 64
+    },
+    "measured_e2e_completion": {
+      "c1_infer_makespan_cycles": 4638,
+      "c1_train_makespan_cycles": 4608,
+      "c2_infer_makespan_cycles": 8415,
+      "c2_train_complete": false,
+      "c2_train_blocker": "P2P endpoint receive session capacity exhausted",
+      "summary_json_present": false
+    }
+  },
+  "target_applicability": {
+    "publish_as": "structural_prior_only",
+    "h128_target_unit_closure": false,
+    "h2000_target_unit_closure": false,
+    "target_top_k_2_or_8_covered": false,
+    "target_h4096_i14336_covered": false,
+    "target_h7168_i2048_covered": false,
+    "target_four_edge_hbm_stack_topology_covered": false,
+    "reason": [
+      "Flexible Mesh smoke is tiny H16/I32/top-k1 with one token per rank.",
+      "The smoke hardware is a per-die local 1 MiB/8 GBps HBM fixture, not the target four edge-stack topology.",
+      "The current smoke hardware tensor rate is neither H128 nor H2000.",
+      "The legacy 168-sample profile is bound to a different npusim SHA and a 2x2 tiny calibration hardware profile.",
+      "A fresh target-bound unit closure and target top-k/expert motif are required before quantitative use."
+    ]
+  },
+  "validation": {
+    "related_unit_test_modules": 3,
+    "related_unit_tests_run": 19,
+    "related_unit_tests_passed": 19,
+    "current_build_flexible_inference_dual_run_pass": true,
+    "current_build_flexible_train_dual_run_pass": true,
+    "current_build_group_gemm_single_sample_pass": true
+  }
+}

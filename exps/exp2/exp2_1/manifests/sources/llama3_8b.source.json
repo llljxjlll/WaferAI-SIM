@@ -1,0 +1,27 @@
+{
+  "schema_version": "exp2.model_source_snapshot.v1",
+  "source_kind": "official_meta_sku_and_model_card_normalization",
+  "source_url": "https://github.com/meta-llama/llama-models/blob/main/models/sku_list.py",
+  "upstream_urls": [
+    "https://github.com/meta-llama/llama-models/blob/main/models/llama3/MODEL_CARD.md",
+    "https://huggingface.co/meta-llama/Meta-Llama-3-8B/blob/main/config.json"
+  ],
+  "source_revision": "main URL recorded; local snapshot frozen and remote bytes not claimed",
+  "retrieved_at": "2026-08-27",
+  "fields": {
+    "num_hidden_layers": 32,
+    "vocab_size": 128256,
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "torch_dtype": "bfloat16"
+  },
+  "source_notes": [
+    "Architecture values follow Meta's official SKU/config and model card.",
+    "Experiment weights are normalized to FP16 as required by development_plan.md.",
+    "This digest covers this local normalized snapshot, not remote bytes."
+  ],
+  "snapshot_digest": "c86741fe13e66acee3dd0a981a1e16866bec79f689fb833d63c5dd313327b309"
+}

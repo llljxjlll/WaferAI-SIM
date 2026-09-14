@@ -1,0 +1,46 @@
+{
+  "schema_version": "exp2.model_manifest.v1",
+  "dtype": "FP16",
+  "experiment_dtype_bytes": 2,
+  "model_id": "llama2_7b",
+  "display_name": "LLaMA-2-7B",
+  "num_layers": 32,
+  "vocab_size": 32000,
+  "hidden_size": 4096,
+  "intermediate_size": 11008,
+  "num_attention_heads": 32,
+  "num_kv_heads": 32,
+  "head_dim": 128,
+  "attention_type": "MHA",
+  "mlp_type": "dense_swiglu",
+  "norm_residual_rope": {
+    "norm": "RMSNorm pre-norm",
+    "residual": "standard residual",
+    "position": "RoPE"
+  },
+  "moe_layer_frequency": 0,
+  "routed_expert_count": 0,
+  "shared_expert_count": 0,
+  "top_k": 0,
+  "parameter_count": 6738415616,
+  "parameter_count_method": "architecture_formula_exact_for_frozen_fields",
+  "parameter_breakdown": {
+    "embedding_and_lm_head": 262144000,
+    "attention": 2147483648,
+    "mlp": 4328521728,
+    "norms": 266240
+  },
+  "source_checkpoint_dtype": "float16",
+  "sources": [
+    {
+      "local_snapshot": "llama2_7b.source.json",
+      "snapshot_digest": "35172f49c050e0bc03688509e0a533a2131f56fda03e8f83b06a64adf44b522d",
+      "digest_scope": "canonical local normalized snapshot; not upstream remote bytes"
+    }
+  ],
+  "assumptions": [
+    "No projection biases and untied input/output embeddings.",
+    "Experiment plan's 32 KV heads are frozen."
+  ],
+  "manifest_digest": "b9b03373fd25b86c641c7d9612da712a0bd52b386723afe8b063be6b23765062"
+}

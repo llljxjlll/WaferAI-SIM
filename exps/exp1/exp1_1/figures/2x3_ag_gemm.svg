@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1694" height="620">
+<rect width="100%" height="100%" fill="white"/>
+<text x="847.0" y="28" text-anchor="middle" font-family="sans-serif" font-size="18">2x3 — AG_GEMM</text>
+<line x1="80" y1="55" x2="80" y2="465" stroke="#333"/>
+<line x1="80" y1="465" x2="1674" y2="465" stroke="#333"/>
+<line x1="80" y1="465.0" x2="1674" y2="465.0" stroke="#ddd"/>
+<text x="72" y="469.0" text-anchor="end" font-family="sans-serif" font-size="10">0</text>
+<line x1="80" y1="383.0" x2="1674" y2="383.0" stroke="#ddd"/>
+<text x="72" y="387.0" text-anchor="end" font-family="sans-serif" font-size="10">32</text>
+<line x1="80" y1="301.0" x2="1674" y2="301.0" stroke="#ddd"/>
+<text x="72" y="305.0" text-anchor="end" font-family="sans-serif" font-size="10">64</text>
+<line x1="80" y1="219.0" x2="1674" y2="219.0" stroke="#ddd"/>
+<text x="72" y="223.0" text-anchor="end" font-family="sans-serif" font-size="10">96</text>
+<line x1="80" y1="137.0" x2="1674" y2="137.0" stroke="#ddd"/>
+<text x="72" y="141.0" text-anchor="end" font-family="sans-serif" font-size="10">128</text>
+<line x1="80" y1="55.0" x2="1674" y2="55.0" stroke="#ddd"/>
+<text x="72" y="59.0" text-anchor="end" font-family="sans-serif" font-size="10">160</text>
+<rect x="94.8" y="370.3" width="12.5" height="94.7" fill="#4c78a8"/>
+<rect x="108.2" y="369.4" width="12.5" height="95.6" fill="#f58518"/>
+<rect x="121.8" y="94.0" width="12.5" height="371.0" fill="#54a24b"/>
+<rect x="135.2" y="79.9" width="12.5" height="385.1" fill="#e45756"/>
+<text x="120" y="477" transform="rotate(55 120 477)" font-family="sans-serif" font-size="9">LLaMA-2-7B / attention / S=2048</text>
+<rect x="166.8" y="370.3" width="12.5" height="94.7" fill="#4c78a8"/>
+<rect x="180.2" y="369.4" width="12.5" height="95.6" fill="#f58518"/>
+<rect x="193.8" y="75.8" width="12.5" height="389.2" fill="#54a24b"/>
+<rect x="207.2" y="59.9" width="12.5" height="405.1" fill="#e45756"/>
+<text x="192" y="477" transform="rotate(55 192 477)" font-family="sans-serif" font-size="9">LLaMA-2-7B / attention / S=32768</text>
+<rect x="238.8" y="380.2" width="12.5" height="84.8" fill="#4c78a8"/>
+<rect x="252.2" y="379.4" width="12.5" height="85.6" fill="#f58518"/>
+<rect x="265.8" y="132.6" width="12.5" height="332.4" fill="#54a24b"/>
+<rect x="279.2" y="120.0" width="12.5" height="345.0" fill="#e45756"/>
+<text x="264" y="477" transform="rotate(55 264 477)" font-family="sans-serif" font-size="9">LLaMA-2-7B / mlp / S=2048</text>
+<rect x="310.8" y="380.2" width="12.5" height="84.8" fill="#4c78a8"/>
+<rect x="324.2" y="379.4" width="12.5" height="85.6" fill="#f58518"/>
+<rect x="337.8" y="116.4" width="12.5" height="348.6" fill="#54a24b"/>
+<rect x="351.2" y="102.1" width="12.5" height="362.9" fill="#e45756"/>
+<text x="336" y="477" transform="rotate(55 336 477)" font-family="sans-serif" font-size="9">LLaMA-2-7B / mlp / S=32768</text>
+<rect x="382.8" y="367.6" width="12.5" height="97.4" fill="#4c78a8"/>
+<rect x="396.2" y="367.3" width="12.5" height="97.7" fill="#f58518"/>
+<rect x="409.8" y="76.9" width="12.5" height="388.1" fill="#54a24b"/>
+<rect x="423.2" y="71.8" width="12.5" height="393.2" fill="#e45756"/>
+<text x="408" y="477" transform="rotate(55 408 477)" font-family="sans-serif" font-size="9">GPT-3-175B / attention / S=2048</text>
+<rect x="454.8" y="367.6" width="12.5" height="97.4" fill="#4c78a8"/>
+<rect x="468.2" y="367.3" width="12.5" height="97.7" fill="#f58518"/>
+<rect x="481.8" y="61.2" width="12.5" height="403.8" fill="#54a24b"/>
+<rect x="495.2" y="55.6" width="12.5" height="409.4" fill="#e45756"/>
+<text x="480" y="477" transform="rotate(55 480 477)" font-family="sans-serif" font-size="9">GPT-3-175B / attention / S=32768</text>
+<rect x="526.8" y="367.5" width="12.5" height="97.5" fill="#4c78a8"/>
+<rect x="540.2" y="367.3" width="12.5" height="97.7" fill="#f58518"/>
+<rect x="553.8" y="73.4" width="12.5" height="391.6" fill="#54a24b"/>
+<rect x="567.2" y="69.5" width="12.5" height="395.5" fill="#e45756"/>
+<text x="552" y="477" transform="rotate(55 552 477)" font-family="sans-serif" font-size="9">GPT-3-175B / mlp / S=2048</text>
+<rect x="598.8" y="367.5" width="12.5" height="97.5" fill="#4c78a8"/>
+<rect x="612.2" y="367.3" width="12.5" height="97.7" fill="#f58518"/>
+<rect x="625.8" y="59.2" width="12.5" height="405.8" fill="#54a24b"/>
+<rect x="639.2" y="55.0" width="12.5" height="410.0" fill="#e45756"/>
+<text x="624" y="477" transform="rotate(55 624 477)" font-family="sans-serif" font-size="9">GPT-3-175B / mlp / S=32768</text>
+<rect x="670.8" y="372.8" width="12.5" height="92.2" fill="#4c78a8"/>
+<rect x="684.2" y="371.2" width="12.5" height="93.8" fill="#f58518"/>
+<rect x="697.8" y="110.2" width="12.5" height="354.8" fill="#54a24b"/>
+<rect x="711.2" y="84.0" width="12.5" height="381.0" fill="#e45756"/>
+<text x="696" y="477" transform="rotate(55 696 477)" font-family="sans-serif" font-size="9">LLaMA-3-8B / attention / S=2048</text>
+<rect x="742.8" y="372.8" width="12.5" height="92.2" fill="#4c78a8"/>
+<rect x="756.2" y="371.1" width="12.5" height="93.9" fill="#f58518"/>
+<rect x="769.8" y="94.6" width="12.5" height="370.4" fill="#54a24b"/>
+<rect x="783.2" y="64.8" width="12.5" height="400.2" fill="#e45756"/>
+<text x="768" y="477" transform="rotate(55 768 477)" font-family="sans-serif" font-size="9">LLaMA-3-8B / attention / S=32768</text>
+<rect x="814.8" y="376.5" width="12.5" height="88.5" fill="#4c78a8"/>
+<rect x="828.2" y="375.8" width="12.5" height="89.2" fill="#f58518"/>
+<rect x="841.8" y="121.6" width="12.5" height="343.4" fill="#54a24b"/>
+<rect x="855.2" y="111.2" width="12.5" height="353.8" fill="#e45756"/>
+<text x="840" y="477" transform="rotate(55 840 477)" font-family="sans-serif" font-size="9">LLaMA-3-8B / mlp / S=2048</text>
+<rect x="886.8" y="376.5" width="12.5" height="88.5" fill="#4c78a8"/>
+<rect x="900.2" y="375.8" width="12.5" height="89.2" fill="#f58518"/>
+<rect x="913.8" y="104.5" width="12.5" height="360.5" fill="#54a24b"/>
+<rect x="927.2" y="92.9" width="12.5" height="372.1" fill="#e45756"/>
+<text x="912" y="477" transform="rotate(55 912 477)" font-family="sans-serif" font-size="9">LLaMA-3-8B / mlp / S=32768</text>
+<rect x="958.8" y="367.6" width="12.5" height="97.4" fill="#4c78a8"/>
+<rect x="972.2" y="367.0" width="12.5" height="98.0" fill="#f58518"/>
+<rect x="985.8" y="91.7" width="12.5" height="373.3" fill="#54a24b"/>
+<rect x="999.2" y="82.2" width="12.5" height="382.8" fill="#e45756"/>
+<text x="984" y="477" transform="rotate(55 984 477)" font-family="sans-serif" font-size="9">LLaMA-3.1-405B / attention / S=2048</text>
+<rect x="1030.8" y="367.6" width="12.5" height="97.4" fill="#4c78a8"/>
+<rect x="1044.2" y="367.0" width="12.5" height="98.0" fill="#f58518"/>
+<rect x="1057.8" y="73.5" width="12.5" height="391.5" fill="#54a24b"/>
+<rect x="1071.2" y="62.9" width="12.5" height="402.1" fill="#e45756"/>
+<text x="1056" y="477" transform="rotate(55 1056 477)" font-family="sans-serif" font-size="9">LLaMA-3.1-405B / attention / S=32768</text>
+<rect x="1102.8" y="370.8" width="12.5" height="94.2" fill="#4c78a8"/>
+<rect x="1116.2" y="370.6" width="12.5" height="94.4" fill="#f58518"/>
+<rect x="1129.8" y="88.4" width="12.5" height="376.6" fill="#54a24b"/>
+<rect x="1143.2" y="85.1" width="12.5" height="379.9" fill="#e45756"/>
+<text x="1128" y="477" transform="rotate(55 1128 477)" font-family="sans-serif" font-size="9">LLaMA-3.1-405B / mlp / S=2048</text>
+<rect x="1174.8" y="370.8" width="12.5" height="94.2" fill="#4c78a8"/>
+<rect x="1188.2" y="370.6" width="12.5" height="94.4" fill="#f58518"/>
+<rect x="1201.8" y="75.5" width="12.5" height="389.5" fill="#54a24b"/>
+<rect x="1215.2" y="71.9" width="12.5" height="393.1" fill="#e45756"/>
+<text x="1200" y="477" transform="rotate(55 1200 477)" font-family="sans-serif" font-size="9">LLaMA-3.1-405B / mlp / S=32768</text>
+<rect x="1246.8" y="372.8" width="12.5" height="92.2" fill="#4c78a8"/>
+<rect x="1260.2" y="371.2" width="12.5" height="93.8" fill="#f58518"/>
+<rect x="1273.8" y="110.2" width="12.5" height="354.8" fill="#54a24b"/>
+<rect x="1287.2" y="84.0" width="12.5" height="381.0" fill="#e45756"/>
+<text x="1272" y="477" transform="rotate(55 1272 477)" font-family="sans-serif" font-size="9">Mixtral-8x7B-single-expert / attention / S=2048</text>
+<rect x="1318.8" y="372.8" width="12.5" height="92.2" fill="#4c78a8"/>
+<rect x="1332.2" y="371.1" width="12.5" height="93.9" fill="#f58518"/>
+<rect x="1345.8" y="94.6" width="12.5" height="370.4" fill="#54a24b"/>
+<rect x="1359.2" y="64.8" width="12.5" height="400.2" fill="#e45756"/>
+<text x="1344" y="477" transform="rotate(55 1344 477)" font-family="sans-serif" font-size="9">Mixtral-8x7B-single-expert / attention / S=32768</text>
+<rect x="1390.8" y="376.5" width="12.5" height="88.5" fill="#4c78a8"/>
+<rect x="1404.2" y="375.8" width="12.5" height="89.2" fill="#f58518"/>
+<rect x="1417.8" y="121.6" width="12.5" height="343.4" fill="#54a24b"/>
+<rect x="1431.2" y="111.2" width="12.5" height="353.8" fill="#e45756"/>
+<text x="1416" y="477" transform="rotate(55 1416 477)" font-family="sans-serif" font-size="9">Mixtral-8x7B-single-expert / mlp / S=2048</text>
+<rect x="1462.8" y="376.5" width="12.5" height="88.5" fill="#4c78a8"/>
+<rect x="1476.2" y="375.8" width="12.5" height="89.2" fill="#f58518"/>
+<rect x="1489.8" y="104.5" width="12.5" height="360.5" fill="#54a24b"/>
+<rect x="1503.2" y="92.9" width="12.5" height="372.1" fill="#e45756"/>
+<text x="1488" y="477" transform="rotate(55 1488 477)" font-family="sans-serif" font-size="9">Mixtral-8x7B-single-expert / mlp / S=32768</text>
+<rect x="1534.8" y="404.2" width="12.5" height="60.8" fill="#4c78a8"/>
+<rect x="1548.2" y="402.0" width="12.5" height="63.0" fill="#f58518"/>
+<rect x="1561.8" y="246.6" width="12.5" height="218.4" fill="#54a24b"/>
+<rect x="1575.2" y="216.5" width="12.5" height="248.5" fill="#e45756"/>
+<text x="1560" y="477" transform="rotate(55 1560 477)" font-family="sans-serif" font-size="9">DeepSeek-V3-single-routed-expert / mlp / S=2048</text>
+<rect x="1606.8" y="404.2" width="12.5" height="60.8" fill="#4c78a8"/>
+<rect x="1620.2" y="401.8" width="12.5" height="63.2" fill="#f58518"/>
+<rect x="1633.8" y="239.4" width="12.5" height="225.6" fill="#54a24b"/>
+<rect x="1647.2" y="204.1" width="12.5" height="260.9" fill="#e45756"/>
+<text x="1632" y="477" transform="rotate(55 1632 477)" font-family="sans-serif" font-size="9">DeepSeek-V3-single-routed-expert / mlp / S=32768</text>
+<rect x="1394" y="36" width="13" height="13" fill="#4c78a8"/>
+<text x="1412" y="47" font-family="sans-serif" font-size="11">T00 naive/naive</text>
+<rect x="1489" y="36" width="13" height="13" fill="#f58518"/>
+<text x="1507" y="47" font-family="sans-serif" font-size="11">T10 inter</text>
+<rect x="1584" y="36" width="13" height="13" fill="#54a24b"/>
+<text x="1602" y="47" font-family="sans-serif" font-size="11">T01 intra</text>
+<rect x="1679" y="36" width="13" height="13" fill="#e45756"/>
+<text x="1697" y="47" font-family="sans-serif" font-size="11">T11 combined</text>
+<text x="18" y="260.0" text-anchor="middle" transform="rotate(-90 18 260.0)" font-family="sans-serif" font-size="12">Performance (TFLOP/s)</text>
+</svg>

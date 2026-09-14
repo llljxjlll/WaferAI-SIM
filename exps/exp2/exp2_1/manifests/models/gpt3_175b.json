@@ -1,0 +1,48 @@
+{
+  "schema_version": "exp2.model_manifest.v1",
+  "dtype": "FP16",
+  "experiment_dtype_bytes": 2,
+  "model_id": "gpt3_175b",
+  "display_name": "GPT-3-175B",
+  "num_layers": 96,
+  "vocab_size": 50257,
+  "hidden_size": 12288,
+  "intermediate_size": 49152,
+  "num_attention_heads": 96,
+  "num_kv_heads": 96,
+  "head_dim": 128,
+  "attention_type": "MHA_alternating_dense_banded_sparse",
+  "mlp_type": "dense_gelu",
+  "norm_residual_rope": {
+    "norm": "LayerNorm pre-norm",
+    "residual": "standard residual",
+    "position": "learned absolute position embedding"
+  },
+  "moe_layer_frequency": 0,
+  "routed_expert_count": 0,
+  "shared_expert_count": 0,
+  "top_k": 0,
+  "parameter_count": 174604259328,
+  "published_parameter_count": 175000000000,
+  "parameter_count_method": "architecture_formula_from_paper_plus_explicit_GPT2_tokenizer_assumption",
+  "parameter_breakdown": {
+    "token_and_position_embeddings": 642723840,
+    "attention": 57986777088,
+    "mlp": 115970015232,
+    "norms": 4743168
+  },
+  "source_checkpoint_dtype": "not released; FP16 experiment assumption",
+  "sources": [
+    {
+      "local_snapshot": "gpt3_175b.source.json",
+      "snapshot_digest": "24362e4affcc570686ffeef9f0007ba13ddfb2f28a019d4c4254218f8f48dce4",
+      "digest_scope": "canonical local normalized snapshot; not upstream remote bytes"
+    }
+  ],
+  "assumptions": [
+    "Vocabulary 50,257 and tied token embedding/lm head follow the GPT-2 tokenizer architecture inherited by GPT-3.",
+    "Projection, MLP and LayerNorm biases are included; public 175B is rounded.",
+    "Sparse attention changes connectivity, not trainable projection count."
+  ],
+  "manifest_digest": "d6f3d81e25611608890699b194e7fe1a1222b826e93d5f7862a38266a609db2f"
+}

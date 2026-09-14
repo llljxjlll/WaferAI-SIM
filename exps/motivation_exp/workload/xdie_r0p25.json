@@ -1,0 +1,124 @@
+{
+ "id_space": "global",
+ "vars": {
+  "B": 1,
+  "T": 64,
+  "C": 64,
+  "OC": 1024,
+  "ONE": 1,
+  "AG_OC": 1024,
+  "XD_OC": 6144,
+  "SRC": 64,
+  "matmul_data": 0
+ },
+ "pipeline": 1,
+ "source": [
+  {
+   "dest": 0,
+   "size": "SRC"
+  },
+  {
+   "dest": 12,
+   "size": "SRC"
+  }
+ ],
+ "chips": [
+  {
+   "chip_id": 0,
+   "cores": [
+    {
+     "id": 0,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "XD_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "xd_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 32,
+         "tag": 32
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 12,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "XD_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "xd_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 44,
+         "tag": 44
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 32,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 44,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

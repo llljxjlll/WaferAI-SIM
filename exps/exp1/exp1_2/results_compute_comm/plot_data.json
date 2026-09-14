@@ -1,0 +1,308 @@
+[
+  {
+    "operator": "DISPATCH_GEMM",
+    "memory_mode": "hbm_free_compute_comm",
+    "max_tflops": 5757.3556123567,
+    "points": [
+      {
+        "case_id": "dispatch_gemm__compact__mixtral_8x7b__s2304",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 0.0,
+        "naive_tflops": 1328.8590276912196,
+        "optimized_tflops": 4472.408321385774,
+        "naive_normalized": 0.23081065634354106,
+        "optimized_normalized": 0.776816410608177,
+        "theory_speedup": 5.928334352345183,
+        "actual_speedup": 3.365600284295171,
+        "attainment_rate": 0.5677143164106082
+      },
+      {
+        "case_id": "dispatch_gemm__compact__mixtral_8x7b__s36864",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 0.86,
+        "naive_tflops": 1588.84065391433,
+        "optimized_tflops": 5757.3556123567,
+        "naive_normalized": 0.27596708643535717,
+        "optimized_normalized": 1.0,
+        "theory_speedup": 5.03024608170725,
+        "actual_speedup": 3.6236205299585285,
+        "attainment_rate": 0.7203664534695453
+      },
+      {
+        "case_id": "dispatch_gemm__compact__deepseek_v3__s2304",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 2.0,
+        "naive_tflops": 1558.4914029783693,
+        "optimized_tflops": 4388.305865196237,
+        "naive_normalized": 0.27069569919104247,
+        "optimized_normalized": 0.7622085833603633,
+        "theory_speedup": 4.99758207279688,
+        "actual_speedup": 2.815739539409666,
+        "attainment_rate": 0.5634203697697048
+      },
+      {
+        "case_id": "dispatch_gemm__compact__deepseek_v3__s36864",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 2.86,
+        "naive_tflops": 1762.6315066909997,
+        "optimized_tflops": 5725.150122578252,
+        "naive_normalized": 0.3061529676763338,
+        "optimized_normalized": 0.9944062010501268,
+        "theory_speedup": 4.5309855400505645,
+        "actual_speedup": 3.2480697756992414,
+        "attainment_rate": 0.7168572371261626
+      },
+      {
+        "case_id": "dispatch_gemm__noncompact__mixtral_8x7b__s2304",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 4.17,
+        "naive_tflops": 1264.6987955064374,
+        "optimized_tflops": 4279.885793679416,
+        "naive_normalized": 0.219666610968425,
+        "optimized_normalized": 0.7433770087944072,
+        "theory_speedup": 6.135397100784308,
+        "actual_speedup": 3.384114706905824,
+        "attainment_rate": 0.5515722375122584
+      },
+      {
+        "case_id": "dispatch_gemm__noncompact__mixtral_8x7b__s36864",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 5.03,
+        "naive_tflops": 1529.7342952139436,
+        "optimized_tflops": 5736.593807713407,
+        "naive_normalized": 0.2657008526502615,
+        "optimized_normalized": 0.9963938644681366,
+        "theory_speedup": 5.219552409609112,
+        "actual_speedup": 3.75005896492051,
+        "attainment_rate": 0.7184637054351081
+      },
+      {
+        "case_id": "dispatch_gemm__noncompact__deepseek_v3__s2304",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 6.170000000000001,
+        "naive_tflops": 1219.2292581563065,
+        "optimized_tflops": 2678.46883730691,
+        "naive_normalized": 0.21176896829849123,
+        "optimized_normalized": 0.465225533673525,
+        "theory_speedup": 3.312380597014925,
+        "actual_speedup": 2.196854135010864,
+        "attainment_rate": 0.6632251550412536
+      },
+      {
+        "case_id": "dispatch_gemm__noncompact__deepseek_v3__s36864",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 7.030000000000001,
+        "naive_tflops": 1366.083314490654,
+        "optimized_tflops": 3123.473983202044,
+        "naive_normalized": 0.23727617442262963,
+        "optimized_normalized": 0.5425188564865269,
+        "theory_speedup": 2.9956905352470544,
+        "actual_speedup": 2.286444721247939,
+        "attainment_rate": 0.7632446323629941
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 0.0,
+        "end_x": 0.86
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 2.0,
+        "end_x": 2.86
+      },
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 4.17,
+        "end_x": 5.03
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 6.170000000000001,
+        "end_x": 7.030000000000001
+      }
+    ],
+    "placement_spans": [
+      {
+        "label": "Compact / adjacent",
+        "start_x": 0.0,
+        "end_x": 2.86
+      },
+      {
+        "label": "Non-compact / corners",
+        "start_x": 4.17,
+        "end_x": 7.030000000000001
+      }
+    ]
+  },
+  {
+    "operator": "GEMM_COMBINE",
+    "memory_mode": "hbm_free_compute_comm",
+    "max_tflops": 5887.637485966069,
+    "points": [
+      {
+        "case_id": "gemm_combine__compact__mixtral_8x7b__s2304",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 0.0,
+        "naive_tflops": 2262.7964746987345,
+        "optimized_tflops": 4715.179612410801,
+        "naive_normalized": 0.38433012903603475,
+        "optimized_normalized": 0.8008610624635145,
+        "theory_speedup": 3.501683797475768,
+        "actual_speedup": 2.083784231208232,
+        "attainment_rate": 0.595080638837337
+      },
+      {
+        "case_id": "gemm_combine__compact__mixtral_8x7b__s36864",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 0.86,
+        "naive_tflops": 3106.9759109989336,
+        "optimized_tflops": 5887.637485966069,
+        "naive_normalized": 0.5277118230198115,
+        "optimized_normalized": 1.0,
+        "theory_speedup": 2.5733002518966117,
+        "actual_speedup": 1.8949736511066535,
+        "attainment_rate": 0.7363981912759664
+      },
+      {
+        "case_id": "gemm_combine__compact__deepseek_v3__s2304",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 2.0,
+        "naive_tflops": 723.7082615142665,
+        "optimized_tflops": 2807.1827289071944,
+        "naive_normalized": 0.12291997651678062,
+        "optimized_normalized": 0.4767927263861728,
+        "theory_speedup": 5.729935173407304,
+        "actual_speedup": 3.8788872231933977,
+        "attainment_rate": 0.6769513276861069
+      },
+      {
+        "case_id": "gemm_combine__compact__deepseek_v3__s36864",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 2.86,
+        "naive_tflops": 773.6266032339581,
+        "optimized_tflops": 3362.368651614945,
+        "naive_normalized": 0.13139847775580532,
+        "optimized_normalized": 0.5710896195001097,
+        "theory_speedup": 5.417734098405411,
+        "actual_speedup": 4.346242279620918,
+        "attainment_rate": 0.8022251001392144
+      },
+      {
+        "case_id": "gemm_combine__noncompact__mixtral_8x7b__s2304",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 4.17,
+        "naive_tflops": 2082.865233725146,
+        "optimized_tflops": 4528.774252445709,
+        "naive_normalized": 0.3537692731065592,
+        "optimized_normalized": 0.7692005941671199,
+        "theory_speedup": 3.77521722704949,
+        "actual_speedup": 2.174300179923846,
+        "attainment_rate": 0.575940415916984
+      },
+      {
+        "case_id": "gemm_combine__noncompact__mixtral_8x7b__s36864",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 5.03,
+        "naive_tflops": 2888.7138716971467,
+        "optimized_tflops": 5868.785859542055,
+        "naive_normalized": 0.49064058012789724,
+        "optimized_normalized": 0.9967981000071846,
+        "theory_speedup": 2.766392126315634,
+        "actual_speedup": 2.031625879268579,
+        "attainment_rate": 0.7343954820947096
+      },
+      {
+        "case_id": "gemm_combine__noncompact__deepseek_v3__s2304",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 6.170000000000001,
+        "naive_tflops": 640.8956516491195,
+        "optimized_tflops": 2616.6032264577893,
+        "naive_normalized": 0.10885446890654793,
+        "optimized_normalized": 0.44442329078425685,
+        "theory_speedup": 6.279253084262268,
+        "actual_speedup": 4.082728943042259,
+        "attainment_rate": 0.6501934048931438
+      },
+      {
+        "case_id": "gemm_combine__noncompact__deepseek_v3__s36864",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 7.030000000000001,
+        "naive_tflops": 686.200810931404,
+        "optimized_tflops": 3107.157645921311,
+        "naive_normalized": 0.11654943303949176,
+        "optimized_normalized": 0.5277426902263626,
+        "theory_speedup": 5.962464814455169,
+        "actual_speedup": 4.528058837039057,
+        "attainment_rate": 0.7594273472375731
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 0.0,
+        "end_x": 0.86
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 2.0,
+        "end_x": 2.86
+      },
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 4.17,
+        "end_x": 5.03
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 6.170000000000001,
+        "end_x": 7.030000000000001
+      }
+    ],
+    "placement_spans": [
+      {
+        "label": "Compact / adjacent",
+        "start_x": 0.0,
+        "end_x": 2.86
+      },
+      {
+        "label": "Non-compact / corners",
+        "start_x": 4.17,
+        "end_x": 7.030000000000001
+      }
+    ]
+  }
+]

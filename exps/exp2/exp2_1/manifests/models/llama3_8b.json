@@ -1,0 +1,46 @@
+{
+  "schema_version": "exp2.model_manifest.v1",
+  "dtype": "FP16",
+  "experiment_dtype_bytes": 2,
+  "model_id": "llama3_8b",
+  "display_name": "LLaMA-3-8B",
+  "num_layers": 32,
+  "vocab_size": 128256,
+  "hidden_size": 4096,
+  "intermediate_size": 14336,
+  "num_attention_heads": 32,
+  "num_kv_heads": 8,
+  "head_dim": 128,
+  "attention_type": "GQA",
+  "mlp_type": "dense_swiglu",
+  "norm_residual_rope": {
+    "norm": "RMSNorm pre-norm",
+    "residual": "standard residual",
+    "position": "RoPE theta 500000"
+  },
+  "moe_layer_frequency": 0,
+  "routed_expert_count": 0,
+  "shared_expert_count": 0,
+  "top_k": 0,
+  "parameter_count": 8030261248,
+  "parameter_count_method": "architecture_formula_exact_for_frozen_fields",
+  "parameter_breakdown": {
+    "embedding_and_lm_head": 1050673152,
+    "attention": 1342177280,
+    "mlp": 5637144576,
+    "norms": 266240
+  },
+  "source_checkpoint_dtype": "bfloat16",
+  "sources": [
+    {
+      "local_snapshot": "llama3_8b.source.json",
+      "snapshot_digest": "c86741fe13e66acee3dd0a981a1e16866bec79f689fb833d63c5dd313327b309",
+      "digest_scope": "canonical local normalized snapshot; not upstream remote bytes"
+    }
+  ],
+  "assumptions": [
+    "No projection biases and untied input/output embeddings.",
+    "Target experiment normalizes BF16 source weights to FP16; both occupy two bytes per element."
+  ],
+  "manifest_digest": "543d132523a4dfc19490d5276e4e2b0a55ac8ae624c1c29e5bef85f80f740679"
+}

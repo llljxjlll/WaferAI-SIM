@@ -1,0 +1,51 @@
+{
+  "schema_version": "exp1_2.group_gemm_smoke/v1",
+  "captured_at_utc": "2026-08-27",
+  "status": "provisional_single_sample",
+  "kind": "group_gemm",
+  "shape": [1, 8, 32],
+  "dtype": "fp16",
+  "sample_index": 0,
+  "repeat_index": 0,
+  "primitive_cycles": 6,
+  "makespan_cycles": 70,
+  "program_io": {
+    "resolved_pass": true,
+    "applied_pass": true,
+    "verify_pass": true,
+    "probe_exact_pass": true
+  },
+  "drain": {
+    "lsu_residual": 0,
+    "dte_residual": 0,
+    "router_residual": 0,
+    "d2d_link_residual": 0,
+    "p5_p2p_timing_residual": 0,
+    "collective_residual": 0,
+    "credit_data_balanced": true,
+    "credit_control_balanced": true,
+    "hostlane_mismatch": 0
+  },
+  "provenance": {
+    "npusim_path": "/workspace/build-release-final/npusim",
+    "npusim_sha256": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29",
+    "hardware_path": "/workspace/build/moe-calibration-actual168-artifacts-20260822-w/runtime_inputs/hardware.json",
+    "hardware_sha256": "91f620842d7b8b322ba71c831a6c814b103d0fc8fa37a62e3855920cbbf82fed",
+    "simulation_path": "/workspace/build/moe-calibration-actual168-artifacts-20260822-w/runtime_inputs/simulation.json",
+    "simulation_sha256": "fc43af3fde0aab4c432995fad54211d0b5103b9f2b298cb0d269ec0389a204f8",
+    "mapping_path": "/workspace/llm/test/default/mapping.spec",
+    "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+    "program_sha256": "77b6405f87a96375006844df41dc2a061e65480723fa877236570cc8de5abaad",
+    "linked_manifest_sha256": "923247f0aa916f894c13516d75f0158c823a2f6a3f2a553423ff5e48eb158f34",
+    "program_io_sha256": "1859658120af0ad8e9740a8a99c3c83b712a99a8d55b90878f9a21679919cf88",
+    "raw_stdout_path": "/tmp/exp1_2_cycle_calibration_group_gemm_smoke_20260827_a/sample-000-group_gemm/raw.stdout",
+    "raw_stdout_sha256": "8ed78dae52897f3c3913b2ee5055f98446a874143bd780024e3f127d1e8e7061"
+  },
+  "applicability": {
+    "purpose": "current-build compatibility and marker-path smoke",
+    "full_168_profile": false,
+    "h128_target_unit_closure": false,
+    "h2000_target_unit_closure": false,
+    "publish_as": "structural_prior_only"
+  }
+}

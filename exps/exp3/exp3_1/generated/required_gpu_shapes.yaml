@@ -1,0 +1,1510 @@
+schema_version: 1
+schema_name: exp3_1_gpu_gemm_lut
+units: ns
+shape_order:
+- M
+- N
+- K
+shape_semantics: A[M,K] x B[K,N] -> C[M,N]
+expected_entries: 120
+gpu:
+  name: null
+  count: 1
+  clock_policy: null
+software:
+  driver: null
+  cuda: null
+  cublas_or_backend: null
+gemm:
+  input_dtype: bf16
+  output_dtype: bf16
+  accumulation_dtype: fp32
+  transpose_a: false
+  transpose_b: false
+measurement:
+  statistic: p50
+  warmup_iterations: null
+  measured_iterations: null
+  synchronization: per_iteration
+  operands_resident_on_device: true
+  includes_host_to_device: false
+  includes_device_to_host: false
+experiment:
+  die_counts:
+  - 6
+  - 9
+  - 36
+  meshes:
+    '6':
+    - 2
+    - 3
+    '9':
+    - 3
+    - 3
+    '36':
+    - 6
+    - 6
+  sequence_lengths:
+  - 2304
+  - 36864
+  dense_runtime_shapes_include_semantic_padding: true
+  moe_profiles:
+  - model: Mixtral-8x7B
+    hidden_size: 4096
+    intermediate_size: 14336
+    experts: 8
+    topk: 2
+  - model: DeepSeek-V3
+    hidden_size: 7168
+    intermediate_size: 2048
+    experts: 256
+    topk: 8
+  up_gate_execution_count: 2
+  down_execution_count: 1
+lookup:
+  gemm_rs_coarse:
+  - - - 2304
+      - 4128
+      - 2048
+    - null
+  - - - 36864
+      - 4128
+      - 2048
+    - null
+  - - - 2304
+      - 4128
+      - 1835
+    - null
+  - - - 36864
+      - 4128
+      - 1835
+    - null
+  - - - 2304
+      - 12288
+      - 6144
+    - null
+  - - - 36864
+      - 12288
+      - 6144
+    - null
+  - - - 2304
+      - 12288
+      - 8192
+    - null
+  - - - 36864
+      - 12288
+      - 8192
+    - null
+  - - - 2304
+      - 4176
+      - 1366
+    - null
+  - - - 36864
+      - 4176
+      - 1366
+    - null
+  - - - 2304
+      - 4176
+      - 1224
+    - null
+  - - - 36864
+      - 4176
+      - 1224
+    - null
+  - - - 2304
+      - 12384
+      - 4096
+    - null
+  - - - 36864
+      - 12384
+      - 4096
+    - null
+  - - - 2304
+      - 12384
+      - 5462
+    - null
+  - - - 36864
+      - 12384
+      - 5462
+    - null
+  - - - 2304
+      - 4176
+      - 342
+    - null
+  - - - 36864
+      - 4176
+      - 342
+    - null
+  - - - 2304
+      - 4176
+      - 306
+    - null
+  - - - 36864
+      - 4176
+      - 306
+    - null
+  - - - 2304
+      - 12384
+      - 1024
+    - null
+  - - - 36864
+      - 12384
+      - 1024
+    - null
+  - - - 2304
+      - 12384
+      - 1366
+    - null
+  - - - 36864
+      - 12384
+      - 1366
+    - null
+  gemm_rs_1d_ring_c_eq_d:
+  - - - 2304
+      - 688
+      - 2048
+    - null
+  - - - 36864
+      - 688
+      - 2048
+    - null
+  - - - 2304
+      - 688
+      - 1835
+    - null
+  - - - 36864
+      - 688
+      - 1835
+    - null
+  - - - 2304
+      - 2048
+      - 6144
+    - null
+  - - - 36864
+      - 2048
+      - 6144
+    - null
+  - - - 2304
+      - 2048
+      - 8192
+    - null
+  - - - 36864
+      - 2048
+      - 8192
+    - null
+  - - - 2304
+      - 464
+      - 1366
+    - null
+  - - - 36864
+      - 464
+      - 1366
+    - null
+  - - - 2304
+      - 464
+      - 1224
+    - null
+  - - - 36864
+      - 464
+      - 1224
+    - null
+  - - - 2304
+      - 1376
+      - 4096
+    - null
+  - - - 36864
+      - 1376
+      - 4096
+    - null
+  - - - 2304
+      - 1376
+      - 5462
+    - null
+  - - - 36864
+      - 1376
+      - 5462
+    - null
+  - - - 2304
+      - 116
+      - 342
+    - null
+  - - - 36864
+      - 116
+      - 342
+    - null
+  - - - 2304
+      - 116
+      - 306
+    - null
+  - - - 36864
+      - 116
+      - 306
+    - null
+  - - - 2304
+      - 344
+      - 1024
+    - null
+  - - - 36864
+      - 344
+      - 1024
+    - null
+  - - - 2304
+      - 344
+      - 1366
+    - null
+  - - - 36864
+      - 344
+      - 1366
+    - null
+  gemm_rs_2d_row_column:
+  - - - 2304
+      - 1376
+      - 6144
+    - null
+  - - - 36864
+      - 1376
+      - 6144
+    - null
+  - - - 2304
+      - 1376
+      - 5505
+    - null
+  - - - 36864
+      - 1376
+      - 5505
+    - null
+  - - - 2304
+      - 4096
+      - 18432
+    - null
+  - - - 36864
+      - 4096
+      - 18432
+    - null
+  - - - 2304
+      - 4096
+      - 24576
+    - null
+  - - - 36864
+      - 4096
+      - 24576
+    - null
+  - - - 2304
+      - 1392
+      - 4098
+    - null
+  - - - 36864
+      - 1392
+      - 4098
+    - null
+  - - - 2304
+      - 1392
+      - 3672
+    - null
+  - - - 36864
+      - 1392
+      - 3672
+    - null
+  - - - 2304
+      - 4128
+      - 12288
+    - null
+  - - - 36864
+      - 4128
+      - 12288
+    - null
+  - - - 2304
+      - 4128
+      - 16386
+    - null
+  - - - 36864
+      - 4128
+      - 16386
+    - null
+  - - - 2304
+      - 696
+      - 2052
+    - null
+  - - - 36864
+      - 696
+      - 2052
+    - null
+  - - - 2304
+      - 696
+      - 1836
+    - null
+  - - - 36864
+      - 696
+      - 1836
+    - null
+  - - - 2304
+      - 2064
+      - 6144
+    - null
+  - - - 36864
+      - 2064
+      - 6144
+    - null
+  - - - 2304
+      - 2064
+      - 8196
+    - null
+  - - - 36864
+      - 2064
+      - 8196
+    - null
+  dispatch_gemm_coarse:
+  - - - 768
+      - 14336
+      - 4096
+    - null
+  - - - 12288
+      - 14336
+      - 4096
+    - null
+  - - - 768
+      - 4096
+      - 14336
+    - null
+  - - - 12288
+      - 4096
+      - 14336
+    - null
+  - - - 3072
+      - 2048
+      - 7168
+    - null
+  - - - 49152
+      - 2048
+      - 7168
+    - null
+  - - - 3072
+      - 7168
+      - 2048
+    - null
+  - - - 49152
+      - 7168
+      - 2048
+    - null
+  - - - 512
+      - 14336
+      - 4096
+    - null
+  - - - 8192
+      - 14336
+      - 4096
+    - null
+  - - - 512
+      - 4096
+      - 14336
+    - null
+  - - - 8192
+      - 4096
+      - 14336
+    - null
+  - - - 2048
+      - 2048
+      - 7168
+    - null
+  - - - 32768
+      - 2048
+      - 7168
+    - null
+  - - - 2048
+      - 7168
+      - 2048
+    - null
+  - - - 32768
+      - 7168
+      - 2048
+    - null
+  - - - 128
+      - 14336
+      - 4096
+    - null
+  - - - 2048
+      - 14336
+      - 4096
+    - null
+  - - - 128
+      - 4096
+      - 14336
+    - null
+  - - - 2048
+      - 4096
+      - 14336
+    - null
+  - - - 512
+      - 2048
+      - 7168
+    - null
+  - - - 8192
+      - 2048
+      - 7168
+    - null
+  - - - 512
+      - 7168
+      - 2048
+    - null
+  - - - 8192
+      - 7168
+      - 2048
+    - null
+  dispatch_gemm_source_expert_chunk:
+  - - - 96
+      - 14336
+      - 4096
+    - null
+  - - - 1536
+      - 14336
+      - 4096
+    - null
+  - - - 96
+      - 4096
+      - 14336
+    - null
+  - - - 1536
+      - 4096
+      - 14336
+    - null
+  - - - 12
+      - 2048
+      - 7168
+    - null
+  - - - 192
+      - 2048
+      - 7168
+    - null
+  - - - 12
+      - 7168
+      - 2048
+    - null
+  - - - 192
+      - 7168
+      - 2048
+    - null
+  - - - 64
+      - 14336
+      - 4096
+    - null
+  - - - 1024
+      - 14336
+      - 4096
+    - null
+  - - - 64
+      - 4096
+      - 14336
+    - null
+  - - - 1024
+      - 4096
+      - 14336
+    - null
+  - - - 8
+      - 2048
+      - 7168
+    - null
+  - - - 128
+      - 2048
+      - 7168
+    - null
+  - - - 8
+      - 7168
+      - 2048
+    - null
+  - - - 128
+      - 7168
+      - 2048
+    - null
+  - - - 16
+      - 14336
+      - 4096
+    - null
+  - - - 256
+      - 14336
+      - 4096
+    - null
+  - - - 16
+      - 4096
+      - 14336
+    - null
+  - - - 256
+      - 4096
+      - 14336
+    - null
+  - - - 2
+      - 2048
+      - 7168
+    - null
+  - - - 32
+      - 2048
+      - 7168
+    - null
+  - - - 2
+      - 7168
+      - 2048
+    - null
+  - - - 32
+      - 7168
+      - 2048
+    - null
+shape_references:
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 4128
+  - 2048
+  case_id: d6_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 688
+  - 2048
+  case_id: d6_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 1376
+  - 6144
+  case_id: d6_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 4128
+  - 2048
+  case_id: d6_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 688
+  - 2048
+  case_id: d6_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 1376
+  - 6144
+  case_id: d6_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 4128
+  - 1835
+  case_id: d6_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 688
+  - 1835
+  case_id: d6_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 1376
+  - 5505
+  case_id: d6_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 4128
+  - 1835
+  case_id: d6_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 688
+  - 1835
+  case_id: d6_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 1376
+  - 5505
+  case_id: d6_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 12288
+  - 6144
+  case_id: d6_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 2048
+  - 6144
+  case_id: d6_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 4096
+  - 18432
+  case_id: d6_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 12288
+  - 6144
+  case_id: d6_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 2048
+  - 6144
+  case_id: d6_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 4096
+  - 18432
+  case_id: d6_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 12288
+  - 8192
+  case_id: d6_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 2048
+  - 8192
+  case_id: d6_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 4096
+  - 24576
+  case_id: d6_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 12288
+  - 8192
+  case_id: d6_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 2048
+  - 8192
+  case_id: d6_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 4096
+  - 24576
+  case_id: d6_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 768
+  - 14336
+  - 4096
+  case_id: d6_dispatch_gemm_mixtral_8x7b_up_gate_s2304
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 96
+  - 14336
+  - 4096
+  case_id: d6_dispatch_gemm_mixtral_8x7b_up_gate_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 12288
+  - 14336
+  - 4096
+  case_id: d6_dispatch_gemm_mixtral_8x7b_up_gate_s36864
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 1536
+  - 14336
+  - 4096
+  case_id: d6_dispatch_gemm_mixtral_8x7b_up_gate_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 768
+  - 4096
+  - 14336
+  case_id: d6_dispatch_gemm_mixtral_8x7b_down_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 96
+  - 4096
+  - 14336
+  case_id: d6_dispatch_gemm_mixtral_8x7b_down_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 12288
+  - 4096
+  - 14336
+  case_id: d6_dispatch_gemm_mixtral_8x7b_down_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 1536
+  - 4096
+  - 14336
+  case_id: d6_dispatch_gemm_mixtral_8x7b_down_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 3072
+  - 2048
+  - 7168
+  case_id: d6_dispatch_gemm_deepseek_v3_up_gate_s2304
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 12
+  - 2048
+  - 7168
+  case_id: d6_dispatch_gemm_deepseek_v3_up_gate_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 49152
+  - 2048
+  - 7168
+  case_id: d6_dispatch_gemm_deepseek_v3_up_gate_s36864
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 192
+  - 2048
+  - 7168
+  case_id: d6_dispatch_gemm_deepseek_v3_up_gate_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 3072
+  - 7168
+  - 2048
+  case_id: d6_dispatch_gemm_deepseek_v3_down_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 12
+  - 7168
+  - 2048
+  case_id: d6_dispatch_gemm_deepseek_v3_down_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 49152
+  - 7168
+  - 2048
+  case_id: d6_dispatch_gemm_deepseek_v3_down_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 192
+  - 7168
+  - 2048
+  case_id: d6_dispatch_gemm_deepseek_v3_down_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 4176
+  - 1366
+  case_id: d9_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 464
+  - 1366
+  case_id: d9_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 1392
+  - 4098
+  case_id: d9_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 4176
+  - 1366
+  case_id: d9_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 464
+  - 1366
+  case_id: d9_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 1392
+  - 4098
+  case_id: d9_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 4176
+  - 1224
+  case_id: d9_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 464
+  - 1224
+  case_id: d9_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 1392
+  - 3672
+  case_id: d9_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 4176
+  - 1224
+  case_id: d9_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 464
+  - 1224
+  case_id: d9_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 1392
+  - 3672
+  case_id: d9_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 12384
+  - 4096
+  case_id: d9_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 1376
+  - 4096
+  case_id: d9_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 4128
+  - 12288
+  case_id: d9_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 12384
+  - 4096
+  case_id: d9_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 1376
+  - 4096
+  case_id: d9_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 4128
+  - 12288
+  case_id: d9_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 12384
+  - 5462
+  case_id: d9_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 1376
+  - 5462
+  case_id: d9_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 4128
+  - 16386
+  case_id: d9_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 12384
+  - 5462
+  case_id: d9_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 1376
+  - 5462
+  case_id: d9_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 4128
+  - 16386
+  case_id: d9_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 512
+  - 14336
+  - 4096
+  case_id: d9_dispatch_gemm_mixtral_8x7b_up_gate_s2304
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 64
+  - 14336
+  - 4096
+  case_id: d9_dispatch_gemm_mixtral_8x7b_up_gate_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 8192
+  - 14336
+  - 4096
+  case_id: d9_dispatch_gemm_mixtral_8x7b_up_gate_s36864
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 1024
+  - 14336
+  - 4096
+  case_id: d9_dispatch_gemm_mixtral_8x7b_up_gate_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 512
+  - 4096
+  - 14336
+  case_id: d9_dispatch_gemm_mixtral_8x7b_down_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 64
+  - 4096
+  - 14336
+  case_id: d9_dispatch_gemm_mixtral_8x7b_down_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 8192
+  - 4096
+  - 14336
+  case_id: d9_dispatch_gemm_mixtral_8x7b_down_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 1024
+  - 4096
+  - 14336
+  case_id: d9_dispatch_gemm_mixtral_8x7b_down_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 2048
+  - 2048
+  - 7168
+  case_id: d9_dispatch_gemm_deepseek_v3_up_gate_s2304
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 8
+  - 2048
+  - 7168
+  case_id: d9_dispatch_gemm_deepseek_v3_up_gate_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 32768
+  - 2048
+  - 7168
+  case_id: d9_dispatch_gemm_deepseek_v3_up_gate_s36864
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 128
+  - 2048
+  - 7168
+  case_id: d9_dispatch_gemm_deepseek_v3_up_gate_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 2048
+  - 7168
+  - 2048
+  case_id: d9_dispatch_gemm_deepseek_v3_down_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 8
+  - 7168
+  - 2048
+  case_id: d9_dispatch_gemm_deepseek_v3_down_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 32768
+  - 7168
+  - 2048
+  case_id: d9_dispatch_gemm_deepseek_v3_down_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 128
+  - 7168
+  - 2048
+  case_id: d9_dispatch_gemm_deepseek_v3_down_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 4176
+  - 342
+  case_id: d36_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 116
+  - 342
+  case_id: d36_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 696
+  - 2052
+  case_id: d36_gemm_rs_llama_2_7b_o_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 4176
+  - 342
+  case_id: d36_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 116
+  - 342
+  case_id: d36_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 696
+  - 2052
+  case_id: d36_gemm_rs_llama_2_7b_o_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 4176
+  - 306
+  case_id: d36_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 116
+  - 306
+  case_id: d36_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 696
+  - 1836
+  case_id: d36_gemm_rs_llama_2_7b_down_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 4176
+  - 306
+  case_id: d36_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 116
+  - 306
+  case_id: d36_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 696
+  - 1836
+  case_id: d36_gemm_rs_llama_2_7b_down_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 12384
+  - 1024
+  case_id: d36_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 344
+  - 1024
+  case_id: d36_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 2064
+  - 6144
+  case_id: d36_gemm_rs_gpt_3_175b_o_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 12384
+  - 1024
+  case_id: d36_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 344
+  - 1024
+  case_id: d36_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 2064
+  - 6144
+  case_id: d36_gemm_rs_gpt_3_175b_o_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 2304
+  - 12384
+  - 1366
+  case_id: d36_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 2304
+  - 344
+  - 1366
+  case_id: d36_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 2304
+  - 2064
+  - 8196
+  case_id: d36_gemm_rs_gpt_3_175b_down_proj_s2304
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: gemm_rs_coarse
+  shape:
+  - 36864
+  - 12384
+  - 1366
+  case_id: d36_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: gemm_rs_1d_ring_c_eq_d
+  shape:
+  - 36864
+  - 344
+  - 1366
+  case_id: d36_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: 1d_ring_c_eq_d
+  gemm_execution_count: 1
+- group: gemm_rs_2d_row_column
+  shape:
+  - 36864
+  - 2064
+  - 8196
+  case_id: d36_gemm_rs_gpt_3_175b_down_proj_s36864
+  algorithm: 2d_row_column
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 128
+  - 14336
+  - 4096
+  case_id: d36_dispatch_gemm_mixtral_8x7b_up_gate_s2304
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 16
+  - 14336
+  - 4096
+  case_id: d36_dispatch_gemm_mixtral_8x7b_up_gate_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 2048
+  - 14336
+  - 4096
+  case_id: d36_dispatch_gemm_mixtral_8x7b_up_gate_s36864
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 256
+  - 14336
+  - 4096
+  case_id: d36_dispatch_gemm_mixtral_8x7b_up_gate_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 128
+  - 4096
+  - 14336
+  case_id: d36_dispatch_gemm_mixtral_8x7b_down_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 16
+  - 4096
+  - 14336
+  case_id: d36_dispatch_gemm_mixtral_8x7b_down_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 2048
+  - 4096
+  - 14336
+  case_id: d36_dispatch_gemm_mixtral_8x7b_down_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 256
+  - 4096
+  - 14336
+  case_id: d36_dispatch_gemm_mixtral_8x7b_down_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 512
+  - 2048
+  - 7168
+  case_id: d36_dispatch_gemm_deepseek_v3_up_gate_s2304
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 2
+  - 2048
+  - 7168
+  case_id: d36_dispatch_gemm_deepseek_v3_up_gate_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 8192
+  - 2048
+  - 7168
+  case_id: d36_dispatch_gemm_deepseek_v3_up_gate_s36864
+  algorithm: coarse
+  gemm_execution_count: 2
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 32
+  - 2048
+  - 7168
+  case_id: d36_dispatch_gemm_deepseek_v3_up_gate_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 2
+- group: dispatch_gemm_coarse
+  shape:
+  - 512
+  - 7168
+  - 2048
+  case_id: d36_dispatch_gemm_deepseek_v3_down_s2304
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 2
+  - 7168
+  - 2048
+  case_id: d36_dispatch_gemm_deepseek_v3_down_s2304
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1
+- group: dispatch_gemm_coarse
+  shape:
+  - 8192
+  - 7168
+  - 2048
+  case_id: d36_dispatch_gemm_deepseek_v3_down_s36864
+  algorithm: coarse
+  gemm_execution_count: 1
+- group: dispatch_gemm_source_expert_chunk
+  shape:
+  - 32
+  - 7168
+  - 2048
+  case_id: d36_dispatch_gemm_deepseek_v3_down_s36864
+  algorithm: source_expert_chunk
+  gemm_execution_count: 1

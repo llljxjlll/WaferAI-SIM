@@ -1,0 +1,1468 @@
+{
+ "id_space": "global",
+ "vars": {
+  "B": 1,
+  "T": 64,
+  "C": 64,
+  "OC": 1024,
+  "ONE": 1,
+  "AG_OC": 1024,
+  "XD_OC": 6144,
+  "SRC": 64,
+  "matmul_data": 0
+ },
+ "pipeline": 1,
+ "source": [
+  {
+   "dest": 0,
+   "size": "SRC"
+  },
+  {
+   "dest": 12,
+   "size": "SRC"
+  },
+  {
+   "dest": 16,
+   "size": "SRC"
+  },
+  {
+   "dest": 17,
+   "size": "SRC"
+  },
+  {
+   "dest": 18,
+   "size": "SRC"
+  },
+  {
+   "dest": 19,
+   "size": "SRC"
+  },
+  {
+   "dest": 20,
+   "size": "SRC"
+  },
+  {
+   "dest": 21,
+   "size": "SRC"
+  },
+  {
+   "dest": 22,
+   "size": "SRC"
+  },
+  {
+   "dest": 23,
+   "size": "SRC"
+  },
+  {
+   "dest": 24,
+   "size": "SRC"
+  },
+  {
+   "dest": 25,
+   "size": "SRC"
+  },
+  {
+   "dest": 26,
+   "size": "SRC"
+  },
+  {
+   "dest": 27,
+   "size": "SRC"
+  },
+  {
+   "dest": 28,
+   "size": "SRC"
+  },
+  {
+   "dest": 29,
+   "size": "SRC"
+  },
+  {
+   "dest": 30,
+   "size": "SRC"
+  },
+  {
+   "dest": 31,
+   "size": "SRC"
+  }
+ ],
+ "chips": [
+  {
+   "chip_id": 0,
+   "cores": [
+    {
+     "id": 0,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "XD_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "xd_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 32,
+         "tag": 32
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 12,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "XD_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "xd_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 44,
+         "tag": 44
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 16,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 17,
+         "tag": 17
+        },
+        {
+         "dest": 18,
+         "tag": 18
+        },
+        {
+         "dest": 19,
+         "tag": 19
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 17,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 16,
+         "tag": 16
+        },
+        {
+         "dest": 18,
+         "tag": 18
+        },
+        {
+         "dest": 19,
+         "tag": 19
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 18,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 16,
+         "tag": 16
+        },
+        {
+         "dest": 17,
+         "tag": 17
+        },
+        {
+         "dest": 19,
+         "tag": 19
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 19,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 16,
+         "tag": 16
+        },
+        {
+         "dest": 17,
+         "tag": 17
+        },
+        {
+         "dest": 18,
+         "tag": 18
+        }
+       ]
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 20,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 21,
+         "tag": 21
+        },
+        {
+         "dest": 22,
+         "tag": 22
+        },
+        {
+         "dest": 23,
+         "tag": 23
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 21,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 20,
+         "tag": 20
+        },
+        {
+         "dest": 22,
+         "tag": 22
+        },
+        {
+         "dest": 23,
+         "tag": 23
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 22,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 20,
+         "tag": 20
+        },
+        {
+         "dest": 21,
+         "tag": 21
+        },
+        {
+         "dest": 23,
+         "tag": 23
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 23,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 20,
+         "tag": 20
+        },
+        {
+         "dest": 21,
+         "tag": 21
+        },
+        {
+         "dest": 22,
+         "tag": 22
+        }
+       ]
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 24,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 25,
+         "tag": 25
+        },
+        {
+         "dest": 26,
+         "tag": 26
+        },
+        {
+         "dest": 27,
+         "tag": 27
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 25,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 24,
+         "tag": 24
+        },
+        {
+         "dest": 26,
+         "tag": 26
+        },
+        {
+         "dest": 27,
+         "tag": 27
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 26,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 24,
+         "tag": 24
+        },
+        {
+         "dest": 25,
+         "tag": 25
+        },
+        {
+         "dest": 27,
+         "tag": 27
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 27,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 24,
+         "tag": 24
+        },
+        {
+         "dest": 25,
+         "tag": 25
+        },
+        {
+         "dest": 26,
+         "tag": 26
+        }
+       ]
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 28,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 29,
+         "tag": 29
+        },
+        {
+         "dest": 30,
+         "tag": 30
+        },
+        {
+         "dest": 31,
+         "tag": 31
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 29,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 28,
+         "tag": 28
+        },
+        {
+         "dest": 30,
+         "tag": 30
+        },
+        {
+         "dest": 31,
+         "tag": 31
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 30,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 28,
+         "tag": 28
+        },
+        {
+         "dest": 29,
+         "tag": 29
+        },
+        {
+         "dest": 31,
+         "tag": 31
+        }
+       ]
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 31,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "B",
+         "T": "T",
+         "C": "C",
+         "OC": "OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "mm_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 1,
+       "cast": []
+      },
+      {
+       "recv_cnt": 0,
+       "prims": [
+        {
+         "type": "Matmul_f",
+         "B": "ONE",
+         "T": "ONE",
+         "C": "ONE",
+         "OC": "AG_OC",
+         "sram_address": {
+          "indata": "_input_label",
+          "outdata": "ag_out"
+         },
+         "dram_address": {
+          "data": "matmul_data"
+         }
+        }
+       ],
+       "cast": [
+        {
+         "dest": 28,
+         "tag": 28
+        },
+        {
+         "dest": 29,
+         "tag": 29
+        },
+        {
+         "dest": 30,
+         "tag": 30
+        }
+       ]
+      },
+      {
+       "recv_cnt": 0,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 32,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": 44,
+     "loop": 1,
+     "worklist": [
+      {
+       "recv_cnt": 1,
+       "cast": [
+        {
+         "dest": -1,
+         "loopout": "true"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

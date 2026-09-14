@@ -1,0 +1,236 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760">
+<rect width="100%" height="100%" fill="white"/>
+<defs>
+<pattern id="capacity-hatch" width="8" height="8" patternUnits="userSpaceOnUse">
+  <path d="M-2,2 L2,-2 M0,8 L8,0 M6,10 L10,6" stroke="#111" stroke-width="1.2" opacity=".55"/>
+</pattern>
+<pattern id="mla-hatch" width="8" height="8" patternUnits="userSpaceOnUse">
+  <path d="M0,0 L8,8 M8,0 L0,8" stroke="#111" stroke-width="1.15" opacity=".58"/>
+</pattern>
+<pattern id="mla-capacity-hatch" width="8" height="8" patternUnits="userSpaceOnUse">
+  <path d="M-2,2 L2,-2 M0,8 L8,0 M0,0 L8,8 M8,0 L0,8" stroke="#111" stroke-width="1.1" opacity=".6"/>
+</pattern>
+
+</defs>
+<text x="800.0" y="34" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="bold">Inference TTFT: prefill / KV handoff / wait</text>
+<text x="800.0" y="59" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#444">S={2304, 36864}; side-by-side stacked base/overlap bars; bars normalized to figure maximum with 10% unlabeled headroom; right 4.5× aligns with left 1.</text>
+<text x="800.0" y="79" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#8B1A1A">Texture conventions match the E2E figures; capacity status is shown separately for every model/sequence case.</text>
+<line x1="88" y1="585.00" x2="1495" y2="585.00" stroke="#B5B5B5"/>
+<text x="80" y="589.00" text-anchor="end" font-family="sans-serif" font-size="10">0</text>
+<line x1="88" y1="498.64" x2="1495" y2="498.64" stroke="#B5B5B5"/>
+<text x="80" y="502.64" text-anchor="end" font-family="sans-serif" font-size="10">0.2</text>
+<line x1="88" y1="412.27" x2="1495" y2="412.27" stroke="#B5B5B5"/>
+<text x="80" y="416.27" text-anchor="end" font-family="sans-serif" font-size="10">0.4</text>
+<line x1="88" y1="325.91" x2="1495" y2="325.91" stroke="#B5B5B5"/>
+<text x="80" y="329.91" text-anchor="end" font-family="sans-serif" font-size="10">0.6</text>
+<line x1="88" y1="239.55" x2="1495" y2="239.55" stroke="#B5B5B5"/>
+<text x="80" y="243.55" text-anchor="end" font-family="sans-serif" font-size="10">0.8</text>
+<line x1="88" y1="153.18" x2="1495" y2="153.18" stroke="#B5B5B5"/>
+<text x="80" y="157.18" text-anchor="end" font-family="sans-serif" font-size="10">1</text>
+<text x="1503" y="589.00" font-family="sans-serif" font-size="10">0×</text>
+<text x="1503" y="502.64" font-family="sans-serif" font-size="10">0.9×</text>
+<text x="1503" y="416.27" font-family="sans-serif" font-size="10">1.8×</text>
+<text x="1503" y="329.91" font-family="sans-serif" font-size="10">2.7×</text>
+<text x="1503" y="243.55" font-family="sans-serif" font-size="10">3.6×</text>
+<text x="1503" y="157.18" font-family="sans-serif" font-size="10">4.5×</text>
+<line data-role="one-x-line" x1="88" y1="489.04" x2="1495" y2="489.04" stroke="#A21D1D" stroke-width="1.6" stroke-dasharray="7,5"/>
+<rect data-role="base-prefill" x="108.72" y="584.10" width="27.65" height="0.90" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff" x="108.72" y="584.07" width="27.65" height="0.03" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait" x="108.72" y="584.07" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill" x="138.37" y="584.36" width="27.65" height="0.64" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff" x="138.37" y="584.34" width="27.65" height="0.03" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait" x="138.37" y="584.34" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<text x="137.37" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">LLaMA-2-7B</text>
+<text x="137.37" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=2304</text>
+<text x="137.37" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_feasible</text>
+<rect data-role="base-prefill" x="207.46" y="572.12" width="27.65" height="12.88" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="207.46" y="572.12" width="27.65" height="12.88" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="207.46" y="571.71" width="27.65" height="0.41" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="207.46" y="571.71" width="27.65" height="0.41" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="207.46" y="571.71" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="207.46" y="571.71" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="237.11" y="572.72" width="27.65" height="12.28" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="237.11" y="572.72" width="27.65" height="12.28" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="237.11" y="572.31" width="27.65" height="0.41" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="237.11" y="572.31" width="27.65" height="0.41" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="237.11" y="572.31" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="237.11" y="572.31" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="236.11" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">LLaMA-2-7B</text>
+<text x="236.11" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=36864</text>
+<text x="236.11" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="350.63" y="562.77" width="27.65" height="22.23" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="350.63" y="562.77" width="27.65" height="22.23" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="350.63" y="562.54" width="27.65" height="0.23" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="350.63" y="562.54" width="27.65" height="0.23" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="350.63" y="562.54" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="350.63" y="562.54" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="380.27" y="569.47" width="27.65" height="15.53" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="380.27" y="569.47" width="27.65" height="15.53" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="380.27" y="569.24" width="27.65" height="0.23" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="380.27" y="569.24" width="27.65" height="0.23" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="380.27" y="569.24" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="380.27" y="569.24" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="379.27" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">GPT-3-175B</text>
+<text x="379.27" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=2304</text>
+<text x="379.27" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="449.36" y="380.86" width="27.65" height="204.14" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="449.36" y="380.86" width="27.65" height="204.14" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="449.36" y="377.14" width="27.65" height="3.71" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="449.36" y="377.14" width="27.65" height="3.71" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="449.36" y="377.14" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="449.36" y="377.14" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="479.01" y="390.61" width="27.65" height="194.39" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="479.01" y="390.61" width="27.65" height="194.39" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="479.01" y="386.89" width="27.65" height="3.71" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="479.01" y="386.89" width="27.65" height="3.71" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="479.01" y="386.89" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="479.01" y="386.89" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="478.01" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">GPT-3-175B</text>
+<text x="478.01" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=36864</text>
+<text x="478.01" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="592.53" y="584.04" width="27.65" height="0.96" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff" x="592.53" y="584.03" width="27.65" height="0.01" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait" x="592.53" y="584.03" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill" x="622.18" y="584.32" width="27.65" height="0.68" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff" x="622.18" y="584.31" width="27.65" height="0.01" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait" x="622.18" y="584.31" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<text x="621.18" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">LLaMA-3-8B</text>
+<text x="621.18" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=2304</text>
+<text x="621.18" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_feasible</text>
+<rect data-role="base-prefill" x="691.27" y="571.73" width="27.65" height="13.27" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff" x="691.27" y="571.63" width="27.65" height="0.10" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait" x="691.27" y="571.63" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill" x="720.92" y="572.36" width="27.65" height="12.64" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff" x="720.92" y="572.25" width="27.65" height="0.10" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait" x="720.92" y="572.25" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<text x="719.92" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">LLaMA-3-8B</text>
+<text x="719.92" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=36864</text>
+<text x="719.92" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_feasible</text>
+<rect data-role="base-prefill" x="834.44" y="534.22" width="27.65" height="50.78" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="834.44" y="534.22" width="27.65" height="50.78" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="834.44" y="534.20" width="27.65" height="0.03" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="834.44" y="534.20" width="27.65" height="0.03" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="834.44" y="534.20" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="834.44" y="534.20" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="864.08" y="549.59" width="27.65" height="35.41" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="864.08" y="549.59" width="27.65" height="35.41" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="864.08" y="549.56" width="27.65" height="0.03" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="864.08" y="549.56" width="27.65" height="0.03" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="864.08" y="549.56" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="864.08" y="549.56" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="863.08" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">LLaMA-3.1-405B</text>
+<text x="863.08" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=2304</text>
+<text x="863.08" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="933.17" y="153.59" width="27.65" height="431.41" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="933.17" y="153.59" width="27.65" height="431.41" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="933.17" y="153.18" width="27.65" height="0.41" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="933.17" y="153.18" width="27.65" height="0.41" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="933.17" y="153.18" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="933.17" y="153.18" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="962.82" y="174.28" width="27.65" height="410.72" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="962.82" y="174.28" width="27.65" height="410.72" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="962.82" y="173.88" width="27.65" height="0.41" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="962.82" y="173.88" width="27.65" height="0.41" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="962.82" y="173.88" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="962.82" y="173.88" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="961.82" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">LLaMA-3.1-405B</text>
+<text x="961.82" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=36864</text>
+<text x="961.82" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="1076.34" y="580.66" width="27.65" height="4.34" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="1076.34" y="580.66" width="27.65" height="4.34" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="1076.34" y="580.65" width="27.65" height="0.01" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="1076.34" y="580.65" width="27.65" height="0.01" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="1076.34" y="580.65" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="1076.34" y="580.65" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="1105.99" y="581.24" width="27.65" height="3.76" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="1105.99" y="581.24" width="27.65" height="3.76" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="1105.99" y="581.24" width="27.65" height="0.01" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="1105.99" y="581.24" width="27.65" height="0.01" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="1105.99" y="581.24" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="1105.99" y="581.24" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="1104.99" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">Mixtral-8x7B</text>
+<text x="1104.99" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=2304</text>
+<text x="1104.99" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="1175.08" y="564.75" width="27.65" height="20.25" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="1175.08" y="564.75" width="27.65" height="20.25" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="1175.08" y="564.64" width="27.65" height="0.10" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="1175.08" y="564.64" width="27.65" height="0.10" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="1175.08" y="564.64" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="1175.08" y="564.64" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="1204.73" y="566.84" width="27.65" height="18.16" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="1204.73" y="566.84" width="27.65" height="18.16" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="1204.73" y="566.74" width="27.65" height="0.10" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="1204.73" y="566.74" width="27.65" height="0.10" fill="url(#capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="1204.73" y="566.74" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="1204.73" y="566.74" width="27.65" height="0.00" fill="url(#capacity-hatch)" stroke="none"/>
+<text x="1203.73" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">Mixtral-8x7B</text>
+<text x="1203.73" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=36864</text>
+<text x="1203.73" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="1318.25" y="528.99" width="27.65" height="56.01" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="1318.25" y="528.99" width="27.65" height="56.01" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="1318.25" y="528.98" width="27.65" height="0.00" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="1318.25" y="528.98" width="27.65" height="0.00" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="1318.25" y="528.98" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="1318.25" y="528.98" width="27.65" height="0.00" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="1347.89" y="530.56" width="27.65" height="54.44" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="1347.89" y="530.56" width="27.65" height="54.44" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="1347.89" y="530.56" width="27.65" height="0.00" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="1347.89" y="530.56" width="27.65" height="0.00" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="1347.89" y="530.56" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="1347.89" y="530.56" width="27.65" height="0.00" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<text x="1346.89" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">DeepSeek-V3</text>
+<text x="1346.89" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=2304</text>
+<text x="1346.89" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<rect data-role="base-prefill" x="1416.99" y="431.69" width="27.65" height="153.31" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="base-prefill-texture" x="1416.99" y="431.69" width="27.65" height="153.31" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff" x="1416.99" y="431.63" width="27.65" height="0.06" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff-texture" x="1416.99" y="431.63" width="27.65" height="0.06" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="base-handoff_wait" x="1416.99" y="431.63" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="base-handoff_wait-texture" x="1416.99" y="431.63" width="27.65" height="0.00" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-prefill" x="1446.63" y="458.41" width="27.65" height="126.59" fill="#4C78A8" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-prefill-texture" x="1446.63" y="458.41" width="27.65" height="126.59" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff" x="1446.63" y="458.35" width="27.65" height="0.06" fill="#F58518" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff-texture" x="1446.63" y="458.35" width="27.65" height="0.06" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<rect data-role="overlap-handoff_wait" x="1446.63" y="458.35" width="27.65" height="0.00" fill="#9C6ADE" stroke="#222" stroke-width="3"/>
+<rect data-role="overlap-handoff_wait-texture" x="1446.63" y="458.35" width="27.65" height="0.00" fill="url(#mla-capacity-hatch)" stroke="none"/>
+<text x="1445.63" y="606" text-anchor="middle" font-family="sans-serif" font-size="10">DeepSeek-V3</text>
+<text x="1445.63" y="622" text-anchor="middle" font-family="sans-serif" font-size="9">S=36864</text>
+<text x="1445.63" y="637" text-anchor="middle" font-family="sans-serif" font-size="8">capacity_infeasible_projection</text>
+<polygon data-role="uncertainty-band" points="137.37,361.13 236.11,376.23 379.27,300.92 478.01,375.89 621.18,358.92 719.92,417.26 863.08,299.29 961.82,375.67 1104.99,354.79 1203.73,362.82 1346.89,324.68 1445.63,278.64 1445.63,540.92 1346.89,547.55 1203.73,533.49 1104.99,531.63 961.82,536.47 863.08,518.77 719.92,524.61 621.18,503.61 478.01,536.52 379.27,519.14 236.11,536.60 137.37,504.41" fill="#008C95" opacity=".13" stroke="none"/>
+<polyline data-role="speedup-line" points="137.37,450.68 236.11,484.48 379.27,448.22 478.01,484.32 621.18,449.35 719.92,484.36 863.08,447.44 961.82,484.21 1104.99,474.16 1203.73,478.02 1346.89,486.26 1445.63,468.79" fill="none" stroke="#007C83" stroke-width="4.5" stroke-linejoin="round"/>
+<line x1="137.37" y1="504.41" x2="137.37" y2="361.13" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="137.37" cy="450.68" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="236.11" y1="536.60" x2="236.11" y2="376.23" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="236.11" cy="484.48" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="379.27" y1="519.14" x2="379.27" y2="300.92" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="379.27" cy="448.22" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="478.01" y1="536.52" x2="478.01" y2="375.89" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="478.01" cy="484.32" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="621.18" y1="503.61" x2="621.18" y2="358.92" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="621.18" cy="449.35" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="719.92" y1="524.61" x2="719.92" y2="417.26" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="719.92" cy="484.36" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="863.08" y1="518.77" x2="863.08" y2="299.29" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="863.08" cy="447.44" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="961.82" y1="536.47" x2="961.82" y2="375.67" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="961.82" cy="484.21" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="1104.99" y1="531.63" x2="1104.99" y2="354.79" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="1104.99" cy="474.16" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="1203.73" y1="533.49" x2="1203.73" y2="362.82" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="1203.73" cy="478.02" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="1346.89" y1="547.55" x2="1346.89" y2="324.68" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="1346.89" cy="486.26" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<line x1="1445.63" y1="540.92" x2="1445.63" y2="278.64" stroke="#007C83" stroke-width="1.2"/>
+<circle data-role="speedup-point" cx="1445.63" cy="468.79" r="6.3" fill="white" stroke="#007C83" stroke-width="3.3"/>
+<rect x="88" y="699" width="18" height="13" fill="#4C78A8"/>
+<text x="112" y="710" font-family="sans-serif" font-size="11">prefill</text>
+<rect x="233" y="699" width="18" height="13" fill="#F58518"/>
+<text x="257" y="710" font-family="sans-serif" font-size="11">handoff</text>
+<rect x="378" y="699" width="18" height="13" fill="#9C6ADE"/>
+<text x="402" y="710" font-family="sans-serif" font-size="11">handoff_wait</text>
+<line x1="523" y1="705" x2="563" y2="705" stroke="#007C83" stroke-width="4.5"/>
+<text x="571" y="710" font-family="sans-serif" font-size="11">speedup ± uncertainty</text>
+<text x="21" y="347.5" text-anchor="middle" font-family="sans-serif" font-size="12" transform="rotate(-90 21 347.5)">normalized bar height</text>
+<text x="1582" y="347.5" text-anchor="middle" font-family="sans-serif" font-size="12" transform="rotate(90 1582 347.5)">speedup</text>
+<rect x="88" y="110" width="1407" height="475" fill="none" stroke="#222"/>
+</svg>

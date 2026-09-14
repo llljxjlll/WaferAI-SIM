@@ -1,0 +1,15 @@
+{
+  "anchor_design_digest": "d994ab438105b0914a0b231f93899f18fde3bb3e6647f3ac6f1e94fc747d407a",
+  "calibration_digest": "2d7c4d5900d98a6532be478408ec5c415c2439c29cc5fde1a516e607c45c4839",
+  "completed_run_count": 0,
+  "current_build_direct_gate_passed": false,
+  "evidence_level": "resource_explicit_analytical_extrapolation",
+  "fit_motif_run_count": 96,
+  "holdout_window_run_count": 72,
+  "inherited_exp2_calibration_digest": "2fbdd5feace2c9eee52644fdc7b69ecb0675d803c10d161a2614226c5cb0f0af",
+  "inherited_exp2_publish_status": "analytical_only_target_binding_unclosed",
+  "planned_run_count": 168,
+  "publish_status": "analytical_only_current_build_anchor_pending",
+  "reason": "No 168 current-build direct shadow-run logs are present; exp2 source is inherited only as structural evidence.",
+  "schema_version": "exp4.calibration_summary.v1"
+}

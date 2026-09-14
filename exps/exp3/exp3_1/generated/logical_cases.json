@@ -1,0 +1,2550 @@
+{
+  "case_count": 48,
+  "cases": [
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_gemm_rs_llama_2_7b_o_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        4128,
+        2048
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        2304,
+        4096,
+        12288
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 233740173312,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          32,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        1376,
+        6144
+      ],
+      "ring_key": [
+        2304,
+        688,
+        2048
+      ],
+      "runtime_shape": [
+        2304,
+        4128,
+        12288
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 231928233984
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_gemm_rs_llama_2_7b_o_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        4128,
+        2048
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        36864,
+        4096,
+        12288
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 3739842772992,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          32,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        1376,
+        6144
+      ],
+      "ring_key": [
+        36864,
+        688,
+        2048
+      ],
+      "runtime_shape": [
+        36864,
+        4128,
+        12288
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 3710851743744
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_gemm_rs_llama_2_7b_down_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        4128,
+        1835
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        2304,
+        4096,
+        11008
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 209430282240,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          32,
+          2
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        1376,
+        5505
+      ],
+      "ring_key": [
+        2304,
+        688,
+        1835
+      ],
+      "runtime_shape": [
+        2304,
+        4128,
+        11010
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 207769042944
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_gemm_rs_llama_2_7b_down_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        4128,
+        1835
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        36864,
+        4096,
+        11008
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 3350884515840,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          32,
+          2
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        1376,
+        5505
+      ],
+      "ring_key": [
+        36864,
+        688,
+        1835
+      ],
+      "runtime_shape": [
+        36864,
+        4128,
+        11010
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 3324304687104
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_gemm_rs_gpt_3_175b_o_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        12288,
+        6144
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        2304,
+        12288,
+        36864
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 2087354105856,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        4096,
+        18432
+      ],
+      "ring_key": [
+        2304,
+        2048,
+        6144
+      ],
+      "runtime_shape": [
+        2304,
+        12288,
+        36864
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 2087354105856
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_gemm_rs_gpt_3_175b_o_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        12288,
+        6144
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        36864,
+        12288,
+        36864
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 33397665693696,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        4096,
+        18432
+      ],
+      "ring_key": [
+        36864,
+        2048,
+        6144
+      ],
+      "runtime_shape": [
+        36864,
+        12288,
+        36864
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 33397665693696
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_gemm_rs_gpt_3_175b_down_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        12288,
+        8192
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        2304,
+        12288,
+        49152
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 2783138807808,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        4096,
+        24576
+      ],
+      "ring_key": [
+        2304,
+        2048,
+        8192
+      ],
+      "runtime_shape": [
+        2304,
+        12288,
+        49152
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 2783138807808
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_gemm_rs_gpt_3_175b_down_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        12288,
+        8192
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        36864,
+        12288,
+        49152
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 44530220924928,
+      "padding": {
+        "K_alignment": 6,
+        "M_alignment": 6,
+        "N_alignment": 48,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        4096,
+        24576
+      ],
+      "ring_key": [
+        36864,
+        2048,
+        8192
+      ],
+      "runtime_shape": [
+        36864,
+        12288,
+        49152
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 44530220924928
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_dispatch_gemm_mixtral_8x7b_up_gate_s2304",
+      "chunk_key": [
+        96,
+        14336,
+        4096
+      ],
+      "coarse_key": [
+        768,
+        14336,
+        4096
+      ],
+      "experts": 8,
+      "gemm_execution_count": 2,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "up_gate",
+      "logical_shape": [
+        768,
+        14336,
+        4096
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 180388626432,
+      "padding": {
+        "chunk_divisor": 48,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 4608,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        768,
+        14336,
+        4096
+      ],
+      "stage": "up_gate",
+      "topk": 2,
+      "valid_flops": 180388626432
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_dispatch_gemm_mixtral_8x7b_up_gate_s36864",
+      "chunk_key": [
+        1536,
+        14336,
+        4096
+      ],
+      "coarse_key": [
+        12288,
+        14336,
+        4096
+      ],
+      "experts": 8,
+      "gemm_execution_count": 2,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "up_gate",
+      "logical_shape": [
+        12288,
+        14336,
+        4096
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 2886218022912,
+      "padding": {
+        "chunk_divisor": 48,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 73728,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        12288,
+        14336,
+        4096
+      ],
+      "stage": "up_gate",
+      "topk": 2,
+      "valid_flops": 2886218022912
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_dispatch_gemm_mixtral_8x7b_down_s2304",
+      "chunk_key": [
+        96,
+        4096,
+        14336
+      ],
+      "coarse_key": [
+        768,
+        4096,
+        14336
+      ],
+      "experts": 8,
+      "gemm_execution_count": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "down",
+      "logical_shape": [
+        768,
+        4096,
+        14336
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 90194313216,
+      "padding": {
+        "chunk_divisor": 48,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 4608,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        768,
+        4096,
+        14336
+      ],
+      "stage": "down",
+      "topk": 2,
+      "valid_flops": 90194313216
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_dispatch_gemm_mixtral_8x7b_down_s36864",
+      "chunk_key": [
+        1536,
+        4096,
+        14336
+      ],
+      "coarse_key": [
+        12288,
+        4096,
+        14336
+      ],
+      "experts": 8,
+      "gemm_execution_count": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "down",
+      "logical_shape": [
+        12288,
+        4096,
+        14336
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 1443109011456,
+      "padding": {
+        "chunk_divisor": 48,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 73728,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        12288,
+        4096,
+        14336
+      ],
+      "stage": "down",
+      "topk": 2,
+      "valid_flops": 1443109011456
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_dispatch_gemm_deepseek_v3_up_gate_s2304",
+      "chunk_key": [
+        12,
+        2048,
+        7168
+      ],
+      "coarse_key": [
+        3072,
+        2048,
+        7168
+      ],
+      "experts": 256,
+      "gemm_execution_count": 2,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "up_gate",
+      "logical_shape": [
+        3072,
+        2048,
+        7168
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 180388626432,
+      "padding": {
+        "chunk_divisor": 1536,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 18432,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        3072,
+        2048,
+        7168
+      ],
+      "stage": "up_gate",
+      "topk": 8,
+      "valid_flops": 180388626432
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_dispatch_gemm_deepseek_v3_up_gate_s36864",
+      "chunk_key": [
+        192,
+        2048,
+        7168
+      ],
+      "coarse_key": [
+        49152,
+        2048,
+        7168
+      ],
+      "experts": 256,
+      "gemm_execution_count": 2,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "up_gate",
+      "logical_shape": [
+        49152,
+        2048,
+        7168
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 2886218022912,
+      "padding": {
+        "chunk_divisor": 1536,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 294912,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        49152,
+        2048,
+        7168
+      ],
+      "stage": "up_gate",
+      "topk": 8,
+      "valid_flops": 2886218022912
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d6_dispatch_gemm_deepseek_v3_down_s2304",
+      "chunk_key": [
+        12,
+        7168,
+        2048
+      ],
+      "coarse_key": [
+        3072,
+        7168,
+        2048
+      ],
+      "experts": 256,
+      "gemm_execution_count": 1,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "down",
+      "logical_shape": [
+        3072,
+        7168,
+        2048
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 90194313216,
+      "padding": {
+        "chunk_divisor": 1536,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 18432,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        3072,
+        7168,
+        2048
+      ],
+      "stage": "down",
+      "topk": 8,
+      "valid_flops": 90194313216
+    },
+    {
+      "D": 6,
+      "Px": 2,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d6_dispatch_gemm_deepseek_v3_down_s36864",
+      "chunk_key": [
+        192,
+        7168,
+        2048
+      ],
+      "coarse_key": [
+        49152,
+        7168,
+        2048
+      ],
+      "experts": 256,
+      "gemm_execution_count": 1,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "down",
+      "logical_shape": [
+        49152,
+        7168,
+        2048
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 1443109011456,
+      "padding": {
+        "chunk_divisor": 1536,
+        "coarse_divisor": 6,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 294912,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        49152,
+        7168,
+        2048
+      ],
+      "stage": "down",
+      "topk": 8,
+      "valid_flops": 1443109011456
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_gemm_rs_llama_2_7b_o_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        4176,
+        1366
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        2304,
+        4096,
+        12288
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 236573540352,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          6
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        1392,
+        4098
+      ],
+      "ring_key": [
+        2304,
+        464,
+        1366
+      ],
+      "runtime_shape": [
+        2304,
+        4176,
+        12294
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 231928233984
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_gemm_rs_llama_2_7b_o_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        4176,
+        1366
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        36864,
+        4096,
+        12288
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 3785176645632,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          6
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        1392,
+        4098
+      ],
+      "ring_key": [
+        36864,
+        464,
+        1366
+      ],
+      "runtime_shape": [
+        36864,
+        4176,
+        12294
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 3710851743744
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_gemm_rs_llama_2_7b_down_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        4176,
+        1224
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        2304,
+        4096,
+        11008
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 211980976128,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          8
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        1392,
+        3672
+      ],
+      "ring_key": [
+        2304,
+        464,
+        1224
+      ],
+      "runtime_shape": [
+        2304,
+        4176,
+        11016
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 207769042944
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_gemm_rs_llama_2_7b_down_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        4176,
+        1224
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        36864,
+        4096,
+        11008
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 3391695618048,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          8
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        1392,
+        3672
+      ],
+      "ring_key": [
+        36864,
+        464,
+        1224
+      ],
+      "runtime_shape": [
+        36864,
+        4176,
+        11016
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 3324304687104
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_gemm_rs_gpt_3_175b_o_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        12384,
+        4096
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        2304,
+        12288,
+        36864
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 2103661559808,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        4128,
+        12288
+      ],
+      "ring_key": [
+        2304,
+        1376,
+        4096
+      ],
+      "runtime_shape": [
+        2304,
+        12384,
+        36864
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 2087354105856
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_gemm_rs_gpt_3_175b_o_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        12384,
+        4096
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        36864,
+        12288,
+        36864
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 33658584956928,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        4128,
+        12288
+      ],
+      "ring_key": [
+        36864,
+        1376,
+        4096
+      ],
+      "runtime_shape": [
+        36864,
+        12384,
+        36864
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 33397665693696
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_gemm_rs_gpt_3_175b_down_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        12384,
+        5462
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        2304,
+        12288,
+        49152
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 2805224472576,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          6
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        4128,
+        16386
+      ],
+      "ring_key": [
+        2304,
+        1376,
+        5462
+      ],
+      "runtime_shape": [
+        2304,
+        12384,
+        49158
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 2783138807808
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_gemm_rs_gpt_3_175b_down_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        12384,
+        5462
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        36864,
+        12288,
+        49152
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 44883591561216,
+      "padding": {
+        "K_alignment": 9,
+        "M_alignment": 9,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          6
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        4128,
+        16386
+      ],
+      "ring_key": [
+        36864,
+        1376,
+        5462
+      ],
+      "runtime_shape": [
+        36864,
+        12384,
+        49158
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 44530220924928
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_dispatch_gemm_mixtral_8x7b_up_gate_s2304",
+      "chunk_key": [
+        64,
+        14336,
+        4096
+      ],
+      "coarse_key": [
+        512,
+        14336,
+        4096
+      ],
+      "experts": 8,
+      "gemm_execution_count": 2,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "up_gate",
+      "logical_shape": [
+        512,
+        14336,
+        4096
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 120259084288,
+      "padding": {
+        "chunk_divisor": 72,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 4608,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        512,
+        14336,
+        4096
+      ],
+      "stage": "up_gate",
+      "topk": 2,
+      "valid_flops": 120259084288
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_dispatch_gemm_mixtral_8x7b_up_gate_s36864",
+      "chunk_key": [
+        1024,
+        14336,
+        4096
+      ],
+      "coarse_key": [
+        8192,
+        14336,
+        4096
+      ],
+      "experts": 8,
+      "gemm_execution_count": 2,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "up_gate",
+      "logical_shape": [
+        8192,
+        14336,
+        4096
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 1924145348608,
+      "padding": {
+        "chunk_divisor": 72,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 73728,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        8192,
+        14336,
+        4096
+      ],
+      "stage": "up_gate",
+      "topk": 2,
+      "valid_flops": 1924145348608
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_dispatch_gemm_mixtral_8x7b_down_s2304",
+      "chunk_key": [
+        64,
+        4096,
+        14336
+      ],
+      "coarse_key": [
+        512,
+        4096,
+        14336
+      ],
+      "experts": 8,
+      "gemm_execution_count": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "down",
+      "logical_shape": [
+        512,
+        4096,
+        14336
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 60129542144,
+      "padding": {
+        "chunk_divisor": 72,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 4608,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        512,
+        4096,
+        14336
+      ],
+      "stage": "down",
+      "topk": 2,
+      "valid_flops": 60129542144
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_dispatch_gemm_mixtral_8x7b_down_s36864",
+      "chunk_key": [
+        1024,
+        4096,
+        14336
+      ],
+      "coarse_key": [
+        8192,
+        4096,
+        14336
+      ],
+      "experts": 8,
+      "gemm_execution_count": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "down",
+      "logical_shape": [
+        8192,
+        4096,
+        14336
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 962072674304,
+      "padding": {
+        "chunk_divisor": 72,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 73728,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        8192,
+        4096,
+        14336
+      ],
+      "stage": "down",
+      "topk": 2,
+      "valid_flops": 962072674304
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_dispatch_gemm_deepseek_v3_up_gate_s2304",
+      "chunk_key": [
+        8,
+        2048,
+        7168
+      ],
+      "coarse_key": [
+        2048,
+        2048,
+        7168
+      ],
+      "experts": 256,
+      "gemm_execution_count": 2,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "up_gate",
+      "logical_shape": [
+        2048,
+        2048,
+        7168
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 120259084288,
+      "padding": {
+        "chunk_divisor": 2304,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 18432,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        2048,
+        2048,
+        7168
+      ],
+      "stage": "up_gate",
+      "topk": 8,
+      "valid_flops": 120259084288
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_dispatch_gemm_deepseek_v3_up_gate_s36864",
+      "chunk_key": [
+        128,
+        2048,
+        7168
+      ],
+      "coarse_key": [
+        32768,
+        2048,
+        7168
+      ],
+      "experts": 256,
+      "gemm_execution_count": 2,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "up_gate",
+      "logical_shape": [
+        32768,
+        2048,
+        7168
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 1924145348608,
+      "padding": {
+        "chunk_divisor": 2304,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 294912,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        32768,
+        2048,
+        7168
+      ],
+      "stage": "up_gate",
+      "topk": 8,
+      "valid_flops": 1924145348608
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 2304,
+      "case_id": "d9_dispatch_gemm_deepseek_v3_down_s2304",
+      "chunk_key": [
+        8,
+        7168,
+        2048
+      ],
+      "coarse_key": [
+        2048,
+        7168,
+        2048
+      ],
+      "experts": 256,
+      "gemm_execution_count": 1,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "down",
+      "logical_shape": [
+        2048,
+        7168,
+        2048
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 60129542144,
+      "padding": {
+        "chunk_divisor": 2304,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 18432,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        2048,
+        7168,
+        2048
+      ],
+      "stage": "down",
+      "topk": 8,
+      "valid_flops": 60129542144
+    },
+    {
+      "D": 9,
+      "Px": 3,
+      "Py": 3,
+      "S": 36864,
+      "case_id": "d9_dispatch_gemm_deepseek_v3_down_s36864",
+      "chunk_key": [
+        128,
+        7168,
+        2048
+      ],
+      "coarse_key": [
+        32768,
+        7168,
+        2048
+      ],
+      "experts": 256,
+      "gemm_execution_count": 1,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "down",
+      "logical_shape": [
+        32768,
+        7168,
+        2048
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 962072674304,
+      "padding": {
+        "chunk_divisor": 2304,
+        "coarse_divisor": 9,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 294912,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        32768,
+        7168,
+        2048
+      ],
+      "stage": "down",
+      "topk": 8,
+      "valid_flops": 962072674304
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_gemm_rs_llama_2_7b_o_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        4176,
+        342
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        2304,
+        4096,
+        12288
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 236919914496,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          24
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        696,
+        2052
+      ],
+      "ring_key": [
+        2304,
+        116,
+        342
+      ],
+      "runtime_shape": [
+        2304,
+        4176,
+        12312
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 231928233984
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_gemm_rs_llama_2_7b_o_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        4176,
+        342
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        36864,
+        4096,
+        12288
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 3790718631936,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          24
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        696,
+        2052
+      ],
+      "ring_key": [
+        36864,
+        116,
+        342
+      ],
+      "runtime_shape": [
+        36864,
+        4176,
+        12312
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 3710851743744
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_gemm_rs_llama_2_7b_down_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        4176,
+        306
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        2304,
+        4096,
+        11008
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 211980976128,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          8
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        696,
+        1836
+      ],
+      "ring_key": [
+        2304,
+        116,
+        306
+      ],
+      "runtime_shape": [
+        2304,
+        4176,
+        11016
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 207769042944
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_gemm_rs_llama_2_7b_down_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        4176,
+        306
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        36864,
+        4096,
+        11008
+      ],
+      "model": "LLaMA-2-7B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 3391695618048,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          80,
+          8
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        696,
+        1836
+      ],
+      "ring_key": [
+        36864,
+        116,
+        306
+      ],
+      "runtime_shape": [
+        36864,
+        4176,
+        11016
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 3324304687104
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_gemm_rs_gpt_3_175b_o_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        12384,
+        1024
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        2304,
+        12288,
+        36864
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 2103661559808,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        2064,
+        6144
+      ],
+      "ring_key": [
+        2304,
+        344,
+        1024
+      ],
+      "runtime_shape": [
+        2304,
+        12384,
+        36864
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 2087354105856
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_gemm_rs_gpt_3_175b_o_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        12384,
+        1024
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "o_proj",
+      "logical_shape": [
+        36864,
+        12288,
+        36864
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 33658584956928,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          0
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        2064,
+        6144
+      ],
+      "ring_key": [
+        36864,
+        344,
+        1024
+      ],
+      "runtime_shape": [
+        36864,
+        12384,
+        36864
+      ],
+      "stage": "o_proj",
+      "topk": null,
+      "valid_flops": 33397665693696
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_gemm_rs_gpt_3_175b_down_proj_s2304",
+      "chunk_key": null,
+      "coarse_key": [
+        2304,
+        12384,
+        1366
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        2304,
+        12288,
+        49152
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 2806251651072,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          24
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        2304,
+        2064,
+        8196
+      ],
+      "ring_key": [
+        2304,
+        344,
+        1366
+      ],
+      "runtime_shape": [
+        2304,
+        12384,
+        49176
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 2783138807808
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_gemm_rs_gpt_3_175b_down_proj_s36864",
+      "chunk_key": null,
+      "coarse_key": [
+        36864,
+        12384,
+        1366
+      ],
+      "experts": null,
+      "gemm_execution_count": 1,
+      "hidden_size": null,
+      "intermediate_size": null,
+      "layer": "down_proj",
+      "logical_shape": [
+        36864,
+        12288,
+        49152
+      ],
+      "model": "GPT-3-175B",
+      "operator_family": "gemm_rs",
+      "padded_flops": 44900026417152,
+      "padding": {
+        "K_alignment": 36,
+        "M_alignment": 36,
+        "N_alignment": 144,
+        "delta": [
+          0,
+          96,
+          24
+        ],
+        "rule": "exp1_1_gemm_rs_semantic_padding"
+      },
+      "rc_key": [
+        36864,
+        2064,
+        8196
+      ],
+      "ring_key": [
+        36864,
+        344,
+        1366
+      ],
+      "runtime_shape": [
+        36864,
+        12384,
+        49176
+      ],
+      "stage": "down_proj",
+      "topk": null,
+      "valid_flops": 44530220924928
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_dispatch_gemm_mixtral_8x7b_up_gate_s2304",
+      "chunk_key": [
+        16,
+        14336,
+        4096
+      ],
+      "coarse_key": [
+        128,
+        14336,
+        4096
+      ],
+      "experts": 8,
+      "gemm_execution_count": 2,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "up_gate",
+      "logical_shape": [
+        128,
+        14336,
+        4096
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 30064771072,
+      "padding": {
+        "chunk_divisor": 288,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 4608,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        128,
+        14336,
+        4096
+      ],
+      "stage": "up_gate",
+      "topk": 2,
+      "valid_flops": 30064771072
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_dispatch_gemm_mixtral_8x7b_up_gate_s36864",
+      "chunk_key": [
+        256,
+        14336,
+        4096
+      ],
+      "coarse_key": [
+        2048,
+        14336,
+        4096
+      ],
+      "experts": 8,
+      "gemm_execution_count": 2,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "up_gate",
+      "logical_shape": [
+        2048,
+        14336,
+        4096
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 481036337152,
+      "padding": {
+        "chunk_divisor": 288,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 73728,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        2048,
+        14336,
+        4096
+      ],
+      "stage": "up_gate",
+      "topk": 2,
+      "valid_flops": 481036337152
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_dispatch_gemm_mixtral_8x7b_down_s2304",
+      "chunk_key": [
+        16,
+        4096,
+        14336
+      ],
+      "coarse_key": [
+        128,
+        4096,
+        14336
+      ],
+      "experts": 8,
+      "gemm_execution_count": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "down",
+      "logical_shape": [
+        128,
+        4096,
+        14336
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 15032385536,
+      "padding": {
+        "chunk_divisor": 288,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 4608,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        128,
+        4096,
+        14336
+      ],
+      "stage": "down",
+      "topk": 2,
+      "valid_flops": 15032385536
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_dispatch_gemm_mixtral_8x7b_down_s36864",
+      "chunk_key": [
+        256,
+        4096,
+        14336
+      ],
+      "coarse_key": [
+        2048,
+        4096,
+        14336
+      ],
+      "experts": 8,
+      "gemm_execution_count": 1,
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "layer": "down",
+      "logical_shape": [
+        2048,
+        4096,
+        14336
+      ],
+      "model": "Mixtral-8x7B",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 240518168576,
+      "padding": {
+        "chunk_divisor": 288,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 73728,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        2048,
+        4096,
+        14336
+      ],
+      "stage": "down",
+      "topk": 2,
+      "valid_flops": 240518168576
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_dispatch_gemm_deepseek_v3_up_gate_s2304",
+      "chunk_key": [
+        2,
+        2048,
+        7168
+      ],
+      "coarse_key": [
+        512,
+        2048,
+        7168
+      ],
+      "experts": 256,
+      "gemm_execution_count": 2,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "up_gate",
+      "logical_shape": [
+        512,
+        2048,
+        7168
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 30064771072,
+      "padding": {
+        "chunk_divisor": 9216,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 18432,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        512,
+        2048,
+        7168
+      ],
+      "stage": "up_gate",
+      "topk": 8,
+      "valid_flops": 30064771072
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_dispatch_gemm_deepseek_v3_up_gate_s36864",
+      "chunk_key": [
+        32,
+        2048,
+        7168
+      ],
+      "coarse_key": [
+        8192,
+        2048,
+        7168
+      ],
+      "experts": 256,
+      "gemm_execution_count": 2,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "up_gate",
+      "logical_shape": [
+        8192,
+        2048,
+        7168
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 481036337152,
+      "padding": {
+        "chunk_divisor": 9216,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 294912,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        8192,
+        2048,
+        7168
+      ],
+      "stage": "up_gate",
+      "topk": 8,
+      "valid_flops": 481036337152
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 2304,
+      "case_id": "d36_dispatch_gemm_deepseek_v3_down_s2304",
+      "chunk_key": [
+        2,
+        7168,
+        2048
+      ],
+      "coarse_key": [
+        512,
+        7168,
+        2048
+      ],
+      "experts": 256,
+      "gemm_execution_count": 1,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "down",
+      "logical_shape": [
+        512,
+        7168,
+        2048
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 15032385536,
+      "padding": {
+        "chunk_divisor": 9216,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 18432,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        512,
+        7168,
+        2048
+      ],
+      "stage": "down",
+      "topk": 8,
+      "valid_flops": 15032385536
+    },
+    {
+      "D": 36,
+      "Px": 6,
+      "Py": 6,
+      "S": 36864,
+      "case_id": "d36_dispatch_gemm_deepseek_v3_down_s36864",
+      "chunk_key": [
+        32,
+        7168,
+        2048
+      ],
+      "coarse_key": [
+        8192,
+        7168,
+        2048
+      ],
+      "experts": 256,
+      "gemm_execution_count": 1,
+      "hidden_size": 7168,
+      "intermediate_size": 2048,
+      "layer": "down",
+      "logical_shape": [
+        8192,
+        7168,
+        2048
+      ],
+      "model": "DeepSeek-V3",
+      "operator_family": "dispatch_gemm",
+      "padded_flops": 240518168576,
+      "padding": {
+        "chunk_divisor": 9216,
+        "coarse_divisor": 36,
+        "delta": [
+          0,
+          0,
+          0
+        ],
+        "routed_tokens": 294912,
+        "rule": "exact_balanced_routed_tokens"
+      },
+      "rc_key": null,
+      "ring_key": null,
+      "runtime_shape": [
+        8192,
+        7168,
+        2048
+      ],
+      "stage": "down",
+      "topk": 8,
+      "valid_flops": 240518168576
+    }
+  ],
+  "schema_version": 1
+}

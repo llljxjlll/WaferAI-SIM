@@ -1,0 +1,79 @@
+{
+  "schema_version": "exp2_1.calibration_source_evidence/v1",
+  "captured_at_utc": "2026-08-27",
+  "source_status": "current_build_structural_smokes_complete_target_unit_closure_failed",
+  "current_tools": {
+    "npusim": {
+      "path": "build-release-final/npusim",
+      "sha256": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29"
+    },
+    "finalizer": {
+      "path": "build-release-final/npusim_program_finalizer",
+      "sha256": "d39bb8c69349f8492e77862e28324eb9621fb472982dc5ba87c3c1715f971ed9"
+    },
+    "resolver": {
+      "path": "build-release-final/npusim_program_io_selftest",
+      "sha256": "36bdc79c3d13338285ccf70e6949fc46f2f71369123e2afb1620c925b311c980"
+    }
+  },
+  "fresh_smokes": [
+    {
+      "family": "stage3_prefill_decode",
+      "evidence_path": "calibration/stage3_current_build_smoke_evidence.json",
+      "status": "dual_execution_observed_release_gate_failed_stale_digest",
+      "publish_as": "structural_prior_only"
+    },
+    {
+      "family": "stage4_pds",
+      "evidence_path": "calibration/stage4_pds_current_build_evidence.json",
+      "status": "pass",
+      "executions": 2,
+      "makespan_cycles": [6187, 6187],
+      "publish_as": "structural_pd_lifecycle_prior_only"
+    }
+  ],
+  "retained_current_build_smokes": [
+    {
+      "family": "flexible_moe_inference_1x2",
+      "source_path": "exps/exp1/exp1_2/calibration/flexible_moe_inference_1x2_case_evidence.json",
+      "source_sha256": "0e0f413bc79307aadc0a617d952711841aef8b04f96abd3fa80ed39908015f65",
+      "executions": 2,
+      "makespan_cycles": [2727, 2727],
+      "publish_as": "structural_moe_lifecycle_prior_only"
+    },
+    {
+      "family": "flexible_moe_train_1x2",
+      "source_path": "exps/exp1/exp1_2/calibration/flexible_moe_train_1x2_case_evidence.json",
+      "source_sha256": "58c0005da1b35676a98f20d8f05b83ebbac8a7a54ea0b13e015acee5271a7f75",
+      "executions": 2,
+      "makespan_cycles": [3566, 3566],
+      "publish_as": "structural_moe_train_lifecycle_prior_only"
+    },
+    {
+      "family": "isolated_group_gemm_1x8x32",
+      "source_path": "exps/exp1/exp1_2/calibration/group_gemm_1x8x32_smoke_summary.json",
+      "source_sha256": "c30e7b61556903c7f6b654c280fd49f8614794fa52a2dd675f185bf46ecaaf27",
+      "cycles": 6,
+      "makespan_cycles": 70,
+      "publish_as": "primitive_execution_smoke_only"
+    }
+  ],
+  "target_applicability": {
+    "hardware_unit_closure_path": "calibration/hardware_unit_closure.json",
+    "simulator_unit_closure": false,
+    "direct_target_cycle_anchors": 0,
+    "target_absolute_cycles_publishable": false,
+    "allowed_use": [
+      "action/lifecycle structure",
+      "ProgramIO and drain contracts",
+      "repeatability expectations",
+      "D2D/state-transfer byte conservation"
+    ],
+    "forbidden_use": [
+      "scaling tiny makespans into target E2E cycles",
+      "claiming 1 TB/s D2D closure",
+      "claiming target GEMM/vector/HBM saturation calibration",
+      "labelling analytical target results cycle_accurate_direct"
+    ]
+  }
+}

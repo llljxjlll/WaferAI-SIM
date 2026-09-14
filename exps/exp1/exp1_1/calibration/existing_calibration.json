@@ -1,0 +1,284 @@
+{
+  "congestion_anchors": {
+    "mixed_d2d_local_noc_v5": {
+      "blocked_output_events": 11,
+      "disjoint_flow_completion_cycle": 319,
+      "measured_penalty_cycles": 28,
+      "measured_to_static_factor": 0.875,
+      "shared_flow_completion_cycle": 347,
+      "shared_over_disjoint_flow_factor": 1.0877742946708464,
+      "source": "llm/test/d2d_link/mixed_noc_congestion_v5/mixed_noc_congestion_v5_report.md",
+      "static_bottleneck_penalty_cycles": 32
+    },
+    "single_die_4x4_distributed_gemm": {
+      "behavioral_congestion_ns": 14829,
+      "behavioral_no_congestion_ns": 14777,
+      "cycle_congestion_factor": 1.6560664968494436,
+      "cycle_congestion_ns": 61763,
+      "cycle_no_congestion_ns": 37295,
+      "isolated_cycle_penalty_ns": 24416,
+      "source": "llm/test/noc_congestion/noc_congestion_summary.txt"
+    }
+  },
+  "end_to_end_cycle_anchors": {
+    "compute_bound_identity": {
+      "action_counts": {
+        "barrier": 4,
+        "comp": 32,
+        "dma_in": 18,
+        "dma_out": 4,
+        "local_copy": 4,
+        "recv": 8,
+        "reduce": 4,
+        "send": 8,
+        "wait": 4
+      },
+      "analytic_components_cycles": {
+        "compute_cycles": 14378,
+        "compute_memory_overlap_cycles": 12524,
+        "fixed_pipeline_cycles": 326,
+        "memory_cycles": 12524,
+        "predicted_makespan_cycles": 14760,
+        "reduction_cycles": 0,
+        "sync_cycles": 56,
+        "transport_cycles": 0
+      },
+      "measured_makespan_cycles": 14760,
+      "predicted_makespan_cycles": 14760,
+      "relative_error": 0.0,
+      "repeat_count": 3,
+      "repeat_signature_stable": true,
+      "source": "notes/frontend/intra_die/reports/performance/model_v3_compute/off/run_report.json",
+      "source_sha256": "f17c14b97cd03c55ff70c8d88b7225b532a83886c30e4d93d266374296a7d2e1"
+    },
+    "split_k_16_linear_barrier": {
+      "action_counts": {
+        "barrier": 4,
+        "comp": 62,
+        "dma_in": 18,
+        "dma_out": 4,
+        "local_copy": 70,
+        "local_recv": 90,
+        "local_send": 90,
+        "local_wait": 90,
+        "recv": 8,
+        "reduce": 34,
+        "send": 8,
+        "wait": 4
+      },
+      "analytic_components_cycles": {
+        "compute_cycles": 2397,
+        "compute_memory_overlap_cycles": 2397,
+        "fixed_pipeline_cycles": 326,
+        "memory_cycles": 12524,
+        "predicted_makespan_cycles": 25204,
+        "reduction_cycles": 640,
+        "sync_cycles": 768,
+        "transport_cycles": 10946
+      },
+      "measured_makespan_cycles": 21432,
+      "predicted_makespan_cycles": 25204,
+      "relative_error": 0.17599850690556176,
+      "repeat_count": 3,
+      "repeat_signature_stable": true,
+      "source": "notes/frontend/intra_die/reports/performance/model_v5_tree_direct_16core/naive/run_report.json",
+      "source_sha256": "2941aa12ed7fd102e03cbfe0f247366ab8abb882639597cfdc8d2b29f0594fc9"
+    },
+    "split_k_16_tree_direct_dma": {
+      "action_counts": {
+        "barrier": 4,
+        "comp": 62,
+        "dma_in": 48,
+        "dma_out": 4,
+        "local_copy": 68,
+        "local_recv": 60,
+        "local_send": 60,
+        "local_wait": 60,
+        "recv": 8,
+        "reduce": 34,
+        "send": 8,
+        "wait": 4
+      },
+      "analytic_components_cycles": {
+        "compute_cycles": 2397,
+        "compute_memory_overlap_cycles": 2397,
+        "fixed_pipeline_cycles": 326,
+        "memory_cycles": 12524,
+        "predicted_makespan_cycles": 14283,
+        "reduction_cycles": 80,
+        "sync_cycles": 40,
+        "transport_cycles": 1313
+      },
+      "measured_makespan_cycles": 14273,
+      "predicted_makespan_cycles": 14283,
+      "relative_error": 0.0007006235549639179,
+      "repeat_count": 3,
+      "repeat_signature_stable": true,
+      "source": "notes/frontend/intra_die/reports/performance/model_v5_tree_direct_16core/auto/run_report.json",
+      "source_sha256": "ad6fca5193cce66cac09de9bcc502f3831bd266ed869fd204d6783c3c6c44fdc"
+    },
+    "sync_bound_identity": {
+      "action_counts": {
+        "barrier": 4,
+        "comp": 32,
+        "dma_in": 18,
+        "dma_out": 4,
+        "local_copy": 4,
+        "recv": 8,
+        "reduce": 4,
+        "send": 8,
+        "wait": 4
+      },
+      "analytic_components_cycles": {
+        "compute_cycles": 1783,
+        "compute_memory_overlap_cycles": 1783,
+        "fixed_pipeline_cycles": 326,
+        "memory_cycles": 8428,
+        "predicted_makespan_cycles": 8810,
+        "reduction_cycles": 0,
+        "sync_cycles": 56,
+        "transport_cycles": 0
+      },
+      "measured_makespan_cycles": 8597,
+      "predicted_makespan_cycles": 8810,
+      "relative_error": 0.02477608468070257,
+      "repeat_count": 3,
+      "repeat_signature_stable": true,
+      "source": "notes/frontend/intra_die/reports/performance/model_v3_sync/off/run_report.json",
+      "source_sha256": "4316652c4c28e1390272aee430542e22f7763d5e83b9cd704b997746ef3e91ed"
+    },
+    "tree_vs_linear_measured_speedup": 1.501576402998669
+  },
+  "experiment_input_binding": {
+    "hardware_sha256": "11803f3248d0f4ad2ced98615dc9bc1a34ea88b3a65ea083f0d1c617b72324b3",
+    "reference_digest_match": false,
+    "reference_hardware_sha256": "0696e5805d9b6a94b2652db341a6e3b5ccef387212a55b8e537a0e71a3a7c322",
+    "reference_simulation_sha256": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c",
+    "simulation_sha256": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c",
+    "status": "prior_only_requires_current_config_smoke_run"
+  },
+  "frozen_timing_model_prior": {
+    "compute_setup_cycles": 64,
+    "effective_gemm_ops_per_cycle": 20,
+    "fixed_pipeline_cycles": 326,
+    "hbm_load_bytes_per_cycle": 4,
+    "hbm_load_setup_cycles": 220,
+    "local_reduce_bytes_per_cycle": 128,
+    "local_reduce_setup_cycles": 512,
+    "local_transport_bytes_per_cycle": 256,
+    "local_transport_setup_cycles": 232,
+    "source": "llm/frontend/wafer_frontend/schema/intra_die_timing_model.py",
+    "sync_issue_cycles": 8,
+    "units": "cycles or bytes/cycle as named"
+  },
+  "limitations": [
+    "The strongest v5 calibration report is bound to different hardware/simulation digests than exp1 configs.",
+    "Most run_report files expose makespan and counters, not per-record begin/end timestamps.",
+    "The operation-level SRAM report uses a handcrafted two-core workload and reports ns, not the production manifest path.",
+    "No checked-in isolated current-config HBM sweep was found; HBM constants remain priors until a small byte sweep is run."
+  ],
+  "method": "checked_in_evidence_only_no_compile_no_simulator",
+  "operation_level_anchor": {
+    "collective_chunk_bytes": 512,
+    "communication_breakdown": {
+      "COMPLETION_ACK": {
+        "count": 1,
+        "mean": 246.0,
+        "p95": 246.0,
+        "total": 246.0
+      },
+      "COMPLETION_DATA": {
+        "count": 1,
+        "mean": 16162.0,
+        "p95": 16162.0,
+        "total": 16162.0
+      },
+      "COMPLETION_REQUEST": {
+        "count": 1,
+        "mean": 2.0,
+        "p95": 2.0,
+        "total": 2.0
+      },
+      "OWNER_RECV": {
+        "count": 3,
+        "mean": 5607.333333333333,
+        "p95": 16190.0,
+        "total": 16822.0
+      },
+      "RS_ACK": {
+        "count": 2,
+        "mean": 342.0,
+        "p95": 472.0,
+        "total": 684.0
+      },
+      "RS_DATA": {
+        "count": 2,
+        "mean": 290.0,
+        "p95": 324.0,
+        "total": 580.0
+      },
+      "RS_REQUEST": {
+        "count": 2,
+        "mean": 2.0,
+        "p95": 2.0,
+        "total": 4.0
+      }
+    },
+    "operation_breakdown": {
+      "GEMM": {
+        "count": 4,
+        "mean": 1830.0,
+        "p95": 1906.0,
+        "total": 7320.0
+      },
+      "HBM load/prefetch": {
+        "count": 2,
+        "mean": 4080.0,
+        "p95": 4305.0,
+        "total": 8160.0
+      },
+      "HBM store": {
+        "count": 2,
+        "mean": 3844.0,
+        "p95": 3973.0,
+        "total": 7688.0
+      },
+      "owner reduce": {
+        "count": 2,
+        "mean": 208.0,
+        "p95": 208.0,
+        "total": 416.0
+      },
+      "schedule windows": {
+        "count": 4,
+        "mean": 4416.0,
+        "p95": 16384.0,
+        "total": 17664.0
+      },
+      "swizzle+label": {
+        "count": 4,
+        "mean": 36.0,
+        "p95": 36.0,
+        "total": 144.0
+      },
+      "weight round-trip": {
+        "count": 2,
+        "mean": 4887.0,
+        "p95": 4939.0,
+        "total": 9774.0
+      }
+    },
+    "source": "notes/extensions/SRAM/exp/results/summary.json",
+    "source_sha256": "80bcdea3d04f67c8d64074a84893aa28345f4b229ab05bf211a5b3cb868c683f",
+    "tile_bytes": 4096,
+    "time_unit": "ns",
+    "warning": "legacy two-core handcrafted workload; useful for setup-scale priors, not direct current-config calibration"
+  },
+  "recommended_fast_use": [
+    "Use frozen timing constants to rank candidates without simulator calls.",
+    "Apply congestion factors only to matching topology/route-sharing classes.",
+    "Run one tiny current-config compute+collective smoke case and one repeat before accepting absolute cycles.",
+    "Do not fit separate GEMM/HBM/reduce constants from whole-program makespan alone because overlap makes the system underdetermined."
+  ],
+  "schema_version": "exp1.existing_cycle_calibration/v1"
+}

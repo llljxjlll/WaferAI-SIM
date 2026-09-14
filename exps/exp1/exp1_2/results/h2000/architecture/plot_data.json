@@ -1,0 +1,330 @@
+[
+  {
+    "operator": "DISPATCH_GEMM",
+    "memory_mode": "architecture",
+    "tensor_profile": "H2000",
+    "estimate_source": "analytical_physical_resource_replay",
+    "max_tflops": 131.06062102763002,
+    "max_attainment": 0.9999131853304294,
+    "points": [
+      {
+        "case_id": "h2000__dispatch_gemm__compact__mixtral_8x7b__s2304",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 0.0,
+        "naive_tflops": 84.1515843010391,
+        "optimized_tflops": 117.93961823380388,
+        "naive_normalized": 0.6420813791451391,
+        "optimized_normalized": 0.8998860016765831,
+        "theory_speedup": 1.4018131801060267,
+        "actual_speedup": 1.401513937181425,
+        "attainment_rate": 0.9997865315229957,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__compact__mixtral_8x7b__s36864",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 0.9,
+        "naive_tflops": 93.85947079935693,
+        "optimized_tflops": 131.05371782816562,
+        "naive_normalized": 0.7161531058178765,
+        "optimized_normalized": 0.9999473281950728,
+        "theory_speedup": 1.396470690530444,
+        "actual_speedup": 1.3962759081427032,
+        "attainment_rate": 0.9998605180981873,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__compact__deepseek_v3__s2304",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 2.1,
+        "naive_tflops": 65.96503246392432,
+        "optimized_tflops": 73.71835338287023,
+        "naive_normalized": 0.5033169532289768,
+        "optimized_normalized": 0.5624752332535418,
+        "theory_speedup": 1.1176830700465612,
+        "actual_speedup": 1.1175368317022527,
+        "attainment_rate": 0.9998691593813778,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__compact__deepseek_v3__s36864",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 3.0,
+        "naive_tflops": 93.30796501816944,
+        "optimized_tflops": 131.06062102763002,
+        "naive_normalized": 0.7119450853090219,
+        "optimized_normalized": 1.0,
+        "theory_speedup": 1.4047246660505022,
+        "actual_speedup": 1.4046027153427814,
+        "attainment_rate": 0.9999131853304294,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__noncompact__mixtral_8x7b__s2304",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 4.4,
+        "naive_tflops": 84.15153195860579,
+        "optimized_tflops": 117.93951542065949,
+        "naive_normalized": 0.6420809797693929,
+        "optimized_normalized": 0.899885217206438,
+        "theory_speedup": 1.4018140520368303,
+        "actual_speedup": 1.401513587164094,
+        "attainment_rate": 0.9997856599651718,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__noncompact__mixtral_8x7b__s36864",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 5.300000000000001,
+        "naive_tflops": 93.85946672962515,
+        "optimized_tflops": 131.053709893872,
+        "naive_normalized": 0.7161530747655913,
+        "optimized_normalized": 0.9999472676559608,
+        "theory_speedup": 1.3964707510811942,
+        "actual_speedup": 1.396275884151248,
+        "attainment_rate": 0.9998604575643311,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__noncompact__deepseek_v3__s2304",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 6.500000000000001,
+        "naive_tflops": 65.96500030089591,
+        "optimized_tflops": 73.71831321483397,
+        "naive_normalized": 0.503316707823239,
+        "optimized_normalized": 0.5624749267691382,
+        "theory_speedup": 1.1176836150033134,
+        "actual_speedup": 1.1175367676581782,
+        "attainment_rate": 0.9998686145675181,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__dispatch_gemm__noncompact__deepseek_v3__s36864",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 7.400000000000001,
+        "naive_tflops": 93.30796099612357,
+        "optimized_tflops": 131.06061309250052,
+        "naive_normalized": 0.7119450546205829,
+        "optimized_normalized": 0.9999999394545102,
+        "theory_speedup": 1.4047247266012526,
+        "actual_speedup": 1.4046026908459117,
+        "attainment_rate": 0.9999131247901957,
+        "status": "estimated_via_operator_specific_dag_replay"
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 0.0,
+        "end_x": 0.9
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 2.1,
+        "end_x": 3.0
+      },
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 4.4,
+        "end_x": 5.300000000000001
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 6.500000000000001,
+        "end_x": 7.4
+      }
+    ],
+    "placement_spans": [
+      {
+        "label": "Compact / adjacent",
+        "start_x": 0.0,
+        "end_x": 3.0
+      },
+      {
+        "label": "Non-compact / corners",
+        "start_x": 4.4,
+        "end_x": 7.4
+      }
+    ]
+  },
+  {
+    "operator": "GEMM_COMBINE",
+    "memory_mode": "architecture",
+    "tensor_profile": "H2000",
+    "estimate_source": "analytical_physical_resource_replay",
+    "max_tflops": 104.85690286177775,
+    "max_attainment": 0.9999933515718246,
+    "points": [
+      {
+        "case_id": "h2000__gemm_combine__compact__mixtral_8x7b__s2304",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 0.0,
+        "naive_tflops": 58.169295069454456,
+        "optimized_tflops": 94.36366150882918,
+        "naive_normalized": 0.5547493153229326,
+        "optimized_normalized": 0.8999279869368185,
+        "theory_speedup": 1.622365199497768,
+        "actual_speedup": 1.6222246014182993,
+        "attainment_rate": 0.9999133375891494,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__compact__mixtral_8x7b__s36864",
+        "placement": "compact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 0.9,
+        "naive_tflops": 64.79882438109804,
+        "optimized_tflops": 104.85690286177775,
+        "naive_normalized": 0.6179738540105059,
+        "optimized_normalized": 1.0,
+        "theory_speedup": 1.6182021973625063,
+        "actual_speedup": 1.6181914388614238,
+        "attainment_rate": 0.9999933515718246,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__compact__deepseek_v3__s2304",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 2.1,
+        "naive_tflops": 50.099175153389794,
+        "optimized_tflops": 58.977707516208454,
+        "naive_normalized": 0.47778614269611286,
+        "optimized_normalized": 0.5624589884554648,
+        "theory_speedup": 1.1773127964564731,
+        "actual_speedup": 1.1772191325632617,
+        "attainment_rate": 0.9999204426440507,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__compact__deepseek_v3__s36864",
+        "placement": "compact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 3.0,
+        "naive_tflops": 64.02979150164786,
+        "optimized_tflops": 104.85597970757735,
+        "naive_normalized": 0.6106397361941146,
+        "optimized_normalized": 0.9999911960569575,
+        "theory_speedup": 1.637637692406064,
+        "actual_speedup": 1.6376123871163752,
+        "attainment_rate": 0.9999845476873144,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__noncompact__mixtral_8x7b__s2304",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 2304,
+        "x": 4.4,
+        "naive_tflops": 58.169245049094954,
+        "optimized_tflops": 94.36352987468842,
+        "naive_normalized": 0.5547488382884395,
+        "optimized_normalized": 0.8999267315674803,
+        "theory_speedup": 1.6223665945870536,
+        "actual_speedup": 1.6222237334358633,
+        "attainment_rate": 0.9999119427436025,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__noncompact__mixtral_8x7b__s36864",
+        "placement": "noncompact",
+        "model": "Mixtral-8x7B",
+        "seq_len": 36864,
+        "x": 5.300000000000001,
+        "naive_tflops": 64.7988205016153,
+        "optimized_tflops": 104.85689270318368,
+        "naive_normalized": 0.6179738170126293,
+        "optimized_normalized": 0.9999999031194533,
+        "theory_speedup": 1.6182022942437067,
+        "actual_speedup": 1.6181913789706992,
+        "attainment_rate": 0.9999932546919218,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__noncompact__deepseek_v3__s2304",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 2304,
+        "x": 6.500000000000001,
+        "naive_tflops": 50.099138049417235,
+        "optimized_tflops": 58.97765609586456,
+        "naive_normalized": 0.4777857888427037,
+        "optimized_normalized": 0.5624584980695915,
+        "theory_speedup": 1.1773136683872767,
+        "actual_speedup": 1.1772189780528692,
+        "attainment_rate": 0.9999195708527387,
+        "status": "estimated_via_operator_specific_dag_replay"
+      },
+      {
+        "case_id": "h2000__gemm_combine__noncompact__deepseek_v3__s36864",
+        "placement": "noncompact",
+        "model": "DeepSeek-V3",
+        "seq_len": 36864,
+        "x": 7.400000000000001,
+        "naive_tflops": 64.02978771370212,
+        "optimized_tflops": 104.85596954916211,
+        "naive_normalized": 0.6106397000692088,
+        "optimized_normalized": 0.9999910991781163,
+        "theory_speedup": 1.6376377892872644,
+        "actual_speedup": 1.6376123253446822,
+        "attainment_rate": 0.9999844508091174,
+        "status": "estimated_via_operator_specific_dag_replay"
+      }
+    ],
+    "model_spans": [
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 0.0,
+        "end_x": 0.9
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 2.1,
+        "end_x": 3.0
+      },
+      {
+        "label": "Mixtral-8x7B",
+        "start_x": 4.4,
+        "end_x": 5.300000000000001
+      },
+      {
+        "label": "DeepSeek-V3",
+        "start_x": 6.500000000000001,
+        "end_x": 7.4
+      }
+    ],
+    "placement_spans": [
+      {
+        "label": "Compact / adjacent",
+        "start_x": 0.0,
+        "end_x": 3.0
+      },
+      {
+        "label": "Non-compact / corners",
+        "start_x": 4.4,
+        "end_x": 7.4
+      }
+    ]
+  }
+]

@@ -1,0 +1,1520 @@
+{
+  "completed_run_count": 0,
+  "design_digest": "d994ab438105b0914a0b231f93899f18fde3bb3e6647f3ac6f1e94fc747d407a",
+  "planned_run_count": 168,
+  "runs": [
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-isolated_gemm-r1",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-isolated_gemm-r2",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-sram_read_write-r1",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-sram_read_write-r2",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-single_channel_dte-r1",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-single_channel_dte-r2",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-hbm_read_write-r1",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-hbm_read_write-r2",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-004b4ae3a9125d83-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-004b4ae3a9125d83",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-isolated_gemm-r1",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-isolated_gemm-r2",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-sram_read_write-r1",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-sram_read_write-r2",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-single_channel_dte-r1",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-single_channel_dte-r2",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-hbm_read_write-r1",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-hbm_read_write-r2",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-e7cb7f11cd96b711-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-e7cb7f11cd96b711",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-isolated_gemm-r1",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-isolated_gemm-r2",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-sram_read_write-r1",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-sram_read_write-r2",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-single_channel_dte-r1",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-single_channel_dte-r2",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-hbm_read_write-r1",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-hbm_read_write-r2",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-8590f94d337915ca-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-8590f94d337915ca",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-isolated_gemm-r1",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-isolated_gemm-r2",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-sram_read_write-r1",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-sram_read_write-r2",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-single_channel_dte-r1",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-single_channel_dte-r2",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-hbm_read_write-r1",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-hbm_read_write-r2",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-9f2307e76a329ec4-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-9f2307e76a329ec4",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-isolated_gemm-r1",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-isolated_gemm-r2",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-sram_read_write-r1",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-sram_read_write-r2",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-single_channel_dte-r1",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-single_channel_dte-r2",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-hbm_read_write-r1",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-hbm_read_write-r2",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-149cda04c8ce22e1-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-149cda04c8ce22e1",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-isolated_gemm-r1",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-isolated_gemm-r2",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-sram_read_write-r1",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-sram_read_write-r2",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-single_channel_dte-r1",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-single_channel_dte-r2",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-hbm_read_write-r1",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-hbm_read_write-r2",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-5d3010f106f13a58-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-5d3010f106f13a58",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-isolated_gemm-r1",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-isolated_gemm-r2",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-sram_read_write-r1",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-sram_read_write-r2",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-single_channel_dte-r1",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-single_channel_dte-r2",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-hbm_read_write-r1",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-hbm_read_write-r2",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-bde6d5ca5806faf7-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-bde6d5ca5806faf7",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-isolated_gemm-r1",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-isolated_gemm-r2",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "isolated_gemm"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-sram_read_write-r1",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-sram_read_write-r2",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "sram_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-single_channel_dte-r1",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-single_channel_dte-r2",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "single_channel_dte"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-d2d_1_2_multihop-r1",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-d2d_1_2_multihop-r2",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "d2d_1_2_multihop"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-hbm_read_write-r1",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-hbm_read_write-r2",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "hbm_read_write"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-collective_broadcast_reduce-r1",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "fit-cand-4f5b2e0851b2232a-collective_broadcast_reduce-r2",
+      "candidate_id": "cand-4f5b2e0851b2232a",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "motif",
+      "split": "fit",
+      "workload": "collective_broadcast_reduce"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_train_short-naive-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_train_short-naive-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_train_short-sw_opt-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_train_short-sw_opt-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_prefill_long-naive-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_prefill_long-naive-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_prefill_long-sw_opt-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_prefill_long-sw_opt-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_decode_B512-naive-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_decode_B512-naive-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_decode_B512-sw_opt-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-dense_decode_B512-sw_opt-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-gqa_decode_B64-naive-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-gqa_decode_B64-naive-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-gqa_decode_B64-sw_opt-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-gqa_decode_B64-sw_opt-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_train_long-naive-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_train_long-naive-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_train_long-sw_opt-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_train_long-sw_opt-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_decode_B512-naive-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_decode_B512-naive-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_decode_B512-sw_opt-r1",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-924cf60f1fc166d3-moe_decode_B512-sw_opt-r2",
+      "candidate_id": "cand-924cf60f1fc166d3",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_train_short-naive-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_train_short-naive-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_train_short-sw_opt-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_train_short-sw_opt-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_prefill_long-naive-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_prefill_long-naive-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_prefill_long-sw_opt-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_prefill_long-sw_opt-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_decode_B512-naive-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_decode_B512-naive-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_decode_B512-sw_opt-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-dense_decode_B512-sw_opt-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-gqa_decode_B64-naive-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-gqa_decode_B64-naive-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-gqa_decode_B64-sw_opt-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-gqa_decode_B64-sw_opt-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_train_long-naive-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_train_long-naive-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_train_long-sw_opt-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_train_long-sw_opt-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_decode_B512-naive-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_decode_B512-naive-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_decode_B512-sw_opt-r1",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-3a3f11ee8c73109b-moe_decode_B512-sw_opt-r2",
+      "candidate_id": "cand-3a3f11ee8c73109b",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_train_short-naive-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_train_short-naive-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_train_short-sw_opt-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_train_short-sw_opt-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_train_short"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_prefill_long-naive-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_prefill_long-naive-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_prefill_long-sw_opt-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_prefill_long-sw_opt-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_prefill_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_decode_B512-naive-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_decode_B512-naive-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_decode_B512-sw_opt-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-dense_decode_B512-sw_opt-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "dense_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-gqa_decode_B64-naive-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-gqa_decode_B64-naive-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-gqa_decode_B64-sw_opt-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-gqa_decode_B64-sw_opt-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "gqa_decode_B64"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_train_long-naive-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_train_long-naive-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_train_long-sw_opt-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_train_long-sw_opt-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_train_long"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_decode_B512-naive-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_decode_B512-naive-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "naive",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_decode_B512-sw_opt-r1",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 1,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    },
+    {
+      "anchor_id": "holdout-cand-4f18417f2d14dc73-moe_decode_B512-sw_opt-r2",
+      "candidate_id": "cand-4f18417f2d14dc73",
+      "execution_status": "planned_not_executed",
+      "repeat": 2,
+      "software_state": "sw_opt",
+      "split": "holdout",
+      "workload": "moe_decode_B512"
+    }
+  ],
+  "schema_version": "exp4.anchor_design.v1"
+}

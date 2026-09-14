@@ -1,0 +1,66 @@
+{
+  "schema_version": "exp2.model_manifest.v1",
+  "dtype": "FP16",
+  "experiment_dtype_bytes": 2,
+  "model_id": "deepseek_v3",
+  "display_name": "DeepSeek-V3",
+  "num_layers": 61,
+  "vocab_size": 129280,
+  "hidden_size": 7168,
+  "intermediate_size": 2048,
+  "dense_intermediate_size": 18432,
+  "moe_intermediate_size": 2048,
+  "num_attention_heads": 128,
+  "num_kv_heads": 128,
+  "head_dim": null,
+  "attention_type": "MLA",
+  "mla_dimensions": {
+    "q_lora_rank": 1536,
+    "kv_lora_rank": 512,
+    "qk_nope_head_dim": 128,
+    "qk_rope_head_dim": 64,
+    "v_head_dim": 128
+  },
+  "q_lora_rank": 1536,
+  "kv_lora_rank": 512,
+  "qk_rope_head_dim": 64,
+  "mla_cache_width": 576,
+  "mlp_type": "deepseek_moe_swiglu",
+  "norm_residual_rope": {
+    "norm": "RMSNorm pre-norm",
+    "residual": "standard residual",
+    "position": "decoupled RoPE with YaRN scaling"
+  },
+  "moe_layer_frequency": 1,
+  "dense_layer_prefix": 3,
+  "routed_expert_count": 256,
+  "shared_expert_count": 1,
+  "top_k": 8,
+  "parameter_count": 671026404352,
+  "published_parameter_count": 671000000000,
+  "parameter_count_method": "architecture_formula_for_61_layer_main_model_excluding_MTP",
+  "parameter_breakdown": {
+    "embedding_and_lm_head": 1853358080,
+    "attention": 11413547008,
+    "dense_mlp": 1189085184,
+    "routed_experts": 653908770816,
+    "shared_experts": 2554331136,
+    "router": 106430464,
+    "norms": 881664
+  },
+  "source_checkpoint_dtype": "mixed FP8/BF16/F32 upstream; FP16 target experiment",
+  "sources": [
+    {
+      "local_snapshot": "deepseek_v3.source.json",
+      "snapshot_digest": "4caf0e3f587185e16e1ab6ca3e3c7f609dd152f9d00ad7f5976c198a9e49cef4",
+      "digest_scope": "canonical local normalized snapshot; not upstream remote bytes"
+    }
+  ],
+  "assumptions": [
+    "The first three layers use dense I=18432; the remaining 58 use 256 routed I=2048 experts plus one shared I=2048 expert.",
+    "MLA resident KV width is 512 compressed latent elements plus 64 RoPE-key elements; it is not standard 128-head KV.",
+    "The separate MTP module and its weights are excluded from this E2E workload.",
+    "The architecture-derived 671,026,404,352 count explains the rounded official 671B main-model label."
+  ],
+  "manifest_digest": "75bd5d82de513d325527b1725bd0efe86d62f89dfd874a36f8bf60d17e698dd0"
+}

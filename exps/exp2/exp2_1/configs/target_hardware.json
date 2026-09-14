@@ -1,0 +1,258 @@
+{
+  "schema_note": "exp2-1 target-intent binding; hardware_unit_closure.json is the authority for realized units",
+  "x": 4,
+  "y": 4,
+  "die": {
+    "x": 6,
+    "y": 6
+  },
+  "noc": {
+    "noc_payload_per_cycle": 32
+  },
+  "dte": {
+    "gamma_ns": 2,
+    "tau_launch_avg_ns": 1,
+    "command_slots_per_channel": 2,
+    "pending_queue_depth": 8,
+    "spm_read_width_bits": 4096,
+    "spm_write_width_bits": 4096,
+    "axi_read_width_bits": 4096,
+    "axi_write_width_bits": 4096
+  },
+  "control_cores": {
+    "mode": "dual_dte_dedicated",
+    "dte": {
+      "command_queue_depth": 16,
+      "dispatch_width": 2,
+      "dispatch_latency_ns": 2,
+      "completion_notify_latency_ns": 2
+    }
+  },
+  "operand": {
+    "comp_util": 1.0,
+    "core_credit": 8,
+    "pd_ratio": 5
+  },
+  "memory": {
+    "beha_dram_util": 1.0,
+    "dram_default_bitwidth": 4096,
+    "sram_size": 3145728,
+    "sram": {
+      "capacity_bytes": 3145728,
+      "allocation_alignment_bytes": 256,
+      "bank_count": 16,
+      "bank_interleave_bytes": 256,
+      "read_base_latency_cycles": 2,
+      "write_base_latency_cycles": 2,
+      "queue_depth": 32,
+      "real_data_path": true,
+      "manual_regions": true,
+      "manual_memory_schedule": true,
+      "lsu": {
+        "queue_depth": 16,
+        "max_outstanding": 4,
+        "issue_latency_ns": 1
+      },
+      "dte_memory": {
+        "workers": 2,
+        "queue_depth": 16
+      },
+      "ports": {
+        "compute": {
+          "read": {"count": 1, "width_bits": 4096},
+          "write": {"count": 1, "width_bits": 4096}
+        },
+        "dte": {
+          "read": {"count": 1, "width_bits": 4096},
+          "write": {"count": 1, "width_bits": 4096}
+        },
+        "lsu": {
+          "read": {"count": 1, "width_bits": 4096},
+          "write": {"count": 1, "width_bits": 4096}
+        }
+      },
+      "regions": [
+        {
+          "name": "double_a",
+          "base_bytes": 0,
+          "size_bytes": 524288,
+          "allocator": "fixed",
+          "spillable": false,
+          "access": ["compute", "dte", "lsu"]
+        },
+        {
+          "name": "double_b",
+          "base_bytes": 524288,
+          "size_bytes": 524288,
+          "allocator": "fixed",
+          "spillable": false,
+          "access": ["compute", "dte", "lsu"]
+        },
+        {
+          "name": "input",
+          "base_bytes": 1048576,
+          "size_bytes": 786432,
+          "allocator": "block",
+          "spillable": true,
+          "access": ["compute", "dte", "lsu", "legacy"]
+        },
+        {
+          "name": "comm",
+          "base_bytes": 1835008,
+          "size_bytes": 786432,
+          "allocator": "block",
+          "spillable": false,
+          "access": ["compute", "dte", "lsu", "noc_rx"]
+        },
+        {
+          "name": "intermediate",
+          "base_bytes": 2621440,
+          "size_bytes": 393216,
+          "allocator": "block",
+          "spillable": true,
+          "access": ["compute", "dte", "lsu", "legacy"]
+        },
+        {
+          "name": "runtime_reserve",
+          "base_bytes": 3014656,
+          "size_bytes": 131072,
+          "allocator": "fixed",
+          "spillable": false,
+          "access": ["compute", "dte", "lsu", "legacy", "noc_rx"]
+        }
+      ]
+    }
+  },
+  "die_ports": {
+    "edges": {
+      "W": {"role": "host"}
+    },
+    "overrides": [
+      {"side": "E", "idx": 2, "role": "c2c", "dir": "E"},
+      {"side": "W", "idx": 2, "role": "c2c", "dir": "W"},
+      {"side": "N", "idx": 2, "role": "c2c", "dir": "N"},
+      {"side": "S", "idx": 2, "role": "c2c", "dir": "S"}
+    ],
+    "c2c": {
+      "backend": "behavioral",
+      "port_rate": {"num": 1, "den": 1},
+      "link_rate": {"num": 1, "den": 1},
+      "link_latency": 1
+    }
+  },
+  "memory_system": {
+    "topology": "distributed_hbm",
+    "cache_policy": "none",
+    "profiles": {
+      "target_hbm2_16ch": {
+        "generation": "HBM2",
+        "channels_per_stack": 16,
+        "pseudo_channels_per_channel": 2,
+        "data_rate_gbps_per_pin": 2.0,
+        "stack_bus_width_bits": 1024
+      }
+    },
+    "hbm_stacks": [
+      {
+        "stack_id": 0,
+        "compute_die_id": 1,
+        "profile": "target_hbm2_16ch",
+        "side": "S",
+        "start_idx": 1,
+        "phy_span_tiles": 1,
+        "capacity_bytes": 17179869184,
+        "backend": "behavioral",
+        "backend_granularity": "channel",
+        "port_granularity": "aggregated",
+        "channels_per_mem_port": 16,
+        "channel_dram_config": "../DRAMSys/configs/hbm2-example.json",
+        "bandwidth_cap_GBps": 256.0,
+        "behavioral_efficiency": 1.0,
+        "behavioral_base_latency_ns": 20.0
+      },
+      {
+        "stack_id": 1,
+        "compute_die_id": 4,
+        "profile": "target_hbm2_16ch",
+        "side": "S",
+        "start_idx": 1,
+        "phy_span_tiles": 1,
+        "capacity_bytes": 17179869184,
+        "backend": "behavioral",
+        "backend_granularity": "channel",
+        "port_granularity": "aggregated",
+        "channels_per_mem_port": 16,
+        "channel_dram_config": "../DRAMSys/configs/hbm2-example.json",
+        "bandwidth_cap_GBps": 256.0,
+        "behavioral_efficiency": 1.0,
+        "behavioral_base_latency_ns": 20.0
+      },
+      {
+        "stack_id": 2,
+        "compute_die_id": 31,
+        "profile": "target_hbm2_16ch",
+        "side": "N",
+        "start_idx": 1,
+        "phy_span_tiles": 1,
+        "capacity_bytes": 17179869184,
+        "backend": "behavioral",
+        "backend_granularity": "channel",
+        "port_granularity": "aggregated",
+        "channels_per_mem_port": 16,
+        "channel_dram_config": "../DRAMSys/configs/hbm2-example.json",
+        "bandwidth_cap_GBps": 256.0,
+        "behavioral_efficiency": 1.0,
+        "behavioral_base_latency_ns": 20.0
+      },
+      {
+        "stack_id": 3,
+        "compute_die_id": 34,
+        "profile": "target_hbm2_16ch",
+        "side": "N",
+        "start_idx": 1,
+        "phy_span_tiles": 1,
+        "capacity_bytes": 17179869184,
+        "backend": "behavioral",
+        "backend_granularity": "channel",
+        "port_granularity": "aggregated",
+        "channels_per_mem_port": 16,
+        "channel_dram_config": "../DRAMSys/configs/hbm2-example.json",
+        "bandwidth_cap_GBps": 256.0,
+        "behavioral_efficiency": 1.0,
+        "behavioral_base_latency_ns": 20.0
+      }
+    ],
+    "address_policy": {
+      "mode": "numa_local_interleave",
+      "home_ranges": [
+        {"die_id": 1, "base": 0, "size_bytes": 17179869184},
+        {"die_id": 4, "base": 17179869184, "size_bytes": 17179869184},
+        {"die_id": 31, "base": 34359738368, "size_bytes": 17179869184},
+        {"die_id": 34, "base": 51539607552, "size_bytes": 17179869184}
+      ],
+      "stack_interleave_bytes": 256,
+      "channel_interleave_bytes": 64,
+      "pseudo_channel_interleave_bytes": 32,
+      "allow_gaps": false
+    }
+  },
+  "gpu": {
+    "dram_bandwidth": 512,
+    "dram_burst_size": 2048,
+    "dram_aligned": 64
+  },
+  "cores": [
+    {
+      "id": 0,
+      "exu_x": 40,
+      "sfu_x": 1024,
+      "vec_x": 128,
+      "sa_cnt": 5,
+      "vec_cnt": 1,
+      "sram_bitwidth": 4096,
+      "dram_bw": 4096,
+      "dte_channel_count": 2,
+      "dte_bit_width": 4096
+    }
+  ]
+}

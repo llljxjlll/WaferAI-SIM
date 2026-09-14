@@ -1,0 +1,60 @@
+{
+  "schema_version": "exp2_1.stage3_current_build_smoke/v1",
+  "captured_at_utc": "2026-08-27",
+  "runner": {
+    "path": "llm/test/frontend/integration/run_stage3_static_profiles.py",
+    "sha256": "226291c4c45d028f33c75b2b08418223bb79b895bc696d04860f4e415dc15f4c"
+  },
+  "tool_digests": {
+    "npusim": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29",
+    "finalizer": "d39bb8c69349f8492e77862e28324eb9621fb472982dc5ba87c3c1715f971ed9",
+    "resolver": "36bdc79c3d13338285ccf70e6949fc46f2f71369123e2afb1620c925b311c980",
+    "simulation": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb"
+  },
+  "cases": [
+    {
+      "case": "prefill",
+      "executions_observed": 2,
+      "runtime_repeat_identical": true,
+      "observer_checks_completed_before_release_gate": true,
+      "artifact_bytes": 22258,
+      "record_count": 159,
+      "relocation_count": 297,
+      "current_artifact_sha256": "d4539d1fa01183a16ecf0c182586ea79e56ac4be1edf67e9ac7a20d3c28907af",
+      "current_makespan_cycles": 5805,
+      "current_marker_digest": "24cfc041572f8c3de44a61defab11971fa8acfd63df93497647f05bba00d964f",
+      "reviewed_artifact_sha256": "4b1204fa698553e202d97a77dc3fdb4f60f38051b1a82a4dca84ec4981d76777",
+      "reviewed_makespan_cycles": 5805,
+      "reviewed_marker_digest": "f8fa4a291d691110f634368275564ad99e8f62e606b9e59bfbe8993e4f7ed106",
+      "runner_exit_status": "failed_release_gate_stale_reviewed_digest",
+      "absolute_cycle_anchor_eligible": false
+    },
+    {
+      "case": "decode",
+      "executions_observed": 2,
+      "runtime_repeat_identical": true,
+      "observer_checks_completed_before_release_gate": true,
+      "artifact_bytes": 37818,
+      "record_count": 275,
+      "relocation_count": 501,
+      "current_artifact_sha256": "ffe254146d3a180d889c91896d8e7930f837c874bd29ca16b5795338a0d0c659",
+      "current_makespan_cycles": 13081,
+      "current_marker_digest": "d8753cc5a8d08a8e149d5bf1c73ac33dd0197fa3b1a022ba8b77c31bf95b4107",
+      "reviewed_artifact_sha256": "8cd6f01aada63d8091b7ceb9c70726c7287010d63a5b8c2362a905cf51cc5543",
+      "reviewed_makespan_cycles": 13081,
+      "reviewed_marker_digest": "00d6dde839fcc3a3fd1a4b24b42808ec8b325fba97f743746519f38a2eef2678",
+      "runner_exit_status": "failed_release_gate_stale_reviewed_digest",
+      "absolute_cycle_anchor_eligible": false
+    }
+  ],
+  "applicability": {
+    "publish_as": "structural_prior_only",
+    "target_hardware_digest_match": false,
+    "simulator_unit_closure": false,
+    "reason": [
+      "The Stage3 fixtures use tiny H=16/I=32 and a different hardware binding.",
+      "The current artifact and marker digests differ from the runner's reviewed release witness.",
+      "Identical makespans do not make the tiny fixture a target-rate anchor."
+    ]
+  }
+}

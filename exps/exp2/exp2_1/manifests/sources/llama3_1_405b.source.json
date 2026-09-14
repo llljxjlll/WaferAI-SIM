@@ -1,0 +1,27 @@
+{
+  "schema_version": "exp2.model_source_snapshot.v1",
+  "source_kind": "official_meta_sku_and_model_card_normalization",
+  "source_url": "https://github.com/meta-llama/llama-models/blob/main/models/sku_list.py",
+  "upstream_urls": [
+    "https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/MODEL_CARD.md",
+    "https://huggingface.co/meta-llama/Llama-3.1-405B/blob/main/config.json"
+  ],
+  "source_revision": "official corrected 8-KV-head SKU; local snapshot frozen",
+  "retrieved_at": "2026-08-27",
+  "fields": {
+    "num_hidden_layers": 126,
+    "vocab_size": 128256,
+    "hidden_size": 16384,
+    "intermediate_size": 53248,
+    "num_attention_heads": 128,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "torch_dtype": "bfloat16"
+  },
+  "source_notes": [
+    "The official SKU's 8 KV heads are used; early 16-KV-head hub variants are not the experiment input.",
+    "The architecture formula yields 405,853,388,800 parameters, consistent with the published 405B class.",
+    "This digest covers this local normalized snapshot, not remote bytes."
+  ],
+  "snapshot_digest": "19d0bee84036dd66a9d632f1ce60b7d262f1d0752dc18ed3f1a331f1970f16cf"
+}

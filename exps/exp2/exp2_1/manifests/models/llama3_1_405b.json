@@ -1,0 +1,47 @@
+{
+  "schema_version": "exp2.model_manifest.v1",
+  "dtype": "FP16",
+  "experiment_dtype_bytes": 2,
+  "model_id": "llama3_1_405b",
+  "display_name": "LLaMA-3.1-405B",
+  "num_layers": 126,
+  "vocab_size": 128256,
+  "hidden_size": 16384,
+  "intermediate_size": 53248,
+  "num_attention_heads": 128,
+  "num_kv_heads": 8,
+  "head_dim": 128,
+  "attention_type": "GQA",
+  "mlp_type": "dense_swiglu",
+  "norm_residual_rope": {
+    "norm": "RMSNorm pre-norm",
+    "residual": "standard residual",
+    "position": "scaled RoPE, 128K context"
+  },
+  "moe_layer_frequency": 0,
+  "routed_expert_count": 0,
+  "shared_expert_count": 0,
+  "top_k": 0,
+  "parameter_count": 405853388800,
+  "published_parameter_count": 405000000000,
+  "parameter_count_method": "architecture_formula_exact_for_corrected_official_8_KV_head_fields",
+  "parameter_breakdown": {
+    "embedding_and_lm_head": 4202692608,
+    "attention": 71873593344,
+    "mlp": 329772957696,
+    "norms": 4145152
+  },
+  "source_checkpoint_dtype": "bfloat16",
+  "sources": [
+    {
+      "local_snapshot": "llama3_1_405b.source.json",
+      "snapshot_digest": "19d0bee84036dd66a9d632f1ce60b7d262f1d0752dc18ed3f1a331f1970f16cf",
+      "digest_scope": "canonical local normalized snapshot; not upstream remote bytes"
+    }
+  ],
+  "assumptions": [
+    "No projection biases and untied input/output embeddings.",
+    "The exact frozen architecture count is 405,853,388,800; 405B is the published rounded class."
+  ],
+  "manifest_digest": "294847393fe1bb8ec0161ed184b73bfbaf069eb8b68fc818ac0e7ed02cf018c6"
+}

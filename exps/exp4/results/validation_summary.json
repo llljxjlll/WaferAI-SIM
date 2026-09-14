@@ -1,0 +1,39 @@
+{
+  "analytical_sweep_gate_passed": true,
+  "artifact_sha256": {
+    "pareto_summary.json": "1aa5daa55f4683da60c1066b6e6a049fd4e8d3e3d0d6637b12584d693841f035",
+    "primitive_results.json": "fe2feb6c5d9caf3af9eab4590c433326bc259c2f574fbcb91afaaa8a595b187c",
+    "request_results.json": "bfdb79c462038b032c3c445e3a054ed3ff666719cdf895cf9ce7c64429abb043",
+    "run_manifest.json": "dfc715e04e82914dac727ea174176128be4d68c0300f361159920523d7111af3",
+    "sensitivity_summary.json": "446a51fbc8d2440e6f657cca64285eaad3f4edf8c94fbd9ce0a22661399ba158",
+    "sw_opt_only.json": "2913b418b04ae7f81c6b70e9cd898c66d948b259983b60392340ce77d72b39bc"
+  },
+  "checks": {
+    "candidate_count": true,
+    "control_rows_match_exp2_digest": true,
+    "corrected_model_selected": true,
+    "finite_positive_and_above_lower_bound": true,
+    "hardware_semantics": true,
+    "prefill_sw_hw_exceeds_sw_only": true,
+    "primitive_result_count": true,
+    "projection_evidence_not_feasible": true,
+    "reference_reproduction_72_of_72": true,
+    "request_result_count": true,
+    "software_control_count": true,
+    "svg_white_background": true
+  },
+  "cycle_anchor_gate_passed": false,
+  "evidence_level": "resource_explicit_analytical_extrapolation",
+  "figure_sha256": {
+    "hardware_pareto.svg": "9fc551c40c7c2257608e5aa8a44ddf81a9141f7cdd04b2128290a73a78724913",
+    "optimization_speedup.svg": "d6c5c51fd1d7c050b0c1da2d4982ea480b26bd11356c4bb938fce53958b21245"
+  },
+  "minimum_software_speedup": 0.7633343736549116,
+  "projection_pareto_group_count": 12,
+  "release_gate_passed": false,
+  "schema_version": "exp4.corrected_validation.v1",
+  "software_slowdown_pair_count": 3450,
+  "software_slowdown_policy": "preserved_without_positive-benefit-clamp_per_development_plan",
+  "strict_pareto_group_count": 0,
+  "validation_digest": "37d7842da030cfabe64b51ea46426aa73356d37874a53657b0f603037aa9c028"
+}

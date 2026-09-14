@@ -1,0 +1,32 @@
+{
+  "credit_balanced": true,
+  "cycle_ns": 2,
+  "expected_makespan_cycles": 6391,
+  "final_done_timestamp_ns": 12783,
+  "hostlane": {
+    "ack_total": 4,
+    "done_total": 2,
+    "mismatch": 0
+  },
+  "input_sha256": {
+    "hardware": "0696e5805d9b6a94b2652db341a6e3b5ccef387212a55b8e537a0e71a3a7c322",
+    "manifest": "4a2539963b207ce140b29354ed5b2e1a1f335ef14ba9461c468d91e2862a623f",
+    "mapping": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+    "program": "7ea39a035f78f4d2b27583a440b0e38ae239d6228e21707bd023ba05e06f7d63",
+    "program_io": "32d3bafbc743921448d6a2b6152d9de51aec527cf306d63e4c219c27be084401",
+    "simulation": "32bce414f159454eff62612d46ffb2d9b85d75fad8e31973af94329bb7b5ce3c"
+  },
+  "limitation": "replays the retained small A11 hardware/config; validates simulator and marker stability but does not calibrate current exp1 hardware",
+  "method": "retained_finalized_artifact_single_replay_no_compile",
+  "npusim_sha256": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29",
+  "program_io_phases_passed": [
+    "resolved",
+    "applied",
+    "verify"
+  ],
+  "returncode": 0,
+  "router_residual": 0,
+  "schema_version": "exp1.retained_no_compile_replay/v1",
+  "source_case": "notes/frontend/intra_die/reports/2x2_model_v3/A11/run",
+  "status": "pass"
+}

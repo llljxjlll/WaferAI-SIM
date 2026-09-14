@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" font-family="Noto Sans CJK SC, DejaVu Sans, sans-serif">
+<rect width="900" height="500" fill="#ffffff"/>
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c92a2a"/></marker><marker id="ar2" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M8,0 L0,4 L8,8 z" fill="#c92a2a"/></marker></defs>
+<text x="86" y="30" font-size="16" fill="#111" font-weight="bold">跨 die 过境流量与片上 GEMM + AllGather 的 NoC 链路争用</text>
+<text x="86" y="50" font-size="12" fill="#666">3×1 dies / 每 die 4×4 核 / 端口在四角 / 周期精确 NoC；归一化到「无重叠」串行基线</text>
+<rect x="86.0" y="63" width="12" height="12" fill="#4C6EF5"/>
+<text x="103.0" y="74" font-size="12" fill="#222">无重叠：comp-only + comm-only</text>
+<rect x="315.6" y="63" width="12" height="12" fill="#F08C00"/>
+<text x="332.6" y="74" font-size="12" fill="#222">拥塞重叠：片上 x 方向 AG</text>
+<rect x="506.2" y="63" width="12" height="12" fill="#2F9E44"/>
+<text x="523.2" y="74" font-size="12" fill="#222">无拥塞重叠：片上 y 方向 AG</text>
+<line x1="86" y1="422.0" x2="866" y2="422.0" stroke="#e9ecef"/>
+<text x="76" y="426.0" font-size="12" text-anchor="end" fill="#444">0.00</text>
+<line x1="86" y1="351.1" x2="866" y2="351.1" stroke="#e9ecef"/>
+<text x="76" y="355.1" font-size="12" text-anchor="end" fill="#444">0.25</text>
+<line x1="86" y1="280.3" x2="866" y2="280.3" stroke="#e9ecef"/>
+<text x="76" y="284.3" font-size="12" text-anchor="end" fill="#444">0.50</text>
+<line x1="86" y1="209.4" x2="866" y2="209.4" stroke="#e9ecef"/>
+<text x="76" y="213.4" font-size="12" text-anchor="end" fill="#444">0.75</text>
+<line x1="86" y1="138.5" x2="866" y2="138.5" stroke="#e9ecef"/>
+<text x="76" y="142.5" font-size="12" text-anchor="end" fill="#444">1.00</text>
+<line x1="86" y1="96" x2="86" y2="422" stroke="#333"/>
+<line x1="86" y1="422" x2="866" y2="422" stroke="#333"/>
+<text x="24" y="259.0" font-size="13" fill="#222" transform="rotate(-90 24 259.0)" text-anchor="middle">Norm. Time</text>
+<text x="476.0" y="476" font-size="13" fill="#222" text-anchor="middle">inter-die / intra-die 流量比</text>
+<line x1="86" y1="138.5" x2="866" y2="138.5" stroke="#c92a2a" stroke-width="1.6" stroke-dasharray="7 5"/>
+<text x="90" y="131.5" font-size="12" fill="#c92a2a">hidden time 基线（不重叠时的串行时间）</text>
+<rect x="115.2" y="138.5" width="37.0" height="283.5" fill="#4C6EF5"/>
+<text x="133.8" y="133.5" font-size="11" text-anchor="middle" fill="#333">1.00</text>
+<rect x="152.3" y="201.5" width="37.0" height="220.5" fill="#F08C00"/>
+<text x="170.8" y="196.5" font-size="11" text-anchor="middle" fill="#333">0.78</text>
+<rect x="189.3" y="221.6" width="37.0" height="200.4" fill="#2F9E44"/>
+<text x="207.9" y="216.6" font-size="11" text-anchor="middle" fill="#333">0.71</text>
+<line x1="235.4" y1="139.5" x2="235.4" y2="220.6" stroke="#c92a2a" stroke-width="1.2" marker-end="url(#ar2)" marker-start="url(#ar)"/>
+<text x="183.5" y="444.0" font-size="13" text-anchor="middle" fill="#222">0.25x</text>
+<line x1="281.0" y1="96" x2="281.0" y2="422" stroke="#f1f3f5"/>
+<rect x="310.2" y="138.5" width="37.0" height="283.5" fill="#4C6EF5"/>
+<text x="328.8" y="133.5" font-size="11" text-anchor="middle" fill="#333">1.00</text>
+<rect x="347.3" y="189.1" width="37.0" height="232.9" fill="#F08C00"/>
+<text x="365.8" y="184.1" font-size="11" text-anchor="middle" fill="#333">0.82</text>
+<rect x="384.4" y="261.3" width="37.0" height="160.7" fill="#2F9E44"/>
+<text x="402.9" y="256.3" font-size="11" text-anchor="middle" fill="#333">0.57</text>
+<line x1="430.4" y1="139.5" x2="430.4" y2="260.3" stroke="#c92a2a" stroke-width="1.2" marker-end="url(#ar2)" marker-start="url(#ar)"/>
+<text x="378.5" y="444.0" font-size="13" text-anchor="middle" fill="#222">0.5x</text>
+<line x1="476.0" y1="96" x2="476.0" y2="422" stroke="#f1f3f5"/>
+<rect x="505.2" y="138.5" width="37.0" height="283.5" fill="#4C6EF5"/>
+<text x="523.8" y="133.5" font-size="11" text-anchor="middle" fill="#333">1.00</text>
+<rect x="542.3" y="174.8" width="37.0" height="247.2" fill="#F08C00"/>
+<text x="560.8" y="169.8" font-size="11" text-anchor="middle" fill="#333">0.87</text>
+<rect x="579.4" y="255.8" width="37.0" height="166.2" fill="#2F9E44"/>
+<text x="597.9" y="250.8" font-size="11" text-anchor="middle" fill="#333">0.59</text>
+<line x1="625.4" y1="139.5" x2="625.4" y2="254.8" stroke="#c92a2a" stroke-width="1.2" marker-end="url(#ar2)" marker-start="url(#ar)"/>
+<text x="573.5" y="444.0" font-size="13" text-anchor="middle" fill="#222">1x</text>
+<line x1="671.0" y1="96" x2="671.0" y2="422" stroke="#f1f3f5"/>
+<rect x="700.2" y="138.5" width="37.0" height="283.5" fill="#4C6EF5"/>
+<text x="718.8" y="133.5" font-size="11" text-anchor="middle" fill="#333">1.00</text>
+<rect x="737.3" y="161.6" width="37.0" height="260.4" fill="#F08C00"/>
+<text x="755.8" y="156.6" font-size="11" text-anchor="middle" fill="#333">0.92</text>
+<rect x="774.4" y="213.2" width="37.0" height="208.8" fill="#2F9E44"/>
+<text x="792.9" y="208.2" font-size="11" text-anchor="middle" fill="#333">0.74</text>
+<line x1="820.4" y1="139.5" x2="820.4" y2="212.2" stroke="#c92a2a" stroke-width="1.2" marker-end="url(#ar2)" marker-start="url(#ar)"/>
+<text x="768.5" y="444.0" font-size="13" text-anchor="middle" fill="#222">2x</text>
+</svg>

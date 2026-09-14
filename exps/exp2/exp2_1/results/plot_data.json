@@ -1,0 +1,24 @@
+{
+  "schema_version": "exp2.plot_data.v7",
+  "source_files": [
+    "results/training_e2e.json",
+    "results/training_operator_amdahl.json",
+    "results/prefill_operator_amdahl.json",
+    "results/inference_decode_e2e.json",
+    "results/inference_request_e2e.json",
+    "results/inference_prefill_pd_breakdown.json"
+  ],
+  "training_cases": 12,
+  "training_operator_amdahl_cases": 12,
+  "prefill_operator_amdahl_cases": 12,
+  "decode_cases": 12,
+  "inference_request_cases": 12,
+  "prefill_pd_cases": 12,
+  "figures": [
+    "figures/training_e2e.svg",
+    "figures/inference_decode_e2e.svg",
+    "figures/inference_prefill_e2e.svg",
+    "figures/inference_prefill_pd_breakdown.svg",
+    "figures/inference_request_e2e.svg"
+  ]
+}

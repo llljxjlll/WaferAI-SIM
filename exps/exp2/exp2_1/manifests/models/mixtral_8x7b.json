@@ -1,0 +1,47 @@
+{
+  "schema_version": "exp2.model_manifest.v1",
+  "dtype": "FP16",
+  "experiment_dtype_bytes": 2,
+  "model_id": "mixtral_8x7b",
+  "display_name": "Mixtral-8x7B",
+  "num_layers": 32,
+  "vocab_size": 32000,
+  "hidden_size": 4096,
+  "intermediate_size": 14336,
+  "num_attention_heads": 32,
+  "num_kv_heads": 8,
+  "head_dim": 128,
+  "attention_type": "GQA",
+  "mlp_type": "sparse_moe_swiglu",
+  "norm_residual_rope": {
+    "norm": "RMSNorm pre-norm",
+    "residual": "standard residual",
+    "position": "RoPE theta 1000000"
+  },
+  "moe_layer_frequency": 1,
+  "routed_expert_count": 8,
+  "shared_expert_count": 0,
+  "top_k": 2,
+  "parameter_count": 46702792704,
+  "parameter_count_method": "architecture_formula_exact_for_all_8_experts",
+  "parameter_breakdown": {
+    "embedding_and_lm_head": 262144000,
+    "attention": 1342177280,
+    "routed_experts": 45097156608,
+    "router": 1048576,
+    "norms": 266240
+  },
+  "source_checkpoint_dtype": "bfloat16",
+  "sources": [
+    {
+      "local_snapshot": "mixtral_8x7b.source.json",
+      "snapshot_digest": "c43c0fa28290e496f6037b69c34a85b9d591b54c65f06887c2967213ed7cace2",
+      "digest_scope": "canonical local normalized snapshot; not upstream remote bytes"
+    }
+  ],
+  "assumptions": [
+    "Every transformer block is MoE and all eight expert weights are resident.",
+    "Router projection is counted; projection biases are absent."
+  ],
+  "manifest_digest": "52b9256d4028ebd8af73805d0f41fee3410f5c33ce85c35693efbee1bb1f7eaa"
+}

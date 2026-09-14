@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="480" viewBox="0 0 1280 480">
+<style>text{font-family:Arial,sans-serif;fill:#1f2937}.axis{stroke:#374151;stroke-width:1}.grid{stroke:#d1d5db;stroke-width:1;stroke-dasharray:3 4}.legend{font-size:12px}.tick{font-size:11px}.title{font-size:17px;font-weight:700}</style>
+<rect width="1280" height="480" fill="white"/>
+<text x="640.0" y="26.0" class="title" text-anchor="middle">Software / hardware optimization speedup</text>
+<line x1="65" y1="55" x2="65" y2="395" class="axis"/>
+<line x1="65" y1="395" x2="1260" y2="395" class="axis"/>
+<line x1="65" y1="395.0" x2="1260" y2="395.0" class="grid"/>
+<text x="58.0" y="399.0" class="tick" text-anchor="end">0×</text>
+<line x1="65" y1="310.0" x2="1260" y2="310.0" class="grid"/>
+<text x="58.0" y="314.0" class="tick" text-anchor="end">1×</text>
+<line x1="65" y1="225.0" x2="1260" y2="225.0" class="grid"/>
+<text x="58.0" y="229.0" class="tick" text-anchor="end">2×</text>
+<line x1="65" y1="140.0" x2="1260" y2="140.0" class="grid"/>
+<text x="58.0" y="144.0" class="tick" text-anchor="end">3×</text>
+<line x1="65" y1="55.0" x2="1260" y2="55.0" class="grid"/>
+<text x="58.0" y="59.0" class="tick" text-anchor="end">4×</text>
+<line x1="452.3" y1="63" x2="452.3" y2="387" stroke="#9ca3af" stroke-width="1" stroke-dasharray="2 6"/>
+<line x1="832.7" y1="63" x2="832.7" y2="387" stroke="#9ca3af" stroke-width="1" stroke-dasharray="2 6"/>
+<text x="262.2" y="48.0" class="" text-anchor="middle">Training</text>
+<text x="106.2" y="411.0" class="tick" text-anchor="middle">LLaMA2-7B</text>
+<text x="168.6" y="424.0" class="tick" text-anchor="middle">GPT3-175B</text>
+<text x="231.0" y="411.0" class="tick" text-anchor="middle">LLaMA3-8B</text>
+<text x="293.4" y="424.0" class="tick" text-anchor="middle">LLaMA3.1-405B</text>
+<text x="355.8" y="411.0" class="tick" text-anchor="middle">Mixtral-8x7B</text>
+<text x="418.1" y="424.0" class="tick" text-anchor="middle">DeepSeek-V3</text>
+<polyline points="106.2,305.0 168.6,305.8 231.0,305.4 293.4,306.0 355.8,305.6 418.1,307.7" fill="none" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="106.2" cy="305.0" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="168.6" cy="305.8" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="231.0" cy="305.4" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="293.4" cy="306.0" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="355.8" cy="305.6" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="418.1" cy="307.7" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<polyline points="106.2,226.3 168.6,225.6 231.0,227.0 293.4,225.3 355.8,223.3 418.1,223.7" fill="none" stroke="#E69F00" stroke-width="4"/>
+<circle cx="106.2" cy="226.3" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="168.6" cy="225.6" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="231.0" cy="227.0" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="293.4" cy="225.3" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="355.8" cy="223.3" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="418.1" cy="223.7" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<polyline points="106.2,132.3 168.6,134.0 231.0,133.0 293.4,134.3 355.8,132.3 418.1,196.4" fill="none" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="106.2" cy="132.3" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="168.6" cy="134.0" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="231.0" cy="133.0" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="293.4" cy="134.3" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="355.8" cy="132.3" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="418.1" cy="196.4" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<text x="642.5" y="48.0" class="" text-anchor="middle">Inference prefill</text>
+<text x="486.5" y="411.0" class="tick" text-anchor="middle">LLaMA2-7B</text>
+<text x="548.9" y="424.0" class="tick" text-anchor="middle">GPT3-175B</text>
+<text x="611.3" y="411.0" class="tick" text-anchor="middle">LLaMA3-8B</text>
+<text x="673.7" y="424.0" class="tick" text-anchor="middle">LLaMA3.1-405B</text>
+<text x="736.1" y="411.0" class="tick" text-anchor="middle">Mixtral-8x7B</text>
+<text x="798.5" y="424.0" class="tick" text-anchor="middle">DeepSeek-V3</text>
+<polyline points="486.5,293.3 548.9,292.3 611.3,292.7 673.7,291.9 736.1,299.7 798.5,301.2" fill="none" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="486.5" cy="293.3" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="548.9" cy="292.3" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="611.3" cy="292.7" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="673.7" cy="291.9" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="736.1" cy="299.7" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="798.5" cy="301.2" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<polyline points="486.5,194.2 548.9,188.6 611.3,175.0 673.7,174.3 736.1,204.4 798.5,223.3" fill="none" stroke="#E69F00" stroke-width="4"/>
+<circle cx="486.5" cy="194.2" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="548.9" cy="188.6" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="611.3" cy="175.0" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="673.7" cy="174.3" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="736.1" cy="204.4" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="798.5" cy="223.3" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<polyline points="486.5,120.1 548.9,137.3 611.3,85.9 673.7,132.8 736.1,122.1 798.5,162.6" fill="none" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="486.5" cy="120.1" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="548.9" cy="137.3" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="611.3" cy="85.9" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="673.7" cy="132.8" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="736.1" cy="122.1" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="798.5" cy="162.6" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<text x="1022.8" y="48.0" class="" text-anchor="middle">Inference decode</text>
+<text x="866.9" y="411.0" class="tick" text-anchor="middle">LLaMA2-7B</text>
+<text x="929.2" y="424.0" class="tick" text-anchor="middle">GPT3-175B</text>
+<text x="991.6" y="411.0" class="tick" text-anchor="middle">LLaMA3-8B</text>
+<text x="1054.0" y="424.0" class="tick" text-anchor="middle">LLaMA3.1-405B</text>
+<text x="1116.4" y="411.0" class="tick" text-anchor="middle">Mixtral-8x7B</text>
+<text x="1178.8" y="424.0" class="tick" text-anchor="middle">DeepSeek-V3</text>
+<polyline points="866.9,311.0 929.2,311.0 991.6,310.9 1054.0,310.6 1116.4,310.8 1178.8,308.9" fill="none" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="866.9" cy="311.0" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="929.2" cy="311.0" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="991.6" cy="310.9" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="1054.0" cy="310.6" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="1116.4" cy="310.8" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="1178.8" cy="308.9" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<polyline points="866.9,249.6 929.2,227.4 991.6,228.0 1054.0,251.9 1116.4,229.9 1178.8,260.9" fill="none" stroke="#E69F00" stroke-width="4"/>
+<circle cx="866.9" cy="249.6" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="929.2" cy="227.4" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="991.6" cy="228.0" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="1054.0" cy="251.9" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="1116.4" cy="229.9" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<circle cx="1178.8" cy="260.9" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<polyline points="866.9,249.5 929.2,227.2 991.6,227.6 1054.0,248.8 1116.4,228.5 1178.8,245.9" fill="none" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="866.9" cy="249.5" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="929.2" cy="227.2" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="991.6" cy="227.6" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="1054.0" cy="248.8" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="1116.4" cy="228.5" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="1178.8" cy="245.9" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<line x1="465" y1="455" x2="485" y2="455" stroke="#CC79A7" stroke-width="4"/>
+<circle cx="475" cy="455" r="8" fill="white" stroke="#CC79A7" stroke-width="4"/>
+<text x="490.0" y="459.0" class="legend" text-anchor="start">SW only</text>
+<line x1="595" y1="455" x2="615" y2="455" stroke="#E69F00" stroke-width="4"/>
+<circle cx="605" cy="455" r="8" fill="white" stroke="#E69F00" stroke-width="4"/>
+<text x="620.0" y="459.0" class="legend" text-anchor="start">HW only</text>
+<line x1="725" y1="455" x2="745" y2="455" stroke="#56B4E9" stroke-width="4"/>
+<circle cx="735" cy="455" r="8" fill="white" stroke="#56B4E9" stroke-width="4"/>
+<text x="750.0" y="459.0" class="legend" text-anchor="start">SW + HW</text>
+<text x="20.0" y="225.0" class="" text-anchor="middle" transform="rotate(-90 20.0 225.0)">Speedup vs H_exp2 + naive</text>
+</svg>

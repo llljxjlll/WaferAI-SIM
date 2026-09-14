@@ -1,0 +1,23 @@
+{
+  "config_sha256": "c29ccac55c1b88e606642438e26d16eebb76204a928ede780a31362ae7c88ba7",
+  "evidence": "analytical_preflight_model_not_npusim",
+  "limitations": [
+    "No current runner composes exact 2x3 Wang Ring, blocking inter schedule, arbitrary GEMM shape, and 16-core intra-die ON/OFF.",
+    "These rows are deterministic timing-model preflight results, not NpuSim measurements."
+  ],
+  "pair_invariants": {
+    "only_intra_composition_changes": true,
+    "same_fixed_ring": true,
+    "same_logical_work": true,
+    "same_ring_order": [
+      0,
+      1,
+      2,
+      5,
+      4,
+      3
+    ]
+  },
+  "schema_version": "exp3_2_audit/v1alpha1",
+  "status": "analytical_preflight_model"
+}

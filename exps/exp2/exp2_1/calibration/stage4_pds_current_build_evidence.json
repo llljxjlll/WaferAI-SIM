@@ -1,0 +1,66 @@
+{
+  "schema_version": "exp2_1.stage4_pds_current_build_smoke/v1",
+  "captured_at_utc": "2026-08-27",
+  "case_id": "case.stage4.pds.tp1",
+  "runner_status": "pass",
+  "runtime_report_sha256": "dc8d5cdcd672982985af22725dc90c37fe16f08486981c24b299ba61737a9939",
+  "tool_digests": {
+    "npusim": "c1635d56a99e54c8bd62307a8a7cc51280ff3817989c6c7eae9d0fc446cfae29",
+    "finalizer": "d39bb8c69349f8492e77862e28324eb9621fb472982dc5ba87c3c1715f971ed9",
+    "resolver": "36bdc79c3d13338285ccf70e6949fc46f2f71369123e2afb1620c925b311c980",
+    "runner": "e1fcaa19a7b9a1e39330b1bdd704d74b329a0b705784d644a7625dc5103083f5",
+    "simulation": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb"
+  },
+  "binding": {
+    "hardware_sha256": "3d698c4980598dc4b8d67eea84c97bcf73bff87eed932e46b5cea85d2b149cbf",
+    "mapping_sha256": "99a357b646bc6d0d81ac188c8bfffcbf6ab8f8f72a5d262fe81624f6f9a9a66c",
+    "plan_sha256": "b70901a05134ba9f16927e265fef8b63d16b7cd5892061a20d7af18b9415b143",
+    "oracle_sha256": "5b7dab69ad3b31d0a8d7f6dbbc1f8cc381b62e8c7c30a5ce993ce74e08c505ad"
+  },
+  "artifact": {
+    "sha256": "7c67207cf8a841c4531e39f7407bc0553ad0c18d0483d816c657b014140861f5",
+    "bytes": 45016,
+    "records": 330,
+    "actions": 100,
+    "relocations": 626
+  },
+  "repeatability": {
+    "executions": 2,
+    "makespan_cycles": [6187, 6187],
+    "marker_digests": [
+      "9684eda5edee7985d31ac01b57c0dd872982800d873d9038f340b2f34e5ced77",
+      "9684eda5edee7985d31ac01b57c0dd872982800d873d9038f340b2f34e5ced77"
+    ],
+    "program_io_digests": [
+      "9a4c75515fc1a7d7794feca36c14efc364b2640a12a4de0ffccc9bad47c764b6",
+      "9a4c75515fc1a7d7794feca36c14efc364b2640a12a4de0ffccc9bad47c764b6"
+    ]
+  },
+  "transport": {
+    "state_transfers": 4,
+    "logical_bytes": 1024,
+    "logical_data_packets": 64,
+    "physical_data_packets": 64,
+    "unique_endpoint_routes": 1,
+    "state_transport_exact": true
+  },
+  "drain": {
+    "all_done_boundary_reached": true,
+    "program_io_all_probes_passed": true,
+    "collective_residual": 0,
+    "global_residual": 0,
+    "p2p_residual": 0,
+    "timing_residual": 0
+  },
+  "applicability": {
+    "publish_as": "structural_pd_lifecycle_prior_only",
+    "absolute_cycle_anchor_eligible": false,
+    "target_hardware_digest_match": false,
+    "target_unit_closure": false,
+    "reason": [
+      "The direct case is TP1 on two dies with 1024 state-transfer bytes.",
+      "Its hardware is the tiny Stage4 fixture, not the 6x6 target binding.",
+      "Its 6187 cycles validate lifecycle, byte conservation, repeatability, and drain only."
+    ]
+  }
+}

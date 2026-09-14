@@ -1,0 +1,27 @@
+{
+  "schema_version": "exp2.model_source_snapshot.v1",
+  "source_kind": "primary_paper_table_normalization",
+  "source_url": "https://arxiv.org/abs/2005.14165",
+  "upstream_urls": [
+    "https://arxiv.org/pdf/2005.14165"
+  ],
+  "source_revision": "arXiv:2005.14165",
+  "retrieved_at": "2026-08-27",
+  "fields": {
+    "published_parameter_count": 175000000000,
+    "num_hidden_layers": 96,
+    "hidden_size": 12288,
+    "intermediate_size": 49152,
+    "num_attention_heads": 96,
+    "num_key_value_heads": 96,
+    "head_dim": 128,
+    "max_position_embeddings": 2048,
+    "vocab_size": 50257
+  },
+  "source_notes": [
+    "Layer, width, head and published parameter values come from GPT-3 paper Table 2.1.",
+    "The 50,257 vocabulary is an explicit GPT-2 tokenizer inheritance assumption; GPT-3 did not release a checkpoint config.",
+    "This digest covers this local normalized snapshot, not remote bytes."
+  ],
+  "snapshot_digest": "24362e4affcc570686ffeef9f0007ba13ddfb2f28a019d4c4254218f8f48dce4"
+}

@@ -1,0 +1,3657 @@
+{
+  "config": {
+    "evidence": "analytical_preflight_model_not_npusim",
+    "experiment": "exp3_2_intra_die_ablation",
+    "hardware": {
+      "compute_utilization": 0.7,
+      "cores_per_die": 16,
+      "local_bw_bytes_per_ns": 256.0,
+      "local_startup_ns": 4000.0,
+      "overlap_residual_fraction": 0.5,
+      "peak_flops_per_core": 8000.0,
+      "ring_bw_bytes_per_ns": 256.0,
+      "ring_startup_ns": 8000.0
+    },
+    "matrix": {
+      "D": 6,
+      "K": [
+        256,
+        1024,
+        4096,
+        16384,
+        65536
+      ],
+      "M": [
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+        16384
+      ],
+      "N": 12288
+    },
+    "status": "analytical_preflight_model"
+  },
+  "config_sha256": "c29ccac55c1b88e606642438e26d16eebb76204a928ede780a31362ae7c88ba7",
+  "evidence": "analytical_preflight_model_not_npusim",
+  "experiment": "exp3_2_intra_die_ablation",
+  "pairs": [
+    {
+      "D": 6,
+      "K": 256,
+      "M": 256,
+      "N": 12288,
+      "attainment": 0.8438637619837231,
+      "baseline_state": "I0",
+      "case_id": "d6_m256_n12288_k256",
+      "e2e_speedup": 1.0613401688751556,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.3700508187464708,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.37005081874647094,
+      "stage_speedup": 1.156136238016277
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 512,
+      "N": 12288,
+      "attainment": 0.8027426287337917,
+      "baseline_state": "I0",
+      "case_id": "d6_m512_n12288_k256",
+      "e2e_speedup": 1.0813199939777673,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.49145856767904,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.4914585676790401,
+      "stage_speedup": 1.1972573712662082
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 1024,
+      "N": 12288,
+      "attainment": 0.7728277975361023,
+      "baseline_state": "I0",
+      "case_id": "d6_m1024_n12288_k256",
+      "e2e_speedup": 1.0971403556793173,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.5878986319802646,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.5878986319802646,
+      "stage_speedup": 1.2271722024638978
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 2048,
+      "N": 12288,
+      "attainment": 0.7541886868883879,
+      "baseline_state": "I0",
+      "case_id": "d6_m2048_n12288_k256",
+      "e2e_speedup": 1.107607590897622,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.6518562725351236,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.6518562725351237,
+      "stage_speedup": 1.245811313111612
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 4096,
+      "N": 12288,
+      "attainment": 0.7436730830531908,
+      "baseline_state": "I0",
+      "case_id": "d6_m4096_n12288_k256",
+      "e2e_speedup": 1.1137352915910173,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.6893537571494313,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.6893537571494314,
+      "stage_speedup": 1.256326916946809
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 8192,
+      "N": 12288,
+      "attainment": 0.7380705202439203,
+      "baseline_state": "I0",
+      "case_id": "d6_m8192_n12288_k256",
+      "e2e_speedup": 1.1170685175760122,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.7097681659728567,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.7097681659728569,
+      "stage_speedup": 1.2619294797560798
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 16384,
+      "N": 12288,
+      "attainment": 0.7351763822235288,
+      "baseline_state": "I0",
+      "case_id": "d6_m16384_n12288_k256",
+      "e2e_speedup": 1.11880948494392,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.7204355966265308,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999994,
+      "r": 0.7204355966265309,
+      "stage_speedup": 1.2648236177764711
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 256,
+      "N": 12288,
+      "attainment": 0.7475006700998592,
+      "baseline_state": "I0",
+      "case_id": "d6_m256_n12288_k1024",
+      "e2e_speedup": 1.1311798732100724,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.6755828857421873,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.4999999999999998,
+      "r": 1.4802032749858838,
+      "stage_speedup": 1.2524993299001408
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 512,
+      "N": 12288,
+      "attainment": 0.7972288705944609,
+      "baseline_state": "I0",
+      "case_id": "d6_m512_n12288_k1024",
+      "e2e_speedup": 1.1178727569408062,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.5086898803710935,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.4999999999999997,
+      "r": 1.9658342707161605,
+      "stage_speedup": 1.2027711294055392
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 1024,
+      "N": 12288,
+      "attainment": 0.8246595036200597,
+      "baseline_state": "I0",
+      "case_id": "d6_m1024_n12288_k1024",
+      "e2e_speedup": 1.1090828494720282,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.4252433776855467,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.49999999999999967,
+      "r": 2.3515945279210584,
+      "stage_speedup": 1.17534049637994
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 2048,
+      "N": 12288,
+      "attainment": 0.8390950753450365,
+      "baseline_state": "I0",
+      "case_id": "d6_m2048_n12288_k1024",
+      "e2e_speedup": 1.1039424287575001,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.3835201263427732,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.4999999999999996,
+      "r": 2.6074250901404947,
+      "stage_speedup": 1.1609049246549636
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 4096,
+      "N": 12288,
+      "attainment": 0.8465040544080612,
+      "baseline_state": "I0",
+      "case_id": "d6_m4096_n12288_k1024",
+      "e2e_speedup": 1.101147898873114,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.3626585006713867,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 2.7574150285977255,
+      "stage_speedup": 1.1534959455919387
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 8192,
+      "N": 12288,
+      "attainment": 0.8502578259506072,
+      "baseline_state": "I0",
+      "case_id": "d6_m8192_n12288_k1024",
+      "e2e_speedup": 1.0996887595488811,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.3522276878356934,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 2.8390726638914274,
+      "stage_speedup": 1.149742174049393
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 16384,
+      "N": 12288,
+      "attainment": 0.8521472238704204,
+      "baseline_state": "I0",
+      "case_id": "d6_m16384_n12288_k1024",
+      "e2e_speedup": 1.0989429161965958,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.3470122814178467,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 2.8817423865061236,
+      "stage_speedup": 1.1478527761295796
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 256,
+      "N": 12288,
+      "attainment": 0.9221282426046015,
+      "baseline_state": "I0",
+      "case_id": "d6_m256_n12288_k4096",
+      "e2e_speedup": 1.0605901224757537,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.1688957214355469,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 5.920813099943535,
+      "stage_speedup": 1.0778717573953986
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 512,
+      "N": 12288,
+      "attainment": 0.9402152519926007,
+      "baseline_state": "I0",
+      "case_id": "d6_m512_n12288_k4096",
+      "e2e_speedup": 1.049312752434328,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.1271724700927734,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 7.863337082864642,
+      "stage_speedup": 1.0597847480073992
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 1024,
+      "N": 12288,
+      "attainment": 0.9495274666116099,
+      "baseline_state": "I0",
+      "case_id": "d6_m1024_n12288_k4096",
+      "e2e_speedup": 1.0429610267020588,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.1063108444213867,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 9.406378111684234,
+      "stage_speedup": 1.0504725333883902
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 2048,
+      "N": 12288,
+      "attainment": 0.9542530917129103,
+      "baseline_state": "I0",
+      "case_id": "d6_m2048_n12288_k4096",
+      "e2e_speedup": 1.039580038550882,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0958800315856934,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 10.429700360561979,
+      "stage_speedup": 1.0457469082870896
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 4096,
+      "N": 12288,
+      "attainment": 0.9566335871969097,
+      "baseline_state": "I0",
+      "case_id": "d6_m4096_n12288_k4096",
+      "e2e_speedup": 1.0378343568693273,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0906646251678467,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 11.029660114390902,
+      "stage_speedup": 1.0433664128030902
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 8192,
+      "N": 12288,
+      "attainment": 0.9578282943185704,
+      "baseline_state": "I0",
+      "case_id": "d6_m8192_n12288_k4096",
+      "e2e_speedup": 1.0369471907722165,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0880569219589233,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 11.35629065556571,
+      "stage_speedup": 1.0421717056814295
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 16384,
+      "N": 12288,
+      "attainment": 0.9584267676003824,
+      "baseline_state": "I0",
+      "case_id": "d6_m16384_n12288_k4096",
+      "e2e_speedup": 1.0364999576479532,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0867530703544617,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 11.526969546024494,
+      "stage_speedup": 1.0415732323996176
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 256,
+      "N": 12288,
+      "attainment": 0.9793245345276771,
+      "baseline_state": "I0",
+      "case_id": "d6_m256_n12288_k16384",
+      "e2e_speedup": 1.0192199694940414,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0422239303588867,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 23.68325239977414,
+      "stage_speedup": 1.020675465472323
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 512,
+      "N": 12288,
+      "attainment": 0.9843521876075896,
+      "baseline_state": "I0",
+      "case_id": "d6_m512_n12288_k16384",
+      "e2e_speedup": 1.0148238732652028,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0317931175231934,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 31.453348331458567,
+      "stage_speedup": 1.0156478123924102
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 1024,
+      "N": 12288,
+      "attainment": 0.9868854221776423,
+      "baseline_state": "I0",
+      "case_id": "d6_m1024_n12288_k16384",
+      "e2e_speedup": 1.0125446621670056,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0265777111053467,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 37.625512446736934,
+      "stage_speedup": 1.0131145778223578
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 2048,
+      "N": 12288,
+      "attainment": 0.988156935229818,
+      "baseline_state": "I0",
+      "case_id": "d6_m2048_n12288_k16384",
+      "e2e_speedup": 1.0113838863501934,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0239700078964233,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 41.718801442247916,
+      "stage_speedup": 1.0118430647701822
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 4096,
+      "N": 12288,
+      "attainment": 0.9887939212205369,
+      "baseline_state": "I0",
+      "case_id": "d6_m4096_n12288_k16384",
+      "e2e_speedup": 1.0107980908129257,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0226661562919617,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 44.11864045756361,
+      "stage_speedup": 1.0112060787794632
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 8192,
+      "N": 12288,
+      "attainment": 0.9891127222757482,
+      "baseline_state": "I0",
+      "case_id": "d6_m8192_n12288_k16384",
+      "e2e_speedup": 1.0105038264187944,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0220142304897308,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 45.42516262226284,
+      "stage_speedup": 1.0108872777242517
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 16384,
+      "N": 12288,
+      "attainment": 0.9892721999052384,
+      "baseline_state": "I0",
+      "case_id": "d6_m16384_n12288_k16384",
+      "e2e_speedup": 1.0103563507040918,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0216882675886154,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 46.10787818409798,
+      "stage_speedup": 1.0107278000947615
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 256,
+      "N": 12288,
+      "attainment": 0.994749719639179,
+      "baseline_state": "I0",
+      "case_id": "d6_m256_n12288_k65536",
+      "e2e_speedup": 1.0051512209605615,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0105559825897217,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 94.73300959909656,
+      "stage_speedup": 1.0052502803608208
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 512,
+      "N": 12288,
+      "attainment": 0.996041591577623,
+      "baseline_state": "I0",
+      "case_id": "d6_m512_n12288_k65536",
+      "e2e_speedup": 1.003903522982915,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0079482793807983,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 125.81339332583427,
+      "stage_speedup": 1.003958408422377
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 1024,
+      "N": 12288,
+      "attainment": 0.9966887866707409,
+      "baseline_state": "I0",
+      "case_id": "d6_m1024_n12288_k65536",
+      "e2e_speedup": 1.003273662599559,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0066444277763367,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 150.50204978694774,
+      "stage_speedup": 1.0033112133292592
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 2048,
+      "N": 12288,
+      "attainment": 0.9970126997143766,
+      "baseline_state": "I0",
+      "case_id": "d6_m2048_n12288_k65536",
+      "e2e_speedup": 1.0029572126370871,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0059925019741058,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 166.87520576899166,
+      "stage_speedup": 1.0029873002856236
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 4096,
+      "N": 12288,
+      "attainment": 0.9971747352001947,
+      "baseline_state": "I0",
+      "case_id": "d6_m4096_n12288_k65536",
+      "e2e_speedup": 1.0027986055723426,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0056665390729904,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 176.47456183025443,
+      "stage_speedup": 1.0028252647998055
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 8192,
+      "N": 12288,
+      "attainment": 0.9972557726953338,
+      "baseline_state": "I0",
+      "case_id": "d6_m8192_n12288_k65536",
+      "e2e_speedup": 1.0027192062498758,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0055035576224327,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 181.70065048905136,
+      "stage_speedup": 1.0027442273046663
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 16384,
+      "N": 12288,
+      "attainment": 0.9972962963823655,
+      "baseline_state": "I0",
+      "case_id": "d6_m16384_n12288_k65536",
+      "e2e_speedup": 1.002679482607365,
+      "evidence": "analytical_preflight_model_not_npusim",
+      "ideal_speedup": 1.0054220668971539,
+      "no_regression": true,
+      "optimized_state": "I1",
+      "overlap_efficiency": 0.5,
+      "r": 184.4315127363919,
+      "stage_speedup": 1.0027037036176345
+    }
+  ],
+  "records": [
+    {
+      "D": 6,
+      "K": 256,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 2995.9314285714286,
+      "T_intra_ns": 11091.931428571428,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 25918.598095238096,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        256
+      ],
+      "padded_flops": 1610612736,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 1610612736
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 2995.9314285714286,
+      "T_intra_ns": 9593.965714285714,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 24420.632380952382,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        256
+      ],
+      "padded_flops": 1610612736,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 1610612736
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 5991.862857142857,
+      "T_intra_ns": 18183.862857142856,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 39837.19619047619,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        256
+      ],
+      "padded_flops": 3221225472,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 3221225472
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 5991.862857142857,
+      "T_intra_ns": 15187.931428571428,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 36841.264761904764,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        256
+      ],
+      "padded_flops": 3221225472,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 3221225472
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 11983.725714285714,
+      "T_intra_ns": 32367.725714285712,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 67674.39238095238,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        256
+      ],
+      "padded_flops": 6442450944,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 6442450944
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 11983.725714285714,
+      "T_intra_ns": 26375.862857142856,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 61682.52952380953,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        256
+      ],
+      "padded_flops": 6442450944,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 6442450944
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 23967.45142857143,
+      "T_intra_ns": 60735.451428571425,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 123348.78476190477,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        256
+      ],
+      "padded_flops": 12884901888,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 12884901888
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 23967.45142857143,
+      "T_intra_ns": 48751.72571428571,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 111365.05904761906,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        256
+      ],
+      "padded_flops": 12884901888,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 12884901888
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 47934.90285714286,
+      "T_intra_ns": 117470.90285714285,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 234697.56952380954,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        256
+      ],
+      "padded_flops": 25769803776,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 25769803776
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 47934.90285714286,
+      "T_intra_ns": 93503.45142857142,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 210730.1180952381,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        256
+      ],
+      "padded_flops": 25769803776,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 25769803776
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 95869.80571428571,
+      "T_intra_ns": 230941.8057142857,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 457395.1390476191,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        256
+      ],
+      "padded_flops": 51539607552,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 51539607552
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 95869.80571428571,
+      "T_intra_ns": 183006.90285714285,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 409460.2361904762,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        256
+      ],
+      "padded_flops": 51539607552,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 51539607552
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 457883.6114285714,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 902790.2780952381,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        256
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 256,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 362013.8057142857,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 806920.4723809524,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k256",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        256
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        256
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 11983.725714285714,
+      "T_intra_ns": 20079.725714285712,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 34906.392380952384,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        1024
+      ],
+      "padded_flops": 6442450944,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 6442450944
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 11983.725714285714,
+      "T_intra_ns": 16031.725714285714,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 30858.392380952384,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        1024
+      ],
+      "padded_flops": 6442450944,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 6442450944
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 23967.45142857143,
+      "T_intra_ns": 36159.451428571425,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 57812.78476190476,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        1024
+      ],
+      "padded_flops": 12884901888,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 12884901888
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 23967.45142857143,
+      "T_intra_ns": 30063.45142857143,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 51716.78476190477,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        1024
+      ],
+      "padded_flops": 12884901888,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 12884901888
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 47934.90285714286,
+      "T_intra_ns": 68318.90285714285,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 103625.56952380952,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        1024
+      ],
+      "padded_flops": 25769803776,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 25769803776
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 47934.90285714286,
+      "T_intra_ns": 58126.90285714286,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 93433.56952380954,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        1024
+      ],
+      "padded_flops": 25769803776,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 25769803776
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 95869.80571428571,
+      "T_intra_ns": 132637.8057142857,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 195251.13904761904,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        1024
+      ],
+      "padded_flops": 51539607552,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 51539607552
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 95869.80571428571,
+      "T_intra_ns": 114253.80571428571,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 176867.13904761904,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        1024
+      ],
+      "padded_flops": 51539607552,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 51539607552
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 261275.61142857143,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 378502.2780952381,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        1024
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 226507.61142857143,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 343734.2780952381,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        1024
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 383479.22285714286,
+      "T_intra_ns": 518551.22285714286,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 745004.5561904762,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        1024
+      ],
+      "padded_flops": 206158430208,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 206158430208
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 383479.22285714286,
+      "T_intra_ns": 451015.22285714286,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 677468.5561904762,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        1024
+      ],
+      "padded_flops": 206158430208,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 206158430208
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 1033102.4457142857,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 1478009.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        1024
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 1024,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 900030.4457142857,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 1344937.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k1024",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        1024
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        1024
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 47934.90285714286,
+      "T_intra_ns": 56030.90285714286,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 70857.56952380952,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        4096
+      ],
+      "padded_flops": 25769803776,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 25769803776
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 47934.90285714286,
+      "T_intra_ns": 51982.90285714286,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 66809.56952380952,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        4096
+      ],
+      "padded_flops": 25769803776,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 25769803776
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 95869.80571428571,
+      "T_intra_ns": 108061.80571428571,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 129715.13904761904,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        4096
+      ],
+      "padded_flops": 51539607552,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 51539607552
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 95869.80571428571,
+      "T_intra_ns": 101965.80571428571,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 123619.13904761904,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        4096
+      ],
+      "padded_flops": 51539607552,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 51539607552
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 212123.61142857143,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 247430.27809523809,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        4096
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 201931.61142857143,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 237238.27809523809,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        4096
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 383479.22285714286,
+      "T_intra_ns": 420247.22285714286,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 482860.55619047617,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        4096
+      ],
+      "padded_flops": 206158430208,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 206158430208
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 383479.22285714286,
+      "T_intra_ns": 401863.22285714286,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 464476.55619047617,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        4096
+      ],
+      "padded_flops": 206158430208,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 206158430208
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 836494.4457142857,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 953721.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        4096
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 801726.4457142857,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 918953.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        4096
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 1533916.8914285714,
+      "T_intra_ns": 1668988.8914285714,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 1895442.2247619047,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        4096
+      ],
+      "padded_flops": 824633720832,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 824633720832
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 1533916.8914285714,
+      "T_intra_ns": 1601452.8914285714,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 1827906.2247619047,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        4096
+      ],
+      "padded_flops": 824633720832,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 824633720832
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 3067833.782857143,
+      "T_intra_ns": 3333977.782857143,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 3778884.4495238094,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        4096
+      ],
+      "padded_flops": 1649267441664,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 1649267441664
+    },
+    {
+      "D": 6,
+      "K": 4096,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 3067833.782857143,
+      "T_intra_ns": 3200905.782857143,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 3645812.4495238094,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k4096",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        4096
+      ],
+      "padded_flops": 1649267441664,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        4096
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 1649267441664
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 199835.61142857143,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 214662.27809523809,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        16384
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 191739.61142857143,
+      "T_intra_ns": 195787.61142857143,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 210614.27809523809,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        16384
+      ],
+      "padded_flops": 103079215104,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 103079215104
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 383479.22285714286,
+      "T_intra_ns": 395671.22285714286,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 417324.55619047617,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        16384
+      ],
+      "padded_flops": 206158430208,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 206158430208
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 383479.22285714286,
+      "T_intra_ns": 389575.22285714286,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 411228.55619047617,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        16384
+      ],
+      "padded_flops": 206158430208,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 206158430208
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 787342.4457142857,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 822649.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        16384
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 777150.4457142857,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 812457.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        16384
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 1533916.8914285714,
+      "T_intra_ns": 1570684.8914285714,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 1633298.2247619047,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        16384
+      ],
+      "padded_flops": 824633720832,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 824633720832
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 1533916.8914285714,
+      "T_intra_ns": 1552300.8914285714,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 1614914.2247619047,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        16384
+      ],
+      "padded_flops": 824633720832,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 824633720832
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 3067833.782857143,
+      "T_intra_ns": 3137369.782857143,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 3254596.4495238094,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        16384
+      ],
+      "padded_flops": 1649267441664,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 1649267441664
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 3067833.782857143,
+      "T_intra_ns": 3102601.782857143,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 3219828.4495238094,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        16384
+      ],
+      "padded_flops": 1649267441664,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 1649267441664
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 6135667.565714286,
+      "T_intra_ns": 6270739.565714286,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 6497192.899047619,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        16384
+      ],
+      "padded_flops": 3298534883328,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 3298534883328
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 6135667.565714286,
+      "T_intra_ns": 6203203.565714286,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 6429656.899047619,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        16384
+      ],
+      "padded_flops": 3298534883328,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 3298534883328
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 12271335.131428571,
+      "T_intra_ns": 12537479.131428571,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 12982385.798095237,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        16384
+      ],
+      "padded_flops": 6597069766656,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 6597069766656
+    },
+    {
+      "D": 6,
+      "K": 16384,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 12271335.131428571,
+      "T_intra_ns": 12404407.131428571,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 12849313.798095237,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k16384",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        16384
+      ],
+      "padded_flops": 6597069766656,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        16384
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 6597069766656
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 775054.4457142857,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 789881.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        65536
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 256,
+      "N": 12288,
+      "T_comp_ns": 766958.4457142857,
+      "T_intra_ns": 771006.4457142857,
+      "T_move_ns": 8096.0,
+      "T_ring_ns": 14826.666666666668,
+      "T_total_ns": 785833.1123809523,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m256_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 1048576,
+      "logical_shape": [
+        256,
+        12288,
+        65536
+      ],
+      "padded_flops": 412316860416,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        256,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 412316860416
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 1533916.8914285714,
+      "T_intra_ns": 1546108.8914285714,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 1567762.2247619047,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        65536
+      ],
+      "padded_flops": 824633720832,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 824633720832
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 512,
+      "N": 12288,
+      "T_comp_ns": 1533916.8914285714,
+      "T_intra_ns": 1540012.8914285714,
+      "T_move_ns": 12192.0,
+      "T_ring_ns": 21653.333333333336,
+      "T_total_ns": 1561666.2247619047,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m512_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 2097152,
+      "logical_shape": [
+        512,
+        12288,
+        65536
+      ],
+      "padded_flops": 824633720832,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        512,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 824633720832
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 3067833.782857143,
+      "T_intra_ns": 3088217.782857143,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 3123524.4495238094,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        65536
+      ],
+      "padded_flops": 1649267441664,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 1649267441664
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 1024,
+      "N": 12288,
+      "T_comp_ns": 3067833.782857143,
+      "T_intra_ns": 3078025.782857143,
+      "T_move_ns": 20384.0,
+      "T_ring_ns": 35306.66666666667,
+      "T_total_ns": 3113332.4495238094,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m1024_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 4194304,
+      "logical_shape": [
+        1024,
+        12288,
+        65536
+      ],
+      "padded_flops": 1649267441664,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        1024,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 1649267441664
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 6135667.565714286,
+      "T_intra_ns": 6172435.565714286,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 6235048.899047619,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        65536
+      ],
+      "padded_flops": 3298534883328,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 3298534883328
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 2048,
+      "N": 12288,
+      "T_comp_ns": 6135667.565714286,
+      "T_intra_ns": 6154051.565714286,
+      "T_move_ns": 36768.0,
+      "T_ring_ns": 62613.333333333336,
+      "T_total_ns": 6216664.899047619,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m2048_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 8388608,
+      "logical_shape": [
+        2048,
+        12288,
+        65536
+      ],
+      "padded_flops": 3298534883328,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        2048,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 3298534883328
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 12271335.131428571,
+      "T_intra_ns": 12340871.131428571,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 12458097.798095237,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        65536
+      ],
+      "padded_flops": 6597069766656,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 6597069766656
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 4096,
+      "N": 12288,
+      "T_comp_ns": 12271335.131428571,
+      "T_intra_ns": 12306103.131428571,
+      "T_move_ns": 69536.0,
+      "T_ring_ns": 117226.66666666667,
+      "T_total_ns": 12423329.798095237,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m4096_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 16777216,
+      "logical_shape": [
+        4096,
+        12288,
+        65536
+      ],
+      "padded_flops": 6597069766656,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        4096,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 6597069766656
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 24542670.262857143,
+      "T_intra_ns": 24677742.262857143,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 24904195.596190475,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        65536
+      ],
+      "padded_flops": 13194139533312,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 13194139533312
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 8192,
+      "N": 12288,
+      "T_comp_ns": 24542670.262857143,
+      "T_intra_ns": 24610206.262857143,
+      "T_move_ns": 135072.0,
+      "T_ring_ns": 226453.33333333334,
+      "T_total_ns": 24836659.596190475,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m8192_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 33554432,
+      "logical_shape": [
+        8192,
+        12288,
+        65536
+      ],
+      "padded_flops": 13194139533312,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        8192,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 13194139533312
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 49085340.525714286,
+      "T_intra_ns": 49351484.525714286,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 49796391.19238095,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        65536
+      ],
+      "padded_flops": 26388279066624,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_barrier",
+      "state": "I0",
+      "valid_flops": 26388279066624
+    },
+    {
+      "D": 6,
+      "K": 65536,
+      "M": 16384,
+      "N": 12288,
+      "T_comp_ns": 49085340.525714286,
+      "T_intra_ns": 49218412.525714286,
+      "T_move_ns": 266144.0,
+      "T_ring_ns": 444906.6666666667,
+      "T_total_ns": 49663319.19238095,
+      "active_mesh": [
+        2,
+        3
+      ],
+      "case_id": "d6_m16384_n12288_k65536",
+      "evidence": "analytical_preflight_model_not_npusim",
+      "local_output_bytes": 67108864,
+      "logical_shape": [
+        16384,
+        12288,
+        65536
+      ],
+      "padded_flops": 26388279066624,
+      "ring_algorithm": "fixed_1d_ring_blocking_model",
+      "ring_chunk_count": 6,
+      "ring_order": [
+        0,
+        1,
+        2,
+        5,
+        4,
+        3
+      ],
+      "ring_unroll": 1,
+      "runtime_shape": [
+        16384,
+        12288,
+        65536
+      ],
+      "selected_candidate": "split_k_streaming_model",
+      "state": "I1",
+      "valid_flops": 26388279066624
+    }
+  ],
+  "schema_version": "exp3_2_results/v1alpha1",
+  "status": "analytical_preflight_model",
+  "summary": {
+    "logical_cases": 35,
+    "metric": "stage_speedup",
+    "pairs": 35,
+    "state_rows": 70
+  }
+}
