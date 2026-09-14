@@ -1,0 +1,217 @@
+{
+  "cases": [
+    {
+      "artifact_output": "/tmp/rect-mesh-p5-preflight",
+      "case_id": "p5_preflight_400",
+      "classification": "preflight_pass",
+      "observed_outcome": "preflight_pass",
+      "return_code": 0,
+      "scope": "Four families times 100 shapes; schema, placement, graph, transport and memory preflight only; runtime remains not_measured.",
+      "stderr": {
+        "bytes": 734,
+        "path": "logs/p5_preflight_400/stderr.log",
+        "sha256": "0318c77bf9bf8f39a97e9ae1ed2aa9b3daaa62d77c6f87567c579c4e66967d0f"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "logs/p5_preflight_400/stdout.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "wall_seconds": 375.47442
+    },
+    {
+      "artifact_output": "/tmp/dense-sequence-runtime-canary",
+      "case_id": "dense_inference_resident_1x1",
+      "classification": "runtime_pass",
+      "observed_outcome": "runtime_pass",
+      "return_code": 0,
+      "scope": "Two-layer Dense Prefill plus two Decode segments in one 1x1 NpuSim instance with resident HBM.",
+      "stderr": {
+        "bytes": 0,
+        "path": "logs/dense_inference_resident_1x1/stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 521,
+        "path": "logs/dense_inference_resident_1x1/stdout.log",
+        "sha256": "bd69f7666fdda50d33af80cbb5b318a395abaf936896b1729d2a06f58d5eb729"
+      },
+      "wall_seconds": 37.120548
+    },
+    {
+      "artifact_output": "/tmp/dense-training-sequence-runtime-canary",
+      "case_id": "dense_training_resident_1x1",
+      "classification": "runtime_pass",
+      "observed_outcome": "runtime_pass",
+      "return_code": 0,
+      "scope": "Two complete Dense SGD steps in one 1x1 NpuSim instance with resident HBM; timing functional flag remains false.",
+      "stderr": {
+        "bytes": 0,
+        "path": "logs/dense_training_resident_1x1/stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 504,
+        "path": "logs/dense_training_resident_1x1/stdout.log",
+        "sha256": "b391be6066bba7a6975fe73a8f3c3a131474a16c3f5ebb6b691c30fe8e5e3c7f"
+      },
+      "wall_seconds": 17.531158
+    },
+    {
+      "artifact_output": "/tmp/p4-dense-external-offload-runtime-canary",
+      "case_id": "dense_inference_offload_1x1",
+      "classification": "runtime_pass",
+      "observed_outcome": "runtime_pass",
+      "return_code": 0,
+      "scope": "Bounded-HBM 1x1 Dense inference with blocking external parameter bring-in before compute; no per-layer eviction or prefetch.",
+      "stderr": {
+        "bytes": 0,
+        "path": "logs/dense_inference_offload_1x1/stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 167,
+        "path": "logs/dense_inference_offload_1x1/stdout.log",
+        "sha256": "ddbe01fbd545f3899f6356af59e91f4b539e544784894539381edda645c26431"
+      },
+      "wall_seconds": 37.043186
+    },
+    {
+      "artifact_output": "/tmp/dense-training-external-offload-runtime-canary",
+      "case_id": "dense_training_offload_1x1",
+      "classification": "runtime_pass",
+      "observed_outcome": "runtime_pass",
+      "return_code": 0,
+      "scope": "Bounded-HBM 1x1 Dense SGD with parameter bring-in, two compute steps and final dirty writeback; no AdamW.",
+      "stderr": {
+        "bytes": 0,
+        "path": "logs/dense_training_offload_1x1/stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 504,
+        "path": "logs/dense_training_offload_1x1/stdout.log",
+        "sha256": "0478b7a3dc1994721bff29956463c48ee42394aff302f5272afb50e6a6b5eb17"
+      },
+      "wall_seconds": 18.965836
+    },
+    {
+      "artifact_output": "/tmp/moe-full-inference-compile-canary",
+      "case_id": "moe_full_inference_compile_1x2",
+      "classification": "compile_only",
+      "observed_outcome": "compile_only",
+      "return_code": 0,
+      "scope": "Two-layer full-model MoE inference composite on 1x2 EP2; linker replacement and runtime are not materialized.",
+      "stderr": {
+        "bytes": 1040,
+        "path": "logs/moe_full_inference_compile_1x2/stderr.log",
+        "sha256": "b9de8fca6d8b8b23b792ceffffd347f31f9e0e7b97c12ad5c0d4a9b02cb09901"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "logs/moe_full_inference_compile_1x2/stdout.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "wall_seconds": 55.369307
+    },
+    {
+      "artifact_output": "/tmp/moe-block-sequences-compile-canary",
+      "case_id": "moe_block_sequences_compile_1x2",
+      "classification": "compile_only",
+      "observed_outcome": "compile_only",
+      "return_code": 0,
+      "scope": "Production Flexible-MoE block sequences for inference and training on 1x2 EP2; not a full-model runtime result.",
+      "stderr": {
+        "bytes": 0,
+        "path": "logs/moe_block_sequences_compile_1x2/stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 308,
+        "path": "logs/moe_block_sequences_compile_1x2/stdout.log",
+        "sha256": "bf18057056a3c90313cd73ad9e6f874f9274ca87f60f668a17f2280799c654e5"
+      },
+      "wall_seconds": 3.919324
+    }
+  ],
+  "config_digest": "4c01ebc27619c7d5d7c4787eabb08a2f0a7b3e0a8c3b88fb4b440422291208ba",
+  "known_blockers_not_run": [
+    {
+      "case_id": "dense_inference_runtime_2x2_session_blocker",
+      "diagnostic": "P2P endpoint receive session capacity exhausted",
+      "reason": "long diagnostic excluded from the default bounded evidence set"
+    }
+  ],
+  "limitations": [
+    "P5 covers 400 schema/preflight cases; runtime remains not_measured for that matrix.",
+    "Real runtime passes are limited to 1x1 Dense inference and two-step SGD, resident and blocking external offload.",
+    "MoE evidence is compile-only; no full-model MoE runtime is materialized.",
+    "Training timing is functional=0 and does not prove numerical parameter updates.",
+    "The final evidence set is one run per case and does not claim repeatability verification."
+  ],
+  "manifest_refs": [
+    {
+      "path": "runtime_manifest.json",
+      "report_digest": "d05b974641d95a500dfd0e7f2538fae00356d92edb71d3723c831ac0011e1967"
+    },
+    {
+      "path": "preflight_compile_manifest.json",
+      "report_digest": "f7dc38eb7d0be54bc583cd72ba091ecc2a79e24e51edcfd5e352846b59f100bb"
+    }
+  ],
+  "milestones": {
+    "M1": "incomplete",
+    "M2": "incomplete",
+    "M3": "incomplete"
+  },
+  "outcome_counts": {
+    "compile_only": 2,
+    "preflight_pass": 1,
+    "runtime_pass": 4
+  },
+  "schema_version": "rect_mesh_e2e.acceptance_summary/v1alpha1",
+  "selected_case_ids": [
+    "p5_preflight_400",
+    "dense_inference_resident_1x1",
+    "dense_training_resident_1x1",
+    "dense_inference_offload_1x1",
+    "dense_training_offload_1x1",
+    "moe_full_inference_compile_1x2",
+    "moe_block_sequences_compile_1x2"
+  ],
+  "source_binding": {
+    "binding_digest": "c6d857d99df7e1defb4a24f6a90e9d3e327ea72788c8b349c28a0e070a972d00",
+    "commit": "fe6fa79e29151253047d6be11349062dced6ae71",
+    "tracked_change_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tracked_worktree_clean": true,
+    "tree": "206bba35e502889342e4c12ec824e2a5a136a6f3"
+  },
+  "summary_digest": "adc5af8e00145f878aa9e8a3da2a135030cfd237b79e870eb933c02427eca9c7",
+  "tool_bindings": {
+    "config": {
+      "path": "/workspace/exps/rect_mesh_e2e/configs/cases.json",
+      "sha256": "4c01ebc27619c7d5d7c4787eabb08a2f0a7b3e0a8c3b88fb4b440422291208ba"
+    },
+    "finalizer": {
+      "path": "/workspace/build-debug-final/npusim_program_finalizer",
+      "sha256": "060d610f14bc28ffa1d8b1fd4bb2639bad067f71c1972b82eebc769344bf91cc"
+    },
+    "npusim": {
+      "path": "/workspace/build-debug-final/npusim",
+      "sha256": "b11995cc9020d8cfc50586cea8c8c72fe18d237c3c2c163060ae7bed99ffea3f"
+    },
+    "python": {
+      "path": "/usr/bin/python3.10",
+      "sha256": "33f9dae7896c3ed23260a5cafe72679ba9ff35a0883d67e0d1a1d3018322563e"
+    },
+    "runner": {
+      "path": "/workspace/exps/rect_mesh_e2e/run_acceptance.py",
+      "sha256": "4f9ffe59d528244d2f67f48ad58422e59189430ed397527f38d32171767b1cca"
+    },
+    "simulation": {
+      "path": "/workspace/llm/test/program/p5_behavioral_simulation.json",
+      "sha256": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb"
+    }
+  },
+  "total_wall_seconds": 545.423779
+}

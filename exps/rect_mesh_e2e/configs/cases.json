@@ -1,0 +1,248 @@
+{
+  "schema_version": "rect_mesh_e2e.acceptance_cases/v1alpha1",
+  "description": "Bounded evidence set for the current rectangular-mesh workload implementation; classifications are evidence scopes rather than one aggregate success state.",
+  "default_case_ids": [
+    "p5_preflight_400",
+    "dense_inference_resident_1x1",
+    "dense_training_resident_1x1",
+    "dense_inference_offload_1x1",
+    "dense_training_offload_1x1",
+    "moe_full_inference_compile_1x2",
+    "moe_block_sequences_compile_1x2"
+  ],
+  "cases": [
+    {
+      "case_id": "p5_preflight_400",
+      "classification": "preflight_pass",
+      "scope": "Four families times 100 shapes; schema, placement, graph, transport and memory preflight only; runtime remains not_measured.",
+      "artifact_output": "/tmp/rect-mesh-p5-preflight",
+      "entrypoint": "unittest",
+      "arguments": [
+        "test_workload_shape_matrix",
+        "-v"
+      ],
+      "python_paths": [
+        "{repo}",
+        "{repo}/llm/test/frontend/unit"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "Ran 6 tests",
+          "OK"
+        ],
+        "forbidden_output_substrings": [
+          "FAILED ("
+        ]
+      }
+    },
+    {
+      "case_id": "dense_inference_resident_1x1",
+      "classification": "runtime_pass",
+      "scope": "Two-layer Dense Prefill plus two Decode segments in one 1x1 NpuSim instance with resident HBM.",
+      "artifact_output": "/tmp/dense-sequence-runtime-canary",
+      "entrypoint": "llm.test.frontend.integration.run_dense_sequence_runtime_canary",
+      "arguments": [
+        "--mesh-size",
+        "1x1",
+        "--output",
+        "{case_output}",
+        "--finalizer",
+        "{finalizer}",
+        "--npusim",
+        "{npusim}",
+        "--simulation",
+        "{simulation}",
+        "--timeout",
+        "{timeout}"
+      ],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "Dense sequence runtime canary PASS mesh=1x1"
+        ],
+        "forbidden_output_substrings": [
+          "Traceback (most recent call last)"
+        ]
+      }
+    },
+    {
+      "case_id": "dense_training_resident_1x1",
+      "classification": "runtime_pass",
+      "scope": "Two complete Dense SGD steps in one 1x1 NpuSim instance with resident HBM; timing functional flag remains false.",
+      "artifact_output": "/tmp/dense-training-sequence-runtime-canary",
+      "entrypoint": "llm.test.frontend.integration.run_dense_training_sequence_runtime_canary",
+      "arguments": [
+        "--output",
+        "{case_output}",
+        "--finalizer",
+        "{finalizer}",
+        "--npusim",
+        "{npusim}",
+        "--simulation",
+        "{simulation}",
+        "--timeout",
+        "{timeout}"
+      ],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "Dense training sequence runtime canary PASS external_offload=0",
+          "versions=0,1,2",
+          "functional=0"
+        ],
+        "forbidden_output_substrings": [
+          "Traceback (most recent call last)"
+        ]
+      }
+    },
+    {
+      "case_id": "dense_inference_offload_1x1",
+      "classification": "runtime_pass",
+      "scope": "Bounded-HBM 1x1 Dense inference with blocking external parameter bring-in before compute; no per-layer eviction or prefetch.",
+      "artifact_output": "/tmp/p4-dense-external-offload-runtime-canary",
+      "entrypoint": "llm.test.frontend.integration.run_dense_external_offload_runtime_canary",
+      "arguments": [
+        "--output",
+        "{case_output}",
+        "--finalizer",
+        "{finalizer}",
+        "--npusim",
+        "{npusim}",
+        "--simulation",
+        "{simulation}",
+        "--timeout",
+        "{timeout}"
+      ],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "Dense external offload runtime canary PASS"
+        ],
+        "forbidden_output_substrings": [
+          "Traceback (most recent call last)"
+        ]
+      }
+    },
+    {
+      "case_id": "dense_training_offload_1x1",
+      "classification": "runtime_pass",
+      "scope": "Bounded-HBM 1x1 Dense SGD with parameter bring-in, two compute steps and final dirty writeback; no AdamW.",
+      "artifact_output": "/tmp/dense-training-external-offload-runtime-canary",
+      "entrypoint": "llm.test.frontend.integration.run_dense_training_sequence_runtime_canary",
+      "arguments": [
+        "--external-offload",
+        "--output",
+        "{case_output}",
+        "--finalizer",
+        "{finalizer}",
+        "--npusim",
+        "{npusim}",
+        "--simulation",
+        "{simulation}",
+        "--timeout",
+        "{timeout}"
+      ],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "Dense training sequence runtime canary PASS external_offload=1",
+          "versions=0,1,2",
+          "functional=0"
+        ],
+        "forbidden_output_substrings": [
+          "Traceback (most recent call last)"
+        ]
+      }
+    },
+    {
+      "case_id": "moe_full_inference_compile_1x2",
+      "classification": "compile_only",
+      "scope": "Two-layer full-model MoE inference composite on 1x2 EP2; linker replacement and runtime are not materialized.",
+      "artifact_output": "/tmp/moe-full-inference-compile-canary",
+      "entrypoint": "unittest",
+      "arguments": [
+        "llm.test.frontend.unit.test_moe_full_model_compile_sequence",
+        "-v"
+      ],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "Ran 6 tests",
+          "OK"
+        ],
+        "forbidden_output_substrings": [
+          "FAILED ("
+        ]
+      }
+    },
+    {
+      "case_id": "moe_block_sequences_compile_1x2",
+      "classification": "compile_only",
+      "scope": "Production Flexible-MoE block sequences for inference and training on 1x2 EP2; not a full-model runtime result.",
+      "artifact_output": "/tmp/moe-block-sequences-compile-canary",
+      "entrypoint": "llm.test.frontend.integration.run_moe_compile_sequence_canary",
+      "arguments": [],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [0],
+        "required_output_substrings": [
+          "MOE_COMPILE_SEQUENCE_CANARY status=PASS"
+        ],
+        "forbidden_output_substrings": [
+          "Traceback (most recent call last)"
+        ]
+      }
+    },
+    {
+      "case_id": "dense_inference_runtime_2x2_session_blocker",
+      "classification": "known_blocker",
+      "scope": "Four-request TP4 Dense compile/finalize starts on 2x2, then fails closed at the production P2P receive-session capacity gate.",
+      "artifact_output": "/tmp/dense-sequence-runtime-canary-2x2",
+      "entrypoint": "llm.test.frontend.integration.run_dense_sequence_runtime_canary",
+      "arguments": [
+        "--mesh-size",
+        "2x2",
+        "--output",
+        "{case_output}",
+        "--finalizer",
+        "{finalizer}",
+        "--npusim",
+        "{npusim}",
+        "--simulation",
+        "{simulation}",
+        "--timeout",
+        "{timeout}"
+      ],
+      "python_paths": [
+        "{repo}"
+      ],
+      "expected": {
+        "return_codes": [1],
+        "required_output_substrings": [
+          "P2P endpoint receive session capacity exhausted"
+        ],
+        "forbidden_output_substrings": [
+          "Dense sequence runtime canary PASS mesh=2x2"
+        ]
+      }
+    }
+  ]
+}

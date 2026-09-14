@@ -1,0 +1,140 @@
+{
+  "artifact_outputs": {
+    "moe_block_sequences_compile_1x2": "/tmp/moe-block-sequences-compile-canary",
+    "moe_full_inference_compile_1x2": "/tmp/moe-full-inference-compile-canary",
+    "p5_preflight_400": "/tmp/rect-mesh-p5-preflight"
+  },
+  "cases": [
+    {
+      "artifact_output": "/tmp/rect-mesh-p5-preflight",
+      "case_id": "p5_preflight_400",
+      "command": [
+        "/usr/bin/python3.10",
+        "-B",
+        "-m",
+        "unittest",
+        "test_workload_shape_matrix",
+        "-v"
+      ],
+      "declared_classification": "preflight_pass",
+      "observed_outcome": "preflight_pass",
+      "problems": [],
+      "return_code": 0,
+      "scope": "Four families times 100 shapes; schema, placement, graph, transport and memory preflight only; runtime remains not_measured.",
+      "stderr": {
+        "bytes": 734,
+        "path": "logs/p5_preflight_400/stderr.log",
+        "sha256": "0318c77bf9bf8f39a97e9ae1ed2aa9b3daaa62d77c6f87567c579c4e66967d0f"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "logs/p5_preflight_400/stdout.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "timed_out": false,
+      "wall_seconds": 375.47442
+    },
+    {
+      "artifact_output": "/tmp/moe-full-inference-compile-canary",
+      "case_id": "moe_full_inference_compile_1x2",
+      "command": [
+        "/usr/bin/python3.10",
+        "-B",
+        "-m",
+        "unittest",
+        "llm.test.frontend.unit.test_moe_full_model_compile_sequence",
+        "-v"
+      ],
+      "declared_classification": "compile_only",
+      "observed_outcome": "compile_only",
+      "problems": [],
+      "return_code": 0,
+      "scope": "Two-layer full-model MoE inference composite on 1x2 EP2; linker replacement and runtime are not materialized.",
+      "stderr": {
+        "bytes": 1040,
+        "path": "logs/moe_full_inference_compile_1x2/stderr.log",
+        "sha256": "b9de8fca6d8b8b23b792ceffffd347f31f9e0e7b97c12ad5c0d4a9b02cb09901"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "logs/moe_full_inference_compile_1x2/stdout.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "timed_out": false,
+      "wall_seconds": 55.369307
+    },
+    {
+      "artifact_output": "/tmp/moe-block-sequences-compile-canary",
+      "case_id": "moe_block_sequences_compile_1x2",
+      "command": [
+        "/usr/bin/python3.10",
+        "-B",
+        "-m",
+        "llm.test.frontend.integration.run_moe_compile_sequence_canary"
+      ],
+      "declared_classification": "compile_only",
+      "observed_outcome": "compile_only",
+      "problems": [],
+      "return_code": 0,
+      "scope": "Production Flexible-MoE block sequences for inference and training on 1x2 EP2; not a full-model runtime result.",
+      "stderr": {
+        "bytes": 0,
+        "path": "logs/moe_block_sequences_compile_1x2/stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 308,
+        "path": "logs/moe_block_sequences_compile_1x2/stdout.log",
+        "sha256": "bf18057056a3c90313cd73ad9e6f874f9274ca87f60f668a17f2280799c654e5"
+      },
+      "timed_out": false,
+      "wall_seconds": 3.919324
+    }
+  ],
+  "config_digest": "4c01ebc27619c7d5d7c4787eabb08a2f0a7b3e0a8c3b88fb4b440422291208ba",
+  "outcome_counts": {
+    "compile_only": 2,
+    "preflight_pass": 1
+  },
+  "report_digest": "f7dc38eb7d0be54bc583cd72ba091ecc2a79e24e51edcfd5e352846b59f100bb",
+  "schema_version": "rect_mesh_e2e.acceptance_run/v1alpha1",
+  "selected_case_ids": [
+    "p5_preflight_400",
+    "moe_full_inference_compile_1x2",
+    "moe_block_sequences_compile_1x2"
+  ],
+  "source_binding": {
+    "binding_digest": "c6d857d99df7e1defb4a24f6a90e9d3e327ea72788c8b349c28a0e070a972d00",
+    "commit": "fe6fa79e29151253047d6be11349062dced6ae71",
+    "tracked_change_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tracked_worktree_clean": true,
+    "tree": "206bba35e502889342e4c12ec824e2a5a136a6f3"
+  },
+  "tool_bindings": {
+    "config": {
+      "path": "/workspace/exps/rect_mesh_e2e/configs/cases.json",
+      "sha256": "4c01ebc27619c7d5d7c4787eabb08a2f0a7b3e0a8c3b88fb4b440422291208ba"
+    },
+    "finalizer": {
+      "path": "/workspace/build-debug-final/npusim_program_finalizer",
+      "sha256": "060d610f14bc28ffa1d8b1fd4bb2639bad067f71c1972b82eebc769344bf91cc"
+    },
+    "npusim": {
+      "path": "/workspace/build-debug-final/npusim",
+      "sha256": "b11995cc9020d8cfc50586cea8c8c72fe18d237c3c2c163060ae7bed99ffea3f"
+    },
+    "python": {
+      "path": "/usr/bin/python3.10",
+      "sha256": "33f9dae7896c3ed23260a5cafe72679ba9ff35a0883d67e0d1a1d3018322563e"
+    },
+    "runner": {
+      "path": "/workspace/exps/rect_mesh_e2e/run_acceptance.py",
+      "sha256": "4f9ffe59d528244d2f67f48ad58422e59189430ed397527f38d32171767b1cca"
+    },
+    "simulation": {
+      "path": "/workspace/llm/test/program/p5_behavioral_simulation.json",
+      "sha256": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb"
+    }
+  },
+  "unexpected_result_count": 0
+}
