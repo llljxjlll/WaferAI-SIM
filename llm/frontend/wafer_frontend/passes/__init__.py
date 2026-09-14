@@ -110,6 +110,9 @@ from .placement import (
     place_stage4_ir0,
     validate_placement_against,
 )
+from .memory_plan import plan_hierarchical_memory, plan_persistent_hbm
+from .parallel_transport import build_parallel_transport_plan
+from .workload_materialization import materialize_workload_preflight
 from .pass_manager import PassManager, PipelinePhase
 from .project_to_ir2 import (
     project_bundle,
@@ -256,6 +259,9 @@ __all__ = [
     "place_stage4_carrier",
     "place_stage4_ir0",
     "validate_placement_against",
+    "plan_hierarchical_memory",
+    "plan_persistent_hbm",
+    "materialize_workload_preflight",
     "DenseIR0Validator",
     "DenseLogicalBundleValidator",
     "FusionSemanticValidator",
@@ -386,4 +392,29 @@ from .build_moe_swizzle_calibration_program_io import (
 __all__ += [
     "build_moe_swizzle_calibration_program_io",
     "validate_moe_swizzle_calibration_program_io_against",
+]
+from .external_memory import *
+from .external_memory import __all__ as _external_memory_all
+
+__all__ += [
+    name for name in _external_memory_all
+    if name not in __all__
+]
+from .offload import *
+from .offload import __all__ as _offload_all
+
+__all__ += [
+    name for name in _offload_all
+    if name not in __all__
+]
+from .build_e2e_workload_graph import build_e2e_workload_graph
+from .validate_e2e_workload_graph import (
+    E2ECoverageReport,
+    validate_e2e_workload_coverage,
+)
+
+__all__ += [
+    "E2ECoverageReport",
+    "build_e2e_workload_graph",
+    "validate_e2e_workload_coverage",
 ]

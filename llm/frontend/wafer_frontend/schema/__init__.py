@@ -130,6 +130,20 @@ from .persistent_state import (
     StateKind,
     canonical_state_staging_value_id,
 )
+from .memory_plan import (
+    MEMORY_PLAN_SCHEMA_VERSION,
+    MemoryAllocation,
+    MemoryAllocationRequest,
+    MemoryObjectKind,
+    MemoryPeak,
+    MemoryPlan,
+    MemoryPlanExecution,
+    MemoryResidency,
+    MemoryStateVersion,
+    MemoryTier,
+    MemoryTierCapacity,
+    ResidencyStatus,
+)
 from .state_transfer import (
     SEGMENTED_KV_STATE_TRANSFER_CONTRACT_SCHEMA_VERSION,
     SLICED_KV_STATE_TRANSFER_CONTRACT_SCHEMA_VERSION,
@@ -765,6 +779,18 @@ __all__ = [
     "HbmAddressSpace",
     "HbmBinding",
     "PersistentStateManifest",
+    "MEMORY_PLAN_SCHEMA_VERSION",
+    "MemoryAllocation",
+    "MemoryAllocationRequest",
+    "MemoryObjectKind",
+    "MemoryPeak",
+    "MemoryPlan",
+    "MemoryPlanExecution",
+    "MemoryResidency",
+    "MemoryStateVersion",
+    "MemoryTier",
+    "MemoryTierCapacity",
+    "ResidencyStatus",
     "STATE_TRANSFER_CONTRACT_SCHEMA_VERSION",
     "SLICED_KV_STATE_TRANSFER_CONTRACT_SCHEMA_VERSION",
     "SEGMENTED_KV_STATE_TRANSFER_CONTRACT_SCHEMA_VERSION",
@@ -1413,6 +1439,14 @@ from .flexible_moe import *
 from .flexible_moe import __all__ as _flexible_moe_all
 from .flexible_moe_standard import *
 from .flexible_moe_standard import __all__ as _flexible_moe_standard_all
+from .parallel_placement import *
+from .parallel_placement import __all__ as _parallel_placement_all
+from .parallel_transport import *
+from .parallel_transport import __all__ as _parallel_transport_all
+from .workload_run import *
+from .workload_run import __all__ as _workload_run_all
+from .workload_materialization import *
+from .workload_materialization import __all__ as _workload_materialization_all
 
 __all__ = list(dict.fromkeys((
     *__all__,
@@ -1428,4 +1462,23 @@ __all__ = list(dict.fromkeys((
     *_flexible_mesh_representative_completion_all,
     *_flexible_moe_all,
     *_flexible_moe_standard_all,
+    *_parallel_placement_all,
+    *_parallel_transport_all,
+    *_workload_run_all,
+    *_workload_materialization_all,
 )))
+from .external_memory import *
+from .external_memory import __all__ as _external_memory_all
+
+__all__ = list(dict.fromkeys((*__all__, *_external_memory_all)))
+from .offload import *
+from .offload import __all__ as _offload_all
+
+__all__ = list(dict.fromkeys((*__all__, *_offload_all)))
+from .e2e_workload_graph import *
+from .e2e_workload_graph import __all__ as _e2e_workload_graph_all
+
+__all__ += [
+    name for name in _e2e_workload_graph_all
+    if name not in __all__
+]
