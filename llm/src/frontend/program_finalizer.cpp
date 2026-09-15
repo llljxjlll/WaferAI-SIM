@@ -494,6 +494,7 @@ StateKindDto ParseStateKind(const Json &value, const std::string &path) {
     if (raw == "parameter") return StateKindDto::PARAMETER;
     if (raw == "trainable_parameter")
         return StateKindDto::TRAINABLE_PARAMETER;
+    if (raw == "activation") return StateKindDto::ACTIVATION;
     if (raw == "kv_key") return StateKindDto::KV_KEY;
     if (raw == "kv_value") return StateKindDto::KV_VALUE;
     if (raw == "optimizer_reserved") return StateKindDto::OPTIMIZER_RESERVED;
@@ -739,6 +740,11 @@ StateAbiDto ParseStateAbi(const Json &value, const std::string &path) {
             result.access != StateAccessDto::READ_WRITE)
             Fail(path,
                  "trainable parameter must be PERSISTENT and READ_WRITE");
+    } else if (result.kind == StateKindDto::ACTIVATION) {
+        if (result.lifetime != StateLifetimeDto::STEP ||
+            result.access != StateAccessDto::READ_WRITE ||
+            result.dtype != BufferDTypeDto::FP16)
+            Fail(path, "checkpoint activation StateABI must be STEP/READ_WRITE/FP16");
     } else if (result.kind == StateKindDto::KV_KEY ||
                result.kind == StateKindDto::KV_VALUE) {
         if (result.lifetime != StateLifetimeDto::PERSISTENT ||

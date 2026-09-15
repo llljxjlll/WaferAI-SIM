@@ -137,6 +137,7 @@ enum class BufferOwnershipDto { OWNED, BORROWED, ALIASED };
 enum class StateKindDto {
     PARAMETER,
     TRAINABLE_PARAMETER,
+    ACTIVATION,
     KV_KEY,
     KV_VALUE,
     OPTIMIZER_RESERVED,

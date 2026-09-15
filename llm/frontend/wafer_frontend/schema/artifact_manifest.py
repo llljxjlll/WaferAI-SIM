@@ -2615,6 +2615,16 @@ class StateABI:
                     "trainable parameter must be PERSISTENT and READ_WRITE",
                     path=path,
                 )
+        elif self.kind is StateKind.ACTIVATION:
+            if (
+                self.lifetime is not PersistentStateLifetime.STEP
+                or self.access is not PersistentStateAccess.READ_WRITE
+                or self.dtype is not DType.FP16
+            ):
+                raise SchemaError(
+                    "checkpoint activation StateABI must be STEP/READ_WRITE/FP16",
+                    path=path,
+                )
         elif self.kind in (StateKind.KV_KEY, StateKind.KV_VALUE):
             if (
                 self.lifetime is not PersistentStateLifetime.PERSISTENT

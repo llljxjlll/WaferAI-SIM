@@ -37,6 +37,7 @@ _DTYPE_BYTES = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}
 class StateKind(str, Enum):
     PARAMETER = "parameter"
     TRAINABLE_PARAMETER = "trainable_parameter"
+    ACTIVATION = "activation"
     KV_KEY = "kv_key"
     KV_VALUE = "kv_value"
     OPTIMIZER_RESERVED = "optimizer_reserved"
