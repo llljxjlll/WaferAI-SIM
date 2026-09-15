@@ -2,6 +2,9 @@
 
 from .common import ArtifactMetadata, DType, ProfileKey, Sharding, TensorValue
 from .rect_mesh import (
+    RECT_MESH_IMPLEMENTATION_MAX_COLUMNS,
+    RECT_MESH_IMPLEMENTATION_MAX_RANKS,
+    RECT_MESH_IMPLEMENTATION_MAX_ROWS,
     RECT_MESH_MAX_COLUMNS,
     RECT_MESH_MAX_RANKS,
     RECT_MESH_MAX_ROWS,
@@ -739,6 +742,9 @@ __all__ = [
     "RECT_MESH_MAX_COLUMNS",
     "RECT_MESH_MAX_RANKS",
     "RECT_MESH_MAX_ROWS",
+    "RECT_MESH_IMPLEMENTATION_MAX_COLUMNS",
+    "RECT_MESH_IMPLEMENTATION_MAX_RANKS",
+    "RECT_MESH_IMPLEMENTATION_MAX_ROWS",
     "RectMeshRankOrder",
     "RectMeshRoutePolicy",
     "RectMeshSpec",

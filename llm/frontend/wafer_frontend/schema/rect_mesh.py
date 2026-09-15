@@ -13,6 +13,9 @@ from .serde import canonical_digest
 RECT_MESH_MAX_ROWS = 10
 RECT_MESH_MAX_COLUMNS = 10
 RECT_MESH_MAX_RANKS = 100
+RECT_MESH_IMPLEMENTATION_MAX_ROWS = 16
+RECT_MESH_IMPLEMENTATION_MAX_COLUMNS = 16
+RECT_MESH_IMPLEMENTATION_MAX_RANKS = 256
 
 
 class RectMeshRankOrder(str, Enum):
@@ -49,8 +52,8 @@ class RectMeshSpec:
 
     def validate(self, path: str = "rect_mesh") -> None:
         for field_name, maximum in (
-            ("rows", RECT_MESH_MAX_ROWS),
-            ("columns", RECT_MESH_MAX_COLUMNS),
+            ("rows", RECT_MESH_IMPLEMENTATION_MAX_ROWS),
+            ("columns", RECT_MESH_IMPLEMENTATION_MAX_COLUMNS),
         ):
             value = getattr(self, field_name)
             validate_uint64(value, f"{path}.{field_name}")
@@ -59,9 +62,10 @@ class RectMeshSpec:
                     f"must be in [1, {maximum}]",
                     path=f"{path}.{field_name}",
                 )
-        if self.rank_count > RECT_MESH_MAX_RANKS:
+        if self.rank_count > RECT_MESH_IMPLEMENTATION_MAX_RANKS:
             raise SchemaError(
-                f"rank count must not exceed {RECT_MESH_MAX_RANKS}",
+                "rank count must not exceed "
+                f"{RECT_MESH_IMPLEMENTATION_MAX_RANKS}",
                 path=path,
             )
         if type(self.rank_order) is not RectMeshRankOrder:
@@ -104,6 +108,16 @@ class RectMeshSpec:
     @property
     def rank_count(self) -> int:
         return self.rows * self.columns
+
+    @property
+    def within_release_envelope(self) -> bool:
+        """Whether this shape belongs to the frozen 1..10 release matrix."""
+
+        return (
+            self.rows <= RECT_MESH_MAX_ROWS
+            and self.columns <= RECT_MESH_MAX_COLUMNS
+            and self.rank_count <= RECT_MESH_MAX_RANKS
+        )
 
     @property
     def physical_shape(self) -> tuple[int, int]:
@@ -198,6 +212,9 @@ class RectMeshSpec:
 
 
 __all__ = [
+    "RECT_MESH_IMPLEMENTATION_MAX_COLUMNS",
+    "RECT_MESH_IMPLEMENTATION_MAX_RANKS",
+    "RECT_MESH_IMPLEMENTATION_MAX_ROWS",
     "RECT_MESH_MAX_COLUMNS",
     "RECT_MESH_MAX_RANKS",
     "RECT_MESH_MAX_ROWS",

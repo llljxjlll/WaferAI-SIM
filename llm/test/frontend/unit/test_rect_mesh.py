@@ -44,8 +44,8 @@ class RectMeshSpecTest(unittest.TestCase):
         for spec in (
             RectMeshSpec(rows=0, columns=1),
             RectMeshSpec(rows=1, columns=0),
-            RectMeshSpec(rows=11, columns=1),
-            RectMeshSpec(rows=1, columns=11),
+            RectMeshSpec(rows=17, columns=1),
+            RectMeshSpec(rows=1, columns=17),
             RectMeshSpec(rows=True, columns=1),
             replace(RectMeshSpec(2, 2), ranks_per_die=2),
             replace(RectMeshSpec(2, 2), origin=(1, 0)),
@@ -54,6 +54,25 @@ class RectMeshSpecTest(unittest.TestCase):
         ):
             with self.subTest(spec=spec), self.assertRaises(SchemaError):
                 spec.validate()
+
+        for rows, columns in ((1, 16), (16, 1), (12, 12), (8, 16), (16, 16)):
+            with self.subTest(rows=rows, columns=columns):
+                extended = RectMeshSpec(rows=rows, columns=columns)
+                extended.validate()
+                self.assertFalse(extended.within_release_envelope)
+                self.assertEqual(extended.rank_count, rows * columns)
+                self.assertEqual(
+                    tuple(
+                        extended.coordinate(rank)
+                        for rank in range(extended.rank_count)
+                    ),
+                    tuple(
+                        (column, row)
+                        for row in range(rows)
+                        for column in range(columns)
+                    ),
+                )
+        self.assertTrue(RectMeshSpec(10, 10).within_release_envelope)
 
         spec = RectMeshSpec(rows=2, columns=3)
         with self.assertRaisesRegex(SchemaError, "rank count"):
