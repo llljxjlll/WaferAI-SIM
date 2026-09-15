@@ -150,6 +150,8 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
      C::COMPUTE, V::PUBLIC, L::STABLE, S::AVAILABLE},
     {PrimId::SGD_UPDATE, "Sgd_update_prim", C::COMPUTE, V::PUBLIC,
      L::STABLE, S::AVAILABLE},
+    {PrimId::ADAMW_UPDATE, "Adamw_update_prim", C::COMPUTE, V::PUBLIC,
+     L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

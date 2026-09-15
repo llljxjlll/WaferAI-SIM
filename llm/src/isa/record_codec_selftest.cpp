@@ -256,6 +256,29 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::ADAMW_UPDATE: {
+        AdamwUpdateOperands operands;
+        operands.weight = Address(boundary);
+        operands.gradient = Address(boundary);
+        operands.master_weight = Address(boundary);
+        operands.first_moment = Address(boundary);
+        operands.second_moment = Address(boundary);
+        operands.step_counter = Address(boundary);
+        operands.updated_weight = operands.weight;
+        operands.updated_master_weight = operands.master_weight;
+        operands.updated_first_moment = operands.first_moment;
+        operands.updated_second_moment = operands.second_moment;
+        operands.updated_step_counter = operands.step_counter;
+        operands.element_count = 8;
+        operands.step = 1;
+        operands.learning_rate_f64_bits = DoubleBits(0.001);
+        operands.beta1_f64_bits = DoubleBits(0.9);
+        operands.beta2_f64_bits = DoubleBits(0.999);
+        operands.epsilon_f64_bits = DoubleBits(1.0e-8);
+        operands.weight_decay_f64_bits = DoubleBits(0.01);
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::DTE_SEND: {
         DteSendOperands operands;
         operands.source = Address(boundary);
@@ -600,7 +623,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 51, "executable opcode count");
+    checks.Check(executable_count == 52, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -1565,6 +1588,34 @@ void CheckExactStage2Rejections(Checks &checks) {
     sgd.learning_rate_f64_bits = DoubleBits(
         std::numeric_limits<double>::infinity());
     checks.Reject("SGD_UPDATE learning rate finite",
+                  [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::ADAMW_UPDATE),
+                        Boundary::TYPICAL);
+    auto &adamw = std::get<AdamwUpdateOperands>(record.operands);
+    checks.Accept("ADAMW_UPDATE exact", [&] { EncodeExternalRecord(record); });
+    adamw.state_datatype = ExternalDataType::FP16;
+    checks.Reject("ADAMW_UPDATE FP32 master exact",
+                  [&] { EncodeExternalRecord(record); });
+    adamw.state_datatype = ExternalDataType::FP32;
+    adamw.updated_first_moment.absolute_address_bytes++;
+    checks.Reject("ADAMW_UPDATE first moment in-place exact",
+                  [&] { EncodeExternalRecord(record); });
+    adamw.updated_first_moment = adamw.first_moment;
+    adamw.step = 0;
+    checks.Reject("ADAMW_UPDATE step positive",
+                  [&] { EncodeExternalRecord(record); });
+    adamw.step = 1;
+    adamw.beta1_f64_bits = DoubleBits(1.0);
+    checks.Reject("ADAMW_UPDATE beta1 open interval",
+                  [&] { EncodeExternalRecord(record); });
+    adamw.beta1_f64_bits = DoubleBits(0.9);
+    adamw.epsilon_f64_bits = DoubleBits(0.0);
+    checks.Reject("ADAMW_UPDATE epsilon positive",
+                  [&] { EncodeExternalRecord(record); });
+    adamw.epsilon_f64_bits = DoubleBits(1.0e-8);
+    adamw.weight_decay_f64_bits = DoubleBits(-0.01);
+    checks.Reject("ADAMW_UPDATE weight decay nonnegative",
                   [&] { EncodeExternalRecord(record); });
 }
 

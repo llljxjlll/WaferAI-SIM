@@ -108,6 +108,9 @@ constexpr std::array<E, kOpcodeManifestSize> kManifest{{
     {Opcode::SGD_UPDATE, "SGD_UPDATE", OpcodeVisibility::PUBLIC,
      OpcodeLifecycle::STABLE, OpcodeSupport::AVAILABLE,
      OpcodeCategory::COMPUTE},
+    {Opcode::ADAMW_UPDATE, "ADAMW_UPDATE", OpcodeVisibility::PUBLIC,
+     OpcodeLifecycle::STABLE, OpcodeSupport::AVAILABLE,
+     OpcodeCategory::COMPUTE},
 
     {Opcode::DTE_SEND, "DTE_SEND", OpcodeVisibility::PUBLIC,
      OpcodeLifecycle::STABLE, OpcodeSupport::AVAILABLE,

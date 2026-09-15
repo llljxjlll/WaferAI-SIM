@@ -197,6 +197,40 @@ void CheckExactWork(IsaV1SelfTestResult &result) {
                       sgd_work.comparisons == 0,
           "SGD_UPDATE exact published work");
 
+    AdamwUpdateOperands adamw;
+    adamw.weight = ExactAddress(0);
+    adamw.gradient = ExactAddress(64);
+    adamw.master_weight = ExactAddress(128);
+    adamw.first_moment = ExactAddress(192);
+    adamw.second_moment = ExactAddress(256);
+    adamw.step_counter = ExactAddress(320);
+    adamw.updated_weight = adamw.weight;
+    adamw.updated_master_weight = adamw.master_weight;
+    adamw.updated_first_moment = adamw.first_moment;
+    adamw.updated_second_moment = adamw.second_moment;
+    adamw.updated_step_counter = adamw.step_counter;
+    adamw.element_count = 8;
+    adamw.step = 2;
+    const double adamw_learning_rate = 0.001;
+    const double beta1 = 0.9;
+    const double beta2 = 0.999;
+    const double epsilon = 1.0e-8;
+    const double weight_decay = 0.01;
+    std::memcpy(&adamw.learning_rate_f64_bits, &adamw_learning_rate,
+                sizeof(adamw_learning_rate));
+    std::memcpy(&adamw.beta1_f64_bits, &beta1, sizeof(beta1));
+    std::memcpy(&adamw.beta2_f64_bits, &beta2, sizeof(beta2));
+    std::memcpy(&adamw.epsilon_f64_bits, &epsilon, sizeof(epsilon));
+    std::memcpy(&adamw.weight_decay_f64_bits, &weight_decay,
+                sizeof(weight_decay));
+    const PublishedNpuWork adamw_work = EvaluatePublishedNpuWork(adamw);
+    Check(result, adamw_work.ops.exu == 0 && adamw_work.ops.sfu == 10 &&
+                      adamw_work.ops.vec == 144 &&
+                      adamw_work.memory_read_bytes == 148 &&
+                      adamw_work.memory_write_bytes == 116 &&
+                      adamw_work.comparisons == 0,
+          "ADAMW_UPDATE exact published work");
+
     const PublishedNpuWork legacy = EvaluatePublishedNpuWork(
         Opcode::GELU, {{"N", 7}});
     Check(result, legacy.ops.vec == 28 && legacy.memory_read_bytes == 0 &&

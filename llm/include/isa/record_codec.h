@@ -200,6 +200,32 @@ struct SgdUpdateOperands {
     uint64_t momentum_f64_bits = 0;
 };
 
+struct AdamwUpdateOperands {
+    ExternalDataType weight_datatype = ExternalDataType::FP16;
+    ExternalDataType gradient_datatype = ExternalDataType::FP32;
+    ExternalDataType state_datatype = ExternalDataType::FP32;
+    ExternalDataType output_datatype = ExternalDataType::FP16;
+    OptimizerRoundingMode rounding = OptimizerRoundingMode::RNE;
+    SramAddressOperand weight;
+    SramAddressOperand gradient;
+    SramAddressOperand master_weight;
+    SramAddressOperand first_moment;
+    SramAddressOperand second_moment;
+    SramAddressOperand step_counter;
+    SramAddressOperand updated_weight;
+    SramAddressOperand updated_master_weight;
+    SramAddressOperand updated_first_moment;
+    SramAddressOperand updated_second_moment;
+    SramAddressOperand updated_step_counter;
+    uint64_t element_count = 1;
+    uint64_t step = 1;
+    uint64_t learning_rate_f64_bits = 0;
+    uint64_t beta1_f64_bits = 0;
+    uint64_t beta2_f64_bits = 0;
+    uint64_t epsilon_f64_bits = 0;
+    uint64_t weight_decay_f64_bits = 0;
+};
+
 struct DteSendOperands {
     DteSendMode mode = DteSendMode::P2P;
     EndpointSourceSpace source_space = EndpointSourceSpace::SRAM;
@@ -359,6 +385,7 @@ using RecordOperands =
                  AttentionExactOperands, EmbeddingLookupOperands,
                  GreedySampleOperands, CrossEntropyForwardOperands,
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
+                 AdamwUpdateOperands,
                  DteSendOperands, DteRecvOperands,
                  ReduceComputeOperands, LocalReduceOperands, LsuOperands,
                  LocalNocSendOperands, LocalNocRecvOperands, LocalNocWaitOperands,
@@ -383,6 +410,7 @@ enum class RecordOperandKind : uint8_t {
     CROSS_ENTROPY_FORWARD,
     CROSS_ENTROPY_BACKWARD,
     SGD_UPDATE,
+    ADAMW_UPDATE,
     DTE_SEND,
     DTE_RECV,
     REDUCE_COMPUTE,

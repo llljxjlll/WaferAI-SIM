@@ -134,8 +134,8 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
               "external manifest contains only public entries");
     }
 
-    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 32,
-          "compute range contains 32 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 33,
+          "compute range contains 33 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 7,
           "communication range contains 7 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::MEMORY) == 10,
@@ -210,7 +210,7 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
     }
 
     constexpr std::array<uint8_t, 7> kReservedEncoding{{
-        0x00, 0x21, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
+        0x00, 0x22, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
     }};
     for (uint8_t value : kReservedEncoding) {
         Check(result, LookupOpcode(value) == nullptr,
@@ -343,10 +343,10 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
             deprecated_ids.insert(PrimIdValue(entry.id));
         }
     }
-    Check(result, compute == 39 && communication == 8 && memory == 14 &&
+    Check(result, compute == 40 && communication == 8 && memory == 14 &&
                       synchronization == 4 && dynamic == 2,
           "Prim primary-category counts match frozen inventory");
-    Check(result, public_count == 32,
+    Check(result, public_count == 33,
           "Prim visibility counts match frozen inventory");
     Check(result, unsupported == 5 && experimental == 6 && deprecated == 2,
           "Prim lifecycle/support counts match frozen inventory");
@@ -354,7 +354,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
     const std::set<uint8_t> expected_public{
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
         17, 18, 19, 20, 22, 23, 24, 25, 35, 49, 50, 51,
-        61, 62, 63, 64, 65, 66, 67,
+        61, 62, 63, 64, 65, 66, 67, 68,
     };
     const std::set<uint8_t> expected_unsupported{2, 12, 16, 21, 23};
     const std::set<uint8_t> expected_experimental{7, 10, 47, 49, 50, 51};
@@ -415,7 +415,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
           "duplicate factory name has stable manifest error");
 
     Check(result, LookupPrim(uint16_t{0}) == nullptr &&
-                      LookupPrim(uint16_t{68}) == nullptr &&
+                      LookupPrim(uint16_t{69}) == nullptr &&
                       LookupPrim(uint16_t{256}) == nullptr,
           "invalid/out-of-range/unknown PrimIds do not resolve");
     Check(result, LookupPrim("__isa_v1_unknown_prim__") == nullptr,
@@ -427,7 +427,7 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
     IsaV1SelfTestResult result;
     PrimFactory &factory = PrimFactory::getInstance();
     Check(result, factory.registeredCount() == kPrimManifestSize,
-          "PrimFactory runtime count matches 67-entry manifest");
+          "PrimFactory runtime count matches 68-entry manifest");
     if (factory.registeredCount() != kPrimManifestSize)
         return result;
 
@@ -587,10 +587,10 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
     Check(result,
           ThrowsExactly<std::invalid_argument>(
               [&] {
-                  factory.registerPrim("__isa_v1_id_68__",
-                                       static_cast<PrimId>(68), unused_creator);
+                  factory.registerPrim("__isa_v1_id_69__",
+                                       static_cast<PrimId>(69), unused_creator);
               },
-              "unassigned PrimId cannot be registered: 68"),
+              "unassigned PrimId cannot be registered: 69"),
           "PrimFactory rejects first unassigned PrimId");
     Check(result,
           ThrowsExactly<std::invalid_argument>(

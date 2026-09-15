@@ -214,6 +214,36 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         record.operands = operands;
         break;
     }
+    case RecordOperandKind::ADAMW_UPDATE: {
+        AdamwUpdateOperands operands;
+        operands.weight = Absolute(0x1000);
+        operands.gradient = Absolute(0x2000);
+        operands.master_weight = Absolute(0x3000);
+        operands.first_moment = Absolute(0x4000);
+        operands.second_moment = Absolute(0x5000);
+        operands.step_counter = Absolute(0x6000);
+        operands.updated_weight = operands.weight;
+        operands.updated_master_weight = operands.master_weight;
+        operands.updated_first_moment = operands.first_moment;
+        operands.updated_second_moment = operands.second_moment;
+        operands.updated_step_counter = operands.step_counter;
+        operands.element_count = 8;
+        operands.step = 2;
+        const double learning_rate = 0.001;
+        const double beta1 = 0.9;
+        const double beta2 = 0.999;
+        const double epsilon = 1.0e-8;
+        const double weight_decay = 0.01;
+        std::memcpy(&operands.learning_rate_f64_bits, &learning_rate,
+                    sizeof(learning_rate));
+        std::memcpy(&operands.beta1_f64_bits, &beta1, sizeof(beta1));
+        std::memcpy(&operands.beta2_f64_bits, &beta2, sizeof(beta2));
+        std::memcpy(&operands.epsilon_f64_bits, &epsilon, sizeof(epsilon));
+        std::memcpy(&operands.weight_decay_f64_bits, &weight_decay,
+                    sizeof(weight_decay));
+        record.operands = operands;
+        break;
+    }
     case RecordOperandKind::DTE_SEND: {
         DteSendOperands operands;
         operands.mode = DteSendMode::P2P;
@@ -409,6 +439,7 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::CROSS_ENTROPY_FORWARD:
     case Opcode::CROSS_ENTROPY_BACKWARD:
     case Opcode::SGD_UPDATE:
+    case Opcode::ADAMW_UPDATE:
         return true;
     default:
         return false;
@@ -447,7 +478,8 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
         record.opcode == Opcode::GREEDY_SAMPLE ||
         record.opcode == Opcode::CROSS_ENTROPY_FORWARD ||
         record.opcode == Opcode::CROSS_ENTROPY_BACKWARD ||
-        record.opcode == Opcode::SGD_UPDATE) {
+        record.opcode == Opcode::SGD_UPDATE ||
+        record.opcode == Opcode::ADAMW_UPDATE) {
         auto *exact = dynamic_cast<Exact_stage2_prim_base *>(&base);
         checks.Check(exact != nullptr && exact->exact_opcode() == record.opcode,
                      "exact Stage2 target type and opcode");
@@ -470,6 +502,8 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
             lowered.operands = prim->operands;
         else if (auto *prim = dynamic_cast<Sgd_update_prim *>(exact))
             lowered.operands = prim->operands;
+        else if (auto *prim = dynamic_cast<Adamw_update_prim *>(exact))
+            lowered.operands = prim->operands;
         else {
             checks.Check(false, "exact Stage2 concrete target type");
             return;
@@ -485,6 +519,8 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                 ? std::vector<int>{1, 1, 1}
             : record.opcode == Opcode::SGD_UPDATE
                 ? std::vector<int>{1, 1}
+            : record.opcode == Opcode::ADAMW_UPDATE
+                ? std::vector<int>{1, 1, 1, 1, 1, 1}
                 : std::vector<int>{1};
         checks.Check(exact->data_size_input == expected_inputs &&
                          exact->data_chunk ==
@@ -909,7 +945,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 46,
+    checks.Check(supported == 47,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

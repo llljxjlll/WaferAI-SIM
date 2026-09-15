@@ -95,6 +95,7 @@ enum class PrimId : uint8_t {
     CROSS_ENTROPY_FORWARD = 65,
     CROSS_ENTROPY_BACKWARD = 66,
     SGD_UPDATE = 67,
+    ADAMW_UPDATE = 68,
 };
 
 constexpr uint8_t PrimIdValue(PrimId id) {
@@ -102,4 +103,4 @@ constexpr uint8_t PrimIdValue(PrimId id) {
 }
 
 constexpr uint8_t kMaxAssignedPrimId =
-    PrimIdValue(PrimId::SGD_UPDATE);
+    PrimIdValue(PrimId::ADAMW_UPDATE);

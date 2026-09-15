@@ -15,6 +15,7 @@ REGISTER_PRIM(Greedy_sample_prim, PrimId::GREEDY_SAMPLE);
 REGISTER_PRIM(Cross_entropy_forward_prim, PrimId::CROSS_ENTROPY_FORWARD);
 REGISTER_PRIM(Cross_entropy_backward_prim, PrimId::CROSS_ENTROPY_BACKWARD);
 REGISTER_PRIM(Sgd_update_prim, PrimId::SGD_UPDATE);
+REGISTER_PRIM(Adamw_update_prim, PrimId::ADAMW_UPDATE);
 
 namespace {
 
@@ -85,6 +86,9 @@ PublishedNpuWork ExactWork(const ExternalRecord &record) {
     case Opcode::SGD_UPDATE:
         return EvaluatePublishedNpuWork(
             std::get<SgdUpdateOperands>(record.operands));
+    case Opcode::ADAMW_UPDATE:
+        return EvaluatePublishedNpuWork(
+            std::get<AdamwUpdateOperands>(record.operands));
     default:
         throw std::logic_error("exact Stage2 Prim has an unexpected opcode");
     }
@@ -109,6 +113,8 @@ void Exact_stage2_prim_base::initialize() {
                           ? vector<int>{1, 1, 1}
                       : exact_opcode_ == Opcode::SGD_UPDATE
                           ? vector<int>{1, 1}
+                      : exact_opcode_ == Opcode::ADAMW_UPDATE
+                          ? vector<int>{1, 1, 1, 1, 1, 1}
                           : vector<int>{1};
     data_chunk = {{"output", 1}};
 }
@@ -330,4 +336,32 @@ ExternalRecord Sgd_update_prim::ExactRecord() const {
 
 void Sgd_update_prim::AssignExactRecord(const ExternalRecord &record) {
     operands = std::get<SgdUpdateOperands>(record.operands);
+}
+
+Adamw_update_prim::Adamw_update_prim()
+    : Exact_stage2_prim_base("Adamw_update_prim", Opcode::ADAMW_UPDATE) {}
+
+void Adamw_update_prim::taskCore(
+    TaskCoreContext &context, string prim_name, u_int64_t &dram_time,
+    u_int64_t &exu_ops, u_int64_t &sfu_ops, u_int64_t &vec_ops) {
+    Exact_stage2_prim_base::taskCore(context, std::move(prim_name), dram_time,
+                                    exu_ops, sfu_ops, vec_ops);
+    const PublishedNpuWork work = EvaluatePublishedNpuWork(operands);
+    std::cout << "[TRAIN_ADAMW] core=" << context.cid
+              << " invocations=1 element_count=" << operands.element_count
+              << " step=" << operands.step
+              << " beta1_f64_bits=" << operands.beta1_f64_bits
+              << " beta2_f64_bits=" << operands.beta2_f64_bits
+              << " epsilon_f64_bits=" << operands.epsilon_f64_bits
+              << " weight_decay_f64_bits=" << operands.weight_decay_f64_bits
+              << " sram_read_bytes=" << work.memory_read_bytes
+              << " sram_write_bytes=" << work.memory_write_bytes << '\n';
+}
+
+ExternalRecord Adamw_update_prim::ExactRecord() const {
+    return {Opcode::ADAMW_UPDATE, operands};
+}
+
+void Adamw_update_prim::AssignExactRecord(const ExternalRecord &record) {
+    operands = std::get<AdamwUpdateOperands>(record.operands);
 }

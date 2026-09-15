@@ -46,6 +46,7 @@ enum class Opcode : uint8_t {
     CROSS_ENTROPY_FORWARD = 0x1e,
     CROSS_ENTROPY_BACKWARD = 0x1f,
     SGD_UPDATE = 0x20,
+    ADAMW_UPDATE = 0x21,
 
     DTE_SEND = 0x40,
     DTE_RECV = 0x41,
@@ -216,6 +217,8 @@ constexpr OpcodeLowering OpcodeLoweringFor(Opcode opcode) noexcept {
         return DirectPrim(PrimId::CROSS_ENTROPY_BACKWARD);
     case Opcode::SGD_UPDATE:
         return DirectPrim(PrimId::SGD_UPDATE);
+    case Opcode::ADAMW_UPDATE:
+        return DirectPrim(PrimId::ADAMW_UPDATE);
     case Opcode::DTE_SEND:
         return ModeDispatch(OpcodeLoweringVariant::DTE_SEND_MODE);
     case Opcode::DTE_RECV:
@@ -309,7 +312,7 @@ constexpr uint8_t OpcodeValue(Opcode opcode) noexcept {
 }
 
 inline constexpr uint8_t kComputeOpcodeFirst = 0x01;
-inline constexpr uint8_t kComputeOpcodeLast = 0x20;
+inline constexpr uint8_t kComputeOpcodeLast = 0x21;
 inline constexpr uint8_t kCommunicationOpcodeFirst = 0x40;
 inline constexpr uint8_t kCommunicationOpcodeLast = 0x43;
 inline constexpr uint8_t kMemoryOpcodeFirst = 0x80;
@@ -318,7 +321,7 @@ inline constexpr uint8_t kSynchronizationOpcodeFirst = 0xc0;
 inline constexpr uint8_t kSynchronizationOpcodeLast = 0xc6;
 inline constexpr uint8_t kReservedOpcodeFirst = 0xf0;
 inline constexpr uint8_t kReservedOpcodeLast = 0xff;
-inline constexpr std::size_t kOpcodeManifestSize = 56;
+inline constexpr std::size_t kOpcodeManifestSize = 57;
 
 // The returned array is sorted by numeric opcode and has static lifetime.
 const std::array<OpcodeManifestEntry, kOpcodeManifestSize> &

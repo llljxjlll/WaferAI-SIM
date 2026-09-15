@@ -189,6 +189,14 @@ LoweredPrimList LowerExactStage2(const ExternalRecord &record,
         prim->initialize();
         break;
     }
+    case Opcode::ADAMW_UPDATE: {
+        auto *prim = dynamic_cast<Adamw_update_prim *>(base.get());
+        if (prim == nullptr)
+            LoweringFailure(entry, "target Prim is not Adamw_update_prim");
+        prim->operands = std::get<AdamwUpdateOperands>(record.operands);
+        prim->initialize();
+        break;
+    }
     default:
         LoweringFailure(entry, "unexpected exact Stage2 opcode");
     }
@@ -1230,6 +1238,7 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     case Opcode::CROSS_ENTROPY_FORWARD:
     case Opcode::CROSS_ENTROPY_BACKWARD:
     case Opcode::SGD_UPDATE:
+    case Opcode::ADAMW_UPDATE:
         return LowerExactStage2(record, *entry);
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:

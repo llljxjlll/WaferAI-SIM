@@ -490,6 +490,27 @@ PublishedNpuWork EvaluatePublishedNpuWork(
     return result;
 }
 
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const AdamwUpdateOperands &operands) {
+    ValidateExternalRecord(ExternalRecord{Opcode::ADAMW_UPDATE, operands});
+    PublishedNpuWork result;
+    // Per element: update m and v, apply two bias corrections, normalize,
+    // apply decoupled weight decay, then cast the FP32 master back to FP16.
+    result.ops.vec = CheckedMultiply(
+        18, operands.element_count, "AdamW vector ops");
+    result.ops.sfu = CheckedAdd(
+        operands.element_count, 2, "AdamW sqrt and bias-correction ops");
+    result.memory_read_bytes = CheckedAdd(
+        CheckedMultiply(18, operands.element_count,
+                        "AdamW memory read bytes"),
+        4, "AdamW step-counter read bytes");
+    result.memory_write_bytes = CheckedAdd(
+        CheckedMultiply(14, operands.element_count,
+                        "AdamW memory write bytes"),
+        4, "AdamW step-counter write bytes");
+    return result;
+}
+
 NpuOps EvaluatePublishedNpuOps(
     Opcode opcode, const PublishedNpuParameters &parameters,
     const PublishedNpuHardwareView &hardware) {

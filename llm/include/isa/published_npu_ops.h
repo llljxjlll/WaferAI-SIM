@@ -59,6 +59,8 @@ PublishedNpuWork EvaluatePublishedNpuWork(
     const CrossEntropyBackwardOperands &operands);
 PublishedNpuWork EvaluatePublishedNpuWork(
     const SgdUpdateOperands &operands);
+PublishedNpuWork EvaluatePublishedNpuWork(
+    const AdamwUpdateOperands &operands);
 
 // Compatibility wrapper for the published v1 operation-count API.
 NpuOps EvaluatePublishedNpuOps(

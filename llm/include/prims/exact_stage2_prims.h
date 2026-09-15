@@ -111,3 +111,17 @@ private:
     ExternalRecord ExactRecord() const override;
     void AssignExactRecord(const ExternalRecord &record) override;
 };
+
+class Adamw_update_prim final : public Exact_stage2_prim_base {
+public:
+    AdamwUpdateOperands operands;
+
+    Adamw_update_prim();
+    void taskCore(TaskCoreContext &context, string prim_name,
+                  u_int64_t &dram_time, u_int64_t &exu_ops,
+                  u_int64_t &sfu_ops, u_int64_t &vec_ops) override;
+
+private:
+    ExternalRecord ExactRecord() const override;
+    void AssignExactRecord(const ExternalRecord &record) override;
+};

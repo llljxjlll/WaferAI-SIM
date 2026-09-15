@@ -22,6 +22,7 @@ constexpr uint32_t kGreedySamplePayloadSize = 76;
 constexpr uint32_t kCrossEntropyForwardPayloadSize = 92;
 constexpr uint32_t kCrossEntropyBackwardPayloadSize = 122;
 constexpr uint32_t kSgdUpdatePayloadSize = 96;
+constexpr uint32_t kAdamwUpdatePayloadSize = 324;
 constexpr uint32_t kEndpointPayloadSize = 72;
 constexpr uint32_t kReducePayloadSize = 80;
 constexpr uint32_t kLocalReducePayloadSize = 72;
@@ -877,6 +878,75 @@ void ValidateSgdUpdate(const SgdUpdateOperands &o) {
                      "SGD_UPDATE memory write bytes");
 }
 
+double DecodeF64(uint64_t bits) {
+    double value = 0.0;
+    static_assert(sizeof(value) == sizeof(bits));
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+void ValidateAdamwUpdate(const AdamwUpdateOperands &o) {
+    RequireExactDataType(o.weight_datatype, ExternalDataType::FP16,
+                         "ADAMW_UPDATE weight_datatype");
+    RequireExactDataType(o.gradient_datatype, ExternalDataType::FP32,
+                         "ADAMW_UPDATE gradient_datatype");
+    RequireExactDataType(o.state_datatype, ExternalDataType::FP32,
+                         "ADAMW_UPDATE state_datatype");
+    RequireExactDataType(o.output_datatype, ExternalDataType::FP16,
+                         "ADAMW_UPDATE output_datatype");
+    Require(o.rounding == OptimizerRoundingMode::RNE,
+            "ADAMW_UPDATE rounding must be RNE");
+    const std::array<std::pair<const SramAddressOperand *, const char *>, 11>
+        addresses{{
+            {&o.weight, "weight"},
+            {&o.gradient, "gradient"},
+            {&o.master_weight, "master_weight"},
+            {&o.first_moment, "first_moment"},
+            {&o.second_moment, "second_moment"},
+            {&o.step_counter, "step_counter"},
+            {&o.updated_weight, "updated_weight"},
+            {&o.updated_master_weight, "updated_master_weight"},
+            {&o.updated_first_moment, "updated_first_moment"},
+            {&o.updated_second_moment, "updated_second_moment"},
+            {&o.updated_step_counter, "updated_step_counter"},
+        }};
+    for (const auto &[address, name] : addresses)
+        ValidateAddress(*address, false,
+                        std::string("ADAMW_UPDATE ") + name);
+    Require(SameAddress(o.weight, o.updated_weight),
+            "ADAMW_UPDATE weight must update in place");
+    Require(SameAddress(o.master_weight, o.updated_master_weight),
+            "ADAMW_UPDATE master weight must update in place");
+    Require(SameAddress(o.first_moment, o.updated_first_moment),
+            "ADAMW_UPDATE first moment must update in place");
+    Require(SameAddress(o.second_moment, o.updated_second_moment),
+            "ADAMW_UPDATE second moment must update in place");
+    Require(SameAddress(o.step_counter, o.updated_step_counter),
+            "ADAMW_UPDATE step counter must update in place");
+    RequirePositiveU32(o.element_count, "ADAMW_UPDATE element_count");
+    Require(o.step > 0, "ADAMW_UPDATE step must be positive");
+    const double learning_rate = DecodeF64(o.learning_rate_f64_bits);
+    const double beta1 = DecodeF64(o.beta1_f64_bits);
+    const double beta2 = DecodeF64(o.beta2_f64_bits);
+    const double epsilon = DecodeF64(o.epsilon_f64_bits);
+    const double weight_decay = DecodeF64(o.weight_decay_f64_bits);
+    Require(std::isfinite(learning_rate) && learning_rate > 0.0,
+            "ADAMW_UPDATE learning rate must be finite and positive");
+    Require(std::isfinite(beta1) && beta1 > 0.0 && beta1 < 1.0,
+            "ADAMW_UPDATE beta1 must be in (0, 1)");
+    Require(std::isfinite(beta2) && beta2 > 0.0 && beta2 < 1.0,
+            "ADAMW_UPDATE beta2 must be in (0, 1)");
+    Require(std::isfinite(epsilon) && epsilon > 0.0,
+            "ADAMW_UPDATE epsilon must be finite and positive");
+    Require(std::isfinite(weight_decay) && weight_decay >= 0.0,
+            "ADAMW_UPDATE weight decay must be finite and non-negative");
+    (void)CheckedMul(18, o.element_count,
+                     "ADAMW_UPDATE memory read bytes");
+    (void)CheckedMul(14, o.element_count,
+                     "ADAMW_UPDATE memory write bytes");
+    (void)CheckedMul(18, o.element_count, "ADAMW_UPDATE vector ops");
+}
+
 uint64_t ComputeParameter(const ComputeOperands &operands,
                           const RecordSchema &schema,
                           std::string_view name) {
@@ -1327,6 +1397,8 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
                 kCrossEntropyBackwardPayloadSize),
     FixedSchema(Opcode::SGD_UPDATE, RecordOperandKind::SGD_UPDATE,
                 kSgdUpdatePayloadSize),
+    FixedSchema(Opcode::ADAMW_UPDATE, RecordOperandKind::ADAMW_UPDATE,
+                kAdamwUpdatePayloadSize),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,
@@ -1432,6 +1504,10 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::SGD_UPDATE:
         ValidateSgdUpdate(
             RequireOperands<SgdUpdateOperands>(record, "SGD_UPDATE"));
+        return;
+    case RecordOperandKind::ADAMW_UPDATE:
+        ValidateAdamwUpdate(
+            RequireOperands<AdamwUpdateOperands>(record, "ADAMW_UPDATE"));
         return;
     case RecordOperandKind::DTE_SEND:
         ValidateDteSend(RequireOperands<DteSendOperands>(record, "DTE_SEND"));
@@ -1646,6 +1722,34 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         AppendLittleEndian(payload, o.element_count, 4);
         AppendLittleEndian(payload, o.learning_rate_f64_bits, 8);
         AppendLittleEndian(payload, o.momentum_f64_bits, 8);
+        break;
+    }
+    case RecordOperandKind::ADAMW_UPDATE: {
+        const auto &o = std::get<AdamwUpdateOperands>(record.operands);
+        payload.push_back(EnumByte(o.weight_datatype));
+        payload.push_back(EnumByte(o.gradient_datatype));
+        payload.push_back(EnumByte(o.state_datatype));
+        payload.push_back(EnumByte(o.output_datatype));
+        payload.push_back(EnumByte(o.rounding));
+        payload.insert(payload.end(), 3, 0);
+        EncodeAddress(payload, o.weight);
+        EncodeAddress(payload, o.gradient);
+        EncodeAddress(payload, o.master_weight);
+        EncodeAddress(payload, o.first_moment);
+        EncodeAddress(payload, o.second_moment);
+        EncodeAddress(payload, o.step_counter);
+        EncodeAddress(payload, o.updated_weight);
+        EncodeAddress(payload, o.updated_master_weight);
+        EncodeAddress(payload, o.updated_first_moment);
+        EncodeAddress(payload, o.updated_second_moment);
+        EncodeAddress(payload, o.updated_step_counter);
+        AppendLittleEndian(payload, o.element_count, 4);
+        AppendLittleEndian(payload, o.step, 8);
+        AppendLittleEndian(payload, o.learning_rate_f64_bits, 8);
+        AppendLittleEndian(payload, o.beta1_f64_bits, 8);
+        AppendLittleEndian(payload, o.beta2_f64_bits, 8);
+        AppendLittleEndian(payload, o.epsilon_f64_bits, 8);
+        AppendLittleEndian(payload, o.weight_decay_f64_bits, 8);
         break;
     }
     case RecordOperandKind::DTE_SEND: {
@@ -2066,6 +2170,54 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
             ReadLittleEndian(payload, 80, 8, "learning_rate_f64_bits");
         o.momentum_f64_bits =
             ReadLittleEndian(payload, 88, 8, "momentum_f64_bits");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::ADAMW_UPDATE: {
+        AdamwUpdateOperands o;
+        o.weight_datatype = DecodeEnum<ExternalDataType>(
+            payload, 0, "weight_datatype");
+        o.gradient_datatype = DecodeEnum<ExternalDataType>(
+            payload, 1, "gradient_datatype");
+        o.state_datatype = DecodeEnum<ExternalDataType>(
+            payload, 2, "state_datatype");
+        o.output_datatype = DecodeEnum<ExternalDataType>(
+            payload, 3, "output_datatype");
+        o.rounding = DecodeEnum<OptimizerRoundingMode>(
+            payload, 4, "rounding");
+        RequireZero(payload, 5, 3, "ADAMW_UPDATE reserved");
+        o.weight = DecodeAddress(payload, 8, "ADAMW_UPDATE weight");
+        o.gradient = DecodeAddress(payload, 32, "ADAMW_UPDATE gradient");
+        o.master_weight = DecodeAddress(
+            payload, 56, "ADAMW_UPDATE master_weight");
+        o.first_moment = DecodeAddress(
+            payload, 80, "ADAMW_UPDATE first_moment");
+        o.second_moment = DecodeAddress(
+            payload, 104, "ADAMW_UPDATE second_moment");
+        o.step_counter = DecodeAddress(
+            payload, 128, "ADAMW_UPDATE step_counter");
+        o.updated_weight = DecodeAddress(
+            payload, 152, "ADAMW_UPDATE updated_weight");
+        o.updated_master_weight = DecodeAddress(
+            payload, 176, "ADAMW_UPDATE updated_master_weight");
+        o.updated_first_moment = DecodeAddress(
+            payload, 200, "ADAMW_UPDATE updated_first_moment");
+        o.updated_second_moment = DecodeAddress(
+            payload, 224, "ADAMW_UPDATE updated_second_moment");
+        o.updated_step_counter = DecodeAddress(
+            payload, 248, "ADAMW_UPDATE updated_step_counter");
+        o.element_count = ReadLittleEndian(payload, 272, 4, "element_count");
+        o.step = ReadLittleEndian(payload, 276, 8, "step");
+        o.learning_rate_f64_bits =
+            ReadLittleEndian(payload, 284, 8, "learning_rate_f64_bits");
+        o.beta1_f64_bits =
+            ReadLittleEndian(payload, 292, 8, "beta1_f64_bits");
+        o.beta2_f64_bits =
+            ReadLittleEndian(payload, 300, 8, "beta2_f64_bits");
+        o.epsilon_f64_bits =
+            ReadLittleEndian(payload, 308, 8, "epsilon_f64_bits");
+        o.weight_decay_f64_bits =
+            ReadLittleEndian(payload, 316, 8, "weight_decay_f64_bits");
         record.operands = std::move(o);
         break;
     }
