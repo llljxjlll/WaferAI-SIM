@@ -38,6 +38,8 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
                           if item.layer is not None}, {0, 1})
         self.assertEqual(len(fabric.dies), 9)
         self.assertEqual(len(fabric.links), 24)
+        self.assertEqual(fabric.sram_profiles[0].capacity_bytes, 131072)
+        self.assertEqual(fabric.sram_profiles[0].allocation_alignment_bytes, 32)
 
         _validate_inputs(manifest, template, fabric,
                          valid_hbm_address_spaces(fabric))
@@ -60,6 +62,8 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
         self.assertEqual(manifest.placement.idle_die_ids, ())
         self.assertEqual(len(fabric.dies), 100)
         self.assertEqual(len(fabric.links), 360)
+        self.assertEqual(fabric.sram_profiles[0].capacity_bytes, 131072)
+        self.assertEqual(fabric.sram_profiles[0].allocation_alignment_bytes, 32)
         self.assertEqual(len(manifest.logical_graph.operations), 96)
         self.assertEqual((manifest.request.model.hidden_size,
                           manifest.request.model.intermediate_size,

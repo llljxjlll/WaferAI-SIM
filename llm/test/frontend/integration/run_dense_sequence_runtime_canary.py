@@ -222,7 +222,7 @@ def _all_die_scaled_model_case(rows: int, columns: int):
         )),
     )
     template.validate()
-    sram_bytes = _SIX_DIE_SRAM_BYTES if ranks == 6 else 65536
+    sram_bytes = _SIX_DIE_SRAM_BYTES
     hardware = minimal_hardware(columns, rows, sram_bytes=sram_bytes)
     hardware["memory"]["sram"]["allocation_alignment_bytes"] = 32
     fabric = physical_fabric_from_data(hardware)
@@ -309,7 +309,8 @@ def run(args: argparse.Namespace) -> None:
                 manifest, template, fabric,
                 hbm_address_spaces=hbm_address_spaces,
                 intra_die_wire_address_limit_bytes=(
-                    65536 if manifest.request.parallel.tp == 6 else None
+                    65536 if args.scaled_all_dies
+                    or manifest.request.parallel.tp == 6 else None
                 ),
             )
     except Exception as error:
@@ -356,7 +357,8 @@ def run(args: argparse.Namespace) -> None:
         "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "runtime_status": "not_measured",
         "intra_die_wire_address_limit_bytes": (
-            65536 if manifest.request.parallel.tp == 6 else None
+            65536 if args.scaled_all_dies
+            or manifest.request.parallel.tp == 6 else None
         ),
     }, indent=2, sort_keys=True), encoding="utf-8")
     manifests: list[Path] = []
@@ -443,7 +445,8 @@ def run(args: argparse.Namespace) -> None:
     mapping_path = output / "mapping.spec"
     hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
     sram_bytes = (
-        _SIX_DIE_SRAM_BYTES if manifest.request.parallel.tp == 6 else 65536
+        _SIX_DIE_SRAM_BYTES if args.scaled_all_dies
+        or manifest.request.parallel.tp == 6 else 65536
     )
     sram_alignment = (
         32 if args.scaled_all_dies else
