@@ -1463,6 +1463,23 @@ void CheckExactStage2Rejections(Checks &checks) {
     attention.query_key_pairs = 7;
     checks.Reject("ATTENTION decode pair formula",
                   [&] { EncodeExternalRecord(record); });
+    attention.query_tokens = 16;
+    attention.context_sum = 32;
+    attention.context_max = 2;
+    attention.query_key_pairs = 32;
+    attention.rank_kv_read_bytes = 1024;
+    attention.rank_kv_write_bytes = 512;
+    checks.Accept("ATTENTION 16-request decode aggregate tokens exceed per-request context",
+                  [&] { EncodeExternalRecord(record); });
+    attention.context_sum = 15;
+    checks.Reject("ATTENTION decode aggregate context lacks queries",
+                  [&] { EncodeExternalRecord(record); });
+    attention.context_sum = 33;
+    checks.Reject("ATTENTION decode request contexts exceed declared max",
+                  [&] { EncodeExternalRecord(record); });
+    attention.context_sum = 16;
+    checks.Reject("ATTENTION decode declared max cannot be realized",
+                  [&] { EncodeExternalRecord(record); });
     attention.mode = ExactAttentionMode::EXACT_PROFILE;
     attention.query_tokens = 8;
     attention.context_sum = 44;

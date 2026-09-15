@@ -172,7 +172,10 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
                 timeout=900, compile_timeout=2400, program_io_timeout=900,
             )
             def stale_cli(_command, stdout, **_kw):
-                stdout.write_text("usage: old resolver has no codec handshake")
+                stdout.write_text(
+                    "[PROGRAM_IO_CODEC_PREFLIGHT] "
+                    "multi_request_prefill=1 unequal_context_rejected=1"
+                )
                 return {"exit_code": 0}
             with mock.patch(
                 "llm.test.frontend.integration."

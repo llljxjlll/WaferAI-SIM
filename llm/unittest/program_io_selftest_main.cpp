@@ -765,8 +765,36 @@ int RunMultiRequestAttentionPreflight() {
     record.operands = attention;
     ExpectFailure([&] { (void)EncodeExternalRecord(record); },
                   "unequal multi-request prefill context");
+    attention.mode = ExactAttentionMode::DECODE;
+    attention.context_sum = 32;
+    attention.context_max = 2;
+    attention.query_key_pairs = 32;
+    attention.rank_kv_read_bytes = 256;
+    record.operands = attention;
+    const auto decoded_decode = DecodeExternalRecord(
+        EncodeExternalRecord(record), 0);
+    const auto &observed_decode =
+        std::get<AttentionExactOperands>(decoded_decode.record.operands);
+    Require(observed_decode.mode == ExactAttentionMode::DECODE &&
+                observed_decode.query_tokens == 16 &&
+                observed_decode.context_sum == 32 &&
+                observed_decode.context_max == 2,
+            "16-request decode codec roundtrip failed");
+    attention.context_sum = 15;
+    record.operands = attention;
+    ExpectFailure([&] { (void)EncodeExternalRecord(record); },
+                  "decode aggregate context lacks request queries");
+    attention.context_sum = 33;
+    record.operands = attention;
+    ExpectFailure([&] { (void)EncodeExternalRecord(record); },
+                  "decode contexts exceed per-request max");
+    attention.context_sum = 16;
+    record.operands = attention;
+    ExpectFailure([&] { (void)EncodeExternalRecord(record); },
+                  "decode declared max cannot be realized");
     std::cout << "[PROGRAM_IO_CODEC_PREFLIGHT] "
-                 "multi_request_prefill=1 unequal_context_rejected=1\n";
+                 "multi_request_prefill=1 multi_request_decode=1 "
+                 "unequal_context_rejected=1 invalid_decode_context_rejected=1\n";
     return 0;
 }
 

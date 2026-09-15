@@ -590,11 +590,6 @@ void ValidateAttentionExact(const AttentionExactOperands &o) {
     Require(o.context_sum != 0,
             "ATTENTION_EXACT context_sum must be non-zero");
     RequirePositiveU32(o.context_max, "ATTENTION_EXACT context_max");
-    if (o.mode == ExactAttentionMode::DECODE) {
-        Require(o.query_tokens <= o.context_max,
-                "ATTENTION_EXACT context_max must cover query tokens");
-    }
-
     uint64_t expected_pairs = 0;
     uint64_t expected_read = 0;
     if (o.mode == ExactAttentionMode::PREFILL) {
@@ -612,6 +607,18 @@ void ValidateAttentionExact(const AttentionExactOperands &o) {
         expected_pairs = CheckedMul(request_count, pairs_per_request,
                                     "ATTENTION_EXACT prefill pairs");
     } else if (o.mode == ExactAttentionMode::DECODE) {
+        // One query token per request: query_tokens is the aggregate request
+        // count, while context_max is the longest *per-request* context.
+        Require(o.context_sum >= o.query_tokens,
+                "ATTENTION_EXACT decode context_sum must cover aggregate queries");
+        Require(o.context_sum <=
+                    CheckedMul(o.query_tokens, o.context_max,
+                               "ATTENTION_EXACT decode context bound"),
+                "ATTENTION_EXACT decode contexts exceed the per-request max");
+        Require(o.context_sum >=
+                    CheckedAdd(o.context_max, o.query_tokens - 1,
+                               "ATTENTION_EXACT decode realized max"),
+                "ATTENTION_EXACT decode context_max must occur in a request");
         expected_pairs = o.context_sum;
         expected_read =
             Product({4, o.context_sum, o.rank_num_kv_heads, o.head_dim},

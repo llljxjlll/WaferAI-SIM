@@ -456,7 +456,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     if (
         "[PROGRAM_IO_CODEC_PREFLIGHT] "
-        "multi_request_prefill=1 unequal_context_rejected=1"
+        "multi_request_prefill=1 multi_request_decode=1 "
+        "unequal_context_rejected=1 invalid_decode_context_rejected=1"
         not in (root / "resolver_codec_preflight.stdout.txt").read_text(
             encoding="utf-8",
         )
@@ -464,7 +465,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("resolver binary lacks multi-request attention codec")
     (root / "resolver_codec_preflight.json").write_text(
         json.dumps({
-            "codec": "real_16_requests_x_1_context_plus_unequal_negative",
+            "codec": "real_16_prefill_plus_16_decode_requests_with_invalid_context_negatives",
             "resolver_sha256": tool_binding["resolver"],
             "stage": codec_preflight,
             "runtime_status": "not_measured",
