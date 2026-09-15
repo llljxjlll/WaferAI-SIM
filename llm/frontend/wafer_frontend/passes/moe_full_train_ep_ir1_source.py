@@ -46,7 +46,7 @@ class MoeEpPlacedIr1SourceCandidate:
         original_dense,sequence: MoeCompileSequence,
         placement: MoeFullTrainEpPlacement,context,dense_manifest,
     ) -> None:
-        """Exact source/die/parameter bijection, no IR1 runtime acceptance."""
+        """Exact source/die/parameter bijection for the scoped forward IR1."""
         placement.validate(phase,original_dense,dense_manifest,sequence,context)
         if (self.source_ir0_ref!=phase.graph.id
                 or self.source_moe_sequence_ref!=sequence.id
@@ -95,6 +95,7 @@ class MoeEpPlacedIr1SourceCandidate:
                     or proof.e2e_ep_rank!=owner.ep_owner
                     or proof.tp_shard!=owner.tp_shard
                     or proof.tp_shard!=state.identity.shard_index
+                    or proof.e2e_ep_rank!=state.identity.ep_owner_rank
                     or proof.physical_die!=ranks[proof.e2e_ep_rank]
                     or proof.physical_die!=binding.die_id
                     or proof.physical_hbm_binding_ref!=binding.id
@@ -107,7 +108,7 @@ class MoeEpPlacedIr1SourceCandidate:
                                   path=f"moe_ep_ir1_candidate.owner[{ref}]")
 
     def validate_official_ir1(self) -> None:
-        """The mandatory public IR1 validator currently rejects this phase."""
+        """Use the mandatory public validator; a forward IR1 is not TRAIN E2E."""
         self.physical_ir1.validate("moe_ep_ir1_candidate.official")
 
 

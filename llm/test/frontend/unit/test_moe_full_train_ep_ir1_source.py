@@ -1,4 +1,4 @@
-"""Typed source provenance and current official EP IR1 refusal."""
+"""Typed source provenance and genuine official EP IR1 acceptance."""
 
 from dataclasses import replace
 import unittest
@@ -7,7 +7,9 @@ from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
-from llm.frontend.wafer_frontend.schema.ir0 import OpKind
+from llm.frontend.wafer_frontend.schema.persistent_state import (
+    PersistentStateIdentity, StateKind,
+)
 from llm.test.frontend.unit.test_moe_full_train_ep_placement import (
     MoeFullTrainEpPlacementTest as Fixture,
 )
@@ -50,15 +52,42 @@ class MoeFullTrainEpIr1SourceTest(unittest.TestCase):
                     self.placement.physical_group.placements
                     if placement.rank==0)
         self.assertEqual(actual_rank0_die,0)
-        # Existing IR1.validate's `shard_index==physical rank` would map these
-        # eight real EP1 source parameters to die0: a second official blocker.
+        # TP shard zero is genuine on both physical EP owners; die1 requires
+        # opt-in source-signed EP ownership, not a fake TP shard one.
         self.assertTrue(all(proof.physical_die!=actual_rank0_die
                             for proof in proofs))
+        states={state.id:state for state in self.candidate.physical_ir1.
+                persistent_state_manifest.declarations}
+        self.assertTrue(all(states[proof.declaration_ref].identity.ep_owner_rank
+                            ==proof.e2e_ep_rank for proof in proofs))
 
-    def test_official_ir1_currently_rejects_new_physical_opcode(self):
-        with self.assertRaises(KeyError) as failure:
-            self.candidate.validate_official_ir1()
-        self.assertIs(failure.exception.args[0],OpKind.MOE_EXPERT_FORWARD)
+    def test_official_ir1_accepts_actual_ep_home_and_full_forward_source(self):
+        self.candidate.validate_official_ir1()
+
+    def test_legacy_dense_identity_preserves_id_when_ep_field_absent(self):
+        shared=next(state for state in self.candidate.physical_ir1.
+                    persistent_state_manifest.declarations
+                    if state.identity.ep_owner_rank is None)
+        identity=shared.identity
+        self.assertEqual(identity, PersistentStateIdentity.create(
+            kind=identity.kind,instance_ref=identity.instance_ref,
+            mesh_ref=identity.mesh_ref,request_ref=identity.request_ref,
+            layer_index=identity.layer_index,tensor_ref=identity.tensor_ref,
+            shard_index=identity.shard_index,generation=identity.generation,
+        ))
+
+    def test_ep_rank_cannot_be_hidden_in_generation(self):
+        expert=next(state for state in self.candidate.physical_ir1.
+                    persistent_state_manifest.declarations
+                    if state.identity.ep_owner_rank==1)
+        identity=expert.identity
+        with self.assertRaisesRegex(SchemaError,"EP placement owner"):
+            PersistentStateIdentity.create(
+                kind=StateKind.PARAMETER,instance_ref=identity.instance_ref,
+                mesh_ref=identity.mesh_ref,request_ref=None,layer_index=None,
+                tensor_ref=identity.tensor_ref,shard_index=0,generation=1,
+                ep_owner_rank=1,
+            )
 
     def test_expert_ep1_cannot_be_relabelled_as_tp1_shard(self):
         proofs=list(self.candidate.owner_proofs)

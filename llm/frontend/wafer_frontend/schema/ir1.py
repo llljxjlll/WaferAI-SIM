@@ -29,6 +29,11 @@ from .ir0 import (
     FusionSemanticContract,
     FusionImpl,
     GemmWorkload,
+    GemmWeightWgradWorkload,
+    EmbeddingTableWgradWorkload,
+    NormGammaWgradWorkload,
+    MoeFullTrainingBlockWorkload,
+    LogicalNode,
     GreedySampleWorkload,
     GraphEdge,
     InstanceProfileBinding,
@@ -1095,6 +1100,14 @@ class PhysicalNode:
             OpKind.COLLECTIVE: CollectiveWorkload,
             OpKind.P2P: P2PByteWorkload,
             OpKind.EMBEDDING: EmbeddingWorkload,
+            OpKind.EMBEDDING_TABLE_WGRAD: EmbeddingTableWgradWorkload,
+            OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
+            OpKind.GEMM_WEIGHT_WGRAD: GemmWeightWgradWorkload,
+            OpKind.MOE_ROUTER: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_ROUTE_FREEZE: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_EXPERT_FORWARD: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_COMBINE: MoeFullTrainingBlockWorkload,
             OpKind.ROPE: RopeQkWorkload,
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
@@ -1110,6 +1123,20 @@ class PhysicalNode:
         self.workload.validate(f"{path}.workload")
         self.math.validate(f"{path}.math")
         self.effects.validate(f"{path}.effects")
+        if self.kind in (
+            OpKind.EMBEDDING_TABLE_WGRAD, OpKind.NORM_GAMMA_WGRAD,
+            OpKind.GEMM_WEIGHT_WGRAD, OpKind.MOE_ROUTER,
+            OpKind.MOE_ROUTE_FREEZE, OpKind.MOE_DISPATCH,
+            OpKind.MOE_EXPERT_FORWARD, OpKind.MOE_COMBINE,
+        ):
+            # The native gradient and MoE phase/arity/impl/dtype contract must
+            # survive projection intact; the physical node cannot self-report
+            # an opcode while dropping its original logical operand contract.
+            LogicalNode(
+                self.id, self.instance_id, self.kind, self.phase, self.stage,
+                self.mesh_ref, self.inputs, self.outputs, self.workload,
+                self.math, self.effects, self.impl_ref,
+            ).validate(path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1498,18 +1525,35 @@ class IR1:
                         "state identity has no physical owner group",
                         path=f"{declaration_path}.identity",
                     )
+                if identity.ep_owner_rank is not None:
+                    if (group.axis is not MeshAxisName.EP
+                            or group.logical_shape != (1, 2)
+                            or identity.shard_index != 0):
+                        raise SchemaError(
+                            "EP owner requires physical EP2 and genuine TP shard0",
+                            path=f"{declaration_path}.identity.ep_owner_rank",
+                        )
+                    owner_rank = identity.ep_owner_rank
+                else:
+                    owner_rank = identity.shard_index
                 placement = next(
                     (
                         item
                         for item in group.placements
-                        if item.rank == identity.shard_index
+                        if item.rank == owner_rank
                     ),
                     None,
                 )
                 if placement is None:
                     raise SchemaError(
-                        "state shard has no rank placement",
-                        path=f"{declaration_path}.identity.shard_index",
+                        "state EP owner or TP shard has no physical rank placement",
+                        path=f"{declaration_path}.identity",
+                    )
+                if (identity.ep_owner_rank is not None
+                        and placement.logical_coord != (0, identity.ep_owner_rank)):
+                    raise SchemaError(
+                        "EP owner rank is inconsistent with physical logical coordinate",
+                        path=f"{declaration_path}.identity.ep_owner_rank",
                     )
                 if bindings[declaration.id].die_id != placement.die_id:
                     raise SchemaError(

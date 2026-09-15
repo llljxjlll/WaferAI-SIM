@@ -20,6 +20,7 @@ from .common import (
 from .persistent_state import (
     PersistentStateAccess,
     PersistentStateDecl,
+    StateKind,
 )
 from .stage3_profile import Stage3ProfileMode, Stage3StaticProfile
 from .moe_training_ir0_workloads import (
@@ -30,6 +31,7 @@ from .moe_full_training_block_workload import (
     MoeForwardBlockKind,
     MoeFullTrainingBlockWorkload,
 )
+from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 
 
 IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha12"
@@ -58,6 +60,7 @@ class OpKind(str, Enum):
     EMBEDDING = "embedding"
     EMBEDDING_TABLE_WGRAD = "embedding_table_wgrad"
     NORM_GAMMA_WGRAD = "norm_gamma_wgrad"
+    GEMM_WEIGHT_WGRAD = "gemm_weight_wgrad"
     MOE_ROUTER = "moe_router"
     MOE_ROUTE_FREEZE = "moe_route_freeze"
     MOE_DISPATCH = "moe_dispatch"
@@ -1473,6 +1476,7 @@ NodeWorkload = (
     | EmbeddingWorkload
     | EmbeddingTableWgradWorkload
     | NormGammaWgradWorkload
+    | GemmWeightWgradWorkload
     | MoeFullTrainingBlockWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
@@ -1555,6 +1559,7 @@ class LogicalNode:
             OpKind.EMBEDDING: EmbeddingWorkload,
             OpKind.EMBEDDING_TABLE_WGRAD: EmbeddingTableWgradWorkload,
             OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
+            OpKind.GEMM_WEIGHT_WGRAD: GemmWeightWgradWorkload,
             OpKind.MOE_ROUTER: MoeFullTrainingBlockWorkload,
             OpKind.MOE_ROUTE_FREEZE: MoeFullTrainingBlockWorkload,
             OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
@@ -1579,6 +1584,8 @@ class LogicalNode:
                 ("embedding_table_wgrad_timing", 3),
             OpKind.NORM_GAMMA_WGRAD:
                 ("norm_gamma_wgrad_timing", 2),
+            OpKind.GEMM_WEIGHT_WGRAD:
+                ("gemm_weight_wgrad_timing", 2),
         }
         if self.kind in native_gradients:
             impl, input_count = native_gradients[self.kind]
@@ -2056,7 +2063,8 @@ class IR0:
             else:
                 node_profile = next(iter(expected_profiles))
             if node.kind in (
-                OpKind.EMBEDDING_TABLE_WGRAD, OpKind.NORM_GAMMA_WGRAD
+                OpKind.EMBEDDING_TABLE_WGRAD, OpKind.NORM_GAMMA_WGRAD,
+                OpKind.GEMM_WEIGHT_WGRAD,
             ):
                 if self.job is not JobKind.TRAIN:
                     raise SchemaError("native parameter WGRAD is TRAIN-only",
@@ -2074,11 +2082,16 @@ class IR0:
                     if operands[0].producer is not None:
                         raise SchemaError("embedding indices must be externally sourced INT32 IDs",
                                           path=f"{path}.nodes[{index}].inputs[0]")
-                else:
+                elif node.kind is OpKind.NORM_GAMMA_WGRAD:
                     assert isinstance(workload, NormGammaWgradWorkload)
                     shape = ((workload.logical_rows, workload.hidden_size),
                              (workload.logical_rows, workload.hidden_size),
                              (workload.hidden_size,))
+                    dtypes = (DType.FP16, DType.FP16, DType.FP32)
+                else:
+                    assert isinstance(workload, GemmWeightWgradWorkload)
+                    shape = ((workload.k, workload.m),
+                             (workload.k, workload.n), (workload.m, workload.n))
                     dtypes = (DType.FP16, DType.FP16, DType.FP32)
                 if (tuple(value.shape for value in operands) != shape
                         or tuple(value.dtype for value in operands) != dtypes
@@ -2229,6 +2242,15 @@ class IR0:
                     "state shard_index must be smaller than instance TP",
                     path=f"{state_path}.identity.shard_index",
                 )
+            if (declaration.identity.ep_owner_rank is not None
+                    and (instance.parallel.tp != 1
+                         or instance.parallel.ep != 2
+                         or declaration.identity.ep_owner_rank
+                            >= instance.parallel.ep)):
+                raise SchemaError(
+                    "source EP state owner requires explicit TP1/EP2 mesh rank",
+                    path=f"{state_path}.identity.ep_owner_rank",
+                )
             tensor_ref = declaration.identity.tensor_ref
             if tensor_ref is not None and tensor_ref not in value_index:
                 raise SchemaError(
@@ -2237,6 +2259,43 @@ class IR0:
                 )
             state_index[declaration.id] = declaration
             identity_ids.add(declaration.identity.id)
+
+        nodes_by_ref = {node.id: node for node in self.nodes}
+        for index, node in enumerate(self.nodes):
+            if node.kind is not OpKind.GEMM_WEIGHT_WGRAD:
+                continue
+            workload = node.workload
+            assert isinstance(workload, GemmWeightWgradWorkload)
+            source = nodes_by_ref.get(workload.source_forward_op_ref)
+            parameter = state_index.get(workload.source_parameter_state_ref)
+            if (source is None or source.phase is not OpPhase.FWD
+                    or source.kind not in (OpKind.GEMM, OpKind.MOE_EXPERT_FORWARD)
+                    or parameter is None
+                    # A scoped CE/head backward may differentiate a read-only
+                    # source parameter; only a TRAINABLE state can later be
+                    # committed by the full TRAIN optimizer/state-version gate.
+                    or parameter.identity.kind not in (
+                        StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
+                    or parameter.identity.instance_ref != node.instance_id
+                    or parameter.identity.mesh_ref != node.mesh_ref
+                    or parameter.identity.tensor_ref not in source.inputs
+                    or parameter.shape != (workload.m, workload.n)
+                    or parameter.dtype is not DType.FP16
+                    or not any(access.node_ref == source.id
+                               and access.state_ref == parameter.id
+                               and access.mode in (StateAccessMode.READ,
+                                                   StateAccessMode.READ_WRITE)
+                               for access in self.state_accesses)):
+                raise SchemaError(
+                    "GEMM FP32 WGRAD must reference a real forward parameter read and matching FP16 weight",
+                    path=f"{path}.nodes[{index}].workload",
+                )
+            if (source.kind is OpKind.GEMM
+                    and source.workload.rank_shape[0] != workload.k):
+                raise SchemaError(
+                    "named WGRAD rank rows differ from source forward GEMM",
+                    path=f"{path}.nodes[{index}].workload.k",
+                )
 
         validate_unique_ids(self.state_accesses, f"{path}.state_accesses")
         access_keys: set[tuple[str, str, int]] = set()

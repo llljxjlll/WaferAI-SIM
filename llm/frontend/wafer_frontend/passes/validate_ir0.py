@@ -311,6 +311,10 @@ class DenseIR0Validator:
                     node, values, local_shapes, axis_sizes[node.mesh_ref],
                     node_path,
                 )
+            elif node.kind is OpKind.GEMM_WEIGHT_WGRAD:
+                DenseIR0Validator._validate_gemm_weight_wgrad(
+                    node, values, local_shapes, node_path,
+                )
             elif node.kind in (
                 OpKind.MOE_ROUTER, OpKind.MOE_ROUTE_FREEZE,
                 OpKind.MOE_DISPATCH, OpKind.MOE_EXPERT_FORWARD,
@@ -364,6 +368,28 @@ class DenseIR0Validator:
             path,
         )
         DenseIR0Validator._validate_job_contract(graph, path)
+
+    @staticmethod
+    def _validate_gemm_weight_wgrad(
+        node: LogicalNode,
+        values: dict[str, TensorValue],
+        local_shapes: dict[str, tuple[int, ...]],
+        path: str,
+    ) -> None:
+        """Public FP32 dW has source-shaped X/dY, never a generic FP16 GEMM."""
+        from ..schema.gemm_weight_wgrad_workload import GemmWeightWgradWorkload
+
+        workload = node.workload
+        assert isinstance(workload, GemmWeightWgradWorkload)
+        actual = tuple(local_shapes[ref] for ref in (*node.inputs, *node.outputs))
+        expected = ((workload.k, workload.m), (workload.k, workload.n),
+                    (workload.m, workload.n))
+        if (node.phase is not OpPhase.WGRAD or actual != expected
+                or values[node.inputs[1]].producer is None
+                or values[node.outputs[0]].producer != node.id):
+            _fail("named GEMM WGRAD needs source-shaped FP16 X/dY and owned FP32 dW",
+                  f"{path}.workload")
+        _require_pure(node, path)
 
     @staticmethod
     def _validate_native_parameter_wgrad(

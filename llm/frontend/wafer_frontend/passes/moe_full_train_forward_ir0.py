@@ -122,6 +122,7 @@ class FullMoeForwardIr0Phase:
                     or view.dtype is not state.dtype
                     or state.identity.generation != 0
                     or state.identity.shard_index != owner.tp_shard
+                    or state.identity.ep_owner_rank != owner.ep_owner
                     or state.identity.tensor_ref not in values):
                 raise SchemaError("EP owner is not the actual source E2E tensor home",
                                   path=f"full_moe_forward_ir0.owner[{owner.source_state_decl_ref}]")
@@ -148,6 +149,7 @@ def _resign_parameter_state(
     new_tensor_ref: str | None = None,
     shape: tuple[int, ...] | None = None,
     layout: str | None = None,
+    ep_owner_rank: int | None = None,
 ) -> PersistentStateDecl:
     identity = PersistentStateIdentity.create(
         kind=StateKind.TRAINABLE_PARAMETER,
@@ -159,6 +161,7 @@ def _resign_parameter_state(
                     else new_tensor_ref),
         shard_index=0,
         generation=declaration.identity.generation,
+        ep_owner_rank=ep_owner_rank,
     )
     return PersistentStateDecl.create(
         identity=identity, shape=(declaration.shape if shape is None else shape),
@@ -330,6 +333,7 @@ def build_moe_full_train_forward_ir0(
                 template, new_tensor_ref=value.id,
                 shape=value.shape,
                 layout=value.logical_layout,
+                ep_owner_rank=owner,
             )
             states.append(declaration)
             new_accesses.append(StateAccess.create(

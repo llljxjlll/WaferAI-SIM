@@ -128,6 +128,9 @@ class PersistentStateIdentity:
     tensor_ref: str | None
     shard_index: int
     generation: int
+    # Opt-in EP placement owner; shard_index remains the genuine TP shard.
+    # Omitted legacy states retain their original stable identity and home.
+    ep_owner_rank: int | None = None
 
     @classmethod
     def create(
@@ -141,6 +144,7 @@ class PersistentStateIdentity:
         tensor_ref: str | None,
         shard_index: int,
         generation: int,
+        ep_owner_rank: int | None = None,
     ) -> "PersistentStateIdentity":
         key = {
             "kind": kind,
@@ -152,6 +156,8 @@ class PersistentStateIdentity:
             "shard_index": shard_index,
             "generation": generation,
         }
+        if ep_owner_rank is not None:
+            key["ep_owner_rank"] = ep_owner_rank
         result = cls(
             id=stable_artifact_id(
                 "persistent_state_identity",
@@ -159,12 +165,13 @@ class PersistentStateIdentity:
                 schema_version=PERSISTENT_STATE_IDENTITY_SCHEMA_VERSION,
             ),
             **key,
+            **({"ep_owner_rank": None} if ep_owner_rank is None else {}),
         )
         result.validate()
         return result
 
     def _semantic_key(self) -> dict[str, object]:
-        return {
+        key = {
             "kind": self.kind,
             "instance_ref": self.instance_ref,
             "mesh_ref": self.mesh_ref,
@@ -174,6 +181,9 @@ class PersistentStateIdentity:
             "shard_index": self.shard_index,
             "generation": self.generation,
         }
+        if self.ep_owner_rank is not None:
+            key["ep_owner_rank"] = self.ep_owner_rank
+        return key
 
     def validate(self, path: str = "persistent_state_identity") -> None:
         if type(self.kind) is not StateKind:
@@ -182,6 +192,11 @@ class PersistentStateIdentity:
         validate_nonempty(self.mesh_ref, f"{path}.mesh_ref")
         _validate_int32(self.shard_index, f"{path}.shard_index")
         _validate_int32(self.generation, f"{path}.generation")
+        if self.ep_owner_rank is not None:
+            _validate_int32(self.ep_owner_rank, f"{path}.ep_owner_rank")
+            if self.kind is not StateKind.TRAINABLE_PARAMETER:
+                raise SchemaError("EP placement owner requires a trainable parameter",
+                                  path=f"{path}.ep_owner_rank")
         if self.request_ref is not None:
             validate_nonempty(self.request_ref, f"{path}.request_ref")
         if self.layer_index is not None:
