@@ -24,12 +24,17 @@ from ..schema.artifact_manifest import (
 )
 from ..schema.common import DType, stable_artifact_id
 from ..schema.full_training_physical_dag import FullTrainingPhysicalDAG
+from ..schema.flexible_dense_train import FlexibleDenseTrainPlan
+from ..schema.full_dense_gradient_requirements import DenseFullTrainRequirements
 from ..schema.action import FusionPlan, StandaloneCollectivePlan
 from ..schema.global_action import GlobalActionDAG, LogicalCoreRef
 from ..schema.ir1 import IR1
 from ..schema.ir2 import IR2ProjectionResult, IntraDieScheduleSet
 from ..schema.serde import canonical_digest
 from .full_training_timeline_linker import require_physical_operation_coverage
+from .full_dense_gradient_physical_gate import (
+    require_full_dense_physical_gradient_paths,
+)
 from .moe_full_model_linker import _interfaces
 
 
@@ -174,6 +179,10 @@ def link_source_backed_full_training_timeline(
     upstream_input_digests: tuple[ManifestInputDigest, ...],
     required_operations: Mapping[str, Mapping[RecordOpcode, int]],
     seed_abi_by_step: Mapping[int, str],
+    dense_plan: FlexibleDenseTrainPlan,
+    dense_gradient_requirements: DenseFullTrainRequirements,
+    required_backward_opcodes: Mapping[str, RecordOpcode],
+    required_wgrad_opcodes: Mapping[str, RecordOpcode],
 ) -> LinkedProgramManifest:
     """Construct and validate one real full-training physical program.
 
@@ -332,6 +341,11 @@ def link_source_backed_full_training_timeline(
         operation_by_action={action.id: action.operation_ref for action
                              in dag.actions},
         required_by_operation=required_operations,
+    )
+    require_full_dense_physical_gradient_paths(
+        result, dense_plan, dense_gradient_requirements, dag,
+        required_backward_opcodes=required_backward_opcodes,
+        required_wgrad_opcodes=required_wgrad_opcodes,
     )
     return result
 
