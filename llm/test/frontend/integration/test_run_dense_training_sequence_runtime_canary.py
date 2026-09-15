@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
-from .run_dense_training_sequence_runtime_canary import observe_runtime
+from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+
+from .run_dense_training_sequence_runtime_canary import (
+    _missing_full_model_opcodes,
+    _records,
+    observe_runtime,
+)
 
 
 _DIGEST = "1" * 64
@@ -44,6 +51,28 @@ def _output() -> str:
 
 
 class DenseTrainingSequenceRuntimeParserTest(unittest.TestCase):
+    def test_records_cover_every_core_in_one_fragment(self) -> None:
+        fragment = SimpleNamespace(core_streams=tuple(
+            SimpleNamespace(records=(index,)) for index in range(4)
+        ))
+        linked = SimpleNamespace(manifest=SimpleNamespace(fragments=(fragment,)))
+        self.assertEqual(_records(linked), (0, 1, 2, 3))
+
+    def test_gradient_only_linked_program_cannot_claim_full_training(self) -> None:
+        linked = SimpleNamespace(manifest=SimpleNamespace(fragments=(
+            SimpleNamespace(core_streams=(SimpleNamespace(records=(
+                SimpleNamespace(opcode=RecordOpcode.MATMUL),
+                SimpleNamespace(opcode=RecordOpcode.SGD_UPDATE),
+            )),)),
+        )))
+        self.assertEqual(
+            _missing_full_model_opcodes(linked),
+            (
+                "EMBEDDING_LOOKUP", "RMSNORM", "CROSS_ENTROPY_FORWARD",
+                "CROSS_ENTROPY_BACKWARD", "ATTENTION",
+            ),
+        )
+
     def test_exact_two_step_observation(self) -> None:
         result = observe_runtime(
             _output(), state_count=15, hbm_bytes=808, matmul_records=41

@@ -1,4 +1,4 @@
-"""Run two Dense SGD steps in one 1x1 NpuSim/HBM instance."""
+"""Run two Dense SGD steps in one full-participation NpuSim/HBM mesh."""
 
 from __future__ import annotations
 
@@ -168,12 +168,30 @@ def _records(linked):
     return tuple(
         record
         for item in linked.manifest.fragments
-        for record in (
-            item.fragment.core_streams[0].records
+        for stream in (
+            item.fragment.core_streams
             if type(item) is RegionManifest
-            else item.core_streams[0].records
+            else item.core_streams
         )
+        for record in stream.records
     )
+
+
+def _missing_full_model_opcodes(linked) -> tuple[str, ...]:
+    """Reject a full-training claim when linked ISA omits the model and loss."""
+
+    opcodes = {record.opcode for record in _records(linked)}
+    required = (
+        RecordOpcode.EMBEDDING_LOOKUP,
+        RecordOpcode.RMSNORM,
+        RecordOpcode.CROSS_ENTROPY_FORWARD,
+        RecordOpcode.CROSS_ENTROPY_BACKWARD,
+        RecordOpcode.SGD_UPDATE,
+    )
+    missing = [opcode.name for opcode in required if opcode not in opcodes]
+    if not ({RecordOpcode.ATTENTION, RecordOpcode.ATTENTION_EXACT} & opcodes):
+        missing.append("ATTENTION")
+    return tuple(missing)
 
 
 def _validate_static_bindings(sequence) -> tuple[int, int]:
@@ -200,8 +218,10 @@ def _validate_static_bindings(sequence) -> tuple[int, int]:
     for refs, opcode, name in expected:
         if not refs or any(opcode not in by_action.get(ref, set()) for ref in refs):
             raise RuntimeError(f"static {name} action-to-record binding failed")
-    if len(sgd_refs) != 15 or len(store_refs) != 15 or len(wgrad_refs) != 15:
-        raise RuntimeError("1x1 sequence must bind 15 legacy parameter carriers")
+    if not (len(sgd_refs) == len(store_refs) == len(wgrad_refs)):
+        raise RuntimeError("training sequence parameter carriers differ across WGRAD/SGD/store")
+    if len(records) != linked.record_count:
+        raise RuntimeError("training records did not cover every physical core")
     matmul_count = sum(record.opcode is RecordOpcode.MATMUL for record in records)
     return len(wgrad_refs), matmul_count
 
@@ -279,8 +299,20 @@ def observe_runtime(
 
 def run(args: argparse.Namespace) -> DenseTrainingSequenceRuntimeObservation:
     external_offload = bool(getattr(args, "external_offload", False))
-    sequence = _offload_sequence() if external_offload else _sequence(1, 1)
+    mesh_size = getattr(args, "mesh_size", "1x1")
+    rows, columns = (int(part) for part in mesh_size.split("x"))
+    if external_offload and (rows, columns) != (1, 1):
+        raise RuntimeError("external-offload fixture currently requires a 1x1 mesh")
+    sequence = _offload_sequence() if external_offload else _sequence(rows, columns)
     sequence.validate()
+    missing_full_model = tuple(
+        _missing_full_model_opcodes(segment.linked_program)
+        for segment in sequence.segments
+    )
+    if getattr(args, "require_full_model", False) and any(missing_full_model):
+        raise RuntimeError(
+            f"full Dense training linked opcode coverage is incomplete: {missing_full_model}"
+        )
     state_count, matmul_records = _validate_static_bindings(sequence)
     linked = sequence.segments[0].linked_program
     state_seeds, state_expected = build_deterministic_timing_state_overrides(
@@ -415,11 +447,11 @@ def run(args: argparse.Namespace) -> DenseTrainingSequenceRuntimeObservation:
         ):
             raise RuntimeError(f"step {index} finalizer closure failed")
         contract = build_timing_program_io(
-            linked,
+            segment.linked_program,
             artifact_digest,
             state_seed_overrides=state_seeds,
         )
-        contract.validate_against(linked.manifest)
+        contract.validate_against(segment.linked_program.manifest)
         sidecar_path = output / f"step_{index}.program_io.json"
         sidecar_path.write_text(canonical_json(contract), encoding="utf-8")
         manifests.append(manifest_path)
@@ -429,7 +461,7 @@ def run(args: argparse.Namespace) -> DenseTrainingSequenceRuntimeObservation:
 
     hardware_path = output / "hardware.json"
     mapping_path = output / "mapping.spec"
-    hardware = json.loads(specialize_p5_large_release_hardware(1, 1))
+    hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
     hardware["memory"]["sram_size"] = 1 << 20
     hardware["memory"]["sram"]["capacity_bytes"] = 1 << 20
     hardware["memory"]["sram"]["regions"][0]["name"] = "sram"
@@ -532,6 +564,8 @@ def run(args: argparse.Namespace) -> DenseTrainingSequenceRuntimeObservation:
         )
     print(
         "Dense training sequence runtime canary PASS "
+        f"scope={'full-model' if not any(missing_full_model) else 'gradient-matmul-motif'} "
+        f"missing_full_model_opcodes={missing_full_model} "
         f"external_offload={int(external_offload)} "
         f"sequence={sequence.digest} artifacts={','.join(artifacts)} "
         f"versions=0,1,2 hbm={','.join(observation.hbm_digests)} "
@@ -547,6 +581,17 @@ def _parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         default=build / "dense-training-sequence-runtime-canary",
+    )
+    parser.add_argument(
+        "--mesh-size",
+        choices=("1x1", "1x4", "4x1", "2x2"),
+        default="1x1",
+        help="physical mesh with the matching full-participation Dense SGD fixture",
+    )
+    parser.add_argument(
+        "--require-full-model",
+        action="store_true",
+        help="reject linked training programs without model forward and CE loss/backward ISA",
     )
     parser.add_argument(
         "--finalizer", type=Path, default=build / "npusim_program_finalizer"
