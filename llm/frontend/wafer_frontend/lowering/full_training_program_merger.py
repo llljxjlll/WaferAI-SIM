@@ -26,6 +26,8 @@ from ..schema.common import DType, stable_artifact_id
 from ..schema.full_training_physical_dag import FullTrainingPhysicalDAG
 from ..schema.flexible_dense_train import FlexibleDenseTrainPlan
 from ..schema.full_dense_gradient_requirements import DenseFullTrainRequirements
+from ..schema.full_moe_shared_train_requirements import FullMoeSharedTrainRequirements
+from ..schema.moe_compile_sequence import MoeCompileSequence
 from ..schema.action import FusionPlan, StandaloneCollectivePlan
 from ..schema.global_action import GlobalActionDAG, LogicalCoreRef
 from ..schema.ir1 import IR1
@@ -34,6 +36,9 @@ from ..schema.serde import canonical_digest
 from .full_training_timeline_linker import require_physical_operation_coverage
 from .full_dense_gradient_physical_gate import (
     require_full_dense_physical_gradient_paths,
+)
+from .full_moe_shared_train_source_gate import (
+    require_moe_full_train_production_source,
 )
 from .moe_full_model_linker import _interfaces
 
@@ -183,6 +188,8 @@ def link_source_backed_full_training_timeline(
     dense_gradient_requirements: DenseFullTrainRequirements,
     required_backward_opcodes: Mapping[str, RecordOpcode],
     required_wgrad_opcodes: Mapping[str, RecordOpcode],
+    moe_sequence: MoeCompileSequence | None = None,
+    moe_source_requirements: FullMoeSharedTrainRequirements | None = None,
 ) -> LinkedProgramManifest:
     """Construct and validate one real full-training physical program.
 
@@ -195,6 +202,18 @@ def link_source_backed_full_training_timeline(
     equal the real GlobalActionDAG id.  Finalizer still checks SRAM lifecycle,
     HBM relocation, branch/transport wait and ProgramIO state after linking.
     """
+    has_moe_fragments = any(fragment.producer_pass ==
+                            "flexible_moe_production_lowering"
+                            for fragment in fragments)
+    if (has_moe_fragments != (moe_sequence is not None and
+                              moe_source_requirements is not None)
+            or (moe_sequence is None) != (moe_source_requirements is None)):
+        raise SchemaError("MoE TRAIN physical leaves need independent source MLP replacement requirements",
+                          path="moe_source_requirements")
+    if moe_source_requirements is not None:
+        moe_source_requirements.validate_against(
+            dense_plan, dense_gradient_requirements, moe_sequence,
+        )
     dag.validate_against(
         fragments, core_streams,
         required_operation_ids=tuple(sorted(required_operations)),
@@ -342,6 +361,11 @@ def link_source_backed_full_training_timeline(
                              in dag.actions},
         required_by_operation=required_operations,
     )
+    if has_moe_fragments:
+        require_moe_full_train_production_source(
+            result, dag, dense_plan, dense_gradient_requirements,
+            moe_sequence, moe_source_requirements,
+        )
     require_full_dense_physical_gradient_paths(
         result, dense_plan, dense_gradient_requirements, dag,
         required_backward_opcodes=required_backward_opcodes,

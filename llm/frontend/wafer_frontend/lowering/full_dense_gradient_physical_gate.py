@@ -137,7 +137,7 @@ def require_full_dense_physical_gradient_paths(
         OpKind.NORM: getattr(RecordOpcode, "RMSNORM_BACKWARD_TIMING", None),
         OpKind.ATTENTION: getattr(RecordOpcode, "ATTENTION_BACKWARD_TIMING", None),
         OpKind.ROPE: getattr(RecordOpcode, "ROPE_BACKWARD_TIMING", None),
-        OpKind.EMBEDDING: getattr(RecordOpcode, "EMBEDDING_WGRAD_TIMING", None),
+        OpKind.EMBEDDING: getattr(RecordOpcode, "EMBEDDING_TABLE_WGRAD_TIMING", None),
     }
     for reverse_ref in requirements.required_backbone_backward_refs:
         if not reverse_ref.startswith("backward::") or (
@@ -165,7 +165,7 @@ def require_full_dense_physical_gradient_paths(
         allowed = {
             OpKind.GEMM: RecordOpcode.MATMUL,
             OpKind.NORM: getattr(RecordOpcode, "NORM_GAMMA_WGRAD_TIMING", None),
-            OpKind.EMBEDDING: getattr(RecordOpcode, "EMBEDDING_WGRAD_TIMING", None),
+            OpKind.EMBEDDING: getattr(RecordOpcode, "EMBEDDING_TABLE_WGRAD_TIMING", None),
         }
         if (len(families) != 1 or next(iter(families)) not in allowed
                 or opcode is not allowed[next(iter(families))]):
