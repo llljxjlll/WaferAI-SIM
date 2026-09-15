@@ -97,11 +97,16 @@ def _four_die_rect_case(rows: int, columns: int):
 
 
 def _six_die_fixed_model_case(rows: int, columns: int):
-    """One unchanged two-layer model on horizontal and vertical six-die TP6."""
+    """One unchanged two-layer TP6 model, including a 3x3 idle-middle row."""
 
-    if (rows, columns) not in ((2, 3), (3, 2)):
-        raise ValueError("six-die fixed-model canary requires 2x3 or 3x2")
-    ranks = rows * columns
+    if (rows, columns) not in ((2, 3), (3, 2), (1, 6), (6, 1), (3, 3)):
+        raise ValueError("fixed-model TP6 requires a six-die rectangle or 3x3")
+    physical_dies = rows * columns
+    ranks = 6
+    active_dies = (
+        (0, 1, 2, 6, 7, 8) if (rows, columns) == (3, 3)
+        else tuple(range(ranks))
+    )
     base = _request(layers=2, prefill=6, decode=2)
     model = replace(
         base.model, hidden_size=48, intermediate_size=96,
@@ -113,18 +118,19 @@ def _six_die_fixed_model_case(rows: int, columns: int):
     request = WorkloadRunRequest.create(
         family=base.family, model=model, steps=steps,
         mesh=WorkloadMeshSpec(rows, columns),
-        parallel=WorkloadParallelSpec(tp=ranks, active_die_ids=tuple(range(ranks))),
+        parallel=WorkloadParallelSpec(tp=ranks, active_die_ids=active_dies),
         memory=base.memory, execution=base.execution,
     )
     baseline = _capability()
     capability = WorkloadRunCapability.create(
-        max_mesh_rows=3, max_mesh_columns=3, max_mesh_ranks=6,
+        max_mesh_rows=max(rows, 3), max_mesh_columns=max(columns, 3),
+        max_mesh_ranks=physical_dies,
         families=baseline.families,
     )
     capacities = tuple(MemoryTierCapacity.create(
         tier=MemoryTier.HBM, location_ref=f"die:{rank}",
         base_address=0, capacity_bytes=1 << 30, alignment_bytes=64,
-    ) for rank in range(ranks))
+    ) for rank in range(physical_dies))
     manifest = materialize_workload_preflight(
         request, capability, capacities=capacities,
     )
@@ -203,7 +209,7 @@ def run(args: argparse.Namespace) -> None:
         manifest, template, fabric = _one_die_case()
     elif args.mesh_size == "2x2":
         manifest, template, fabric = _two_by_two_case()
-    elif args.mesh_size in ("2x3", "3x2"):
+    elif args.mesh_size in ("2x3", "3x2", "1x6", "6x1", "3x3"):
         manifest, template, fabric = _six_die_fixed_model_case(rows, columns)
     else:
         manifest, template, fabric = _four_die_rect_case(rows, columns)
@@ -223,7 +229,7 @@ def run(args: argparse.Namespace) -> None:
                 manifest, template, fabric,
                 hbm_address_spaces=hbm_address_spaces,
                 intra_die_wire_address_limit_bytes=(
-                    65536 if rows * columns == 6 else None
+                    65536 if manifest.request.parallel.tp == 6 else None
                 ),
             )
     except Exception as error:
@@ -255,7 +261,7 @@ def run(args: argparse.Namespace) -> None:
         "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "runtime_status": "not_measured",
         "intra_die_wire_address_limit_bytes": (
-            65536 if rows * columns == 6 else None
+            65536 if manifest.request.parallel.tp == 6 else None
         ),
     }, indent=2, sort_keys=True), encoding="utf-8")
     manifests: list[Path] = []
@@ -341,9 +347,12 @@ def run(args: argparse.Namespace) -> None:
     hardware_path = output / "hardware.json"
     mapping_path = output / "mapping.spec"
     hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
-    sram_bytes = _SIX_DIE_SRAM_BYTES if rows * columns == 6 else 65536
+    sram_bytes = (
+        _SIX_DIE_SRAM_BYTES if manifest.request.parallel.tp == 6 else 65536
+    )
     sram_alignment = (
-        _SIX_DIE_SRAM_ALIGNMENT_BYTES if rows * columns == 6 else 64
+        _SIX_DIE_SRAM_ALIGNMENT_BYTES
+        if manifest.request.parallel.tp == 6 else 64
     )
     hardware["memory"]["sram_size"] = sram_bytes
     hardware["memory"]["sram"]["capacity_bytes"] = sram_bytes
@@ -500,7 +509,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mesh-size",
-        choices=("1x1", "2x2", "1x4", "4x1", "2x3", "3x2"),
+        choices=("1x1", "2x2", "1x4", "4x1", "2x3", "3x2",
+                 "1x6", "6x1", "3x3"),
         default="1x1",
         help="physical mesh and matching full-participation Dense fixture",
     )

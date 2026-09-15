@@ -72,6 +72,51 @@ class SixDieFixedDenseModelTest(unittest.TestCase):
             )
             self.assertEqual(boundary_bytes, (13824, 16128, 18432))
 
+    def test_nine_die_materialization_maps_six_ranks_across_idle_row(self) -> None:
+        compact, template, _ = _six_die_fixed_model_case(2, 3)
+        expanded, expanded_template, fabric = _six_die_fixed_model_case(3, 3)
+        self.assertEqual(expanded.request.model, compact.request.model)
+        self.assertEqual(canonical_digest(expanded_template.model),
+                         canonical_digest(template.model))
+        self.assertEqual(expanded.placement.active_die_ids,
+                         (0, 1, 2, 6, 7, 8))
+        self.assertEqual(expanded.request.parallel.tp, 6)
+        self.assertEqual(fabric.die_grid, (3, 3))
+        self.assertEqual(tuple(space.size_bytes for space in
+                               valid_hbm_address_spaces(fabric)),
+                         (1 << 30,) * 9)
+        self.assertEqual(
+            Counter((op.kind, op.step, op.layer)
+                    for op in expanded.logical_graph.operations),
+            Counter((op.kind, op.step, op.layer)
+                    for op in compact.logical_graph.operations),
+        )
+
+    def test_long_rectangles_preserve_six_active_dies_and_the_same_model(self) -> None:
+        reference, template, _ = _six_die_fixed_model_case(2, 3)
+        expected_ops = Counter((op.kind, op.step, op.layer)
+                               for op in reference.logical_graph.operations)
+        for rows, columns in ((1, 6), (6, 1)):
+            with self.subTest(mesh=(rows, columns)):
+                materialized, extended_template, fabric = (
+                    _six_die_fixed_model_case(rows, columns)
+                )
+                self.assertEqual(materialized.request.model,
+                                 reference.request.model)
+                self.assertEqual(canonical_digest(extended_template.model),
+                                 canonical_digest(template.model))
+                self.assertEqual(materialized.placement.active_die_ids,
+                                 tuple(range(6)))
+                self.assertEqual(fabric.die_grid, (columns, rows))
+                self.assertEqual(
+                    tuple(space.size_bytes for space in
+                          valid_hbm_address_spaces(fabric)),
+                    (1 << 30,) * 6,
+                )
+                self.assertEqual(Counter((op.kind, op.step, op.layer)
+                                         for op in materialized.logical_graph.operations),
+                                 expected_ops)
+
 
 if __name__ == "__main__":
     unittest.main()
