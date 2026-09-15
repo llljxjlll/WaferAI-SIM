@@ -48,6 +48,7 @@ from .ir0 import (
     SgdUpdateWorkload,
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
+from .gemm_input_dx_workload import GemmInputDxWorkload
 from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
@@ -209,6 +210,7 @@ def _validate_workload_kind(
         OpKind.EMBEDDING_TABLE_WGRAD: (EmbeddingTableWgradWorkload,),
         OpKind.NORM_GAMMA_WGRAD: (NormGammaWgradWorkload,),
         OpKind.GEMM_WEIGHT_WGRAD: (GemmWeightWgradWorkload,),
+        OpKind.GEMM_INPUT_DX: (GemmInputDxWorkload,),
         OpKind.ROPE: (RopeQkWorkload,),
         OpKind.SAMPLING: (GreedySampleWorkload,),
         OpKind.CE_FORWARD: (CrossEntropyForwardWorkload,),
@@ -254,6 +256,8 @@ def canonical_compute_operand_roles(
         return ("forward_activation", "upstream_hidden"), ("gamma_gradient",)
     if op_kind is OpKind.GEMM_WEIGHT_WGRAD:
         return ("forward_activation", "upstream_gradient"), ("weight_gradient",)
+    if op_kind is OpKind.GEMM_INPUT_DX:
+        return ("forward_weight", "upstream_gradient"), ("input_gradient",)
     if type(workload) is RmsNormWorkload:
         return ("activation", "weight"), ("normalized",)
     if op_kind is OpKind.ROPE:

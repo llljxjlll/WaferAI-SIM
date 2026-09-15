@@ -286,6 +286,12 @@ def _operand_role(
             (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
             (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (
             BufferUseRole.COMP_INPUT,
             0,

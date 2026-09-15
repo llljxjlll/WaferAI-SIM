@@ -187,6 +187,18 @@ struct GemmWeightWGradOperands {
     uint64_t k = 1;
 };
 
+struct GemmInputDxOperands {
+    ExternalDataType weight_datatype = ExternalDataType::FP16;
+    ExternalDataType upstream_datatype = ExternalDataType::FP16;
+    ExternalDataType dx_datatype = ExternalDataType::FP32;
+    SramAddressOperand weight;   // explicit StateABI READ -> SRAM LOAD
+    SramAddressOperand upstream; // real dY[K,N] producer
+    SramAddressOperand dx;       // independent FP32 dX[K,M]
+    uint64_t m = 1;
+    uint64_t n = 1;
+    uint64_t k = 1;
+};
+
 struct GreedySampleOperands {
     ExternalDataType logits_datatype = ExternalDataType::FP16;
     ExternalDataType output_datatype = ExternalDataType::INT32;
@@ -432,7 +444,7 @@ using RecordOperands =
     std::variant<ComputeOperands, RopeQkExactOperands,
                  AttentionExactOperands, EmbeddingLookupOperands,
                  EmbeddingTableWGradOperands, NormGammaWGradOperands,
-                 GemmWeightWGradOperands,
+                 GemmWeightWGradOperands, GemmInputDxOperands,
                  GreedySampleOperands, CrossEntropyForwardOperands,
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
                  AdamwUpdateOperands,
@@ -459,6 +471,7 @@ enum class RecordOperandKind : uint8_t {
     EMBEDDING_TABLE_WGRAD,
     NORM_GAMMA_WGRAD,
     GEMM_WEIGHT_WGRAD,
+    GEMM_INPUT_DX,
     GREEDY_SAMPLE,
     CROSS_ENTROPY_FORWARD,
     CROSS_ENTROPY_BACKWARD,

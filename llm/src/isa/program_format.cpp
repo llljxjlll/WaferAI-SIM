@@ -185,7 +185,8 @@ bool ValidRelocationOperand(const ExternalRecord &record,
                id == SemanticOperandId::COMPUTE_AUX_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
     }
-    if (std::holds_alternative<GemmWeightWGradOperands>(record.operands)) {
+    if (std::holds_alternative<GemmWeightWGradOperands>(record.operands) ||
+        std::holds_alternative<GemmInputDxOperands>(record.operands)) {
         return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
@@ -420,6 +421,20 @@ void ValidateRecordReferences(const ExternalRecord &record,
                      {&o->gradient, 4 * o->m * o->n}}};
         for (std::size_t i = 0; i < buffers.size(); ++i) {
             const std::string field = where + " GEMM WGrad buffer " +
+                                      std::to_string(i);
+            ValidateAddressReference(*buffers[i].first, artifact, field,
+                                     buffers[i].second);
+            ValidateAbsoluteSramRegionSpan(*buffers[i].first, artifact, field,
+                                           buffers[i].second);
+        }
+    } else if (const auto *o =
+                   std::get_if<GemmInputDxOperands>(&record.operands)) {
+        const std::array<std::pair<const SramAddressOperand *, uint64_t>, 3>
+            buffers{{{&o->weight, 2 * o->m * o->n},
+                     {&o->upstream, 2 * o->k * o->n},
+                     {&o->dx, 4 * o->k * o->m}}};
+        for (std::size_t i = 0; i < buffers.size(); ++i) {
+            const std::string field = where + " GEMM dX buffer " +
                                       std::to_string(i);
             ValidateAddressReference(*buffers[i].first, artifact, field,
                                      buffers[i].second);

@@ -251,6 +251,17 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::GEMM_INPUT_DX: {
+        GemmInputDxOperands operands;
+        operands.weight = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.upstream = {SramAddressKind::ABSOLUTE, 512, 0, 0};
+        operands.dx = {SramAddressKind::ABSOLUTE, 1024, 0, 0};
+        operands.m = 8;
+        operands.n = 16;
+        operands.k = 4;
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::GREEDY_SAMPLE: {
         GreedySampleOperands operands;
         operands.logits = Address(boundary);
@@ -666,7 +677,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 56, "executable opcode count");
+    checks.Check(executable_count == 57, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -1848,6 +1859,41 @@ void CheckExactStage2Rejections(Checks &checks) {
         auto bytes = EncodeExternalRecord(record);
         bytes[11] = 1; // external header 8B + reserved payload byte 3
         checks.Reject("GEMM_WEIGHT_WGRAD rejects reserved wire mode", [&] {
+            DecodeExternalRecordExact(bytes);
+        });
+    });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::GEMM_DX_TIMING),
+                        Boundary::TYPICAL);
+    auto &dx = std::get<GemmInputDxOperands>(record.operands);
+    checks.Accept("GEMM_INPUT_DX exact FP32 public wire", [&] {
+        const auto bytes = EncodeExternalRecord(record);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        const auto &out = std::get<GemmInputDxOperands>(decoded.operands);
+        checks.Check(out.m == 8 && out.n == 16 && out.k == 4 &&
+                         out.dx_datatype == ExternalDataType::FP32 &&
+                         EncodeExternalRecord(decoded) == bytes,
+                     "GEMM_INPUT_DX rank rows/FP32 physical roundtrip");
+    });
+    dx.dx_datatype = ExternalDataType::FP16;
+    checks.Reject("GEMM_INPUT_DX rejects FP16-sized output", [&] {
+        EncodeExternalRecord(record);
+    });
+    dx.dx_datatype = ExternalDataType::FP32;
+    dx.k = 0;
+    checks.Reject("GEMM_INPUT_DX rejects zero K", [&] {
+        EncodeExternalRecord(record);
+    });
+    dx.k = 4;
+    dx.upstream.absolute_address_bytes = 240;
+    checks.Reject("GEMM_INPUT_DX rejects W/dY SRAM overlap", [&] {
+        EncodeExternalRecord(record);
+    });
+    dx.upstream.absolute_address_bytes = 512;
+    checks.Accept("GEMM_INPUT_DX raw reserved corruption setup", [&] {
+        auto bytes = EncodeExternalRecord(record);
+        bytes[11] = 1;
+        checks.Reject("GEMM_INPUT_DX rejects reserved wire mode", [&] {
             DecodeExternalRecordExact(bytes);
         });
     });

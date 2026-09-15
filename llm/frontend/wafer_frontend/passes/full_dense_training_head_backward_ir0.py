@@ -1,6 +1,6 @@
 """Connect a real LM-head backward source to a complete two-layer CE source.
 
-The FP32 weight gradient and FP16 hidden gradient have separate nodes and
+The FP32 weight gradient and FP32 hidden gradient have separate nodes and
 separate output tensors.  This source transform does not claim physical
 lowering, an optimizer step, or a complete model backward pass.
 """
@@ -12,6 +12,7 @@ from dataclasses import replace
 from ..errors import SchemaError
 from ..schema.common import DType, TensorValue
 from ..schema.gemm_weight_wgrad_workload import GemmWeightWgradWorkload
+from ..schema.gemm_input_dx_workload import GemmInputDxWorkload
 from ..schema.ir0 import (
     EdgeKind,
     EffectKind,
@@ -33,7 +34,7 @@ def append_dense_training_head_backward_source(source: IR0) -> IR0:
     """Differentiate LM head against CE dLogits and the saved final-norm value.
 
     For a replicated TP1 GEMM ``hidden[M,H] × weight[H,V]``, the two
-    derivatives are ``dWeight[H,V]`` in FP32 and ``dHidden[M,H]`` in FP16.
+    derivatives are ``dWeight[H,V]`` in FP32 and ``dHidden[M,H]`` in FP32.
     Its sole parameter source must be a real persistent StateDecl.
     """
 
@@ -108,7 +109,7 @@ def append_dense_training_head_backward_source(source: IR0) -> IR0:
     ):
         raise SchemaError("LM-head backward source IDs already exist", path="source")
     hidden_grad = TensorValue(
-        id=hidden_grad_value_ref, shape=hidden.shape, dtype=DType.FP16,
+        id=hidden_grad_value_ref, shape=hidden.shape, dtype=DType.FP32,
         logical_layout="MH_hidden_gradient", sharding=hidden.sharding,
         producer=hidden_grad_ref, consumers=(), alias_set=None,
     )
@@ -132,14 +133,14 @@ def append_dense_training_head_backward_source(source: IR0) -> IR0:
         impl_ref="gemm_weight_wgrad_timing",
     )
     dgrad = LogicalNode(
-        id=hidden_grad_ref, instance_id=instance.id, kind=OpKind.GEMM,
+        id=hidden_grad_ref, instance_id=instance.id, kind=OpKind.GEMM_INPUT_DX,
         phase=OpPhase.DGRAD, stage=head.stage, mesh_ref=head.mesh_ref,
-        inputs=(dlogits.id, weight.id), outputs=(hidden_grad.id,),
-        workload=GemmWorkload(
-            logical_shape=(m, h, v), rank_shape=(m, h, v),
-            partition=GemmPartition.REPLICATED, dtype=DType.FP16,
+        inputs=(weight.id, dlogits.id), outputs=(hidden_grad.id,),
+        workload=GemmInputDxWorkload(
+            k=m, m=h, n=v, source_forward_op_ref=head.id,
+            source_parameter_state_ref=state.id,
         ),
-        math=head.math, effects=pure, impl_ref="lm_head_dgrad",
+        math=head.math, effects=pure, impl_ref="gemm_input_dx_timing",
     )
     changed = {hidden.id: weight_grad_ref, weight.id: hidden_grad_ref}
     values = tuple(

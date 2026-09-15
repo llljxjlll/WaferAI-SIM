@@ -51,6 +51,11 @@ struct GemmInputDxTimingWork {
 // Stage R7 NEW-only source/physical timing contract. Public PrimId, opcode,
 // fixed record codec and authoritative ProgramIO bridge stay fail closed until
 // the frontend source-binding freeze ends. No numerical dX is calculated.
+// Runtime record decoding proves three physical SRAM spans; the producer
+// validates the separate source witness in LinkedProgramManifest/StateABI.
+GemmInputDxTimingWork BuildGemmInputDxPhysicalWork(
+    const GemmInputDxTimingTile &tile);
+
 GemmInputDxTimingWork BuildGemmInputDxTimingWork(
     const GemmInputDxSourceWitness &source,
     const GemmInputDxTimingTile &tile);

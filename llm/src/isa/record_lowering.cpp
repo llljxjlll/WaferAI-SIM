@@ -7,6 +7,7 @@
 #include "prims/exact_stage2_prims.h"
 #include "prims/weight_gradient_timing_prims.h"
 #include "prims/gemm_weight_wgrad_timing_prim.h"
+#include "prims/gemm_input_dx_npu_prim.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -257,8 +258,18 @@ LoweredPrimList LowerWeightGradientTiming(const ExternalRecord &record,
         prim->param_value = {{"M", static_cast<int>(o.m)},
                              {"N", static_cast<int>(o.n)},
                              {"K", static_cast<int>(o.k)}};
+    } else if (record.opcode == Opcode::GEMM_DX_TIMING) {
+        if (dynamic_cast<gemm_input_dx_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not gemm_input_dx_timing");
+        const auto &o = std::get<GemmInputDxOperands>(record.operands);
+        prim->inp_offset = static_cast<int>(o.weight.absolute_address_bytes);
+        prim->data_offset = static_cast<int>(o.upstream.absolute_address_bytes);
+        prim->out_offset = static_cast<int>(o.dx.absolute_address_bytes);
+        prim->param_value = {{"M", static_cast<int>(o.m)},
+                             {"N", static_cast<int>(o.n)},
+                             {"K", static_cast<int>(o.k)}};
     } else {
-        LoweringFailure(entry, "unexpected weight-gradient opcode");
+        LoweringFailure(entry, "unexpected typed gradient opcode");
     }
     prim->initialize();
     LoweredPrimList result;
@@ -1306,6 +1317,7 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
     case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
+    case Opcode::GEMM_DX_TIMING:
         return LowerWeightGradientTiming(record, *entry);
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:

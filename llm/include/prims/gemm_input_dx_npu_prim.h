@@ -3,13 +3,11 @@
 #include "prims/base.h"
 #include "prims/gemm_input_dx_timing_prim.h"
 
-// NEW-only runtime adapter. It deliberately has no PrimId or public ISA
-// registration until source-to-physical RecordOpcode/codec/finalizer coverage
-// exists. Worker timing may be exercised directly in an isolated harness.
+// Public runtime adapter. Source/StateABI provenance is checked by the
+// producer and finalizer; strict Prim wire carries only physical W/dY/dX
+// addresses and M/N/K. No numerical FP32 dX is claimed.
 class gemm_input_dx_timing final : public NpuBase {
 public:
-    GemmInputDxSourceWitness source_witness;
-
     gemm_input_dx_timing();
     GemmInputDxTimingWork work() const;
     void initialize() override;

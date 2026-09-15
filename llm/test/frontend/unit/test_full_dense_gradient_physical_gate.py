@@ -11,6 +11,8 @@ from llm.frontend.wafer_frontend.lowering.full_dense_gradient_physical_gate impo
     require_full_dense_physical_gradient_paths,
     require_source_gemm_wgrad_geometry,
     require_named_gemm_wgrad_typed_buffers,
+    require_source_gemm_dx_geometry,
+    require_named_gemm_dx_typed_buffers,
 )
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.common import DType
@@ -110,6 +112,70 @@ class FullDenseGradientPhysicalGateTest(unittest.TestCase):
                 rank=rank, m=m, n=n, k=k, activation=x, upstream=dy,
                 gradient=replace(dw, storage_id=x.storage_id),
                 literals=literals, path="native_gemm_test",
+            )
+
+    def test_true_gemm_dx_geometry_uses_weight_shard_and_forward_rows(self) -> None:
+        nodes = {node.id: node for node in self.plan.forward_graph.nodes}
+        states = {decl.id: decl for decl in self.plan.forward_graph.persistent_states}
+        path = next(path for path in self.requirements.paths
+                    if nodes[path.forward_op_refs[0]].kind is OpKind.GEMM
+                    and len(states[path.parameter_state_ref].shape) == 2)
+        m, n = states[path.parameter_state_ref].shape
+        k = nodes[path.forward_op_refs[0]].workload.rank_shape[0]
+        require_source_gemm_dx_geometry(
+            self.plan, source_forward_ref=path.forward_op_refs[0],
+            source_parameter_state_ref=path.parameter_state_ref,
+            m=m, n=n, k=k,
+        )
+        with self.assertRaisesRegex(SchemaError, "source GEMM rows disagree"):
+            require_source_gemm_dx_geometry(
+                self.plan, source_forward_ref=path.forward_op_refs[0],
+                source_parameter_state_ref=path.parameter_state_ref,
+                m=m, n=n, k=k + 1,
+            )
+
+    def test_named_gemm_dx_rejects_fp16_sized_fp32_output_and_untyped_weight(self) -> None:
+        nodes = {node.id: node for node in self.plan.forward_graph.nodes}
+        states = {decl.id: decl for decl in self.plan.forward_graph.persistent_states}
+        path = next(path for path in self.requirements.paths
+                    if nodes[path.forward_op_refs[0]].kind is OpKind.GEMM
+                    and states[path.parameter_state_ref].shape == (4, 16))
+        m, n = states[path.parameter_state_ref].shape
+        k = nodes[path.forward_op_refs[0]].workload.rank_shape[0]
+        rank = path.rank
+        originals = [abi for fragment in self.fixture.backward.manifest.fragments
+                     for abi in fragment.buffer_abi
+                     if abi.logical_core.die_id == rank][:3]
+        weight = replace(originals[0], dtype=DType.FP16,
+                         size_bytes=2 * m * n, storage_id="native_dx_weight")
+        upstream = replace(originals[1], dtype=DType.FP16,
+                           size_bytes=2 * k * n, storage_id="native_dx_upstream")
+        dx = replace(originals[2], dtype=DType.FP32,
+                     size_bytes=4 * k * m, storage_id="native_dx_output")
+        literals = {"m": m, "n": n, "k": k,
+                    "weight_datatype": 1, "upstream_datatype": 1,
+                    "dx_datatype": 3}
+        require_named_gemm_dx_typed_buffers(
+            rank=rank, m=m, n=n, k=k, weight=weight, upstream=upstream,
+            dx=dx, literals=literals, path="native_dx_test",
+        )
+        with self.assertRaisesRegex(SchemaError, "dx physical footprint/dtype"):
+            require_named_gemm_dx_typed_buffers(
+                rank=rank, m=m, n=n, k=k, weight=weight, upstream=upstream,
+                dx=replace(dx, size_bytes=2 * k * m), literals=literals,
+                path="native_dx_test",
+            )
+        with self.assertRaisesRegex(SchemaError, "weight physical footprint/dtype"):
+            require_named_gemm_dx_typed_buffers(
+                rank=rank, m=m, n=n, k=k,
+                weight=replace(weight, dtype=DType.FP32), upstream=upstream,
+                dx=dx, literals=literals, path="native_dx_test",
+            )
+        with self.assertRaisesRegex(SchemaError, "independent SRAM storage"):
+            require_named_gemm_dx_typed_buffers(
+                rank=rank, m=m, n=n, k=k, weight=weight, upstream=upstream,
+                dx=replace(dx, storage_id=upstream.storage_id),
+                literals=literals, path="native_dx_test",
             )
 
     def test_old_all_matmul_backbone_reverse_rejects_real_norm_and_attention(self) -> None:

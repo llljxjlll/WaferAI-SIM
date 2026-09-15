@@ -123,6 +123,131 @@ def require_named_gemm_wgrad_typed_buffers(
                           path=path)
 
 
+def require_source_gemm_dx_geometry(
+    plan: FlexibleDenseTrainPlan, *, source_forward_ref: str,
+    source_parameter_state_ref: str, m: int, n: int, k: int,
+) -> None:
+    """DGRAD dX[K,M] uses the actual forward FP16 W[M,N] shard and rows K."""
+    states = {decl.id: decl for decl in plan.forward_graph.persistent_states}
+    nodes = {node.id: node for node in plan.forward_graph.nodes}
+    state = states.get(source_parameter_state_ref)
+    forward = nodes.get(source_forward_ref)
+    if (state is None or forward is None or forward.kind is not OpKind.GEMM
+            or len(state.shape) != 2
+            or any(type(value) is not int or value < 1
+                   for value in (m, n, k))
+            or state.shape != (m, n)
+            or forward.workload.rank_shape != (k, n, m)):
+        raise SchemaError("native dX K×M, FP16 W M×N and source GEMM rows disagree",
+                          path=f"gemm_dx_source[{source_forward_ref}]")
+
+
+def require_named_gemm_dx_typed_buffers(
+    *, rank: int, m: int, n: int, k: int,
+    weight: BufferABI, upstream: BufferABI, dx: BufferABI,
+    literals: Mapping[str, int], path: str,
+) -> None:
+    """Reject legacy MATMUL or FP16-sized storage masquerading as FP32 dX."""
+    if (type(m) is not int or type(n) is not int or type(k) is not int
+            or min(m, n, k) < 1
+            or any(literals.get(field) != value for field, value in (
+                ("m", m), ("n", n), ("k", k),
+                ("weight_datatype", 1), ("upstream_datatype", 1),
+                ("dx_datatype", 3),
+            ))):
+        raise SchemaError("native GEMM FP32 dX dimensions or datatypes differ",
+                          path=path)
+    for role, abi, dtype, size in (
+        ("weight", weight, DType.FP16, 2 * m * n),
+        ("upstream", upstream, DType.FP16, 2 * k * n),
+        ("dx", dx, DType.FP32, 4 * k * m),
+    ):
+        if (abi.dtype is not dtype or abi.size_bytes != size
+                or abi.logical_core.die_id != rank):
+            raise SchemaError(
+                f"native {role} physical footprint/dtype differs from GEMM FP32 dX",
+                path=f"{path}.{role}",
+            )
+    if len({weight.storage_id, upstream.storage_id, dx.storage_id}) != 3:
+        raise SchemaError("GEMM FP32 dX operands require independent SRAM storage",
+                          path=path)
+
+
+def require_named_gemm_dx_state_load(
+    manifest: LinkedProgramManifest, *, state_ref: str, rank: int,
+    compute_fragment_id: str, compute_record_index: int,
+    weight: BufferABI, required_state: StateABI | None = None,
+    allowed_load_records: frozenset[tuple[str, int]] | None = None,
+) -> tuple[str, int]:
+    """Require one earlier blocking HBM READ loading the exact weight SRAM value."""
+    states = {abi.id: abi for fragment in manifest.fragments
+              for abi in fragment.state_abi}
+    buffers = {abi.id: abi for fragment in manifest.fragments
+               for abi in fragment.buffer_abi}
+    by_fragment = {fragment.id: fragment for fragment in manifest.fragments}
+    load_candidates: list[tuple[str, int]] = []
+    for binding in manifest.state_operand_bindings:
+        if binding.operand_id is not SemanticOperandId.HBM_ADDRESS:
+            continue
+        state = states[binding.state_abi_id]
+        if state.state_ref != state_ref or state.die_id != rank:
+            continue
+        if (allowed_load_records is not None and
+                (binding.fragment_id, binding.fragment_record_index)
+                not in allowed_load_records):
+            continue
+        if (required_state is not None and state != required_state
+                or state.dtype is not DType.FP16
+                or state.size_bytes != weight.size_bytes
+                or state.access is PersistentStateAccess.RESERVED):
+            raise SchemaError("named dX weight HBM StateABI READ differs from source",
+                              path=f"gemm_dx_state[{state_ref}]")
+        fragment = by_fragment[binding.fragment_id]
+        stream = next((stream for stream in fragment.core_streams
+                       if stream.logical_core == binding.logical_core), None)
+        if stream is None or binding.fragment_record_index >= len(stream.records):
+            raise SchemaError("named dX StateABI LOAD record is dangling",
+                              path=f"gemm_dx_state[{state_ref}]")
+        record = stream.records[binding.fragment_record_index]
+        if record.opcode is not RecordOpcode.LSU_LOAD:
+            continue
+        local = next((closure for closure in manifest.address_operand_bindings
+                      if closure.fragment_id == binding.fragment_id
+                      and closure.logical_core == binding.logical_core
+                      and closure.fragment_record_index == binding.fragment_record_index
+                      and closure.operand_id is SemanticOperandId.DESTINATION_ADDRESS), None)
+        loaded = (buffers[local.buffer_abi_ids[0]] if local is not None
+                  and len(local.buffer_abi_ids) == 1 else None)
+        size = next((item.literal_value for item in record.operands
+                     if item.name == "size_bytes"), None)
+        if (loaded is None or loaded.id != weight.id
+                or loaded.storage_id != weight.storage_id
+                or loaded.value_id != weight.value_id
+                or loaded.logical_core.die_id != rank
+                or size != weight.size_bytes):
+            raise SchemaError("HBM LSU_LOAD does not fill exact named dX FP16 weight SRAM",
+                              path=f"gemm_dx_state[{state_ref}]")
+        load_candidates.append((binding.fragment_id, binding.fragment_record_index))
+    if len(load_candidates) != 1:
+        raise SchemaError("named dX needs exactly one source StateABI HBM LOAD",
+                          path=f"gemm_dx_state[{state_ref}]")
+    core = weight.logical_core
+    linked = next((stream for stream in manifest.core_streams
+                   if stream.logical_core == core), None)
+    if linked is None:
+        raise SchemaError("named dX core stream is absent",
+                          path=f"gemm_dx_state[{state_ref}]")
+    refs = [(ref.fragment_id, ref.fragment_record_index)
+            for ref in linked.records]
+    if (load_candidates[0] not in refs
+            or (compute_fragment_id, compute_record_index) not in refs
+            or refs.index(load_candidates[0]) >=
+               refs.index((compute_fragment_id, compute_record_index))):
+        raise SchemaError("source HBM LOAD must precede named dX record",
+                          path=f"gemm_dx_state[{state_ref}]")
+    return load_candidates[0]
+
+
 def require_full_dense_physical_gradient_paths(
     manifest: LinkedProgramManifest,
     plan: FlexibleDenseTrainPlan,
@@ -277,7 +402,85 @@ def require_full_dense_physical_gradient_paths(
             if opcode is None:
                 raise SchemaError("parameter reverse source lacks independent native opcode",
                                   path=f"gradient_path.step{step}.rank{rank}.{reverse_ref}")
-            one(step, rank, reverse_ref, opcode)
+            reverse, reverse_record, reverse_fid, reverse_idx = one(
+                step, rank, reverse_ref, opcode)
+            if opcode is RecordOpcode.GEMM_DX_TIMING:
+                source_ref = reverse_ref.removeprefix("backward::")
+                owners = [template.state_ref for template in
+                          plan.parameter_templates if
+                          source_ref in template.forward_consumer_refs]
+                if len(owners) != 1:
+                    raise SchemaError("named dX source GEMM lacks one real weight StateDecl",
+                                      path=f"gradient_path[{reverse_ref}].state")
+                literals = {item.name: item.literal_value for item in
+                            reverse_record.operands if item.literal_value is not None}
+                if not all(type(literals.get(field)) is int and
+                           literals[field] > 0 for field in ("m", "n", "k")):
+                    raise SchemaError("named dX source tile is absent",
+                                      path=f"gradient_path[{reverse_ref}].geometry")
+                require_source_gemm_dx_geometry(
+                    plan, source_forward_ref=source_ref,
+                    source_parameter_state_ref=owners[0],
+                    m=literals["m"], n=literals["n"], k=literals["k"],
+                )
+                weight = buffer(reverse, reverse_fid, reverse_idx,
+                                SemanticOperandId.COMPUTE_INPUT_ADDRESS)
+                upstream = buffer(reverse, reverse_fid, reverse_idx,
+                                  SemanticOperandId.COMPUTE_DATA_ADDRESS)
+                dx = buffer(reverse, reverse_fid, reverse_idx,
+                            SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)
+                require_named_gemm_dx_typed_buffers(
+                    rank=rank, m=literals["m"], n=literals["n"],
+                    k=literals["k"], weight=weight, upstream=upstream,
+                    dx=dx, literals=literals,
+                    path=f"gradient_path[{reverse_ref}].dX",
+                )
+                step_load_records = frozenset(
+                    (fid, idx) for candidate in dag.actions
+                    if candidate.step == step and
+                    candidate.logical_core == reverse.logical_core
+                    for fid, idx, op in candidate.executable_records
+                    if op is RecordOpcode.LSU_LOAD
+                )
+                load_fid, load_idx = require_named_gemm_dx_state_load(
+                    manifest, state_ref=owners[0], rank=rank,
+                    compute_fragment_id=reverse_fid,
+                    compute_record_index=reverse_idx, weight=weight,
+                    required_state=homes[(owners[0], rank)],
+                    allowed_load_records=step_load_records,
+                )
+                source_loads = [item for item in dag.actions
+                                if item.step == step and
+                                item.logical_core == reverse.logical_core and
+                                (load_fid, load_idx, RecordOpcode.LSU_LOAD)
+                                in item.executable_records]
+                if len(source_loads) != 1 or not depends_on(reverse, source_loads[0]):
+                    raise SchemaError("named dX must depend on its physical parameter LOAD",
+                                      path=f"gradient_path[{reverse_ref}].state")
+                upstream_producers = []
+                for earlier in dag.actions:
+                    if earlier.step != step or earlier.logical_core != reverse.logical_core:
+                        continue
+                    for producer_fid, producer_idx, producer_opcode in earlier.executable_records:
+                        if producer_opcode not in (
+                            RecordOpcode.CROSS_ENTROPY_BACKWARD,
+                            RecordOpcode.GEMM_DX_TIMING,
+                            RecordOpcode.SWIGLU_BACKWARD_TIMING,
+                        ):
+                            continue
+                        closure = closures.get((producer_fid,
+                                                earlier.logical_core,
+                                                producer_idx,
+                                                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS))
+                        if (closure is not None and
+                                len(closure.buffer_abi_ids) == 1 and
+                                same_physical_value(
+                                    buffers[closure.buffer_abi_ids[0]], upstream)
+                                and depends_on(reverse, earlier)):
+                            upstream_producers.append(earlier)
+                if len(upstream_producers) != 1:
+                    raise SchemaError("named dX upstream dY lacks one real earlier derivative producer",
+                                      path=f"gradient_path[{reverse_ref}].dY")
         derivative_opcode = required_wgrad_opcodes[path.named_wgrad_op_ref]
         wgrad, native, fid, idx = one(step, rank, path.named_wgrad_op_ref,
                                        derivative_opcode)
@@ -545,4 +748,8 @@ def require_full_dense_physical_gradient_paths(
 
 __all__ = ["require_exact_dense_parameter_state_inventory",
            "require_source_gemm_wgrad_geometry",
+           "require_named_gemm_wgrad_typed_buffers",
+           "require_source_gemm_dx_geometry",
+           "require_named_gemm_dx_typed_buffers",
+           "require_named_gemm_dx_state_load",
            "require_full_dense_physical_gradient_paths"]

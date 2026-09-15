@@ -45,6 +45,7 @@ from .ir0 import (
     SwiGluWorkload,
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
+from .gemm_input_dx_workload import GemmInputDxWorkload
 from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
@@ -129,6 +130,7 @@ class RecordOpcode(IntEnum):
     EMBEDDING_TABLE_WGRAD_TIMING = 0x23
     NORM_GAMMA_WGRAD_TIMING = 0x24
     GEMM_WEIGHT_WGRAD_TIMING = 0x25
+    GEMM_DX_TIMING = 0x26
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
@@ -818,6 +820,14 @@ _GEMM_WEIGHT_WGRAD_OPERANDS = (
     _lit("m"), _lit("n"), _lit("k"),
 )
 
+_GEMM_INPUT_DX_OPERANDS = (
+    _lit("weight_datatype"), _lit("upstream_datatype"), _lit("dx_datatype"),
+    _addr("weight_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("dx_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("m"), _lit("n"), _lit("k"),
+)
+
 _GREEDY_SAMPLE_OPERANDS = (
     _lit("logits_datatype"),
     _lit("output_datatype"),
@@ -917,6 +927,7 @@ _OPERAND_SCHEMAS = {
     RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING: _EMBEDDING_TABLE_WGRAD_OPERANDS,
     RecordOpcode.NORM_GAMMA_WGRAD_TIMING: _NORM_GAMMA_WGRAD_OPERANDS,
     RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING: _GEMM_WEIGHT_WGRAD_OPERANDS,
+    RecordOpcode.GEMM_DX_TIMING: _GEMM_INPUT_DX_OPERANDS,
     RecordOpcode.GREEDY_SAMPLE: _GREEDY_SAMPLE_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_FORWARD: _CROSS_ENTROPY_FORWARD_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_BACKWARD: _CROSS_ENTROPY_BACKWARD_OPERANDS,
@@ -1094,6 +1105,9 @@ for _operand_id in (
     _ALLOWED_ADDRESS_KINDS[
         (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, _operand_id)
     ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+    _ALLOWED_ADDRESS_KINDS[(RecordOpcode.GEMM_DX_TIMING, _operand_id)] = (
+        ProgramSymbolKind.ABSOLUTE_ADDRESS,
+    )
 
 for _operand_id in (
     SemanticOperandId.COMPUTE_INPUT_ADDRESS,
@@ -1128,6 +1142,9 @@ _COMPUTE_OPCODE_BY_IMPL_REF = {
     ),
     "gemm_weight_wgrad_timing": (
         OpKind.GEMM_WEIGHT_WGRAD, RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
+    ),
+    "gemm_input_dx_timing": (
+        OpKind.GEMM_INPUT_DX, RecordOpcode.GEMM_DX_TIMING,
     ),
     "greedy_sample": (OpKind.SAMPLING, RecordOpcode.GREEDY_SAMPLE),
     "cross_entropy_forward": (
@@ -1189,6 +1206,7 @@ _FIXED_COMPUTE_OPCODES = (
     RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
     RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
     RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
+    RecordOpcode.GEMM_DX_TIMING,
     RecordOpcode.GREEDY_SAMPLE,
     RecordOpcode.CROSS_ENTROPY_FORWARD,
     RecordOpcode.CROSS_ENTROPY_BACKWARD,
@@ -1340,6 +1358,13 @@ def _fixed_compute_literals(
         workload.validate(path=f"{path}.workload")
         return {"activation_datatype": 1, "upstream_datatype": 1,
                 "gradient_datatype": 3, "m": workload.m,
+                "n": workload.n, "k": workload.k}
+    if opcode is RecordOpcode.GEMM_DX_TIMING:
+        if type(workload) is not GemmInputDxWorkload or len(compute.inputs) != 2:
+            raise SchemaError("0x26 requires real FP16 forward W and upstream dY", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {"weight_datatype": 1, "upstream_datatype": 1,
+                "dx_datatype": 3, "m": workload.m,
                 "n": workload.n, "k": workload.k}
     if opcode is RecordOpcode.GREEDY_SAMPLE:
         if (
@@ -1787,6 +1812,20 @@ def _validate_fixed_compute_operands(
             raise SchemaError("0x25 tile exceeds typed 16-bit SRAM span", path=path)
         return
 
+    if opcode is RecordOpcode.GEMM_DX_TIMING:
+        if (values["weight_datatype"] != 1 or
+            values["upstream_datatype"] != 1 or
+            values["dx_datatype"] != 3):
+            raise SchemaError("0x26 requires FP16 W/dY and FP32 dX", path=path)
+        positive("m", "n", "k")
+        if any(values[name] > _COMPUTE_PARAMETER_MAX for name in ("m", "n", "k")):
+            raise SchemaError("0x26 profile exceeds 30-bit ABI", path=path)
+        if max(2 * values["m"] * values["n"],
+               2 * values["k"] * values["n"],
+               4 * values["k"] * values["m"]) > 65536:
+            raise SchemaError("0x26 tile exceeds typed 16-bit SRAM span", path=path)
+        return
+
     if opcode is RecordOpcode.GREEDY_SAMPLE:
         if (
             values["logits_datatype"] != 1
@@ -1938,6 +1977,7 @@ def _compute_record_abi(
             RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
             RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
             RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
+            RecordOpcode.GEMM_DX_TIMING,
             RecordOpcode.CROSS_ENTROPY_FORWARD,
             RecordOpcode.CROSS_ENTROPY_BACKWARD,
             RecordOpcode.SGD_UPDATE,
@@ -4952,6 +4992,9 @@ def _address_operand_role(
         (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
@@ -6663,6 +6706,9 @@ class LinkedProgramManifest:
             (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),

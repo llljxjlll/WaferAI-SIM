@@ -7,6 +7,7 @@
 #include "prims/exact_stage2_prims.h"
 #include "prims/weight_gradient_timing_prims.h"
 #include "prims/gemm_weight_wgrad_timing_prim.h"
+#include "prims/gemm_input_dx_npu_prim.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -202,6 +203,17 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         operands.activation = Absolute(0);
         operands.upstream = Absolute(256);
         operands.gradient = Absolute(1024);
+        operands.m = 8;
+        operands.n = 16;
+        operands.k = 4;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::GEMM_INPUT_DX: {
+        GemmInputDxOperands operands;
+        operands.weight = Absolute(0);
+        operands.upstream = Absolute(512);
+        operands.dx = Absolute(1024);
         operands.m = 8;
         operands.n = 16;
         operands.k = 4;
@@ -488,6 +500,7 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
     case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
+    case Opcode::GEMM_DX_TIMING:
         return true;
     default:
         return false;
@@ -503,7 +516,8 @@ bool SameWire(const std::vector<sc_bv<128>> &left,
 }
 
 int ExpectedCategory(Opcode opcode) {
-    if (OpcodeValue(opcode) <= kComputeOpcodeLast) return COMP_PRIM;
+    if (OpcodeValue(opcode) <= kComputeOpcodeLast ||
+        opcode == Opcode::GEMM_DX_TIMING) return COMP_PRIM;
     if (opcode == Opcode::DTE_SEND || opcode == Opcode::DTE_RECV ||
         opcode == Opcode::LOCAL_REDUCE ||
         opcode == Opcode::LOCAL_NOC_SEND ||
@@ -545,6 +559,20 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                              work.gamma_gradient.bytes == 64 &&
                              work.gamma_gradient.dtype == WeightGradBufferDType::FP32,
                          "external Norm gamma uses distinct FP16 tape and FP32 output");
+        }
+        return;
+    }
+    if (record.opcode == Opcode::GEMM_DX_TIMING) {
+        auto *prim = dynamic_cast<gemm_input_dx_timing *>(&base);
+        checks.Check(prim != nullptr, "GEMM dX lowers to named Prim75");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(work.tile.weight.bytes == 256 &&
+                             work.tile.upstream.bytes == 128 &&
+                             work.tile.output.bytes == 128 &&
+                             work.tile.output.dtype == GemmInputDxDType::FP32 &&
+                             work.fma_ops == 512 && work.exu_flops == 1024,
+                         "GEMM dX preserves FP16 W/dY, FP32 output and work");
         }
         return;
     }
@@ -1046,7 +1074,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 51,
+    checks.Check(supported == 52,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

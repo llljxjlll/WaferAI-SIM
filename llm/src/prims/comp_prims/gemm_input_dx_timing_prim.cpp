@@ -29,32 +29,17 @@ void CheckSpan(const GemmInputDxSramSpan &span, uint64_t bytes,
 }
 } // namespace
 
-GemmInputDxTimingWork BuildGemmInputDxTimingWork(
-    const GemmInputDxSourceWitness &source,
+GemmInputDxTimingWork BuildGemmInputDxPhysicalWork(
     const GemmInputDxTimingTile &tile) {
     if (!tile.k || !tile.m || !tile.n ||
         tile.k > kMaxProfile || tile.m > kMaxProfile || tile.n > kMaxProfile)
         throw std::invalid_argument("GEMM dX requires positive 30-bit K/M/N");
-    if (source.forward_op_ref.empty() || source.weight_state_ref.empty() ||
-        source.weight_load_state_ref != source.weight_state_ref ||
-        source.loaded_state_version != source.source_state_version)
-        throw std::invalid_argument("GEMM dX source StateABI/load provenance differs");
     const uint64_t km = CheckedMul(tile.k, tile.m, "GEMM dX KxM");
     const uint64_t mn = CheckedMul(tile.m, tile.n, "GEMM dX MxN");
     const uint64_t kn = CheckedMul(tile.k, tile.n, "GEMM dX KxN");
-    const uint64_t xbytes = CheckedMul(2, km, "GEMM dX source X bytes");
     const uint64_t wbytes = CheckedMul(2, mn, "GEMM dX source W bytes");
     const uint64_t dybytes = CheckedMul(2, kn, "GEMM dX dY bytes");
     const uint64_t dxbytes = CheckedMul(4, km, "GEMM dX output bytes");
-    if (source.activation_dtype != GemmInputDxDType::FP16 ||
-        source.activation_rows != tile.k ||
-        source.activation_hidden != tile.m ||
-        source.activation_bytes != xbytes ||
-        source.state_weight_dtype != GemmInputDxDType::FP16 ||
-        source.state_weight_hidden != tile.m ||
-        source.state_weight_output != tile.n ||
-        source.state_weight_bytes != wbytes)
-        throw std::invalid_argument("GEMM dX forward X/StateABI source geometry differs");
     CheckSpan(tile.weight, wbytes, GemmInputDxDType::FP16, "GEMM dX W");
     CheckSpan(tile.upstream, dybytes, GemmInputDxDType::FP16, "GEMM dX dY");
     CheckSpan(tile.output, dxbytes, GemmInputDxDType::FP32, "GEMM dX dX");
@@ -70,5 +55,26 @@ GemmInputDxTimingWork BuildGemmInputDxTimingWork(
     work.fma_ops = CheckedMul(tile.k, mn, "GEMM dX FMA");
     work.exu_flops = CheckedMul(2, work.fma_ops, "GEMM dX EXU");
     work.fp32_output_vec_ops = km;
+    return work;
+}
+
+GemmInputDxTimingWork BuildGemmInputDxTimingWork(
+    const GemmInputDxSourceWitness &source,
+    const GemmInputDxTimingTile &tile) {
+    const auto work = BuildGemmInputDxPhysicalWork(tile);
+    if (source.forward_op_ref.empty() || source.weight_state_ref.empty() ||
+        source.weight_load_state_ref != source.weight_state_ref ||
+        source.loaded_state_version != source.source_state_version)
+        throw std::invalid_argument("GEMM dX source StateABI/load provenance differs");
+    if (source.activation_dtype != GemmInputDxDType::FP16 ||
+        source.activation_rows != tile.k ||
+        source.activation_hidden != tile.m ||
+        source.activation_bytes != CheckedMul(2, work.fp32_output_vec_ops,
+                                              "GEMM dX source X bytes") ||
+        source.state_weight_dtype != GemmInputDxDType::FP16 ||
+        source.state_weight_hidden != tile.m ||
+        source.state_weight_output != tile.n ||
+        source.state_weight_bytes != work.fp16_weight_read_bytes)
+        throw std::invalid_argument("GEMM dX forward X/StateABI source geometry differs");
     return work;
 }

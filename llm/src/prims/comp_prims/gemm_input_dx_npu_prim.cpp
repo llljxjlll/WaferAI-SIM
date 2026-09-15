@@ -1,7 +1,11 @@
 #include "prims/gemm_input_dx_npu_prim.h"
+#include "utils/prim_utils.h"
 
 #include <limits>
 #include <stdexcept>
+#include <utility>
+
+REGISTER_PRIM(gemm_input_dx_timing, PrimId::GEMM_INPUT_DX_TIMING);
 
 namespace {
 uint64_t Profile(const NpuBase &prim, const char *field) {
@@ -40,7 +44,7 @@ GemmInputDxTimingWork gemm_input_dx_timing::work() const {
         {static_cast<uint32_t>(data_offset), 2 * k * n, GemmInputDxDType::FP16},
         {static_cast<uint32_t>(out_offset), 4 * k * m, GemmInputDxDType::FP32},
     };
-    return BuildGemmInputDxTimingWork(source_witness, tile);
+    return BuildGemmInputDxPhysicalWork(tile);
 }
 
 void gemm_input_dx_timing::initialize() {
@@ -65,9 +69,15 @@ void gemm_input_dx_timing::taskCore(TaskCoreContext &, string,
 }
 
 vector<sc_bv<128>> gemm_input_dx_timing::serialize() {
-    throw std::invalid_argument(name + " public PrimId/wire registration is absent");
+    if (prim_wire::LegacyCompatibilityEnabled())
+        throw std::invalid_argument(name + " requires strict Prim wire");
+    work();
+    return NpuBase::serialize();
 }
 
-void gemm_input_dx_timing::deserialize(vector<sc_bv<128>>) {
-    throw std::invalid_argument(name + " public PrimId/wire registration is absent");
+void gemm_input_dx_timing::deserialize(vector<sc_bv<128>> wire) {
+    if (prim_wire::LegacyCompatibilityEnabled())
+        throw std::invalid_argument(name + " requires strict Prim wire");
+    NpuBase::deserialize(std::move(wire));
+    work();
 }

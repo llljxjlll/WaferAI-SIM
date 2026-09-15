@@ -220,6 +220,15 @@ Json Stage2Compute(const std::string &action, uint64_t opcode) {
             Address("upstream_address", 2, "p_abs_data"),
             Address("gradient_address", 3, "p_abs_output"),
             Literal("m", 8), Literal("n", 16), Literal("k", 4)}));
+    if (opcode == 0x26)
+        return Record(action, opcode, Json::array({
+            Literal("weight_datatype", 1),
+            Literal("upstream_datatype", 1),
+            Literal("dx_datatype", 3),
+            Address("weight_address", 1, "p_abs_input"),
+            Address("upstream_address", 2, "p_abs_data"),
+            Address("dx_address", 3, "p_abs_output"),
+            Literal("m", 8), Literal("n", 16), Literal("k", 4)}));
     if (opcode == 0x20)
         return Record(action, opcode, Json::array({
             Literal("weight_datatype", 1),
@@ -768,12 +777,13 @@ Json Stage2Manifest(uint64_t opcode) {
     const bool has_data = opcode == 0x10 || opcode == 0x1c ||
                           opcode == 0x1e || opcode == 0x1f ||
                           opcode == 0x20 || opcode == 0x23 ||
-                          opcode == 0x24 || opcode == 0x25;
+                          opcode == 0x24 || opcode == 0x25 ||
+                          opcode == 0x26;
     const bool has_aux = opcode == 0x1f || opcode == 0x23;
     const bool binds_data = opcode == 0x1c || opcode == 0x1e ||
                             opcode == 0x1f || opcode == 0x20 ||
                             opcode == 0x23 || opcode == 0x24 ||
-                            opcode == 0x25;
+                            opcode == 0x25 || opcode == 0x26;
     Json input_shape = Json::array({1, 4, 2});
     Json data_shape = Json::array({1, 32});
     Json output_shape = input_shape;
@@ -837,6 +847,14 @@ Json Stage2Manifest(uint64_t opcode) {
         data_size = 128;
         output_size = 512;
         output_dtype = "fp32";
+    } else if (opcode == 0x26) {
+        input_shape = Json::array({8, 16});
+        data_shape = Json::array({4, 16});
+        output_shape = Json::array({4, 8});
+        input_size = 256;
+        data_size = 128;
+        output_size = 128;
+        output_dtype = "fp32";
     } else if (opcode == 0x20) {
         input_shape = Json::array({32});
         data_shape = Json::array({32});
@@ -844,7 +862,6 @@ Json Stage2Manifest(uint64_t opcode) {
         input_size = 64;
         data_size = 128;
         output_size = 64;
-        data_size = 128;
     } else if (opcode == 0x10) {
         input_shape = Json::array({1, 1, 32});
         data_shape = Json::array({32});
@@ -923,6 +940,8 @@ Json Stage2Manifest(uint64_t opcode) {
         abi["dtype"] = dtype;
         if ((opcode == 0x23 || opcode == 0x25) &&
             binding != "abs_output")
+            abi["ownership"] = "borrowed";
+        if (opcode == 0x26 && binding == "abs_data")
             abi["ownership"] = "borrowed";
     }
     const std::string old_fragment_id = fragment["id"].get<std::string>();
@@ -1554,6 +1573,175 @@ Json TransferManifest() {
 }
 
 
+Json ScopedGemmDxStateManifest() {
+    Json manifest = Stage2Manifest(0x26);
+    const Json core = Core(0, 0);
+    Json &coarse = manifest["fragments"][0];
+    const std::string coarse_id = coarse["id"].get<std::string>();
+    const Json input_abi = *std::find_if(
+        coarse["buffer_abi"].begin(), coarse["buffer_abi"].end(),
+        [&](const Json &abi) {
+            return abi["logical_core"] == core &&
+                   abi["binding_id"] == "abs_input";
+        });
+    coarse["claimed_action_ids"] = Json::array({"a0"});
+    coarse["core_streams"].erase(coarse["core_streams"].begin() + 1);
+    coarse["buffer_abi"].erase(
+        std::remove_if(coarse["buffer_abi"].begin(),
+                       coarse["buffer_abi"].end(),
+                       [&](const Json &abi) { return abi["logical_core"] != core; }),
+        coarse["buffer_abi"].end());
+    Json &records = coarse["core_streams"][0]["records"];
+    if (records.size() != 8 || records[4]["opcode"] != 0x26 ||
+        records[7]["opcode"] != 0x86)
+        throw std::runtime_error("0x26 scoped carrier record drifted");
+    Json weight_alloc = records[0];
+    weight_alloc["source_global_action_id"] = "head_weight_load";
+    records.erase(records.end() - 1);
+    records.erase(records.begin());
+    Json &coarse_relocations = coarse["core_streams"][0]["address_relocations"];
+    Json weight_alloc_relocations = Json::array();
+    for (const Json &relocation : coarse_relocations)
+        if (relocation["record_index"] == 0)
+            weight_alloc_relocations.push_back(relocation);
+    coarse_relocations.erase(
+        std::remove_if(coarse_relocations.begin(), coarse_relocations.end(),
+                       [](const Json &item) {
+                           return item["record_index"] == 0 ||
+                                  item["record_index"] == 7;
+                       }), coarse_relocations.end());
+    for (Json &relocation : coarse_relocations)
+        relocation["record_index"] =
+            relocation["record_index"].get<uint64_t>() - 1;
+    Json &linked = manifest["core_streams"][0]["records"];
+    linked.erase(linked.end() - 1);
+    linked.erase(linked.begin());
+    for (Json &reference : linked)
+        reference["fragment_record_index"] =
+            reference["fragment_record_index"].get<uint64_t>() - 1;
+    manifest["core_streams"].erase(manifest["core_streams"].begin() + 1);
+    manifest["core_bindings"].erase(manifest["core_bindings"].begin() + 1);
+    manifest["runtime_symbol_definitions"].erase(
+        manifest["runtime_symbol_definitions"].begin() + 1);
+    manifest["runtime_symbol_definitions"][0]["symbol"]["source_ref"] =
+        "head_weight_load";
+    Json &bindings = manifest["address_operand_bindings"];
+    Json weight_alloc_bindings = Json::array();
+    for (const Json &binding : bindings)
+        if (binding["logical_core"] == core &&
+            binding["fragment_id"] == coarse_id &&
+            binding["fragment_record_index"] == 0)
+            weight_alloc_bindings.push_back(binding);
+    bindings.erase(std::remove_if(bindings.begin(), bindings.end(),
+        [&](const Json &item) {
+            return item["logical_core"] != core ||
+                   item["fragment_record_index"] == 0 ||
+                   item["fragment_record_index"] == 7;
+        }), bindings.end());
+    for (Json &binding : bindings)
+        binding["fragment_record_index"] =
+            binding["fragment_record_index"].get<uint64_t>() - 1;
+    for (Json &definition : manifest["program_symbol_definitions"])
+        definition["logical_cores"] = Json::array({core});
+    Json &envelope = manifest["envelope"];
+    envelope["active_cores"] = Json::array({core});
+    envelope["start_events"].erase(envelope["start_events"].begin() + 1);
+    envelope["terminal_cores"] = Json::array({core});
+    envelope["expected_ack_cores"] = Json::array({core});
+    envelope["expected_done_cores"] = Json::array({core});
+    manifest["producer_pass"] = "public_gemm_dx_allocated_fragment";
+
+    Json state = StateAbi();
+    state["state_ref"] = "head_weight_state";
+    state["hbm_binding_ref"] = "head_weight_hbm";
+    state["shape"] = Json::array({8, 16});
+    state["size_bytes"] = 256;
+    state["id"] = StableId("state_abi",
+        "wafer_frontend.state_abi/v1alpha1", Without(state, {"id"}));
+    const std::string state_id = state["id"].get<std::string>();
+    Json state_fragment{
+        {"schema_version", "wafer_frontend.command_fragment/v1alpha13"},
+        {"producer_pass", "state_lowering"},
+        {"id", "gemm_dx_state_fragment"},
+        {"source_global_dag_id", "global"},
+        {"kind", "state_io"},
+        {"claimed_action_ids", Json::array({"head_weight_load"})},
+        {"core_streams", Json::array({{
+            {"logical_core", core},
+            {"records", Json::array({weight_alloc,
+                Record("head_weight_load", 0x80,
+                Json::array({
+                    Address("hbm_address", 6, "p_hbm_head_weight"),
+                    Literal("size_bytes", 256),
+                    Address("destination_address", 5, "p_abs_input")
+                }))})},
+            {"runtime_relocations", Json::array()},
+            {"address_relocations", Json::array({
+                weight_alloc_relocations[0],
+                weight_alloc_relocations[1],
+                Relocation(1, 5, 1, "p_abs_input"),
+                Relocation(1, 6, 1, "p_hbm_head_weight")})}
+        }})},
+        {"runtime_symbols", Json::array()},
+        {"program_symbols", Json::array({
+            ProgramSymbol("p_abs_input", 1, "abs_input"),
+            ProgramSymbol("p_hbm_head_weight", 1, "head_weight_hbm"),
+            ProgramSymbol("p_label_input", 3, "label_input"),
+            ProgramSymbol("p_region", 2, "region")})},
+        {"buffer_abi", Json::array({input_abi})},
+        {"state_abi", Json::array({state})}
+    };
+    manifest["fragments"].push_back(std::move(state_fragment));
+    manifest["fragment_interfaces"].push_back({
+        {"fragment_id", "gemm_dx_state_fragment"},
+        {"runtime_imports", Json::array()},
+        {"runtime_exports", Json::array()},
+        {"program_imports", Json::array({
+            "p_abs_input", "p_label_input", "p_region"})},
+        {"program_exports", Json::array({"p_hbm_head_weight"})},
+        {"entry_events", Json::array()},
+        {"exit_events", Json::array()}
+    });
+    manifest["program_symbol_definitions"].push_back(Definition(
+        "p_hbm_head_weight", 1, "head_weight_hbm", "hbm.head.weight",
+        0x1000, 256, Json::array({core})));
+    std::sort(manifest["program_symbol_definitions"].begin(),
+              manifest["program_symbol_definitions"].end(),
+              [](const Json &a, const Json &b) {
+                  return a["symbol"]["id"].get<std::string>() <
+                         b["symbol"]["id"].get<std::string>();
+              });
+    const Json linked_alloc = {
+        {"fragment_id", "gemm_dx_state_fragment"},
+        {"fragment_record_index", 0},
+        {"source_global_action_id", "head_weight_load"}
+    };
+    const Json linked_load = {
+        {"fragment_id", "gemm_dx_state_fragment"},
+        {"fragment_record_index", 1},
+        {"source_global_action_id", "head_weight_load"}
+    };
+    linked.insert(linked.begin(), linked_load);
+    linked.insert(linked.begin(), linked_alloc);
+    for (Json binding : weight_alloc_bindings) {
+        binding["fragment_id"] = "gemm_dx_state_fragment";
+        bindings.push_back(std::move(binding));
+    }
+    Json destination = AddressBinding(core, 1, 5,
+        input_abi["id"].get<std::string>());
+    destination["fragment_id"] = "gemm_dx_state_fragment";
+    bindings.push_back(std::move(destination));
+    manifest["state_operand_bindings"].push_back({
+        {"fragment_id", "gemm_dx_state_fragment"},
+        {"logical_core", core},
+        {"fragment_record_index", 1},
+        {"operand_id", 6},
+        {"state_abi_id", state_id}
+    });
+    RefreshManifestIds(manifest);
+    return manifest;
+}
+
 Json StateManifest() {
     Json manifest = Manifest();
     const Json core = Core(0, 0);
@@ -2006,9 +2194,9 @@ void Run() {
     ExpectFailure([&] { finalizer.FinalizeJson(missing_local_wait.dump()); },
                   "LOCAL_NOC missing destination WAIT");
 
-    for (uint64_t opcode : std::array<uint64_t, 11>{{
+    for (uint64_t opcode : std::array<uint64_t, 12>{{
              0x10, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
-             0x23, 0x24, 0x25}}) {
+             0x23, 0x24, 0x25, 0x26}}) {
         const Json stage2 = Stage2Manifest(opcode);
         const auto stage2_dto =
             ProgramArtifactFinalizer::Parse(stage2.dump());
@@ -2069,6 +2257,24 @@ void Run() {
     RefreshManifestIds(bad_gemm_extent);
     ExpectFailure([&] { finalizer.FinalizeJson(bad_gemm_extent.dump()); },
                   "GEMM_WEIGHT_WGRAD rejects FP16-sized FP32 buffer extent");
+    Json bad_dx_dtype = Stage2Manifest(0x26);
+    for (Json &stream : bad_dx_dtype["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][2]["literal_value"] = 1;
+    RefreshManifestIds(bad_dx_dtype);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_dx_dtype.dump()); },
+                  "GEMM_DX rejects FP16 output ABI");
+    Json bad_dx_extent = Stage2Manifest(0x26);
+    for (Json &abi : bad_dx_extent["fragments"][0]["buffer_abi"])
+        if (abi["binding_id"] == "abs_output") abi["size_bytes"] = 64;
+    RefreshManifestIds(bad_dx_extent);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_dx_extent.dump()); },
+                  "GEMM_DX rejects FP16-sized FP32 output buffer");
+    Json bad_dx_rows = Stage2Manifest(0x26);
+    for (Json &stream : bad_dx_rows["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][8]["literal_value"] = 0;
+    RefreshManifestIds(bad_dx_rows);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_dx_rows.dump()); },
+                  "GEMM_DX rejects zero source rows");
     Json scoped_gemm = Stage2Manifest(0x25);
     scoped_gemm["producer_pass"] = "public_gemm_wgrad_allocated_fragment";
     for (Json &stream : scoped_gemm["fragments"][0]["core_streams"]) {
@@ -5202,6 +5408,9 @@ int main(int argc, char **argv) {
         } else if (argc == 2 &&
                    std::string(argv[1]) == "--emit-gemm-wgrad-manifest") {
             std::cout << Stage2Manifest(0x25).dump() << '\n';
+        } else if (argc == 2 &&
+                   std::string(argv[1]) == "--emit-gemm-dx-state-manifest") {
+            std::cout << ScopedGemmDxStateManifest().dump() << '\n';
         } else if (argc == 2 && std::string(argv[1]) == "--stdin") {
             RunPythonProducedManifest();
         } else if (argc == 2 &&

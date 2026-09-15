@@ -230,6 +230,19 @@ void ApplyRelocation(ExternalRecord &record,
         return;
     }
     if (auto *value =
+            std::get_if<GemmInputDxOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "GEMM_DX_TIMING address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->weight, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->upstream, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->dx, relocation, symbol);
+        else
+            Fail("invalid GEMM_DX_TIMING relocation operand_id");
+        return;
+    }
+    if (auto *value =
             std::get_if<GreedySampleOperands>(&record.operands)) {
         RequireAbsolute(relocation, "GREEDY_SAMPLE address");
         if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)

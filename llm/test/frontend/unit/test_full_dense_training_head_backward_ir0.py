@@ -16,6 +16,7 @@ from llm.frontend.wafer_frontend.schema.ir0 import EdgeKind, OpKind, OpPhase
 from llm.frontend.wafer_frontend.schema.gemm_weight_wgrad_workload import (
     GemmWeightWgradWorkload,
 )
+from llm.frontend.wafer_frontend.schema.gemm_input_dx_workload import GemmInputDxWorkload
 from llm.test.frontend.unit.test_flexible_dense_train import _spec
 
 
@@ -50,11 +51,17 @@ class DenseTrainingHeadBackwardIR0Test(unittest.TestCase):
                          values[head.inputs[1]].shape[1] * 4)
         self.assertIs(dgrad.phase, OpPhase.DGRAD)
         self.assertEqual(wgrad.inputs, (head.inputs[0], ce_backward.outputs[0]))
-        self.assertEqual(dgrad.inputs, (ce_backward.outputs[0], head.inputs[1]))
+        self.assertEqual(dgrad.inputs, (head.inputs[1], ce_backward.outputs[0]))
+        self.assertIs(dgrad.kind, OpKind.GEMM_INPUT_DX)
+        self.assertIsInstance(dgrad.workload, GemmInputDxWorkload)
+        self.assertEqual(dgrad.impl_ref, "gemm_input_dx_timing")
+        self.assertEqual(dgrad.workload.source_forward_op_ref, head.id)
+        self.assertEqual(dgrad.workload.source_parameter_state_ref,
+                         graph.state_accesses[-1].state_ref)
         self.assertIs(values[wgrad.outputs[0]].dtype, DType.FP32)
         self.assertEqual(values[wgrad.outputs[0]].shape,
                          values[head.inputs[1]].shape)
-        self.assertIs(values[dgrad.outputs[0]].dtype, DType.FP16)
+        self.assertIs(values[dgrad.outputs[0]].dtype, DType.FP32)
         self.assertEqual(values[dgrad.outputs[0]].shape,
                          values[head.inputs[0]].shape)
         self.assertIs(values[ce_backward.inputs[2]].dtype, DType.FP32)
