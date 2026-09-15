@@ -197,7 +197,11 @@ class FlexibleMoeProductionArtifacts:
                     child_id
                     for action in plan.actions
                     if action.kind is MoeRectActionKind.EXPERT_WGRAD and action.assignment_refs
-                    for child_id in expert_wgrad_action_ids(plan.id, action.id)
+                    # The explicit full-model-dataflow profile writes three
+                    # native FP32 dW projections; its source action is gate
+                    # and the only named children are up/down.  Original
+                    # default profiles keep their five legacy children.
+                    for child_id in expert_wgrad_action_ids(plan.id, action.id)[:2]
                 }
                 expected |= {
                     gate_wgrad_cast_action_id(plan.id, action.id)

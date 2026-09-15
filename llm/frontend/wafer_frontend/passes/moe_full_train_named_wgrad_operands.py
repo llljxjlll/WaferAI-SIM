@@ -1,8 +1,8 @@
 """Independent production-leaf oracle for three expert 0x25 physical operands.
 
-Derive operand spans from already linked forward/DGRAD/SwiGLU-backward
-records and BufferABI definitions.  The current old MATMUL/cast WGRAD leaf
-fails both the upstream-source check and the required native-output check.
+Derive operand spans from linked forward/DGRAD/SwiGLU-backward records and
+BufferABI definitions.  Reject MATMUL/cast substitution and misbound gate/up
+upstream even when the record/action names remain unchanged.
 """
 
 from __future__ import annotations

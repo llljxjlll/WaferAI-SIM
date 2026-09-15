@@ -243,9 +243,7 @@ def lower_link_flexible_moe_multi(
     projection_activated_bytes = max(64, 2 * max_rank_tokens * spec.intermediate_size)
     projection_concat_offset = _align(workspace_bytes)
     projection_activated_offset = _align(projection_concat_offset + projection_concat_bytes)
-    wgrad_stage_offset = _align(projection_activated_offset + projection_activated_bytes)
-    wgrad_stage_bytes = max(64, 6 * spec.hidden_size * spec.intermediate_size)
-    gate_wgrad_stage_offset = _align(wgrad_stage_offset + wgrad_stage_bytes)
+    gate_wgrad_stage_offset = _align(projection_activated_offset + projection_activated_bytes)
     gate_wgrad_stage_bytes = max(64, 2 * spec.hidden_size * spec.expert_count)
     gate_reduce_offset = _align(gate_wgrad_stage_offset + gate_wgrad_stage_bytes)
     gate_gradient_bytes = 4 * spec.hidden_size * spec.expert_count
@@ -293,8 +291,6 @@ def lower_link_flexible_moe_multi(
                 ("expert_gate_up", projection_concat_offset, projection_concat_bytes),
                 ("expert_activated", projection_activated_offset, projection_activated_bytes),
             )
-            if strict_training and expert_tokens[rank]:
-                stage_buffers += (("expert_wgrad_stage", wgrad_stage_offset, wgrad_stage_bytes),)
             if strict_training and source_tokens[rank]:
                 stage_buffers += (("gate_wgrad_stage", gate_wgrad_stage_offset, gate_wgrad_stage_bytes),)
             if strict_training and children_by_rank[rank]:
@@ -382,12 +378,6 @@ def lower_link_flexible_moe_multi(
     backward_by_rank = {
         rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".backward_gradient"))
         for rank, core in enumerate(cores)
-    } if strict_training else {}
-    wgrad_stage_by_rank = {
-        rank: next(item for item in buffers_by_core[core]
-                   if item.value_id.endswith(".expert_wgrad_stage"))
-        for rank, core in enumerate(cores)
-        if expert_tokens[rank]
     } if strict_training else {}
     gate_wgrad_stage_by_rank = {
         rank: next(item for item in buffers_by_core[core]
@@ -878,49 +868,79 @@ def lower_link_flexible_moe_multi(
                                 if next(state for state in plan.state_bindings if state.id == ref).role
                                 is MoeRectStateRole.EXPERT_GRADIENT)
             gradient = buffer_by_state[gradient_ref]
-            stage = wgrad_stage_by_rank[action.rank]
-            matrix_fp16 = 2 * h * intermediate
             matrix_fp32 = 4 * h * intermediate
-            if gradient.dtype is not DType.FP32 or gradient.size_bytes != 3 * matrix_fp32 or stage.size_bytes < 3 * matrix_fp16:
+            if gradient.dtype is not DType.FP32 or gradient.size_bytes != 3 * matrix_fp32:
                 raise SchemaError("expert WGRAD needs exactly three FP32 weight gradient matrices", path=f"actions[{action.id}]")
-            up_id, down_id, cast_gate, cast_up, cast_down = expert_wgrad_action_ids(plan.id, action.id)
-            children = (up_id, down_id, cast_gate, cast_up, cast_down)
-            physical_children_by_action[action.id] = children
-            for projection_index, gemm_id, cast_id in zip(range(3), (action.id, up_id, down_id), (cast_gate, cast_up, cast_down)):
-                input_abi = activation if projection_index != 2 else projection_activated_by_rank[action.rank]
-                data_abi = backward_by_rank[action.rank]
-                stage_offset = projection_index * matrix_fp16
-                gradient_offset = projection_index * matrix_fp32
-                params = ((1, h, m, intermediate) if projection_index != 2
-                          else (1, intermediate, m, h))
-                add_bind(action, (input_abi,), stage, source_action_id=gemm_id)
-                view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, stage, stage_offset, matrix_fp16)
-                add_record("compute", core, RelocatableRecord(gemm_id, RecordOpcode.MATMUL, (
-                    RecordOperand.literal("datatype", 1),
-                    RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(input_abi).id),
-                    RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data_abi).id),
-                    RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(stage).id),
-                    RecordOperand.literal("parameters", params),
-                )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(input_abi), 0),
-                     (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data_abi), 0),
-                     (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(stage), stage_offset)))
-                view("compute", core, SemanticOperandId.SOURCE_ADDRESS, stage, stage_offset, matrix_fp16)
-                view("compute", core, SemanticOperandId.DESTINATION_ADDRESS, gradient, gradient_offset, matrix_fp32)
-                add_record("compute", core, RelocatableRecord(cast_id, RecordOpcode.LOCAL_REDUCE, (
-                    RecordOperand.literal("input_dtype", 0),
-                    RecordOperand.literal("accumulator_dtype", 1),
-                    RecordOperand.literal("output_dtype", 1),
-                    RecordOperand.literal("reduce_op", 1),
-                    RecordOperand.literal("rounding", 0),
-                    RecordOperand.literal("order", 0),
-                    RecordOperand.literal("input_count", 1),
-                    RecordOperand.literal("element_count", h * intermediate),
-                    RecordOperand.literal("input_stride_bytes", matrix_fp16),
-                    RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(stage).id),
-                    RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, absolute(gradient).id),
-                )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(stage), stage_offset),
-                     (SemanticOperandId.DESTINATION_ADDRESS, absolute(gradient), gradient_offset)))
-            continue
+            up_id, down_id, *_ = expert_wgrad_action_ids(plan.id, action.id)
+            if full_model_dataflow:
+                # Named native dW consumes the genuine expert tape.  Down
+                # takes backward dY[k,H]; gate/up take disjoint FP16[k,I]
+                # outputs of the earlier SwiGLU-backward producer.  An FP16
+                # MATMUL followed by an FP32 cast is not an FP32 WGRAD.
+                _, gate_up_grad, _ = dgrad_scratch_by_rank[action.rank]
+                activated = projection_activated_by_rank[action.rank]
+                backward = backward_by_rank[action.rank]
+                activation = activation_by_rank[action.rank]
+                rank_activation_bytes = 2 * m * h
+                rank_intermediate_bytes = 2 * m * intermediate
+                if (activation.size_bytes < rank_activation_bytes
+                        or activated.size_bytes < rank_intermediate_bytes
+                        or backward.size_bytes < rank_activation_bytes
+                        or gate_up_grad.size_bytes < 2 * rank_intermediate_bytes):
+                    raise SchemaError(
+                        "native expert WGRAD has no real forward/SwiGLU-backward FP16 tape",
+                        path=f"actions[{action.id}]",
+                    )
+                physical_children_by_action[action.id] = (up_id, down_id)
+                for (projection, source_ref, input_abi, input_size,
+                     data_abi, data_offset, data_size, input_dim, output_dim) in (
+                    ("gate", action.id, activation, rank_activation_bytes,
+                     gate_up_grad, 0, rank_intermediate_bytes, h, intermediate),
+                    ("up", up_id, activation, rank_activation_bytes,
+                     gate_up_grad, rank_intermediate_bytes,
+                     rank_intermediate_bytes, h, intermediate),
+                    ("down", down_id, activated, rank_intermediate_bytes,
+                     backward, 0, rank_activation_bytes, intermediate, h),
+                ):
+                    output_offset = (0 if projection == "gate" else
+                                     matrix_fp32 if projection == "up" else
+                                     2 * matrix_fp32)
+                    add_bind(action, (input_abi, data_abi), gradient,
+                             source_action_id=source_ref)
+                    view("compute", core, SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                         input_abi, 0, input_size)
+                    view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                         data_abi, data_offset, data_size)
+                    view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                         gradient, output_offset, matrix_fp32)
+                    add_record("compute", core, RelocatableRecord(
+                        source_ref, RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING, (
+                            RecordOperand.literal("activation_datatype", 1),
+                            RecordOperand.literal("upstream_datatype", 1),
+                            RecordOperand.literal("gradient_datatype", 3),
+                            RecordOperand.address("activation_address",
+                                SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                                absolute(input_abi).id),
+                            RecordOperand.address("upstream_address",
+                                SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                                absolute(data_abi).id),
+                            RecordOperand.address("gradient_address",
+                                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                                absolute(gradient).id),
+                            RecordOperand.literal("m", input_dim),
+                            RecordOperand.literal("n", output_dim),
+                            RecordOperand.literal("k", m),
+                        )), (
+                            (SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                             absolute(input_abi), 0),
+                            (SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                             absolute(data_abi), data_offset),
+                            (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                             absolute(gradient), output_offset),
+                        ))
+                continue
+            raise SchemaError("explicit TRAIN expert WGRAD requires native FP32 projection records",
+                              path=action.id)
         if strict_training and action.kind is MoeRectActionKind.GATE_WGRAD:
             m, h, e = len(action.assignment_refs), spec.hidden_size, spec.expert_count
             if action.flops != m * 2 * h * e:
