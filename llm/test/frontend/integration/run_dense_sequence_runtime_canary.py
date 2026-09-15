@@ -12,15 +12,27 @@ import subprocess
 from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
     compile_dense_e2e_sequence_runtime_profiles,
 )
+from llm.frontend.wafer_frontend.passes.load_fabric import physical_fabric_from_data
 from llm.frontend.wafer_frontend.passes.program_io import build_timing_program_io
+from llm.frontend.wafer_frontend.passes.workload_materialization import (
+    materialize_workload_preflight,
+)
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RegionManifest
 from llm.frontend.wafer_frontend.schema.ir2 import StateUseAccess
+from llm.frontend.wafer_frontend.schema.memory_plan import MemoryTier, MemoryTierCapacity
 from llm.frontend.wafer_frontend.schema.serde import canonical_digest, canonical_json
+from llm.frontend.wafer_frontend.schema.workload_run import (
+    WorkloadMeshSpec,
+    WorkloadRunCapability,
+    WorkloadRunRequest,
+)
+from llm.test.frontend.flexible_mesh_fixtures import minimal_hardware
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
 from llm.test.frontend.unit.test_dense_compile_sequence import (
     _one_die_case,
     _two_by_two_case,
 )
+from llm.test.frontend.unit.test_legacy_dense_backend import _capability
 
 from .flexible_mesh_release_hardware import (
     specialize_p5_large_release_hardware,
@@ -28,6 +40,47 @@ from .flexible_mesh_release_hardware import (
 
 
 _ROOT = Path(__file__).resolve().parents[4]
+
+
+def _four_die_rect_case(rows: int, columns: int):
+    if (rows, columns) not in ((1, 4), (4, 1)):
+        raise ValueError("four-die rectangular canary requires 1x4 or 4x1")
+    original, template, _ = _two_by_two_case()
+    request = original.request
+    changed = WorkloadRunRequest.create(
+        family=request.family,
+        model=request.model,
+        steps=request.steps,
+        mesh=WorkloadMeshSpec(rows, columns),
+        parallel=request.parallel,
+        memory=request.memory,
+        optimizer=request.optimizer,
+        execution=request.execution,
+    )
+    baseline = _capability()
+    capability = WorkloadRunCapability.create(
+        max_mesh_rows=4,
+        max_mesh_columns=4,
+        max_mesh_ranks=4,
+        families=baseline.families,
+    )
+    capacities = tuple(
+        MemoryTierCapacity.create(
+            tier=MemoryTier.HBM,
+            location_ref=f"die:{die_id}",
+            base_address=0,
+            capacity_bytes=1 << 30,
+            alignment_bytes=64,
+        )
+        for die_id in range(4)
+    )
+    manifest = materialize_workload_preflight(
+        changed, capability, capacities=capacities
+    )
+    fabric = physical_fabric_from_data(
+        minimal_hardware(columns, rows, sram_bytes=65536)
+    )
+    return manifest, template, fabric
 
 
 def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
@@ -49,10 +102,13 @@ def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
 
 
 def run(args: argparse.Namespace) -> None:
-    rows, columns = (1, 1) if args.mesh_size == "1x1" else (2, 2)
-    manifest, template, fabric = (
-        _one_die_case() if args.mesh_size == "1x1" else _two_by_two_case()
-    )
+    rows, columns = (int(dimension) for dimension in args.mesh_size.split("x"))
+    if args.mesh_size == "1x1":
+        manifest, template, fabric = _one_die_case()
+    elif args.mesh_size == "2x2":
+        manifest, template, fabric = _two_by_two_case()
+    else:
+        manifest, template, fabric = _four_die_rect_case(rows, columns)
     hbm_address_spaces = valid_hbm_address_spaces(fabric)
     sequence, linked_profiles = compile_dense_e2e_sequence_runtime_profiles(
         manifest,
@@ -223,7 +279,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mesh-size",
-        choices=("1x1", "2x2"),
+        choices=("1x1", "2x2", "1x4", "4x1"),
         default="1x1",
         help="physical mesh and matching full-participation Dense fixture",
     )
