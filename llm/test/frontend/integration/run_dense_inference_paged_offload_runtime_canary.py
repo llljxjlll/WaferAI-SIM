@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
@@ -55,6 +56,27 @@ from .flexible_mesh_release_hardware import (
 
 
 _ROOT = Path(__file__).resolve().parents[4]
+
+
+def _source_tool_snapshot(args: argparse.Namespace) -> dict[str, object]:
+    imported: dict[str, str] = {}
+    for module in tuple(sys.modules.values()):
+        filename = getattr(module, "__file__", None)
+        if not filename:
+            continue
+        path = Path(filename).resolve()
+        if path.suffix != ".py" or not path.is_relative_to(_ROOT):
+            continue
+        imported[str(path.relative_to(_ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    imported[str(Path(__file__).resolve().relative_to(_ROOT))] = hashlib.sha256(
+        Path(__file__).read_bytes(),
+    ).hexdigest()
+    tools = {
+        name: hashlib.sha256(getattr(args, name).resolve().read_bytes()).hexdigest()
+        for name in ("npusim", "finalizer", "resolver", "simulation")
+    }
+    return {"imported_python_sha256": dict(sorted(imported.items())),
+            "tool_sha256": dict(sorted(tools.items()))}
 
 
 def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
@@ -209,6 +231,7 @@ def _observe(stdout: str, sidecar: dict[str, object]) -> dict[str, object]:
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
+    source_tool_at_entry = _source_tool_snapshot(args)
     resident, template, fabric = _one_die_case()
     model_digest = canonical_digest(resident.request.model)
     hbm = MemoryTierCapacity.create(
@@ -348,10 +371,26 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         )
         paged_io_path = output / f"segment_{index}.program_io.json"
         paged_io_path.write_text(canonical_json(paged_io), encoding="utf-8")
+        resolver_stdout = _run((
+            str(args.resolver.resolve()), "--resolve",
+            str(paged_manifest_path), str(paged_artifact_path), str(paged_io_path),
+        ), cwd=args.resolver.resolve().parent, timeout=120)
+        (output / f"segment_{index}.resolver.stdout.txt").write_text(
+            resolver_stdout, encoding="utf-8",
+        )
+        if (f"initializations={len(paged_io.initializations)}" not in resolver_stdout
+                or f"probes={len(paged_io.output_probes)}" not in resolver_stdout):
+            raise RuntimeError("native paged ProgramIO resolver closure failed")
         paged_manifest_paths.append(paged_manifest_path)
         paged_artifact_paths.append(paged_artifact_path)
         paged_io_paths.append(paged_io_path)
     hardware = json.loads(specialize_p5_large_release_hardware(1, 1))
+    core_grid = fabric.dies[0].noc_grid
+    if core_grid[0] <= 0 or core_grid[1] <= 0 or len(fabric.dies) != 1:
+        raise RuntimeError("single-Die Dense inference core geometry is invalid")
+    hardware["x"], hardware["y"] = core_grid
+    if hardware["die"] != {"x": 1, "y": 1}:
+        raise RuntimeError("native physical Die geometry drifted from frontend fabric")
     hardware["memory"]["sram_size"] = 65536
     hardware["memory"]["sram"]["capacity_bytes"] = 65536
     hardware["memory"]["sram"]["regions"][0]["name"] = "sram"
@@ -375,6 +414,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     mapping_path.write_text("0:0\n", encoding="utf-8")
     binary_sha = hashlib.sha256(args.npusim.resolve().read_bytes()).hexdigest()
     finalizer_sha = hashlib.sha256(args.finalizer.resolve().read_bytes()).hexdigest()
+    resolver_sha = hashlib.sha256(args.resolver.resolve().read_bytes()).hexdigest()
     hardware_sha = hashlib.sha256(hardware_path.read_bytes()).hexdigest()
     simulation_sha = hashlib.sha256(args.simulation.resolve().read_bytes()).hexdigest()
     observations = []
@@ -406,9 +446,17 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         observations.append(_observe(stdout, sidecar))
     if observations[0] != observations[1]:
         raise RuntimeError(f"two independent fresh run digests drifted: {observations}")
+    source_tool_at_exit = _source_tool_snapshot(args)
+    if any(source_tool_at_exit["imported_python_sha256"].get(name) != digest
+           for name, digest in source_tool_at_entry["imported_python_sha256"].items()) or source_tool_at_exit["tool_sha256"] != source_tool_at_entry["tool_sha256"]:
+        raise RuntimeError("imported source or native tool bytes drifted during paged inference run")
+    source_binding = json.dumps(source_tool_at_exit, sort_keys=True, separators=(",", ":"))
     report = {
         **observations[0],
         "paired_fresh_runs": 2,
+        "source_tool_binding_sha256": hashlib.sha256(source_binding.encode()).hexdigest(),
+        "source_tool_at_entry": source_tool_at_entry,
+        "source_tool_at_exit": source_tool_at_exit,
         "resident_rejection_code": resident_rejection,
         "resident_rejection_detail": resident_rejection_detail,
         "hbm_capacity_bytes": 12288,
@@ -425,6 +473,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "paged_manifest_digests": sidecar["linked_manifest_digests"],
         "npusim_sha256": binary_sha,
         "finalizer_sha256": finalizer_sha,
+        "resolver_sha256": resolver_sha,
+        "frontend_core_grid": core_grid,
+        "native_core_grid": (hardware["x"], hardware["y"]),
         "hardware_sha256": hardware_sha,
         "simulation_sha256": simulation_sha,
         "operator_record_coverage": dict(sorted(operator_counts.items())),
@@ -449,13 +500,15 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--npusim", type=Path, default=build / "npusim")
     parser.add_argument("--finalizer", type=Path,
                         default=_ROOT / "build-debug-final/npusim_program_finalizer")
+    parser.add_argument("--resolver", type=Path,
+                        default=_ROOT / "build-debug-final/npusim_program_io_selftest")
     parser.add_argument("--simulation", type=Path,
                         default=_ROOT / "llm/test/program/p5_behavioral_simulation.json")
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args()
     if args.timeout <= 0 or not all(
         getattr(args, key).is_file()
-        for key in ("npusim", "finalizer", "simulation")
+        for key in ("npusim", "finalizer", "resolver", "simulation")
     ):
         parser.error("npusim/finalizer/simulation must exist and timeout >0")
     return args
