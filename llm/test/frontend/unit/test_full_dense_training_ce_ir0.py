@@ -49,9 +49,33 @@ class FullDenseTrainingCeIR0Test(unittest.TestCase):
         with self.assertRaises(SchemaError):
             DenseIR0Validator.validate(graph)
 
-    def test_tp_sharded_ce_requires_new_real_backward_contract(self) -> None:
-        with self.assertRaisesRegex(SchemaError, "TP1"):
-            build_dense_training_ce_backward_source(_spec(1, 4))
+    def test_tp_row_sharded_ce_has_independent_loss_gradient_and_full_vocab(self) -> None:
+        graph = build_dense_training_ce_backward_source(_spec(1, 4))
+        ce = next(node for node in graph.nodes if node.kind is OpKind.CE_FORWARD)
+        backward = next(node for node in graph.nodes if node.kind is OpKind.CE_BACKWARD)
+        by_id = {value.id: value for value in graph.values}
+        self.assertEqual(graph.instances[0].parallel.tp, 4)
+        self.assertEqual(ce.workload.rank_logits_shape, (1, 32))
+        self.assertEqual(backward.workload.rank_logits_gradient_shape, (1, 32))
+        self.assertEqual(backward.workload.rank_loss_gradient_shape, (1,))
+        self.assertEqual(backward.workload.logical_loss_gradient_shape, (4,))
+        self.assertEqual(backward.inputs[:2], ce.inputs)
+        self.assertNotEqual(backward.inputs[2], ce.outputs[0])
+        self.assertIsNone(by_id[backward.inputs[2]].producer)
+        self.assertIs(by_id[backward.inputs[2]].dtype, DType.FP32)
+        graph.validate()
+
+    def test_tp2_dp2_ce_keeps_each_rank_loss_unreduced(self) -> None:
+        graph = build_dense_training_ce_backward_source(_spec(2, 2))
+        ce = next(node for node in graph.nodes if node.kind is OpKind.CE_FORWARD)
+        backward = next(node for node in graph.nodes if node.kind is OpKind.CE_BACKWARD)
+        self.assertEqual((graph.instances[0].parallel.tp,
+                          graph.instances[0].parallel.dp), (2, 2))
+        self.assertEqual(ce.workload.logical_logits_shape, (2, 16))
+        self.assertEqual(ce.workload.rank_logits_shape, (1, 16))
+        self.assertEqual(backward.workload.rank_loss_gradient_shape, (1,))
+        self.assertEqual(backward.workload.rank_logits_gradient_shape, (1, 16))
+        graph.validate()
 
     def test_forward_loss_cannot_be_repurposed_as_input_gradient(self) -> None:
         forward = build_train_forward_ir0(_spec(1, 1))

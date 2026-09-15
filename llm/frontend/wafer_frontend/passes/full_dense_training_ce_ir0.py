@@ -31,8 +31,9 @@ from .train_forward import build_train_forward_ir0
 def append_dense_training_ce_backward_source(forward: IR0) -> IR0:
     """Keep the forward loss and independent incoming dLoss as distinct values.
 
-    The first version supports a replicated TP1 CE boundary only.  Returning an
-    IR0 does not promise that the existing S2-Lite training validator, planner,
+    The source supports rank-row-partitioned TP CE with a replicated vocabulary
+    and unreduced per-row loss.  Returning an IR0 does not promise that the
+    existing S2-Lite training validator, planner,
     or physical lowering accepts a complete multi-layer backward graph.
     """
 
@@ -43,10 +44,9 @@ def append_dense_training_ce_backward_source(forward: IR0) -> IR0:
         forward.job is not JobKind.TRAIN
         or forward.producer_pass != "train_forward_expand"
         or len(forward.instances) != 1
-        or forward.instances[0].parallel.tp != 1
         or any(node.phase is not OpPhase.FWD for node in forward.nodes)
     ):
-        raise SchemaError("requires complete TP1 forward-only Dense train graph", path="forward")
+        raise SchemaError("requires complete forward-only Dense train graph", path="forward")
     ce_nodes = tuple(node for node in forward.nodes if node.kind is OpKind.CE_FORWARD)
     if len(ce_nodes) != 1:
         raise SchemaError("requires exactly one forward CE", path="forward.nodes")
