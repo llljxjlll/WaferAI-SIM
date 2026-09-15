@@ -20,6 +20,7 @@
 #include "memory/hbm_r4_selftest.h"
 #include "memory/external_dma_program.h"
 #include "memory/dense_adamw_mid_program_pager.h"
+#include "memory/dense_inference_mid_program_pager.h"
 #include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_control_core.h"
@@ -145,6 +146,9 @@ Define_string_opt("--program-io-sequence", g_flag_program_io_sequence,
 Define_string_opt("--dense-adamw-paged-runtime",
                   g_flag_dense_adamw_paged_runtime, std::string{},
                   "source-signed per-StateABI external DMA for two Dense AdamW steps");
+Define_string_opt("--dense-inference-paged-runtime",
+                  g_flag_dense_inference_paged_runtime, std::string{},
+                  "source-signed blocking parameter/KV DMA for Prefill+2Decode");
 Define_string_opt(
     "--external-dma-binding", g_flag_external_dma_binding, std::string{},
     "typed external DMA startup binding for --program-sequence");
@@ -1002,13 +1006,21 @@ int sc_main(int argc, char *argv[]) {
     }
 
     const bool adamw_paged = !g_flag_dense_adamw_paged_runtime.empty();
+    const bool inference_paged =
+        !g_flag_dense_inference_paged_runtime.empty();
+    if (adamw_paged && inference_paged) {
+        LOG_ERROR(CONFIG) << "only one source-signed Dense pager may be bound";
+        return 2;
+    }
     const bool sequence_any = !g_flag_program_sequence.empty() ||
                               !g_flag_linked_manifest_sequence.empty() ||
-                              !g_flag_program_io_sequence.empty() || adamw_paged;
+                              !g_flag_program_io_sequence.empty() ||
+                              adamw_paged || inference_paged;
     if (sequence_any &&
         (g_flag_program_sequence.empty() ||
          g_flag_linked_manifest_sequence.empty() ||
-         (adamw_paged == !g_flag_program_io_sequence.empty()))) {
+         (adamw_paged ? !g_flag_program_io_sequence.empty()
+                      : g_flag_program_io_sequence.empty()))) {
         LOG_ERROR(CONFIG) << "--program-sequence and --linked-manifest-sequence "
                              "require exactly one of --program-io-sequence "
                              "or --dense-adamw-paged-runtime";
@@ -1022,7 +1034,7 @@ int sc_main(int argc, char *argv[]) {
             << "--external-dma-binding requires --program-sequence";
         return 2;
     }
-    if (adamw_paged && external_dma_requested) {
+    if ((adamw_paged || inference_paged) && external_dma_requested) {
         LOG_ERROR(CONFIG) << "on-demand paged DMA cannot share an all-state "
                              "startup/final-writeback phase";
         return 2;
@@ -1434,7 +1446,8 @@ int sc_main(int argc, char *argv[]) {
                 if (manifest_paths.size() != program_paths.size() ||
                     (!adamw_paged &&
                      sidecar_paths.size() != program_paths.size()) ||
-                    (adamw_paged && program_paths.size() != 2))
+                    (adamw_paged && program_paths.size() != 2) ||
+                    (inference_paged && program_paths.size() != 3))
                     throw std::runtime_error(
                         "Program sequence path lists or strict two-step shape drifted");
                 for (std::size_t index = 0;
@@ -1499,6 +1512,9 @@ int sc_main(int argc, char *argv[]) {
                                  })))
                     throw std::runtime_error(
                         "paged external DMA requires actual two-step 17-parameter Dense AdamW");
+                if (inference_paged && dense_training_sequence)
+                    throw std::runtime_error(
+                        "paged inference DMA requires actual three-segment Dense KV sequence");
                 if (dense_training_sequence)
                     ValidateDenseTrainingStateContinuity(
                         sequence_training_state_ranges);
@@ -1680,6 +1696,8 @@ int sc_main(int argc, char *argv[]) {
         external_dma_executor;
     std::unique_ptr<external_memory::DenseAdamwMidProgramPager>
         adamw_mid_program_pager;
+    std::unique_ptr<external_memory::DenseInferenceMidProgramPager>
+        inference_mid_program_pager;
     std::unique_ptr<ExternalDmaStartupCoordinator>
         external_dma_coordinator;
     if (external_dma_program.has_value()) {
@@ -1749,6 +1767,38 @@ int sc_main(int argc, char *argv[]) {
                       << " workspace_end=9248 pass=1" << std::endl;
         } catch (const std::exception &error) {
             LOG_ERROR(CONFIG) << "Dense AdamW paged DMA binding failed: "
+                              << error.what();
+            return 2;
+        }
+    }
+    if (inference_paged) {
+        try {
+            if (monitor->hbmRuntime == nullptr ||
+                monitor->workerCores[0] == nullptr ||
+                !monitor->workerCores[0]->lsu_memory)
+                throw std::runtime_error(
+                    "paged Dense inference requires real die0 HBM and core0 LSU");
+            auto *physical = monitor->hbmRuntime->Find(0, 0);
+            if (physical == nullptr || !physical->backend)
+                throw std::runtime_error(
+                    "paged Dense inference requires physical die0 HBM backend");
+            std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends{
+                {{0, 0}, physical->backend.get()}};
+            inference_mid_program_pager = std::make_unique<
+                external_memory::DenseInferenceMidProgramPager>(
+                    "dense_inference_mid_program_pager",
+                    std::filesystem::path(g_flag_dense_inference_paged_runtime),
+                    sequence_manifest_texts, std::move(backends),
+                    sc_time(CYCLE, SC_NS));
+            monitor->workerCores[0]->lsu_memory->SetDenseInferencePager(
+                inference_mid_program_pager.get());
+            std::cout << "[DENSE_INFERENCE_PAGED_BINDING] source="
+                      << inference_mid_program_pager->SourceRef()
+                      << " parameter_states=15 kv_pages=4 events=65"
+                      << " hbm_capacity=12288 workspace_end=1600"
+                      << " highest_state_end=10560 pass=1" << std::endl;
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG) << "Dense inference paged DMA binding failed: "
                               << error.what();
             return 2;
         }
@@ -1916,6 +1966,13 @@ int sc_main(int argc, char *argv[]) {
                 sequence_training_state_ranges.front(), std::nullopt);
         }
     }
+    if (sequence_mode && inference_paged) {
+        const std::string digest =
+            inference_mid_program_pager->ProbeInitialKvAuthority();
+        std::cout << "[DENSE_INFERENCE_PAGED_KV] version=0 bytes=0"
+                  << " digest=" << digest
+                  << " authority=external functional=0 pass=1" << std::endl;
+    }
 
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
     sc_clock clk("clk", CYCLE, SC_NS);
@@ -1940,6 +1997,8 @@ int sc_main(int argc, char *argv[]) {
                           << " pending=" << adamw_mid_program_pager->Pending()
                           << " pass=1 functional=0" << std::endl;
             } else {
+                if (inference_paged)
+                    inference_mid_program_pager->CompleteSegment(expected);
                 const frontend::program_io::Result io_result =
                     frontend::program_io::VerifyAfterSimulation(
                         *sequence_program_io_applied);
@@ -1949,6 +2008,14 @@ int sc_main(int argc, char *argv[]) {
                 std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
                           << " probes=" << io_result.probes.size()
                           << " pass=1" << std::endl;
+                if (inference_paged)
+                    std::cout << "[DENSE_INFERENCE_PAGED_EXTERNAL_PROGRAM_IO]"
+                              << " index=" << expected
+                              << " kv_probes=4 kv_bytes="
+                              << inference_mid_program_pager->KvAuthorityBytes()
+                              << " pending="
+                              << inference_mid_program_pager->Pending()
+                              << " functional=0 pass=1" << std::endl;
             }
             std::cout
                 << "[DENSE_SEQUENCE_COMPUTE] index=" << expected
@@ -2000,9 +2067,25 @@ int sc_main(int argc, char *argv[]) {
                         << " store_records=" << witness.store_records
                         << " functional=0 pass=1" << std::endl;
             } else {
-                PrintDenseKvBoundary(
-                    *monitor->hbmRuntime, expected,
-                    sequence_kv_ranges[expected]);
+                if (inference_paged) {
+                    const uint64_t kv_bytes =
+                        inference_mid_program_pager->KvAuthorityBytes();
+                    const auto &digest =
+                        inference_mid_program_pager->KvAuthorityDigest();
+                    std::cout << "[DENSE_SEQUENCE_KV] index=" << expected
+                              << " bytes=" << kv_bytes
+                              << " digest=" << digest
+                              << " pass=1 authority=external" << std::endl;
+                    std::cout << "[DENSE_INFERENCE_PAGED_KV] version="
+                              << expected + 1 << " bytes=" << kv_bytes
+                              << " digest=" << digest
+                              << " authority=external functional=0 pass=1"
+                              << std::endl;
+                } else {
+                    PrintDenseKvBoundary(
+                        *monitor->hbmRuntime, expected,
+                        sequence_kv_ranges[expected]);
+                }
             }
             if (!adamw_paged &&
                 expected + 1 < sequence_program_bytes.size())
@@ -2063,6 +2146,31 @@ int sc_main(int argc, char *argv[]) {
                     "paged Dense AdamW actual DMA traffic/drain disagreed with 83-state byte oracle");
             std::cout << "[DENSE_ADAMW_PAGED_DMA_DRAIN] events=332"
                       << " probes=166 submitted=" << stats.submitted_requests
+                      << " completed=" << stats.completed_requests
+                      << " external_read_bytes=" << stats.external_read_bytes
+                      << " external_write_bytes=" << stats.external_write_bytes
+                      << " hbm_read_bytes=" << stats.hbm_read_bytes
+                      << " hbm_write_bytes=" << stats.hbm_write_bytes
+                      << " pending=0 dirty=0 pinned=0 pass=1" << std::endl;
+        }
+        if (inference_paged) {
+            const auto &stats = inference_mid_program_pager->Stats();
+            if (inference_mid_program_pager->CompletedEvents() != 65 ||
+                inference_mid_program_pager->ExternalKvProbes() != 12 ||
+                inference_mid_program_pager->Pending() != 0 ||
+                inference_mid_program_pager->Dirty() != 0 ||
+                inference_mid_program_pager->Pinned() != 0 ||
+                stats.submitted_requests != 65 ||
+                stats.completed_requests != 65 ||
+                stats.failed_requests != 0 ||
+                stats.external_read_bytes != 162112 ||
+                stats.hbm_write_bytes != 162112 ||
+                stats.external_write_bytes != 1920 ||
+                stats.hbm_read_bytes != 1920)
+                throw std::runtime_error(
+                    "paged Dense inference real shared DMA/StateABI drain disagreed with byte oracle");
+            std::cout << "[DENSE_INFERENCE_PAGED_DMA_DRAIN] events=65"
+                      << " kv_probes=12 submitted=" << stats.submitted_requests
                       << " completed=" << stats.completed_requests
                       << " external_read_bytes=" << stats.external_read_bytes
                       << " external_write_bytes=" << stats.external_write_bytes
