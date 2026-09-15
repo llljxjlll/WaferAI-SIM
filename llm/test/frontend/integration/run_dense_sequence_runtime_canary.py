@@ -662,8 +662,15 @@ def _parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     fixed_shapes = {"1x1", "2x2", "1x4", "4x1", "2x3", "3x2",
                     "1x6", "6x1", "3x3"}
-    if not args.scaled_all_dies and args.mesh_size not in fixed_shapes:
-        parser.error("this mesh size requires --scaled-all-dies")
+    if args.scaled_all_dies and args.fixed_global_tp6:
+        parser.error("choose exactly one of --scaled-all-dies and --fixed-global-tp6")
+    if args.fixed_global_tp6 and (
+        int(args.mesh_size.split("x")[0]) * int(args.mesh_size.split("x")[1]) < 6
+    ):
+        parser.error("--fixed-global-tp6 requires at least six physical Dies")
+    if (not args.scaled_all_dies and not args.fixed_global_tp6
+            and args.mesh_size not in fixed_shapes):
+        parser.error("this mesh size requires --scaled-all-dies or --fixed-global-tp6")
     if args.timeout <= 0 or args.compile_timeout <= 0:
         parser.error("--timeout and --compile-timeout must be positive")
     for name in ("finalizer", "npusim", "resolver", "simulation"):

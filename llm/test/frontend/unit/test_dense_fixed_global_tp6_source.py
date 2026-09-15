@@ -1,6 +1,9 @@
 """Fixed global model placement across physically different rectangles."""
 
+import contextlib
+import io
 import unittest
+from unittest.mock import patch
 
 from llm.frontend.wafer_frontend.compiler import _validate_rect_mesh_compile_inputs
 from llm.frontend.wafer_frontend.passes.build_ir0 import build_ir0
@@ -10,7 +13,7 @@ from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
 from llm.frontend.wafer_frontend.passes.logical_expand import logical_expand
 from llm.frontend.wafer_frontend.schema.rect_mesh import RectMeshSpec
 from llm.test.frontend.integration.run_dense_sequence_runtime_canary import (
-    _six_die_fixed_model_case,
+    _parse_args, _six_die_fixed_model_case,
 )
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
 
@@ -75,6 +78,24 @@ class DenseFixedGlobalTp6SourceTest(unittest.TestCase):
                     accepted += 1
         self.assertEqual(len(case_ids), accepted)
         self.assertEqual(len(signatures), 1)
+
+    def test_cli_accepts_fixed_10x10_and_rejects_conflicting_or_small_mode(self) -> None:
+        with patch("sys.argv", ["runner", "--fixed-global-tp6",
+                                "--mesh-size", "10x10"]):
+            args = _parse_args()
+        self.assertEqual(args.mesh_size, "10x10")
+        self.assertTrue(args.fixed_global_tp6)
+        self.assertFalse(args.scaled_all_dies)
+        for extra in (("--mesh-size", "2x2"),
+                      ("--mesh-size", "10x10", "--scaled-all-dies")):
+            with (
+                self.subTest(extra=extra),
+                patch("sys.argv", ["runner", "--fixed-global-tp6", *extra]),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                _parse_args()
+            self.assertEqual(raised.exception.code, 2)
 
     def test_small_mesh_is_rejected_without_changing_the_model(self) -> None:
         for dimensions in ((1, 1), (1, 5), (2, 2), (11, 1)):
