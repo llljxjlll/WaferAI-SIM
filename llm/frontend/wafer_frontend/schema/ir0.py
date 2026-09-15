@@ -32,6 +32,7 @@ from .moe_full_training_block_workload import (
     MoeFullTrainingBlockWorkload,
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
+from .gemm_input_dx_workload import GemmInputDxWorkload
 
 
 IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha12"
@@ -61,6 +62,7 @@ class OpKind(str, Enum):
     EMBEDDING_TABLE_WGRAD = "embedding_table_wgrad"
     NORM_GAMMA_WGRAD = "norm_gamma_wgrad"
     GEMM_WEIGHT_WGRAD = "gemm_weight_wgrad"
+    GEMM_INPUT_DX = "gemm_input_dx"
     MOE_ROUTER = "moe_router"
     MOE_ROUTE_FREEZE = "moe_route_freeze"
     MOE_DISPATCH = "moe_dispatch"
@@ -1477,6 +1479,7 @@ NodeWorkload = (
     | EmbeddingTableWgradWorkload
     | NormGammaWgradWorkload
     | GemmWeightWgradWorkload
+    | GemmInputDxWorkload
     | MoeFullTrainingBlockWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
@@ -1560,6 +1563,7 @@ class LogicalNode:
             OpKind.EMBEDDING_TABLE_WGRAD: EmbeddingTableWgradWorkload,
             OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
             OpKind.GEMM_WEIGHT_WGRAD: GemmWeightWgradWorkload,
+            OpKind.GEMM_INPUT_DX: GemmInputDxWorkload,
             OpKind.MOE_ROUTER: MoeFullTrainingBlockWorkload,
             OpKind.MOE_ROUTE_FREEZE: MoeFullTrainingBlockWorkload,
             OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
@@ -1597,6 +1601,16 @@ class LogicalNode:
                     or self.effects != NodeEffects(EffectKind.PURE, None, None)):
                 raise SchemaError(
                     "native parameter WGRAD needs real FP32 gradient, exact operands and pure WGRAD phase",
+                    path=path,
+                )
+        if self.kind is OpKind.GEMM_INPUT_DX:
+            if (self.phase is not OpPhase.DGRAD
+                    or self.impl_ref != "gemm_input_dx_timing"
+                    or len(self.inputs) != 2 or len(self.outputs) != 1
+                    or self.math.accumulation_dtype is not DType.FP32
+                    or self.effects != NodeEffects(EffectKind.PURE, None, None)):
+                raise SchemaError(
+                    "native GEMM dX needs FP16 weight/dY, FP32 result and pure DGRAD phase",
                     path=path,
                 )
         source_moe = {
@@ -2098,6 +2112,24 @@ class IR0:
                         or operands[-2].producer is None
                         or operands[-1].producer != node.id):
                     raise SchemaError("native WGRAD requires real upstream producer and exact FP32 parameter shape",
+                        path=f"{path}.nodes[{index}].inputs")
+            if node.kind is OpKind.GEMM_INPUT_DX:
+                if self.job is not JobKind.TRAIN:
+                    raise SchemaError("native GEMM dX is TRAIN-only",
+                                      path=f"{path}.nodes[{index}].kind")
+                workload = node.workload
+                assert isinstance(workload, GemmInputDxWorkload)
+                operands = tuple(value_index[ref] for ref in
+                                 (*node.inputs, *node.outputs))
+                if (tuple(value.shape for value in operands)
+                        != ((workload.m,workload.n),
+                            (workload.k,workload.n),
+                            (workload.k,workload.m))
+                        or tuple(value.dtype for value in operands)
+                        != (DType.FP16,DType.FP16,DType.FP32)
+                        or operands[1].producer is None
+                        or operands[2].producer != node.id):
+                    raise SchemaError("native GEMM dX requires source weight/true upstream and owned FP32 dX",
                                       path=f"{path}.nodes[{index}].inputs")
             if node.kind in (
                 OpKind.MOE_ROUTER,OpKind.MOE_ROUTE_FREEZE,
@@ -2295,6 +2327,43 @@ class IR0:
                 raise SchemaError(
                     "named WGRAD rank rows differ from source forward GEMM",
                     path=f"{path}.nodes[{index}].workload.k",
+                )
+
+        for index, node in enumerate(self.nodes):
+            if node.kind is not OpKind.GEMM_INPUT_DX:
+                continue
+            workload = node.workload
+            assert isinstance(workload, GemmInputDxWorkload)
+            source = nodes_by_ref.get(workload.source_forward_op_ref)
+            parameter = state_index.get(workload.source_parameter_state_ref)
+            upstream = value_index[node.inputs[1]]
+            producer = nodes_by_ref.get(upstream.producer)
+            if (source is None or source.kind is not OpKind.GEMM
+                    or source.phase is not OpPhase.FWD
+                    or source.workload.rank_shape
+                       != (workload.k,workload.n,workload.m)
+                    or len(source.inputs) != 2 or len(source.outputs) != 1
+                    or source.inputs[1] != node.inputs[0]
+                    or value_index[source.inputs[0]].shape
+                       != (workload.k,workload.m)
+                    or upstream.shape != value_index[source.outputs[0]].shape
+                    or producer is None or producer.phase is not OpPhase.DGRAD
+                    or source.outputs[0] not in producer.inputs
+                    or upstream.id not in producer.outputs
+                    or parameter is None
+                    or parameter.identity.tensor_ref != node.inputs[0]
+                    or parameter.shape != (workload.m,workload.n)
+                    or parameter.dtype is not DType.FP16
+                    or parameter.identity.instance_ref != node.instance_id
+                    or parameter.identity.mesh_ref != node.mesh_ref
+                    or not any(access.node_ref == source.id
+                               and access.state_ref == parameter.id
+                               and access.mode in (StateAccessMode.READ,
+                                                   StateAccessMode.READ_WRITE)
+                               for access in self.state_accesses)):
+                raise SchemaError(
+                    "GEMM dX must borrow real forward X/W StateDecl READ and downstream DGRAD dY",
+                    path=f"{path}.nodes[{index}].workload",
                 )
 
         validate_unique_ids(self.state_accesses, f"{path}.state_accesses")

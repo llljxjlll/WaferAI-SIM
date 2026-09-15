@@ -30,6 +30,7 @@ from .ir0 import (
     FusionImpl,
     GemmWorkload,
     GemmWeightWgradWorkload,
+    GemmInputDxWorkload,
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
     MoeFullTrainingBlockWorkload,
@@ -1103,6 +1104,7 @@ class PhysicalNode:
             OpKind.EMBEDDING_TABLE_WGRAD: EmbeddingTableWgradWorkload,
             OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
             OpKind.GEMM_WEIGHT_WGRAD: GemmWeightWgradWorkload,
+            OpKind.GEMM_INPUT_DX: GemmInputDxWorkload,
             OpKind.MOE_ROUTER: MoeFullTrainingBlockWorkload,
             OpKind.MOE_ROUTE_FREEZE: MoeFullTrainingBlockWorkload,
             OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
@@ -1125,7 +1127,8 @@ class PhysicalNode:
         self.effects.validate(f"{path}.effects")
         if self.kind in (
             OpKind.EMBEDDING_TABLE_WGRAD, OpKind.NORM_GAMMA_WGRAD,
-            OpKind.GEMM_WEIGHT_WGRAD, OpKind.MOE_ROUTER,
+            OpKind.GEMM_WEIGHT_WGRAD, OpKind.GEMM_INPUT_DX,
+            OpKind.MOE_ROUTER,
             OpKind.MOE_ROUTE_FREEZE, OpKind.MOE_DISPATCH,
             OpKind.MOE_EXPERT_FORWARD, OpKind.MOE_COMBINE,
         ):
