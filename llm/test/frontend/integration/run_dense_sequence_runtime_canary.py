@@ -335,6 +335,7 @@ def run(args: argparse.Namespace) -> None:
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, original_alarm)
+    compile_wall_seconds = round(time.monotonic() - started, 3)
     sequence.validate()
     active_dies = set(manifest.placement.active_die_ids)
     compiled_core_die_ids = tuple(
@@ -366,6 +367,7 @@ def run(args: argparse.Namespace) -> None:
             or manifest.request.parallel.tp == 6 else None
         ),
     }, indent=2, sort_keys=True), encoding="utf-8")
+    segment_metrics: list[dict[str, int | float]] = []
     manifests: list[Path] = []
     programs: list[Path] = []
     sidecars: list[Path] = []
@@ -374,9 +376,17 @@ def run(args: argparse.Namespace) -> None:
         manifest_path = output / f"segment_{index}.linked.json"
         artifact_path = output / f"segment_{index}.npup"
         report_path = output / f"segment_{index}.finalizer.json"
+        serialization_started = time.monotonic()
         manifest_path.write_text(
             canonical_json(segment.linked_manifest), encoding="utf-8"
         )
+        metric: dict[str, int | float] = {
+            "index": index,
+            "linked_manifest_bytes": manifest_path.stat().st_size,
+            "linked_serialization_wall_seconds": round(
+                time.monotonic() - serialization_started, 3),
+        }
+        finalizer_started = time.monotonic()
         _run(
             (
                 str(args.finalizer.resolve()),
@@ -390,6 +400,9 @@ def run(args: argparse.Namespace) -> None:
             cwd=output,
             timeout=120,
         )
+        metric["finalizer_wall_seconds"] = round(
+            time.monotonic() - finalizer_started, 3)
+        metric["npup_bytes"] = artifact_path.stat().st_size
         report = json.loads(report_path.read_text(encoding="utf-8"))
         artifact_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
         if (
@@ -402,6 +415,7 @@ def run(args: argparse.Namespace) -> None:
         manifests.append(manifest_path)
         programs.append(artifact_path)
         artifact_digests.append(artifact_digest)
+        program_io_started = time.monotonic()
         abi_by_binding = {
             abi.hbm_binding_ref: abi
             for fragment in linked_profiles[index].manifest.fragments
@@ -430,6 +444,10 @@ def run(args: argparse.Namespace) -> None:
         contract.validate_against(segment.linked_manifest)
         sidecar_path = output / f"segment_{index}.program_io.json"
         sidecar_path.write_text(canonical_json(contract), encoding="utf-8")
+        metric["program_io_wall_seconds"] = round(
+            time.monotonic() - program_io_started, 3)
+        metric["program_io_bytes"] = sidecar_path.stat().st_size
+        resolver_started = time.monotonic()
         resolved = _run(
             (
                 str(args.resolver.resolve()), "--resolve",
@@ -438,6 +456,12 @@ def run(args: argparse.Namespace) -> None:
             cwd=args.resolver.resolve().parent,
             timeout=min(args.timeout, 900),
         )
+        metric["resolver_wall_seconds"] = round(
+            time.monotonic() - resolver_started, 3)
+        metric["children_max_rss_kib_so_far"] = resource.getrusage(
+            resource.RUSAGE_CHILDREN).ru_maxrss
+        metric["python_peak_rss_kib_so_far"] = resource.getrusage(
+            resource.RUSAGE_SELF).ru_maxrss
         (output / f"segment_{index}.resolver.stdout.txt").write_text(
             resolved, encoding="utf-8",
         )
@@ -445,6 +469,7 @@ def run(args: argparse.Namespace) -> None:
                 or f"probes={len(contract.output_probes)}" not in resolved):
             raise RuntimeError(f"segment {index} native ProgramIO resolver closure failed")
         sidecars.append(sidecar_path)
+        segment_metrics.append(metric)
 
     hardware_path = output / "hardware.json"
     mapping_path = output / "mapping.spec"
@@ -497,6 +522,7 @@ def run(args: argparse.Namespace) -> None:
             not in preflight):
         raise RuntimeError("native SRAM hardware profile differs from compiled fabric")
     mapping_path.write_text("0:0\n", encoding="utf-8")
+    native_started = time.monotonic()
     try:
         runtime_output = _run(
         (
@@ -533,8 +559,14 @@ def run(args: argparse.Namespace) -> None:
             "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             "source_tool_at_entry": source_tool_at_entry,
             "npup_sha256": artifact_digests,
+            "phase_wall_seconds": {
+                "production_compile": compile_wall_seconds,
+                "native_npusim": round(time.monotonic() - native_started, 3),
+            },
+            "segment_metrics": segment_metrics,
         }, indent=2, sort_keys=True), encoding="utf-8")
         raise
+    native_wall_seconds = round(time.monotonic() - native_started, 3)
     (output / "npusim.stdout.txt").write_text(runtime_output, encoding="utf-8")
 
     segment_markers = re.findall(
@@ -609,6 +641,13 @@ def run(args: argparse.Namespace) -> None:
     compiled_receipt = json.loads(compiled_receipt_path.read_text(encoding="utf-8"))
     compiled_receipt["runtime_status"] = "verified"
     compiled_receipt["total_wall_seconds"] = round(time.monotonic() - started, 3)
+    compiled_receipt["phase_wall_seconds"] = {
+        "production_compile": compile_wall_seconds,
+        "native_npusim": native_wall_seconds,
+    }
+    compiled_receipt["segment_metrics"] = segment_metrics
+    compiled_receipt["children_max_rss_kib"] = resource.getrusage(
+        resource.RUSAGE_CHILDREN).ru_maxrss
     compiled_receipt["source_tool_binding_sha256"] = hashlib.sha256(
         (output / "source_tool_binding.json").read_bytes()
     ).hexdigest()
