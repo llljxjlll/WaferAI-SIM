@@ -462,6 +462,8 @@ ManifestInputKindDto ParseInputKind(const Json &value,
         return ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE;
     if (raw == "flexible_dense_backward_global")
         return ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL;
+    if (raw == "dense_adamw_source")
+        return ManifestInputKindDto::DENSE_ADAMW_SOURCE;
     Fail(path, "unknown ManifestInputKind");
 }
 
@@ -1340,6 +1342,8 @@ std::string_view InputKindKey(ManifestInputKindDto kind) {
         return "flexible_dense_backward_schedule";
     case ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL:
         return "flexible_dense_backward_global";
+    case ManifestInputKindDto::DENSE_ADAMW_SOURCE:
+        return "dense_adamw_source";
     }
     Fail("linked_program_manifest.input_digests", "unknown input kind");
 }
@@ -3466,6 +3470,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             manifest.producer_pass == "flexible_moe_production_linker";
         const bool flexible_dense_backward_link =
             manifest.producer_pass == "flexible_dense_backward_linker";
+        const bool dense_adamw_link =
+            manifest.producer_pass == "dense_adamw_linker";
         bool unfused_s0_ag = false;
         bool unfused_s0_rs = false;
         bool unfused_s0_ar = false;
@@ -4312,6 +4318,88 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 Fail("linked_program_manifest.fragments",
                      "Flexible Dense backward fragment closure changed");
         }
+        if (dense_adamw_link) {
+            const std::map<ManifestInputKindDto, std::string> schemas{
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_IR,
+                 "wafer_frontend.flexible_dense_backward_ir/v1alpha1"},
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_PROJECTION,
+                 "wafer_frontend.flexible_dense_backward_projection/v1alpha1"},
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE,
+                 "wafer_frontend.flexible_dense_backward_schedule/v1alpha1"},
+                {ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL,
+                 "wafer_frontend.flexible_dense_backward_global/v1alpha1"},
+                {ManifestInputKindDto::COMMAND_FRAGMENT,
+                 std::string(kCommandFragmentSchemaVersion)},
+                {ManifestInputKindDto::DENSE_ADAMW_SOURCE,
+                 "wafer_frontend.workload_materialization/v1alpha1"},
+            };
+            if (train_link || s3_lite_link || rooted_ar_link || swizzle_link ||
+                moe_swizzle_link || moe_calibration_link || unfused_link ||
+                flexible_moe_v2_link || flexible_dense_backward_link ||
+                manifest.input_digests.size() != schemas.size())
+                Fail("linked_program_manifest.input_digests",
+                     "Dense AdamW requires six exclusive typed source digests");
+            std::map<ManifestInputKindDto, const ManifestInputDigestDto *> inputs;
+            for (const ManifestInputDigestDto &digest : manifest.input_digests) {
+                const auto schema = schemas.find(digest.kind);
+                if (schema == schemas.end() ||
+                    digest.schema_version != schema->second ||
+                    !inputs.emplace(digest.kind, &digest).second)
+                    Fail("linked_program_manifest.input_digests",
+                         "Dense AdamW kind/schema/cardinality changed");
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
+            }
+            if (inputs.size() != schemas.size() ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_IR)
+                        ->artifact_id != manifest.source_ir1_id ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_PROJECTION)
+                        ->artifact_id != manifest.source_projection_id ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_SCHEDULE)
+                        ->artifact_id != manifest.source_schedule_set_id ||
+                inputs.at(ManifestInputKindDto::FLEXIBLE_DENSE_BACKWARD_GLOBAL)
+                        ->artifact_id != manifest.source_global_dag_id)
+                Fail("linked_program_manifest.input_digests",
+                     "Dense AdamW physical WGRAD four-stage source closure changed");
+            if (manifest.fragments.size() != 1 ||
+                std::holds_alternative<RegionManifestDto>(manifest.fragments.front()))
+                Fail("linked_program_manifest.fragments",
+                     "Dense AdamW requires one unwrapped production fragment");
+            const CommandFragmentDto &fragment = Leaf(manifest.fragments.front());
+            if (fragment.id !=
+                    inputs.at(ManifestInputKindDto::COMMAND_FRAGMENT)->artifact_id ||
+                fragment.producer_pass != "dense_adamw_lowering" ||
+                fragment.source_global_dag_id != manifest.source_global_dag_id ||
+                fragment.kind != FragmentKindDto::STATE_IO ||
+                fragment.state_abi.size() != 83)
+                Fail("linked_program_manifest.fragments",
+                     "Dense AdamW physical fragment/state closure changed");
+            std::size_t trainable = 0, master = 0, m = 0, v = 0, step = 0;
+            for (const StateAbiDto &state : fragment.state_abi) {
+                switch (state.kind) {
+                case StateKindDto::TRAINABLE_PARAMETER: ++trainable; break;
+                case StateKindDto::OPTIMIZER_MASTER: ++master; break;
+                case StateKindDto::OPTIMIZER_MOMENT1: ++m; break;
+                case StateKindDto::OPTIMIZER_MOMENT2: ++v; break;
+                case StateKindDto::OPTIMIZER_STEP: ++step; break;
+                default: Fail("linked_program_manifest.fragments",
+                              "Dense AdamW state family is not a packed weight/optimizer");
+                }
+            }
+            if (trainable != 15 || master != 17 || m != 17 ||
+                v != 17 || step != 17)
+                Fail("linked_program_manifest.fragments",
+                     "Dense AdamW requires 15 packed weights and 17 logical optimizer groups");
+            std::size_t adamw_records = 0, sgd_records = 0;
+            for (const CoreFragmentStreamDto &stream : fragment.core_streams)
+                for (const RelocatableRecordDto &record : stream.records) {
+                    adamw_records += record.opcode == Opcode::ADAMW_UPDATE;
+                    sgd_records += record.opcode == Opcode::SGD_UPDATE;
+                }
+            if (adamw_records != 17 || sgd_records != 0)
+                Fail("linked_program_manifest.fragments",
+                     "Dense AdamW 17 logical updates must exclude all SGD records");
+        }
         if (s3_lite_link) {
             const ManifestInputDigestDto &s3 = *s3_lite_inputs.front();
             if (s3.schema_version !=
@@ -4439,7 +4527,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         if (!train_link && !s3_lite_link && !rooted_ar_link &&
             !swizzle_link && !moe_swizzle_link && !moe_calibration_link &&
             !unfused_link && !flexible_moe_v2_link &&
-            !flexible_dense_backward_link) {
+            !flexible_dense_backward_link && !dense_adamw_link) {
             for (const auto &entry : upstream_inputs)
                 expected_inputs.emplace(entry.first, entry.second.first,
                                         entry.second.second);
@@ -6574,9 +6662,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                "command_fragment.state_abi",
                                [](const StateAbiDto &item) { return item.id; });
             for (const StateAbiDto &abi : fragment.state_abi) {
-                if (abi.dtype == BufferDTypeDto::INT32)
+                if (abi.dtype == BufferDTypeDto::INT32 &&
+                    abi.kind != StateKindDto::OPTIMIZER_STEP)
                     Fail("command_fragment.state_abi",
-                         "StateABI dtype must be fp16 or fp32");
+                         "only the AdamW step StateABI may be INT32");
                 const auto previous = known_state_abi.find(abi.id);
                 if (previous != known_state_abi.end() &&
                     !SameStateAbi(*previous->second, abi))

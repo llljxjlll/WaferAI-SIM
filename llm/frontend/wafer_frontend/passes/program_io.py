@@ -24,6 +24,7 @@ from ..schema.artifact_manifest import (
 from ..schema.common import DType
 from ..schema.global_action import ActionBufferUse, GlobalAction, LogicalCoreRef
 from ..schema.flexible_dense_backward import FlexibleDenseBackwardLinkedProgram
+from ..schema.dense_adamw_linked import DenseAdamwLinkedProgram
 from ..schema.ir0 import (
     CrossEntropyBackwardWorkload,
     CrossEntropyForwardWorkload,
@@ -272,6 +273,7 @@ LinkedProgramSource = (
     | SwizzleStandardLinkedProgram
     | UnfusedComparisonStandardLinkedProgram
     | FlexibleDenseBackwardLinkedProgram
+    | DenseAdamwLinkedProgram
 )
 
 
@@ -290,6 +292,7 @@ _LINKED_PROGRAM_SOURCE_TYPES = (
     SwizzleStandardLinkedProgram,
     UnfusedComparisonStandardLinkedProgram,
     FlexibleDenseBackwardLinkedProgram,
+    DenseAdamwLinkedProgram,
 )
 
 
@@ -540,7 +543,7 @@ def _semantic_uses(
         return swizzle_semantic_uses(source, abis)  # type: ignore[return-value]
     if type(source) is UnfusedComparisonStandardLinkedProgram:
         return unfused_comparison_semantic_uses(source, abis)  # type: ignore[return-value]
-    if type(source) is FlexibleDenseBackwardLinkedProgram:
+    if type(source) in (FlexibleDenseBackwardLinkedProgram, DenseAdamwLinkedProgram):
         return _flexible_dense_backward_semantic_uses(source, abis)
     if type(source) in (
         LiteMoeLinkedProgram,
@@ -1736,7 +1739,7 @@ def _resolved_state_abis(
                     path="source.source.intent.state_loads",
                 )
             uses[abi.id].append((action_order[unit.action_ref], StateUseAccess.READ))
-    elif type(source) is FlexibleDenseBackwardLinkedProgram:
+    elif type(source) in (FlexibleDenseBackwardLinkedProgram, DenseAdamwLinkedProgram):
         fragments = {
             _leaf(fragment).id: _leaf(fragment)
             for fragment in source.manifest.fragments
@@ -1857,6 +1860,7 @@ def _resolved_state_abis(
         )
     if type(source) not in (
         FlexibleDenseBackwardLinkedProgram,
+        DenseAdamwLinkedProgram,
         LiteMoeLinkedProgram,
         LiteMoeBackwardLinkedProgram,
         LiteMoeDp4InferLinkedProgram,
@@ -2568,7 +2572,7 @@ def _build_timing_program_io_prevalidated(
             item for item in resolved if item.abi.id in terminal_abi_ids
         )
         terminal_values = {item.abi.value_id for item in resolved_terminal}
-    elif type(source) is FlexibleDenseBackwardLinkedProgram:
+    elif type(source) in (FlexibleDenseBackwardLinkedProgram, DenseAdamwLinkedProgram):
         terminal_abi_ids = None
         terminal_values = set()
         resolved_terminal = ()
@@ -2580,6 +2584,7 @@ def _build_timing_program_io_prevalidated(
         )
     hbm_state_terminals = type(source) in (
         FlexibleDenseBackwardLinkedProgram,
+        DenseAdamwLinkedProgram,
         LiteMoeBackwardLinkedProgram,
         LiteMoeDp4BackwardLinkedProgram,
         S2LiteDp4TreeArLinkedProgram,

@@ -565,17 +565,45 @@ DenseTrainingProgramWitness DenseTrainingWitness(
         state_kinds[frontend::StateKindDto::TRAINABLE_PARAMETER];
     result.optimizer_states = ranges.size() - result.trainable_states;
     const bool adamw = result.optimizer_states != 0;
-    if (adamw &&
-        (state_kinds[frontend::StateKindDto::OPTIMIZER_MASTER] !=
-             result.trainable_states ||
-         state_kinds[frontend::StateKindDto::OPTIMIZER_MOMENT1] !=
-             result.trainable_states ||
-         state_kinds[frontend::StateKindDto::OPTIMIZER_MOMENT2] !=
-             result.trainable_states ||
-         state_kinds[frontend::StateKindDto::OPTIMIZER_STEP] !=
-             result.trainable_states))
-        throw std::runtime_error(
-            "Dense AdamW sequence requires four StateABI groups per parameter");
+    if (adamw) {
+        // DP1 gate/up are two logical parameters in each of two layers but
+        // occupy only one packed physical FP16 trainable carrier per layer.
+        if (result.trainable_states != 15 || result.optimizer_states != 68)
+            throw std::runtime_error(
+                "Dense AdamW DP1 requires 15 trainable carriers and 17 logical four-state groups");
+        const std::vector<std::pair<frontend::StateKindDto, std::string>> roles{
+            {frontend::StateKindDto::OPTIMIZER_MASTER,
+             "optimizer.adamw.master."},
+            {frontend::StateKindDto::OPTIMIZER_MOMENT1,
+             "optimizer.adamw.m."},
+            {frontend::StateKindDto::OPTIMIZER_MOMENT2,
+             "optimizer.adamw.v."},
+            {frontend::StateKindDto::OPTIMIZER_STEP,
+             "optimizer.adamw.step."},
+        };
+        std::optional<std::set<std::string>> parameter_refs;
+        for (const auto &[kind, prefix] : roles) {
+            std::set<std::string> names;
+            for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
+                const frontend::CommandFragmentDto *fragment =
+                    std::get_if<frontend::CommandFragmentDto>(&linked);
+                if (fragment == nullptr)
+                    fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+                for (const frontend::StateAbiDto &state : fragment->state_abi) {
+                    if (state.kind != kind) continue;
+                    if (state.state_ref.rfind(prefix, 0) != 0 ||
+                        !names.emplace(state.state_ref.substr(prefix.size())).second)
+                        throw std::runtime_error(
+                            "Dense AdamW has repeated/malformed optimizer StateABI");
+                }
+            }
+            if (names.size() != 17 ||
+                (parameter_refs.has_value() && names != *parameter_refs))
+                throw std::runtime_error(
+                    "Dense AdamW four states must cover the same 17 logical parameters");
+            parameter_refs = std::move(names);
+        }
+    }
     for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
         const frontend::CommandFragmentDto *fragment =
             std::get_if<frontend::CommandFragmentDto>(&linked);
@@ -600,7 +628,7 @@ DenseTrainingProgramWitness DenseTrainingWitness(
         result.matmul_records < result.trainable_states ||
         (adamw &&
          (result.sgd_records != 0 ||
-          result.adamw_records != result.trainable_states ||
+          result.adamw_records != result.optimizer_states / 4 ||
           result.load_records != ranges.size() ||
           result.store_records != ranges.size())) ||
         (!adamw &&

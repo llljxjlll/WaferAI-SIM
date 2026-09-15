@@ -4339,6 +4339,7 @@ class ManifestInputKind(str, Enum):
     FLEXIBLE_DENSE_BACKWARD_PROJECTION = "flexible_dense_backward_projection"
     FLEXIBLE_DENSE_BACKWARD_SCHEDULE = "flexible_dense_backward_schedule"
     FLEXIBLE_DENSE_BACKWARD_GLOBAL = "flexible_dense_backward_global"
+    DENSE_ADAMW_SOURCE = "dense_adamw_source"
 
 
 class EmptyCoreAckPolicy(str, Enum):
@@ -5558,6 +5559,39 @@ class LinkedProgramManifest:
             ):
                 raise SchemaError(
                     "Flexible Dense backward source provenance is not exact",
+                    path=f"{path}.input_digests",
+                )
+
+        if self.producer_pass == "dense_adamw_linker":
+            source_schemas = {
+                **flexible_dense_schemas,
+                ManifestInputKind.DENSE_ADAMW_SOURCE:
+                    "wafer_frontend.workload_materialization/v1alpha1",
+            }
+            actual = {digest.kind: digest for digest in self.input_digests}
+            if (
+                len(self.input_digests) != len(source_schemas)
+                or set(actual) != set(source_schemas)
+                or any(actual[kind].schema_version != schema
+                       for kind, schema in source_schemas.items())
+                or actual[ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_IR].artifact_id
+                    != self.source_ir1_id
+                or actual[ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_PROJECTION].artifact_id
+                    != self.source_projection_id
+                or actual[ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_SCHEDULE].artifact_id
+                    != self.source_schedule_set_id
+                or actual[ManifestInputKind.FLEXIBLE_DENSE_BACKWARD_GLOBAL].artifact_id
+                    != self.source_global_dag_id
+                or len(self.fragments) != 1
+                or isinstance(self.fragments[0], RegionManifest)
+                or self.fragments[0].id
+                    != actual[ManifestInputKind.COMMAND_FRAGMENT].artifact_id
+                or self.fragments[0].producer_pass != "dense_adamw_lowering"
+                or self.fragments[0].source_global_dag_id != self.source_global_dag_id
+                or self.fragments[0].kind is not FragmentKind.STATE_IO
+            ):
+                raise SchemaError(
+                    "Dense AdamW requires exact six-input P3/WGRAD source provenance",
                     path=f"{path}.input_digests",
                 )
 
