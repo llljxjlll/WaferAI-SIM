@@ -904,9 +904,14 @@ void WorkerCoreExecutor::execute_dte_send_endpoint(
     if (p2p_endpoint->HasFsm(prim->fsm_id))
         throw std::invalid_argument(
             "P2P endpoint fsm_id is already active");
-    if (p2p_endpoint->Residual().sessions >= p2p_endpoint->MaxSessions())
-        throw std::length_error(
-            "P2P endpoint session capacity exhausted before source read");
+    while (p2p_endpoint->AdmissionState() !=
+           P2pEndpointAdmissionState::READY) {
+        if (p2p_endpoint->AdmissionState() ==
+            P2pEndpointAdmissionState::REQUIRES_LOCAL_RETIRE)
+            throw std::length_error(
+                "P2P endpoint session capacity exhausted before source read");
+        wait(ev_p2p_progress);
+    }
     if (prim->completion == DteEndpointCompletion::ASYNC &&
         (dte_control->HasToken(prim->token) ||
          p2p_endpoint->HasToken(prim->token) ||
@@ -959,6 +964,17 @@ void WorkerCoreExecutor::execute_dte_send_endpoint(
     TraceP2pEndpoint(event_engine, cid, source_stage, "E",
                      prim->fsm_id, bytes.size(), 0, checksum);
 
+    // The source access may yield while the collective worker shares this
+    // endpoint. Re-enter admission immediately before the atomic IssueSend.
+    while (p2p_endpoint->AdmissionState() !=
+           P2pEndpointAdmissionState::READY) {
+        if (p2p_endpoint->AdmissionState() ==
+            P2pEndpointAdmissionState::REQUIRES_LOCAL_RETIRE)
+            throw std::length_error(
+                "P2P endpoint session capacity exhausted after source read");
+        wait(ev_p2p_progress);
+    }
+
     P2pTxIssue issue = p2p_endpoint->IssueSend(*prim, bytes);
     const P2pEndpointHandle handle = issue.handle;
     try {
@@ -1002,9 +1018,14 @@ void WorkerCoreExecutor::execute_dte_recv_endpoint(
         p2p_rx_addresses.count(prim->fsm_id) != 0)
         throw std::invalid_argument(
             "P2P receive fsm_id is already active");
-    if (p2p_endpoint->Residual().sessions >= p2p_endpoint->MaxSessions())
-        throw std::length_error(
-            "P2P endpoint receive session capacity exhausted");
+    while (p2p_endpoint->AdmissionState() !=
+           P2pEndpointAdmissionState::READY) {
+        if (p2p_endpoint->AdmissionState() ==
+            P2pEndpointAdmissionState::REQUIRES_LOCAL_RETIRE)
+            throw std::length_error(
+                "P2P endpoint receive session capacity exhausted");
+        wait(ev_p2p_progress);
+    }
     if (prim->completion == DteEndpointCompletion::ASYNC &&
         (dte_control->HasToken(prim->token) ||
          p2p_endpoint->HasToken(prim->token) ||

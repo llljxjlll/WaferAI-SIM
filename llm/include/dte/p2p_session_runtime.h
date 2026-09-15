@@ -157,6 +157,16 @@ struct P2pEndpointLifetimeEvent {
     int8_t delta = 0;
 };
 
+// Admission distinguishes temporary transport backpressure from capacity
+// that can only be released by a later instruction on this core. A Worker may
+// wait for the former because completion ACK handling runs independently;
+// waiting for the latter would deadlock before the required DTE_WAIT.
+enum class P2pEndpointAdmissionState : uint8_t {
+    READY = 0,
+    WAIT_FOR_TRANSPORT = 1,
+    REQUIRES_LOCAL_RETIRE = 2,
+};
+
 // This carrier is intentionally die-level. Endpoint-local peaks cannot be
 // summed after the run to reconstruct a simultaneous per-die peak.
 struct MoeSwizzleSessionMarker {
@@ -229,6 +239,7 @@ public:
     P2pEndpointPhase Phase(const P2pEndpointHandle &handle) const;
     bool IsAdmitted(const P2pEndpointHandle &handle) const;
     P2pEndpointResidual Residual() const noexcept;
+    P2pEndpointAdmissionState AdmissionState() const noexcept;
     const P2pEndpointLifetimeStats &LifetimeStats() const noexcept {
         return lifetime_stats_;
     }

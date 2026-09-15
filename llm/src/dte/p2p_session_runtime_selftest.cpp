@@ -1393,6 +1393,65 @@ void TestManifestBoundDieSessionReplay(Checks &checks) {
         "die replay retirement underflow");
 }
 
+void TestCapacityAdmissionDistinguishesTransportProgress(
+    Checks &checks) {
+    constexpr size_t kCapacity = 3;
+    P2pEndpointSessionRuntime sender(50, kCapacity, 64, 16, 52);
+    const std::vector<uint8_t> bytes = Pattern(16, 0x51);
+    std::vector<P2pTxIssue> issues;
+    for (uint32_t index = 0; index < kCapacity; ++index) {
+        P2pTxIssue issue = sender.IssueSend(
+            SyncSpec(100 + index, bytes.size(), 51), bytes);
+        sender.MarkRequestSent(issue.handle);
+        Admit(issue, sender);
+        sender.CompleteSend(issue.handle);
+        checks.Check(sender.TryRetireSync(issue.handle),
+                     "SYNC TX reaches local retirement before ACK");
+        issues.push_back(std::move(issue));
+    }
+    checks.Check(
+        sender.Residual().sessions == kCapacity &&
+            sender.Residual().tx_awaiting_ack == kCapacity &&
+            sender.AdmissionState() ==
+                P2pEndpointAdmissionState::WAIT_FOR_TRANSPORT,
+        "full locally-retired TX capacity advertises transport backpressure");
+    checks.Reject(
+        [&] {
+            (void)sender.PostReceive(
+                SyncSpec(200, bytes.size(), 51));
+        },
+        "hard runtime capacity remains bounded while transport is pending");
+
+    sender.ReceiveAck(MakeP2pCompletionAck(
+        ParseP2pPayloadRequest(issues.front().messages.request).flow,
+        issues.front().handle.fsm_id));
+    checks.Check(
+        sender.AdmissionState() == P2pEndpointAdmissionState::READY &&
+            sender.Residual().sessions == kCapacity - 1,
+        "completion ACK independently releases one admission slot");
+    const P2pRxPostResult receive =
+        sender.PostReceive(SyncSpec(200, bytes.size(), 51));
+    checks.Check(sender.Abort(receive.handle),
+                 "posted receive capacity fixture tears down exactly");
+    for (size_t index = 1; index < issues.size(); ++index)
+        sender.ReceiveAck(MakeP2pCompletionAck(
+            ParseP2pPayloadRequest(issues[index].messages.request).flow,
+            issues[index].handle.fsm_id));
+    checks.Check(sender.Drained(),
+                 "transport admission fixture drains every session");
+
+    P2pEndpointSessionRuntime local_wait(50, 1, 64, 16, 52);
+    const P2pRxPostResult async_receive =
+        local_wait.PostReceive(AsyncSpec(300, 400, bytes.size(), 51));
+    checks.Check(
+        local_wait.AdmissionState() ==
+            P2pEndpointAdmissionState::REQUIRES_LOCAL_RETIRE,
+        "full async receive requires a future local WAIT and must fail fast");
+    checks.Check(local_wait.Abort(async_receive.handle) &&
+                     local_wait.Drained(),
+                 "future-WAIT capacity fixture tears down exactly");
+}
+
 } // namespace
 
 int RunP2pSessionRuntimeSelfTest() {
@@ -1414,6 +1473,7 @@ int RunP2pSessionRuntimeSelfTest() {
     TestLifetimeRequestIdentity(checks);
     TestFailureAbortTransitions(checks);
     TestBoundsAndUnknowns(checks);
+    TestCapacityAdmissionDistinguishesTransportProgress(checks);
     TestLifetimeStatsAndDedicatedMarker(checks);
     TestManifestBoundDieSessionReplay(checks);
     return checks.Finish();

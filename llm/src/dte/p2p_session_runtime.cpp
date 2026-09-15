@@ -1342,3 +1342,18 @@ P2pEndpointResidual P2pEndpointSessionRuntime::Residual() const noexcept {
     }
     return residual;
 }
+
+P2pEndpointAdmissionState
+P2pEndpointSessionRuntime::AdmissionState() const noexcept {
+    if (sessions_.size() < max_sessions_)
+        return P2pEndpointAdmissionState::READY;
+    const bool transport_can_retire = std::any_of(
+        sessions_.begin(), sessions_.end(), [](const auto &entry) {
+            const Session &session = entry.second;
+            return session.handle.direction == P2pEndpointDirection::TX &&
+                   session.local_retired && !session.acknowledged;
+        });
+    return transport_can_retire
+               ? P2pEndpointAdmissionState::WAIT_FOR_TRANSPORT
+               : P2pEndpointAdmissionState::REQUIRES_LOCAL_RETIRE;
+}
