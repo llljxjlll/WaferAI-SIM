@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import heapq
+import hashlib
+import struct
 
 from ..errors import SchemaError
 from .common import DType, stable_artifact_id, validate_nonempty, validate_uint64
@@ -48,6 +50,8 @@ class MoeRectActionKind(str, Enum):
     EXPERT_DGRAD = "expert_dgrad"
     EXPERT_WGRAD = "expert_wgrad"
     COMBINE_BACKWARD = "combine_backward"
+    SHARED_DCOMBINED_IMPORT = "shared_dcombined_import"
+    SCORE_WEIGHT_BACKWARD_PRE_DISPATCH = "score_weight_backward_pre_dispatch"
     GATE_WGRAD = "gate_wgrad"
     GATE_GRADIENT_LOCAL_REDUCE = "gate_gradient_local_reduce"
     GATE_GRADIENT_ALL_REDUCE = "gate_gradient_all_reduce"
@@ -411,6 +415,137 @@ class MoeRectGateAllReduce:
             raise SchemaError("session witness drifted", path=f"{path}.max_sessions_per_rank_wave")
 
 
+_SIGNED_ROUTER_SOURCE_SCHEMA_VERSION = (
+    "wafer_frontend.flexible_moe_signed_top1_train_source/v1alpha1"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MoeRectSignedTop1TrainSource:
+    """Explicit new score model and named shared gradient import for old P2.
+
+    This source signs an 80B INT32 route blob. It does *not* establish the
+    claimed Dense shared backward BufferABI; a later full timeline must bind
+    that action/manifest to a true compute output before simulation.
+    """
+
+    id: str
+    version: str
+    original_spec_ref: str
+    original_trace_ref: str
+    dynamic_case_ref: str
+    shared_dcombined_producer_ref: str
+    shared_full_model_manifest_ref: str
+    route_rows: int
+    route_bytes: int
+    route_sha256: str
+    route_words: tuple[int, ...]
+
+    @classmethod
+    def create(cls, spec: FlexibleMoeSpec, *,
+               dynamic_case_ref: str,
+               shared_dcombined_producer_ref: str,
+               shared_full_model_manifest_ref: str):
+        spec.validate("signed_top1_router.source_spec")
+        if (spec.mode is not FlexibleMoeMode.TRAIN
+                or spec.mesh.rank_count != 2
+                or any(assignment.source_rank != 0
+                       or assignment.gate_weight_f32_bits != _FP32_ONE_BITS
+                       for assignment in spec.trace.assignments)):
+            raise SchemaError(
+                "bounded signed top1 source requires original TRAIN EP2, rank0 tokens and unfalsified gate=ONE trace",
+                path="signed_top1_router.source_spec",
+            )
+        for name, ref in (("dynamic_case_ref", dynamic_case_ref),
+                          ("shared_dcombined_producer_ref",
+                           shared_dcombined_producer_ref),
+                          ("shared_full_model_manifest_ref",
+                           shared_full_model_manifest_ref)):
+            validate_nonempty(ref, f"signed_top1_router.{name}")
+        if (dynamic_case_ref in (spec.id, spec.trace.id)
+                or shared_dcombined_producer_ref ==
+                   shared_full_model_manifest_ref):
+            raise SchemaError("new scored case and shared producer need distinct source identities",
+                              path="signed_top1_router.source")
+        words = tuple(value for assignment in spec.trace.assignments
+                      for value in (assignment.token_index,
+                                    assignment.source_rank,
+                                    assignment.expert_index,
+                                    assignment.expert_home_rank,
+                                    assignment.slot_index))
+        if any(type(value) is not int or not (0 <= value <= 0x7FFFFFFF)
+               for value in words):
+            raise SchemaError("five route fields must be physical nonnegative INT32",
+                              path="signed_top1_router.route_words")
+        blob = struct.pack("<" + "I" * len(words), *words)
+        semantic = {
+            "version": _SIGNED_ROUTER_SOURCE_SCHEMA_VERSION,
+            "original_spec_ref": spec.id,
+            "original_trace_ref": spec.trace.id,
+            "dynamic_case_ref": dynamic_case_ref,
+            "shared_dcombined_producer_ref": shared_dcombined_producer_ref,
+            "shared_full_model_manifest_ref": shared_full_model_manifest_ref,
+            "route_rows": spec.trace.token_count,
+            "route_bytes": len(blob),
+            "route_sha256": hashlib.sha256(blob).hexdigest(),
+            "route_words": words,
+        }
+        source = cls(
+            stable_artifact_id("moe_signed_top1_train_source", semantic,
+                               schema_version=_SIGNED_ROUTER_SOURCE_SCHEMA_VERSION),
+            **semantic,
+        )
+        source.validate_against(spec)
+        return source
+
+    @property
+    def route_blob(self) -> bytes:
+        return struct.pack("<" + "I" * len(self.route_words),
+                           *self.route_words)
+
+    def validate_against(self, spec: FlexibleMoeSpec) -> None:
+        spec.validate("signed_top1_router.source_spec")
+        if (self.version != _SIGNED_ROUTER_SOURCE_SCHEMA_VERSION
+                or spec.mode is not FlexibleMoeMode.TRAIN
+                or spec.mesh.rank_count != 2
+                or self.original_spec_ref != spec.id
+                or self.original_trace_ref != spec.trace.id
+                or not self.dynamic_case_ref
+                or self.dynamic_case_ref in (spec.id, spec.trace.id)
+                or not self.shared_dcombined_producer_ref
+                or not self.shared_full_model_manifest_ref
+                or self.shared_dcombined_producer_ref ==
+                   self.shared_full_model_manifest_ref
+                or any(assignment.source_rank != 0
+                       or assignment.gate_weight_f32_bits != _FP32_ONE_BITS
+                       for assignment in spec.trace.assignments)):
+            raise SchemaError("signed router TRAIN source/model/shared producer must preserve original EP2 spec",
+                              path="signed_top1_router")
+        expected = tuple(value for assignment in spec.trace.assignments
+                         for value in (assignment.token_index,
+                                       assignment.source_rank,
+                                       assignment.expert_index,
+                                       assignment.expert_home_rank,
+                                       assignment.slot_index))
+        if (any(type(value) is not int or not (0 <= value <= 0x7FFFFFFF)
+                for value in self.route_words)
+                or self.route_words != expected
+                or self.route_rows != spec.trace.token_count
+                or self.route_bytes != 5 * 4 * self.route_rows
+                or self.route_sha256 !=
+                   hashlib.sha256(self.route_blob).hexdigest()
+                or not any(byte != 0 for byte in self.route_blob)):
+            raise SchemaError("signed router route table must be one complete nonzero INT32 P2 assignment blob",
+                              path="signed_top1_router.route")
+        semantic = {name: getattr(self, name) for name in
+                    self.__dataclass_fields__ if name != "id"}
+        if self.id != stable_artifact_id(
+                "moe_signed_top1_train_source", semantic,
+                schema_version=_SIGNED_ROUTER_SOURCE_SCHEMA_VERSION):
+            raise SchemaError("signed router source artifact identity drifted",
+                              path="signed_top1_router.id")
+
+
 @dataclass(frozen=True, slots=True)
 class FlexibleMoeExecutablePlan:
     schema_version: str
@@ -471,9 +606,26 @@ class FlexibleMoeExecutablePlan:
             if name not in ("schema_version", "producer_pass", "id")
         }
 
-    def validate_against(self, spec: FlexibleMoeSpec, path: str = "flexible_moe_plan") -> None:
+    def validate_against(
+        self, spec: FlexibleMoeSpec, path: str = "flexible_moe_plan", *,
+        signed_source: MoeRectSignedTop1TrainSource | None = None,
+    ) -> None:
         spec.validate(f"{path}.spec")
-        if self.schema_version != FLEXIBLE_MOE_PLAN_SCHEMA_VERSION or self.producer_pass != "compile_flexible_moe_baseline":
+        if self.schema_version != FLEXIBLE_MOE_PLAN_SCHEMA_VERSION:
+            raise SchemaError("unsupported plan schema/producer", path=path)
+        if self.producer_pass == "compile_flexible_moe_baseline":
+            if signed_source is not None:
+                raise SchemaError("baseline plan cannot carry a signed score source", path=path)
+            if any(action.kind in (
+                    MoeRectActionKind.SHARED_DCOMBINED_IMPORT,
+                    MoeRectActionKind.SCORE_WEIGHT_BACKWARD_PRE_DISPATCH,
+                ) for action in self.actions):
+                raise SchemaError("baseline cannot carry versioned score gradient actions", path=f"{path}.actions")
+        elif self.producer_pass == "compile_flexible_moe_signed_top1_train_source":
+            if type(signed_source) is not MoeRectSignedTop1TrainSource:
+                raise SchemaError("signed plan requires exact versioned source binding", path=path)
+            signed_source.validate_against(spec)
+        else:
             raise SchemaError("unsupported plan schema/producer", path=path)
         if (self.source_spec_id, self.source_spec_digest, self.mesh_digest) != (spec.id, spec.digest, spec.mesh.digest):
             raise SchemaError("source provenance drifted", path=path)
@@ -833,6 +985,53 @@ class FlexibleMoeExecutablePlan:
         )
         if self.id != expected:
             raise SchemaError(f"unstable artifact id; expected {expected!r}", path=f"{path}.id")
+        if signed_source is not None:
+            routes = tuple(
+                f"assignment.{assignment.token_index}"
+                for assignment in spec.trace.assignments
+                if assignment.source_rank == 0
+            )
+            imported = tuple(action for action in self.actions if action.kind is MoeRectActionKind.SHARED_DCOMBINED_IMPORT)
+            earlier = tuple(action for action in self.actions if action.kind is MoeRectActionKind.SCORE_WEIGHT_BACKWARD_PRE_DISPATCH)
+            if len(imported) != 1 or len(earlier) != 1:
+                raise SchemaError("signed router needs one pre-dispatch gradient and one shared import", path=f"{path}.actions")
+            shared, score = imported[0], earlier[0]
+            if (shared.rank != 0 or score.rank != 0
+                    or shared.assignment_refs != routes or score.assignment_refs != routes
+                    or shared.flow_ref is not None or score.flow_ref is not None
+                    or shared.state_refs or score.state_refs
+                    or shared.logical_bytes != 2 * len(routes) * spec.hidden_size
+                    or shared.flops != 0
+                    or score.logical_bytes != 2 * len(routes) * (spec.hidden_size + spec.expert_count)
+                    or score.flops != 3 * len(routes) * spec.hidden_size
+                    or len(shared.deps) != 1
+                    or action_index[shared.deps[0]].kind is not MoeRectActionKind.WEIGHTED_COMBINE
+                    or action_index[shared.deps[0]].rank != 0
+                    or set(score.deps) != {shared.id, shared.deps[0]}
+                    or len(score.deps) != 2):
+                raise SchemaError("signed router import/score work and forward dependency drifted", path=f"{path}.actions")
+            for action in self.actions:
+                if (action.rank == 0 and action.kind is MoeRectActionKind.SEND
+                        and action.flow_ref is not None
+                        and flow_index[action.flow_ref].stage is MoeRectFlowStage.BACKWARD_GRADIENT
+                        and (score.id not in action.deps or shared.deps[0] in action.deps)):
+                    raise SchemaError("remote dExpert SEND must consume early scored producer", path=f"{path}.actions")
+                if (action.rank == 0 and action.assignment_refs
+                        and action.kind in (MoeRectActionKind.EXPERT_DGRAD, MoeRectActionKind.EXPERT_WGRAD)
+                        and score.id not in action.deps):
+                    raise SchemaError("local expert reverse must consume early scored producer", path=f"{path}.actions")
+
+    def validate_against_signed(
+        self, spec: FlexibleMoeSpec, signed_source: MoeRectSignedTop1TrainSource,
+        path: str = "flexible_moe_signed_plan",
+    ) -> None:
+        self.validate_against(spec, path, signed_source=signed_source)
+        from ..passes.moe_signed_router_train_source_plan import compile_moe_signed_top1_train_source_plan
+        canonical = compile_moe_signed_top1_train_source_plan(
+            spec, signed_source=signed_source, _validate_plan=False,
+        )
+        if self != canonical:
+            raise SchemaError("signed MoE action/flow/state DAG differs from canonical original P2 source", path=path)
 
 
 __all__ = [
@@ -845,6 +1044,7 @@ __all__ = [
     "FlexibleMoeSpec",
     "MoeRectAction",
     "MoeRectActionKind",
+    "MoeRectSignedTop1TrainSource",
     "MoeRectFlow",
     "MoeRectFlowStage",
     "MoeRectGateAllReduce",

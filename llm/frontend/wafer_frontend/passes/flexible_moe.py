@@ -700,7 +700,22 @@ def adapt_ep4_scale_spec(
     )
 
 
+def compile_flexible_moe_signed_top1_train_source(
+    spec: FlexibleMoeSpec, signed_source,
+) -> FlexibleMoeExecutablePlan:
+    """Explicit opt-in signed router P2 source; old compiler remains unchanged.
+
+    This still lacks real shared-backbone dCombined, route SRAM and a linked
+    public 0x27/0x28 executor. Existing baseline consumers reject the producer.
+    """
+    from .moe_signed_router_train_source_plan import compile_moe_signed_top1_train_source_plan
+    return compile_moe_signed_top1_train_source_plan(
+        spec, signed_source=signed_source,
+    )
+
+
 __all__ = [
+    "compile_flexible_moe_signed_top1_train_source",
     "adapt_ep4_scale_spec",
     "build_round_robin_flexible_moe_spec",
     "compile_flexible_moe_baseline",
