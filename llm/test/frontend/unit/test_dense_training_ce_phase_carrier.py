@@ -126,6 +126,7 @@ class DenseTrainingCePhaseCarrierTest(unittest.TestCase):
             gradient_address=self.address if address is None else address,
             gradient_label=self.label if label is None else label,
             region=self.region if region is None else region,
+            source_global_dag_id=self.manifest.source_global_dag_id,
         )
 
     def test_real_native_backward_has_exact_alloc_compute_four_frees(self) -> None:
@@ -139,6 +140,10 @@ class DenseTrainingCePhaseCarrierTest(unittest.TestCase):
         self.assertEqual(tuple(record.source_global_action_id for record in stream.records),
                          (self.backward.id,) * 7)
         self.assertEqual(stream.records[1].operands[0].literal_value, 3)
+        self.assertEqual(carrier.fragment.source_global_dag_id,
+                         self.manifest.source_global_dag_id)
+        self.assertNotEqual(carrier.fragment.source_global_dag_id,
+                            self.backward.source.dag_id)
         self.assertEqual(_lifecycle_payload_indices(
             self.backward, stream.records, list(range(len(stream.records))),
             {symbol.id: symbol for symbol in carrier.fragment.program_symbols},
@@ -184,6 +189,16 @@ class DenseTrainingCePhaseCarrierTest(unittest.TestCase):
     def test_borrowed_gradient_output_is_rejected(self) -> None:
         with self.assertRaisesRegex(SchemaError, "owned FP16"):
             self.carrier(gradient=replace(self.grad, ownership=BufferOwnership.BORROWED))
+
+    def test_scheduled_dag_cannot_be_claimed_as_global_dag(self) -> None:
+        with self.assertRaisesRegex(SchemaError, "not ScheduledDagRef"):
+            build_dense_training_ce_phase_carrier(
+                self.manifest, self.tape,
+                backward_action=self.backward, gradient=self.grad,
+                gradient_address=self.address, gradient_label=self.label,
+                region=self.region,
+                source_global_dag_id=self.backward.source.dag_id,
+            )
 
 
 if __name__ == "__main__":

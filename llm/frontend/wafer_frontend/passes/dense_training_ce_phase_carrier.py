@@ -47,6 +47,7 @@ def build_dense_training_ce_phase_carrier(
     gradient_address: ProgramSymbolDefinition,
     gradient_label: ProgramSymbolDefinition,
     region: ProgramSymbolDefinition,
+    source_global_dag_id: str,
 ) -> DenseCeBackwardPhaseCarrier:
     """Build a typed native phase, rejecting stale tape and overlapping SRAM.
 
@@ -56,6 +57,8 @@ def build_dense_training_ce_phase_carrier(
     """
     forward.validate("ce_phase_forward")
     backward_action.validate("ce_phase_backward_action")
+    if not source_global_dag_id or source_global_dag_id == backward_action.source.dag_id:
+        raise SchemaError("requires the separately signed production GlobalActionDAG ID, not ScheduledDagRef", path="source_global_dag_id")
     if backward_action.op_kind is not OpKind.CE_BACKWARD or backward_action.compute is None:
         raise SchemaError("requires a native CE_BACKWARD GlobalAction", path="backward_action")
     originals = (tape.logits, tape.labels, tape.per_row_loss)
@@ -201,7 +204,7 @@ def build_dense_training_ce_phase_carrier(
     ))
     fragment = CommandFragment.create(
         producer_pass="dense_training_ce_phase_carrier",
-        source_global_dag_id=backward_action.source.dag_id,
+        source_global_dag_id=source_global_dag_id,
         kind=FragmentKind.COARSE,
         claimed_action_ids=(backward_action.id,),
         core_streams=(CoreFragmentStream(core, records, (), tuple(sorted(
