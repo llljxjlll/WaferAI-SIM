@@ -230,6 +230,49 @@ def _all_die_scaled_model_case(rows: int, columns: int):
     return manifest, template, fabric
 
 
+def _bind_native_hardware_to_fabric(hardware: dict, fabric) -> tuple[int, int]:
+    """Use the production Fabric core grid and C2C edge locations in NpuSim."""
+
+    grids = {die.noc_grid for die in fabric.dies}
+    if len(grids) != 1:
+        raise ValueError(f"native hardware needs one common core grid: {grids}")
+    columns, rows = next(iter(grids))
+    if columns <= 0 or rows <= 0:
+        raise ValueError("native core grid dimensions must be positive")
+    cores_per_die = columns * rows
+    for die in fabric.dies:
+        for core in die.cores:
+            expected = die.id * cores_per_die + core.local_core_id
+            if core.runtime_core_id != expected:
+                raise ValueError(
+                    f"Fabric runtime core ID disagrees with native core grid: "
+                    f"die={die.id} local={core.local_core_id} "
+                    f"actual={core.runtime_core_id} expected={expected}"
+                )
+    if hardware["die"] != {"x": fabric.die_grid[0], "y": fabric.die_grid[1]}:
+        raise ValueError("native physical die grid differs from production Fabric")
+    positions: dict[str, int] = {}
+    for die in fabric.dies:
+        for port in die.ports:
+            side = port.side.value[0].upper()
+            index = (port.noc_coord[0] if side in ("N", "S")
+                     else port.noc_coord[1])
+            previous = positions.setdefault(side, index)
+            if previous != index:
+                raise ValueError(f"Fabric C2C {side} edge has mixed port indices")
+    hardware["x"] = columns
+    hardware["y"] = rows
+    for override in hardware["die_ports"]["overrides"]:
+        side = override["side"]
+        if side not in ("N", "S", "E", "W"):
+            raise ValueError(f"unknown native C2C side: {side}")
+        index = positions.get(side, 0)
+        if index >= (columns if side in ("N", "S") else rows):
+            raise ValueError(f"native C2C {side} edge index is out of grid")
+        override["idx"] = index
+    return columns, rows
+
+
 def _run(command: tuple[str, ...], *, cwd: Path, timeout: int,
          failure_log: Path | None = None) -> str:
     completed = subprocess.run(
@@ -354,6 +397,10 @@ def run(args: argparse.Namespace) -> None:
         "active_die_ids": manifest.placement.active_die_ids,
         "idle_die_ids": manifest.placement.idle_die_ids,
         "compiled_core_die_ids": compiled_core_die_ids,
+        "frontend_core_grid": fabric.dies[0].noc_grid,
+        "frontend_cores_per_die": (
+            fabric.dies[0].noc_grid[0] * fabric.dies[0].noc_grid[1]
+        ),
         "workload_case_id": manifest.request.case_id,
         "source_request_sha256": canonical_digest(manifest.request),
         "sequence_digest": sequence.digest,
@@ -474,6 +521,7 @@ def run(args: argparse.Namespace) -> None:
     hardware_path = output / "hardware.json"
     mapping_path = output / "mapping.spec"
     hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
+    native_core_grid = _bind_native_hardware_to_fabric(hardware, fabric)
     sram_bytes = (
         _SIX_DIE_SRAM_BYTES if args.scaled_all_dies
         or manifest.request.parallel.tp == 6 else 65536
@@ -646,6 +694,10 @@ def run(args: argparse.Namespace) -> None:
         "native_npusim": native_wall_seconds,
     }
     compiled_receipt["segment_metrics"] = segment_metrics
+    compiled_receipt["native_core_grid"] = native_core_grid
+    compiled_receipt["native_cores_per_die"] = (
+        native_core_grid[0] * native_core_grid[1]
+    )
     compiled_receipt["children_max_rss_kib"] = resource.getrusage(
         resource.RUSAGE_CHILDREN).ru_maxrss
     compiled_receipt["source_tool_binding_sha256"] = hashlib.sha256(
