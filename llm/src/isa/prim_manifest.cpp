@@ -154,6 +154,10 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
      L::STABLE, S::AVAILABLE},
     {PrimId::SWIGLU_BACKWARD_TIMING, "swiglu_backward_timing", C::COMPUTE,
      V::PUBLIC, L::STABLE, S::AVAILABLE},
+    {PrimId::NORM_BACKWARD_TIMING, "norm_backward_timing", C::COMPUTE,
+     V::INTERNAL, L::STABLE, S::AVAILABLE},
+    {PrimId::ATTENTION_BACKWARD_TIMING, "attention_backward_timing",
+     C::COMPUTE, V::INTERNAL, L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

@@ -26,6 +26,7 @@
 #include "isa/program_format_selftest.h"
 #include "isa/record_codec_selftest.h"
 #include "isa/record_lowering_selftest.h"
+#include "isa/backward_timing_prim_selftest.h"
 #include "prims/collective_data_v1_prim.h"
 #include "prims/collective_launch_v1_prim.h"
 #include "prims/collective_phase_barrier_v1_prim.h"
@@ -294,7 +295,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
     const bool valid = ValidatePrimManifest(&error);
     Check(result, valid, "Prim manifest invariants: " + error);
     Check(result, PrimManifest().size() == kPrimManifestSize,
-          "Prim manifest has frozen 64-entry count");
+          "Prim manifest has assigned entry count");
     Check(result, kMaxAssignedPrimId <= UINT8_MAX,
           "all internal PrimIds fit the 8-bit wire");
 
@@ -343,7 +344,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
             deprecated_ids.insert(PrimIdValue(entry.id));
         }
     }
-    Check(result, compute == 41 && communication == 8 && memory == 14 &&
+    Check(result, compute == 43 && communication == 8 && memory == 14 &&
                       synchronization == 4 && dynamic == 2,
           "Prim primary-category counts match frozen inventory");
     Check(result, public_count == 34,
@@ -414,8 +415,10 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
                       error == "duplicate factory name: Attention_f",
           "duplicate factory name has stable manifest error");
 
+    const uint16_t first_unassigned =
+        static_cast<uint16_t>(kMaxAssignedPrimId) + 1;
     Check(result, LookupPrim(uint16_t{0}) == nullptr &&
-                      LookupPrim(uint16_t{70}) == nullptr &&
+                      LookupPrim(first_unassigned) == nullptr &&
                       LookupPrim(uint16_t{256}) == nullptr,
           "invalid/out-of-range/unknown PrimIds do not resolve");
     Check(result, LookupPrim("__isa_v1_unknown_prim__") == nullptr,
@@ -427,7 +430,7 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
     IsaV1SelfTestResult result;
     PrimFactory &factory = PrimFactory::getInstance();
     Check(result, factory.registeredCount() == kPrimManifestSize,
-          "PrimFactory runtime count matches 68-entry manifest");
+          "PrimFactory runtime count matches assigned manifest");
     if (factory.registeredCount() != kPrimManifestSize)
         return result;
 
@@ -587,10 +590,13 @@ IsaV1SelfTestResult CheckIsaV1PrimFactory() {
     Check(result,
           ThrowsExactly<std::invalid_argument>(
               [&] {
-                  factory.registerPrim("__isa_v1_id_70__",
-                                       static_cast<PrimId>(70), unused_creator);
+                  factory.registerPrim("__isa_v1_first_unassigned__",
+                                       static_cast<PrimId>(
+                                           kMaxAssignedPrimId + 1),
+                                       unused_creator);
               },
-              "unassigned PrimId cannot be registered: 70"),
+              "unassigned PrimId cannot be registered: " +
+                  std::to_string(kMaxAssignedPrimId + 1)),
           "PrimFactory rejects first unassigned PrimId");
     Check(result,
           ThrowsExactly<std::invalid_argument>(
@@ -648,6 +654,8 @@ int RunIsaV1SelfTest() {
               << " (" << result.checks << " checks)\n";
     const int record_failures = RunIsaV1RecordCodecSelfTest();
     const int wire_failures = RunPrimWireSelfTest();
+    const int backward_timing_wire_failures =
+        RunBackwardTimingPrimSelfTest();
     const int format_failures = RunProgramFormatV1SelfTest();
     const int lowering_failures = RunIsaV1RecordLoweringSelfTest();
     const int helper_failures = RunConfigHelperProgramSelfTest();
@@ -689,7 +697,8 @@ int RunIsaV1SelfTest() {
     const int endpoint_output_flow_lock_failures =
         RunEndpointOutputFlowLockSelfTest();
     return static_cast<int>(result.failures.size()) + record_failures +
-           wire_failures + format_failures + lowering_failures +
+           wire_failures + backward_timing_wire_failures +
+           format_failures + lowering_failures +
            helper_failures + coll_plan_failures + coll_byte_wire_failures +
            coll_dca_payload_failures + coll_data_failures +
            coll_graph_failures + coll_data_lowering_failures +

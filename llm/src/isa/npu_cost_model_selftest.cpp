@@ -183,6 +183,9 @@ IsaV1SelfTestResult CheckNpuCostModelSelfTest() {
     TaskCoreContext context(nullptr, nullptr, nullptr, nullptr, nullptr,
                             &sram_address, nullptr, nullptr, nullptr, 0, 0, 16);
 #endif
+    // TaskCoreContext's constructors leave cid uninitialized. Direct NPU
+    // production probes below read it before any runtime WorkerCore assigns it.
+    context.cid = 0;
     {
         Cross_entropy_forward_prim prim;
         prim.operands.logits.kind = SramAddressKind::ABSOLUTE;
