@@ -118,6 +118,7 @@ class RecordOpcode(IntEnum):
     CROSS_ENTROPY_FORWARD = 0x1E
     CROSS_ENTROPY_BACKWARD = 0x1F
     SGD_UPDATE = 0x20
+    ADAMW_UPDATE = 0x21
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
@@ -193,6 +194,14 @@ class SemanticOperandId(IntEnum):
     OLD_SYMBOL = 10
     NEW_SYMBOL = 11
     COMPUTE_AUX_ADDRESS = 12
+    COMPUTE_MASTER_ADDRESS = 13
+    COMPUTE_FIRST_MOMENT_ADDRESS = 14
+    COMPUTE_SECOND_MOMENT_ADDRESS = 15
+    COMPUTE_STEP_ADDRESS = 16
+    COMPUTE_UPDATED_MASTER_ADDRESS = 17
+    COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS = 18
+    COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS = 19
+    COMPUTE_UPDATED_STEP_ADDRESS = 20
     SRAM_BIND_INPUT_0 = 0x100
     SRAM_BIND_INPUT_1 = 0x101
     SRAM_BIND_INPUT_2 = 0x102
@@ -815,6 +824,32 @@ _SGD_UPDATE_OPERANDS = (
     _lit("momentum_f64_bits"),
 )
 
+_ADAMW_UPDATE_OPERANDS = (
+    _lit("weight_datatype"),
+    _lit("gradient_datatype"),
+    _lit("state_datatype"),
+    _lit("output_datatype"),
+    _lit("rounding"),
+    _addr("weight_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("gradient_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("master_weight_address", SemanticOperandId.COMPUTE_MASTER_ADDRESS),
+    _addr("first_moment_address", SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS),
+    _addr("second_moment_address", SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS),
+    _addr("step_counter_address", SemanticOperandId.COMPUTE_STEP_ADDRESS),
+    _addr("updated_weight_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _addr("updated_master_weight_address", SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS),
+    _addr("updated_first_moment_address", SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS),
+    _addr("updated_second_moment_address", SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS),
+    _addr("updated_step_counter_address", SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS),
+    _lit("element_count"),
+    _lit("step"),
+    _lit("learning_rate_f64_bits"),
+    _lit("beta1_f64_bits"),
+    _lit("beta2_f64_bits"),
+    _lit("epsilon_f64_bits"),
+    _lit("weight_decay_f64_bits"),
+)
+
 
 _OPERAND_SCHEMAS = {
     RecordOpcode.MATMUL: _COMPUTE_OPERANDS_WITH_DATA,
@@ -829,6 +864,7 @@ _OPERAND_SCHEMAS = {
     RecordOpcode.CROSS_ENTROPY_FORWARD: _CROSS_ENTROPY_FORWARD_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_BACKWARD: _CROSS_ENTROPY_BACKWARD_OPERANDS,
     RecordOpcode.SGD_UPDATE: _SGD_UPDATE_OPERANDS,
+    RecordOpcode.ADAMW_UPDATE: _ADAMW_UPDATE_OPERANDS,
     RecordOpcode.SRAM_BIND: _SRAM_BIND_OPERANDS,
     RecordOpcode.SRAM_FREE: (
         _addr("symbol", SemanticOperandId.SYMBOL),
@@ -984,6 +1020,23 @@ for _operand_id in (
         (RecordOpcode.CROSS_ENTROPY_BACKWARD, _operand_id)
     ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
 
+for _operand_id in (
+    SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_DATA_ADDRESS,
+    SemanticOperandId.COMPUTE_MASTER_ADDRESS,
+    SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS,
+    SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS,
+    SemanticOperandId.COMPUTE_STEP_ADDRESS,
+    SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS,
+    SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS,
+    SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS,
+    SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS,
+):
+    _ALLOWED_ADDRESS_KINDS[(RecordOpcode.ADAMW_UPDATE, _operand_id)] = (
+        ProgramSymbolKind.ABSOLUTE_ADDRESS,
+    )
+
 
 _COMPUTE_OPCODE_BY_IMPL_REF = {
     "matmul_forward": (OpKind.GEMM, RecordOpcode.MATMUL),
@@ -1048,6 +1101,7 @@ _FIXED_COMPUTE_OPCODES = (
     RecordOpcode.CROSS_ENTROPY_FORWARD,
     RecordOpcode.CROSS_ENTROPY_BACKWARD,
     RecordOpcode.SGD_UPDATE,
+    RecordOpcode.ADAMW_UPDATE,
 )
 
 
@@ -1315,6 +1369,56 @@ def _validate_fixed_compute_operands(
                 "ROPE_QK_EXACT theta bits must encode a finite positive f64",
                 path=f"{path}.rope_theta_f64_bits",
             )
+        return
+
+    if opcode is RecordOpcode.ADAMW_UPDATE:
+        if (
+            values["weight_datatype"] != 1
+            or values["gradient_datatype"] != 3
+            or values["state_datatype"] != 3
+            or values["output_datatype"] != 1
+            or values["rounding"] != 0
+        ):
+            raise SchemaError(
+                "ADAMW_UPDATE requires FP16 weight/output, FP32 gradient/state, and RNE",
+                path=path,
+            )
+        positive("element_count", "step")
+        decoded: dict[str, float] = {}
+        for name in (
+            "learning_rate_f64_bits",
+            "beta1_f64_bits",
+            "beta2_f64_bits",
+            "epsilon_f64_bits",
+            "weight_decay_f64_bits",
+        ):
+            bits = values[name]
+            if type(bits) is not int or bits < 0 or bits > (1 << 64) - 1:
+                raise SchemaError(
+                    f"ADAMW_UPDATE {name} must be a uint64", path=f"{path}.{name}"
+                )
+            decoded[name] = struct.unpack("<d", struct.pack("<Q", bits))[0]
+            if not math.isfinite(decoded[name]):
+                raise SchemaError(
+                    f"ADAMW_UPDATE {name} must encode a finite f64",
+                    path=f"{path}.{name}",
+                )
+        if decoded["learning_rate_f64_bits"] <= 0.0:
+            raise SchemaError("ADAMW_UPDATE learning rate must be positive", path=path)
+        if not 0.0 < decoded["beta1_f64_bits"] < 1.0:
+            raise SchemaError("ADAMW_UPDATE beta1 must be in (0, 1)", path=path)
+        if not 0.0 < decoded["beta2_f64_bits"] < 1.0:
+            raise SchemaError("ADAMW_UPDATE beta2 must be in (0, 1)", path=path)
+        if decoded["epsilon_f64_bits"] <= 0.0:
+            raise SchemaError("ADAMW_UPDATE epsilon must be positive", path=path)
+        if decoded["weight_decay_f64_bits"] < 0.0:
+            raise SchemaError("ADAMW_UPDATE weight decay must be nonnegative", path=path)
+        for source, target in ((5, 11), (7, 12), (8, 13), (9, 14), (10, 15)):
+            if operands[source].symbol_ref != operands[target].symbol_ref:
+                raise SchemaError(
+                    "ADAMW_UPDATE weight and optimizer states must update in place",
+                    path=f"{path}.{operands[target].name}",
+                )
         return
 
     if opcode is RecordOpcode.ATTENTION_EXACT:
@@ -4563,6 +4667,17 @@ def _address_operand_role(
         (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_MASTER_ADDRESS): (BufferUseRole.COMP_INPUT, 2),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS): (BufferUseRole.COMP_INPUT, 3),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS): (BufferUseRole.COMP_INPUT, 4),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_STEP_ADDRESS): (BufferUseRole.COMP_INPUT, 5),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS): (BufferUseRole.COMP_OUTPUT, 1),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 2),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 3),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS): (BufferUseRole.COMP_OUTPUT, 4),
         (RecordOpcode.GREEDY_SAMPLE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.GREEDY_SAMPLE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.RMSNORM, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
@@ -6220,6 +6335,17 @@ class LinkedProgramManifest:
             (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_MASTER_ADDRESS): (BufferUseRole.COMP_INPUT, 2),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS): (BufferUseRole.COMP_INPUT, 3),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS): (BufferUseRole.COMP_INPUT, 4),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_STEP_ADDRESS): (BufferUseRole.COMP_INPUT, 5),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS): (BufferUseRole.COMP_OUTPUT, 1),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 2),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 3),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS): (BufferUseRole.COMP_OUTPUT, 4),
             (RecordOpcode.GREEDY_SAMPLE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.GREEDY_SAMPLE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
             (RecordOpcode.RMSNORM, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),

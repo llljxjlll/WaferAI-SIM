@@ -184,6 +184,29 @@ ExternalRecord CrossEntropyForwardRecord() {
     return {Opcode::CROSS_ENTROPY_FORWARD, operands};
 }
 
+ExternalRecord AdamwUpdateRecord() {
+    AdamwUpdateOperands operands;
+    operands.weight = AbsoluteAddress(20);
+    operands.gradient = AbsoluteAddress(21);
+    operands.master_weight = AbsoluteAddress(22);
+    operands.first_moment = AbsoluteAddress(23);
+    operands.second_moment = AbsoluteAddress(24);
+    operands.step_counter = AbsoluteAddress(25);
+    operands.updated_weight = operands.weight;
+    operands.updated_master_weight = operands.master_weight;
+    operands.updated_first_moment = operands.first_moment;
+    operands.updated_second_moment = operands.second_moment;
+    operands.updated_step_counter = operands.step_counter;
+    operands.element_count = 8;
+    operands.step = 2;
+    operands.learning_rate_f64_bits = UINT64_C(0x3f50624dd2f1a9fc);
+    operands.beta1_f64_bits = UINT64_C(0x3feccccccccccccd);
+    operands.beta2_f64_bits = UINT64_C(0x3feff7ced916872b);
+    operands.epsilon_f64_bits = UINT64_C(0x3e45798ee2308c3a);
+    operands.weight_decay_f64_bits = UINT64_C(0x3f847ae147ae147b);
+    return {Opcode::ADAMW_UPDATE, operands};
+}
+
 ExternalRecord ResidualRecord(uint64_t n = 8) {
     ExternalRecord record;
     record.opcode = Opcode::RESIDUAL;
@@ -813,7 +836,7 @@ ProgramArtifact FixedRelocationArtifact() {
     };
     artifact.cores = {{0, {RopeQkExactRecord(), AttentionExactRecord(),
                            EmbeddingLookupRecord(), GreedySampleRecord(),
-                           CrossEntropyForwardRecord()}}};
+                           CrossEntropyForwardRecord(), AdamwUpdateRecord()}}};
     auto relocation = [](uint64_t instruction, SemanticOperandId operand,
                          int64_t addend) {
         return SemanticRelocation{
@@ -833,6 +856,17 @@ ProgramArtifact FixedRelocationArtifact() {
         relocation(4, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0xa0),
         relocation(4, SemanticOperandId::COMPUTE_DATA_ADDRESS, 0xb0),
         relocation(4, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0xc0),
+        relocation(5, SemanticOperandId::COMPUTE_INPUT_ADDRESS, 0x100),
+        relocation(5, SemanticOperandId::COMPUTE_DATA_ADDRESS, 0x200),
+        relocation(5, SemanticOperandId::COMPUTE_OUTPUT_ADDRESS, 0x100),
+        relocation(5, SemanticOperandId::COMPUTE_MASTER_ADDRESS, 0x300),
+        relocation(5, SemanticOperandId::COMPUTE_FIRST_MOMENT_ADDRESS, 0x400),
+        relocation(5, SemanticOperandId::COMPUTE_SECOND_MOMENT_ADDRESS, 0x500),
+        relocation(5, SemanticOperandId::COMPUTE_STEP_ADDRESS, 0x600),
+        relocation(5, SemanticOperandId::COMPUTE_UPDATED_MASTER_ADDRESS, 0x300),
+        relocation(5, SemanticOperandId::COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS, 0x400),
+        relocation(5, SemanticOperandId::COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS, 0x500),
+        relocation(5, SemanticOperandId::COMPUTE_UPDATED_STEP_ADDRESS, 0x600),
     };
     artifact.envelope.active_cores = {0};
     artifact.envelope.expected_ack_cores = {0};
@@ -1067,6 +1101,21 @@ void CheckFixedRelocations(Checks &checks) {
             ce.loss.kind == SramAddressKind::ABSOLUTE &&
             ce.loss.absolute_address_bytes == 0x10c0,
         "CROSS_ENTROPY_FORWARD relocates logits/labels/loss fixed fields exactly");
+    const auto &adamw = std::get<AdamwUpdateOperands>(
+        artifact.cores[0].records[5].operands);
+    checks.Check(
+        adamw.weight.absolute_address_bytes == 0x1100 &&
+            adamw.gradient.absolute_address_bytes == 0x1200 &&
+            adamw.master_weight.absolute_address_bytes == 0x1300 &&
+            adamw.first_moment.absolute_address_bytes == 0x1400 &&
+            adamw.second_moment.absolute_address_bytes == 0x1500 &&
+            adamw.step_counter.absolute_address_bytes == 0x1600 &&
+            adamw.updated_weight.absolute_address_bytes == 0x1100 &&
+            adamw.updated_master_weight.absolute_address_bytes == 0x1300 &&
+            adamw.updated_first_moment.absolute_address_bytes == 0x1400 &&
+            adamw.updated_second_moment.absolute_address_bytes == 0x1500 &&
+            adamw.updated_step_counter.absolute_address_bytes == 0x1600,
+        "ADAMW_UPDATE relocates every state address and preserves aliases");
     const std::vector<uint8_t> relocated = EncodeProgramArtifact(artifact);
     checks.Check(
         EncodeProgramArtifact(DecodeProgramArtifact(relocated)) == relocated,

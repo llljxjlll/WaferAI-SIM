@@ -239,6 +239,36 @@ void ApplyRelocation(ExternalRecord &record,
             Fail("invalid SGD_UPDATE relocation operand_id");
         return;
     }
+    if (auto *value = std::get_if<AdamwUpdateOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "ADAMW_UPDATE address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->weight, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->gradient, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_MASTER_ADDRESS)
+            SetAddress(value->master_weight, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_FIRST_MOMENT_ADDRESS)
+            SetAddress(value->first_moment, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_SECOND_MOMENT_ADDRESS)
+            SetAddress(value->second_moment, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_STEP_ADDRESS)
+            SetAddress(value->step_counter, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->updated_weight, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_UPDATED_MASTER_ADDRESS)
+            SetAddress(value->updated_master_weight, relocation, symbol);
+        else if (operand ==
+                 SemanticOperandId::COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS)
+            SetAddress(value->updated_first_moment, relocation, symbol);
+        else if (operand ==
+                 SemanticOperandId::COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS)
+            SetAddress(value->updated_second_moment, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_UPDATED_STEP_ADDRESS)
+            SetAddress(value->updated_step_counter, relocation, symbol);
+        else
+            Fail("invalid ADAMW_UPDATE relocation operand_id");
+        return;
+    }
     if (auto *value = std::get_if<DteSendOperands>(&record.operands)) {
         if (value->source_space == EndpointSourceSpace::HBM) {
             if (operand != SemanticOperandId::HBM_ADDRESS)

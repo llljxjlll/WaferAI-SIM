@@ -47,6 +47,15 @@ def _record(
                 "updated_weight_address",
             ):
                 symbol = "symbol_weight_in_place"
+            if opcode is RecordOpcode.ADAMW_UPDATE:
+                aliases = {
+                    "updated_weight_address": "weight_address",
+                    "updated_master_weight_address": "master_weight_address",
+                    "updated_first_moment_address": "first_moment_address",
+                    "updated_second_moment_address": "second_moment_address",
+                    "updated_step_counter_address": "step_counter_address",
+                }
+                symbol = f"symbol_{aliases.get(spec.name, spec.name)}"
             operands.append(RecordOperand.address(spec.name, spec.operand_id, symbol))
         else:
             operands.append(RecordOperand.literal(spec.name, literals[spec.name]))
@@ -92,6 +101,23 @@ class LiteTrainBackendAbiTest(unittest.TestCase):
                 "element_count": 128,
                 "learning_rate_f64_bits": _bits(0.125),
                 "momentum_f64_bits": 0,
+            },
+        )
+        self.adamw = _record(
+            RecordOpcode.ADAMW_UPDATE,
+            {
+                "weight_datatype": 1,
+                "gradient_datatype": 3,
+                "state_datatype": 3,
+                "output_datatype": 1,
+                "rounding": 0,
+                "element_count": 128,
+                "step": 2,
+                "learning_rate_f64_bits": _bits(0.001),
+                "beta1_f64_bits": _bits(0.9),
+                "beta2_f64_bits": _bits(0.999),
+                "epsilon_f64_bits": _bits(1.0e-8),
+                "weight_decay_f64_bits": _bits(0.01),
             },
         )
 
@@ -219,6 +245,53 @@ class LiteTrainBackendAbiTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(SchemaError, "in-place"):
             replace(self.sgd, operands=tuple(operands)).validate("sgd")
+
+    def test_adamw_state_abi_and_hyperparameters_are_exact(self) -> None:
+        self.adamw.validate("adamw")
+        self.assertEqual(int(self.adamw.opcode), 0x21)
+        self.assertEqual(len(self.adamw.operands), 23)
+        self.assertEqual(
+            _address_operand_role(
+                self.adamw.opcode,
+                SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS,
+                "adamw",
+            ),
+            (BufferUseRole.COMP_INPUT, 4),
+        )
+        self.assertEqual(
+            _address_operand_role(
+                self.adamw.opcode,
+                SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS,
+                "adamw",
+            ),
+            (BufferUseRole.COMP_OUTPUT, 4),
+        )
+        for name, value in (
+            ("state_datatype", 1),
+            ("step", 0),
+            ("learning_rate_f64_bits", _bits(0.0)),
+            ("beta1_f64_bits", _bits(1.0)),
+            ("beta2_f64_bits", _bits(0.0)),
+            ("epsilon_f64_bits", _bits(float("inf"))),
+            ("weight_decay_f64_bits", _bits(-0.01)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(SchemaError):
+                    _tamper(self.adamw, name, value).validate("adamw")
+
+        operands = list(self.adamw.operands)
+        index = next(
+            i
+            for i, operand in enumerate(operands)
+            if operand.name == "updated_first_moment_address"
+        )
+        operands[index] = RecordOperand.address(
+            "updated_first_moment_address",
+            SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS,
+            "symbol_not_in_place",
+        )
+        with self.assertRaisesRegex(SchemaError, "in place"):
+            replace(self.adamw, operands=tuple(operands)).validate("adamw")
 
 
 if __name__ == "__main__":

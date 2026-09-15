@@ -195,6 +195,19 @@ bool ValidRelocationOperand(const ExternalRecord &record,
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
     }
+    if (std::holds_alternative<AdamwUpdateOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_MASTER_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_FIRST_MOMENT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_SECOND_MOMENT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_STEP_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_UPDATED_MASTER_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_UPDATED_STEP_ADDRESS;
+    }
     if (const auto *send = std::get_if<DteSendOperands>(&record.operands))
         return send->source_space == EndpointSourceSpace::HBM
                    ? id == SemanticOperandId::HBM_ADDRESS
