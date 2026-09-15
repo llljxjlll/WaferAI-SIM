@@ -10,7 +10,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
     compile_moe_full_model_inference_sequence,
 )
 from llm.frontend.wafer_frontend.schema.e2e_workload_graph import E2EOperationKind
-from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.artifact_manifest import (
+    LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION, RecordOpcode,
+)
 from llm.frontend.wafer_frontend.schema.common import stable_artifact_id
 from llm.frontend.wafer_frontend.schema.flexible_moe import MoeRectActionKind
 from llm.frontend.wafer_frontend.schema.moe_full_model_compile_sequence import (
@@ -215,6 +217,51 @@ class MoeFullModelCompileSequenceTest(unittest.TestCase):
             broken = replace(segment, executable_manifest=replace(manifest, core_streams=broken_streams))
             with self.assertRaisesRegex(RuntimeError, message):
                 prove_full_model_dataflow(broken, layer_units)
+
+    def test_missing_expert_projection_or_swiglu_fails_physical_work_oracle(self) -> None:
+        from llm.test.frontend.integration.run_moe_full_model_sequence_runtime_canary import (
+            prove_full_model_dataflow,
+        )
+        segment = self.sequence.segments[0]
+        manifest = segment.executable_manifest
+        unit_by_id = {item.id: item for item in self.sequence.moe_blocks.units}
+        units = tuple(unit_by_id[ref] for ref in segment.moe_unit_refs)
+        expert = next(action for action in units[0].plan.actions
+                      if action.kind is MoeRectActionKind.EXPERT_FORWARD and action.rank == 1)
+        expert_id = stable_artifact_id(
+            "moe_full_model_action",
+            {"source": manifest.source_global_dag_id, "layer": 0, "action": expert.id},
+            schema_version="wafer_frontend.moe_full_model_region_linker/v1alpha1",
+        )
+        fragments = {fragment.id: fragment for fragment in manifest.fragments}
+        core = next(item for item in manifest.core_streams if item.logical_core.die_id == 1)
+        expert_ids = {expert_id, *(stable_artifact_id(
+            "moe_full_model_action",
+            {"source": manifest.source_global_dag_id, "layer": 0, "action": stable_artifact_id(
+                "flexible_moe_expert_projection_action",
+                {"plan": units[0].plan.id, "expert": expert.id, "stage": stage},
+                schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
+            )}, schema_version="wafer_frontend.moe_full_model_region_linker/v1alpha1",
+        ) for stage in ("up", "swiglu", "down"))}
+        expert_refs = [ref for ref in core.records if ref.source_global_action_id in expert_ids]
+        projection_refs = [ref for ref in expert_refs if
+                           next(stream.records[ref.fragment_record_index]
+                                for stream in fragments[ref.fragment_id].core_streams
+                                if stream.logical_core == core.logical_core).opcode is RecordOpcode.MATMUL]
+        activation_ref = next(ref for ref in expert_refs if
+                              next(stream.records[ref.fragment_record_index]
+                                   for stream in fragments[ref.fragment_id].core_streams
+                                   if stream.logical_core == core.logical_core).opcode is RecordOpcode.SWIGLU)
+        self.assertEqual(len(projection_refs), 3)
+        for removed in (*projection_refs, activation_ref):
+            broken = replace(segment, executable_manifest=replace(
+                manifest, core_streams=tuple(replace(
+                    stream, records=tuple(ref for ref in stream.records if ref != removed)
+                ) if stream.logical_core == core.logical_core else stream
+                    for stream in manifest.core_streams),
+            ))
+            with self.assertRaisesRegex(RuntimeError, "expert lacks exact gate/up/down MATMUL and SwiGLU"):
+                prove_full_model_dataflow(broken, units)
 
     def test_canonical_artifact_round_trip_preserves_full_cover(self) -> None:
         rebuilt = loads_dataclass(

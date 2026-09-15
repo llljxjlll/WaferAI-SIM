@@ -12,7 +12,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
     compile_moe_full_model_inference_sequence,
 )
 from llm.frontend.wafer_frontend.passes.program_io import build_timing_program_io
-from llm.frontend.wafer_frontend.schema.artifact_manifest import ProgramSymbolKind, RecordOpcode
+from llm.frontend.wafer_frontend.schema.artifact_manifest import (
+    LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION, ProgramSymbolKind, RecordOpcode,
+)
 from llm.frontend.wafer_frontend.schema.common import stable_artifact_id
 from llm.frontend.wafer_frontend.schema.flexible_moe import MoeRectActionKind, MoeRectFlowStage
 from llm.frontend.wafer_frontend.schema.global_action import LogicalCoreRef
@@ -55,6 +57,11 @@ def prove_full_model_dataflow(segment, units) -> None:
     bindings = {
         (item.fragment_id, item.logical_core, item.fragment_record_index, item.operand_id): item
         for item in manifest.address_operand_bindings
+    }
+    relocations = {
+        (fragment.id, stream.logical_core, relocation.record_index, relocation.operand_id): relocation
+        for fragment in manifest.fragments for stream in fragment.core_streams
+        for relocation in stream.address_relocations
     }
     records = {}
     for core in manifest.core_streams:
@@ -123,11 +130,71 @@ def prove_full_model_dataflow(segment, units) -> None:
             if action.kind is not MoeRectActionKind.EXPERT_FORWARD:
                 continue
             core = LogicalCoreRef(action.rank, 0)
-            inbound, _ = endpoint(actions[action.id], core, RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_INPUT_ADDRESS)
-            outbound, _ = endpoint(actions[action.id], core, RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)
-            if (inbound.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.activation"
-                    or outbound.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.output"):
-                raise RuntimeError("MoE expert MATMUL does not consume dispatch SRAM and write combine SRAM")
+            m, h, intermediate = len(action.assignment_refs), unit.spec.hidden_size, unit.spec.intermediate_size
+            projection_ids = tuple(stable_artifact_id(
+                "moe_full_model_action",
+                {"source": source, "layer": layer, "action": stable_artifact_id(
+                    "flexible_moe_expert_projection_action",
+                    {"plan": unit.plan.id, "expert": action.id, "stage": stage},
+                    schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
+                )},
+                schema_version=_LINKER_SCHEMA,
+            ) for stage in ("up", "swiglu", "down"))
+            matmuls = tuple(record for physical_action_id in (
+                actions[action.id], projection_ids[0], projection_ids[2],
+            ) for record in records.get((physical_action_id, core, RecordOpcode.MATMUL), ()))
+            swiglus = records.get((projection_ids[1], core, RecordOpcode.SWIGLU), ())
+            if m == 0:
+                if action.flops != 0 or matmuls or swiglus:
+                    raise RuntimeError("empty expert rank emitted phantom expert compute")
+                continue
+            if len(matmuls) != 3 or len(swiglus) != 1:
+                raise RuntimeError("MoE expert lacks exact gate/up/down MATMUL and SwiGLU records")
+            matrix_bytes = 2 * h * intermediate
+            projection_bytes = 2 * m * intermediate
+            expert_flops = 0
+            def physical_operand(ref, operand_id):
+                key = (ref.fragment_id, core, ref.fragment_record_index, operand_id)
+                binding = bindings.get(key)
+                relocation = relocations.get(key)
+                if binding is None or relocation is None or len(binding.buffer_abi_ids) != 1:
+                    raise RuntimeError("MoE expert projection has no exact physical SRAM view")
+                return buffers[binding.buffer_abi_ids[0]], binding.tensor_slices[0], relocation.addend
+            for index, (ref, record) in enumerate(matmuls):
+                params = tuple(next(item.literal_value for item in record.operands if item.name == "parameters"))
+                expected = (1, m, h, intermediate) if index < 2 else (1, m, intermediate, h)
+                inbound, _, _ = physical_operand(ref, SemanticOperandId.COMPUTE_INPUT_ADDRESS)
+                weight, weight_view, weight_addend = physical_operand(ref, SemanticOperandId.COMPUTE_DATA_ADDRESS)
+                outbound, output_view, output_addend = physical_operand(ref, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)
+                source_suffix = "activation" if index < 2 else "expert_activated"
+                destination_suffix = "expert_gate_up" if index < 2 else "output"
+                weight_offset = index * matrix_bytes
+                destination_offset = projection_bytes if index == 1 else 0
+                destination_bytes = projection_bytes if index < 2 else 2 * m * h
+                expected_prefix = f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}."
+                if (params != expected or inbound.value_id != expected_prefix + source_suffix
+                        or outbound.value_id != expected_prefix + destination_suffix
+                        or not weight.value_id.startswith(expected_prefix + "state.")
+                        or weight.size_bytes != 3 * matrix_bytes
+                        or weight_addend != weight_offset
+                        or weight_view.offset != (weight_offset // 2,)
+                        or weight_view.shape != (matrix_bytes // 2,)
+                        or output_addend != destination_offset
+                        or output_view.offset != (destination_offset // 2,)
+                        or output_view.shape != (destination_bytes // 2,)):
+                    raise RuntimeError("MoE expert gate/up/down operation or 192B weight view disagrees with model")
+                expert_flops += 2 * params[0] * params[1] * params[2] * params[3]
+            ref, swiglu = swiglus[0]
+            concat, concat_view, _ = physical_operand(ref, SemanticOperandId.COMPUTE_INPUT_ADDRESS)
+            activated, activated_view, _ = physical_operand(ref, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)
+            swiglu_size = tuple(next(item.literal_value for item in swiglu.operands if item.name == "parameters"))
+            if (concat.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.expert_gate_up"
+                    or activated.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.expert_activated"
+                    or concat_view.shape != (2 * m * intermediate,)
+                    or activated_view.shape != (m * intermediate,)
+                    or swiglu_size != (m * intermediate,)
+                    or expert_flops != action.flops):
+                raise RuntimeError("MoE expert SwiGLU staging or complete physical FLOPs differ from P2")
         for role, dense_suffix, moe_suffix in (
             ("input", ".norm2_out", "activation"),
             ("output", ".down_out", "output"),
@@ -274,14 +341,15 @@ def build_full_model_program_io(segment, artifact_sha256: str) -> ProgramIoContr
             target=target, offset_bytes=0, length_bytes=abi.size_bytes,
             blob_ref=blob.id, purpose=ProgramIoPurpose.STATE,
         ))
-    # Timing primitives charge real expert MAC work but do not materialize
-    # FP16 output bytes.  Bootstrap only their owned output workspace so the
-    # subsequent physical COMBINE DTE_SEND can read concrete timing payload.
+    # Timing primitives charge real expert MAC and SwiGLU work but do not
+    # materialize FP16 output bytes.  Bootstrap all three expert staging
+    # buffers only as TIMING_PARTIAL to make downstream SRAM reads valid;
+    # this cannot demonstrate functional gate/up/down values.
     for abi in buffer_abis.values():
         if not (
             abi.ownership.value == "owned"
             and abi.value_id.startswith("moe_full_model.layer")
-            and abi.value_id.endswith(".output")
+            and abi.value_id.endswith((".output", ".expert_gate_up", ".expert_activated"))
         ):
             continue
         symbol_id, index, definition = labels[abi.storage_id]
@@ -352,7 +420,8 @@ def run(args: argparse.Namespace) -> None:
             if flow.stage in (MoeRectFlowStage.DISPATCH, MoeRectFlowStage.COMBINE)
         )
         expected_remote_experts += sum(
-            action.kind is MoeRectActionKind.EXPERT_FORWARD and action.rank == 1
+            3 if action.kind is MoeRectActionKind.EXPERT_FORWARD
+            and action.rank == 1 and action.assignment_refs else 0
             for unit in units for action in unit.plan.actions
         )
         path = output / f"segment_{index}.linked.json"
@@ -418,6 +487,7 @@ def run(args: argparse.Namespace) -> None:
     bridge_transfers = 2 * sum(len(segment.moe_unit_refs) for segment in sequence.segments)
     bridge_stats = re.search(r"\[DTE_STATS\] core=0 issued=(\d+) completed=(\d+) .*pending=(\d+) active=(\d+) inflight=(\d+)", stdout)
     expert_logs = len(re.findall(r"Core 16 start compute primitive Matmul_f\.", stdout))
+    expert_swiglus = len(re.findall(r"Core 16 start compute primitive swiglu_forward\.", stdout))
     memory_residual = re.findall(r"\[PROGRAM_MEMORY\] core=(\d+) .*lsu_residual=(\d+) dte_residual=(\d+)", stdout)
     drained = all(marker in stdout for marker in (
         "[P5 P2P DRAIN] core=0 residual=0",
@@ -435,6 +505,7 @@ def run(args: argparse.Namespace) -> None:
             or west is None or tuple(map(int, west.groups())) != (inward, inward)
             or bridge_stats is None or tuple(map(int, bridge_stats.groups())) != (bridge_transfers, bridge_transfers, 0, 0, 0)
             or expert_logs != expected_remote_experts
+            or expert_swiglus != expected_remote_experts // 3
             or memory_residual != [("0", "0", "0"), ("16", "0", "0")]
             or not drained
             or stdout.count("[SIM_RESULT]") != 1):

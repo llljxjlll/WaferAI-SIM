@@ -472,6 +472,40 @@ class FlexibleMoeProductionTest(unittest.TestCase):
                 expected[mode],
             )
 
+    def test_full_model_dataflow_empty_expert_keeps_state_without_phantom_compute(self) -> None:
+        spec, plan = _hot_case(1, 2)
+        artifacts = lower_link_flexible_moe_production(
+            plan, spec, full_model_dataflow=True,
+        )
+        expert_by_rank = {
+            action.rank: action
+            for action in plan.actions if action.kind is MoeRectActionKind.EXPERT_FORWARD
+        }
+        self.assertEqual(len(expert_by_rank[0].assignment_refs), 2)
+        self.assertEqual(expert_by_rank[1].flops, 0)
+        physical = {
+            rank: [record for fragment in artifacts.manifest.fragments
+                   for stream in fragment.core_streams
+                   if stream.logical_core.die_id == rank
+                   for record in stream.records]
+            for rank in (0, 1)
+        }
+        self.assertFalse(any(
+            record.source_global_action_id == expert_by_rank[1].id
+            and record.opcode in (RecordOpcode.MATMUL, RecordOpcode.SWIGLU)
+            for record in physical[1]
+        ))
+        self.assertEqual(sum(
+            record.opcode is RecordOpcode.MATMUL and
+            record.source_global_action_id == expert_by_rank[0].id
+            for record in physical[0]
+        ), 1)
+        self.assertTrue(any(
+            item.kind.value == "trainable_parameter" and item.die_id == 1
+            for fragment in artifacts.manifest.fragments
+            for item in fragment.state_abi
+        ))
+
     def test_release_physical_region_does_not_change_frozen_default(self) -> None:
         spec = build_round_robin_flexible_moe_spec(
             RectMeshSpec(1, 2), FlexibleMoeMode.INFERENCE,

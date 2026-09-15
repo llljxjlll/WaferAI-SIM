@@ -161,6 +161,8 @@ class FlexibleMoeProductionArtifacts:
                 MoeRectActionKind.GATE,
                 MoeRectActionKind.PACK,
                 MoeRectActionKind.WEIGHTED_COMBINE,
+                MoeRectActionKind.EXPERT_FORWARD,
+                MoeRectActionKind.EXPERT_FORWARD,
             ) and not action.assignment_refs
             and action.flops == 0 and action.logical_bytes == 0
         }
@@ -170,6 +172,14 @@ class FlexibleMoeProductionArtifacts:
             for action_id in fragment.claimed_action_ids
         }
         expected = action_ids - zero_work_source_actions if allow_zero_work_omission else action_ids
+        if allow_zero_work_omission and spec.mesh.rank_count > 1:
+            from .flexible_moe_multi_production import expert_projection_action_ids
+            expected |= {
+                child_id
+                for action in plan.actions
+                if action.kind is MoeRectActionKind.EXPERT_FORWARD and action.assignment_refs
+                for child_id in expert_projection_action_ids(plan.id, action.id)
+            }
         if claimed != expected:
             raise SchemaError("production fragments must cover exactly the required plan actions", path=f"{path}.fragments")
         if self.manifest.source_global_dag_id != plan.id:

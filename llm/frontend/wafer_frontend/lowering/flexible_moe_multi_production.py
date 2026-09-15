@@ -51,7 +51,7 @@ from ..schema.flexible_moe import (
     MoeRectFlowStage,
 )
 from ..schema.global_action import LogicalCoreRef
-from ..schema.ir2 import BufferOwnership
+from ..schema.ir2 import BufferOwnership, TensorSlice
 from ..schema.serde import canonical_digest, canonical_json
 from .flexible_moe_standard import plan_flexible_moe_standard_mapping
 from .flexible_moe_production import (
@@ -68,6 +68,15 @@ from .flexible_moe_production import (
     _state_abi,
     _symbol,
 )
+
+
+def expert_projection_action_ids(plan_id: str, expert_action_id: str) -> tuple[str, str, str]:
+    """Keep P2 EXPERT_FORWARD as gate; name the other physical stages exactly."""
+    return tuple(stable_artifact_id(
+        "flexible_moe_expert_projection_action",
+        {"plan": plan_id, "expert": expert_action_id, "stage": stage},
+        schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
+    ) for stage in ("up", "swiglu", "down"))
 
 
 _STATE_KINDS = (MoeRectActionKind.STATE_LOAD, MoeRectActionKind.STATE_STORE)
@@ -202,6 +211,10 @@ def lower_link_flexible_moe_multi(
         max_rank_tokens * spec.intermediate_size * 2,
         max_rank_tokens * spec.expert_count * 2,
     )
+    projection_concat_bytes = max(64, 4 * max_rank_tokens * spec.intermediate_size)
+    projection_activated_bytes = max(64, 2 * max_rank_tokens * spec.intermediate_size)
+    projection_concat_offset = _align(workspace_bytes)
+    projection_activated_offset = _align(projection_concat_offset + projection_concat_bytes)
     for rank, core in enumerate(cores):
         buffers.append(_buffer(
             name=f"rank{rank}.activation", core=core,
@@ -218,6 +231,19 @@ def lower_link_flexible_moe_multi(
             action_count=len(actions_by_core[core]),
             region_ref=_REGION_REF if release_region else _COMM_REGION_REF,
         ))
+        if full_model_dataflow:
+            for name, offset, size in (
+                ("expert_gate_up", projection_concat_offset, projection_concat_bytes),
+                ("expert_activated", projection_activated_offset, projection_activated_bytes),
+            ):
+                buffers.append(_buffer(
+                    name=f"rank{rank}.{name}", core=core,
+                    offset=offset + (_COMM_REGION_BASE_BYTES if release_region else 0),
+                    size_bytes=size, dtype=DType.FP16,
+                    ownership=BufferOwnership.OWNED,
+                    action_count=len(actions_by_core[core]),
+                    region_ref=_REGION_REF if release_region else _COMM_REGION_REF,
+                ))
         offset = activation_bytes
         for state in sorted(states_by_rank[rank], key=lambda item: item.id):
             offset = _align(offset)
@@ -232,6 +258,8 @@ def lower_link_flexible_moe_multi(
         if (
             _align(offset) > _REGION_SIZE_BYTES
             or _align(workspace_bytes) > _COMM_REGION_SIZE_BYTES
+            or (full_model_dataflow and
+                _align(projection_activated_offset + projection_activated_bytes) > _COMM_REGION_SIZE_BYTES)
         ):
             raise SchemaError("rank-local SRAM ABI exceeds the production region", path=f"rank[{rank}].buffers")
     buffers = tuple(sorted(buffers, key=lambda item: item.id))
@@ -260,6 +288,14 @@ def lower_link_flexible_moe_multi(
         rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".output"))
         for rank, core in enumerate(cores)
     }
+    projection_concat_by_rank = {
+        rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".expert_gate_up"))
+        for rank, core in enumerate(cores)
+    } if full_model_dataflow else {}
+    projection_activated_by_rank = {
+        rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".expert_activated"))
+        for rank, core in enumerate(cores)
+    } if full_model_dataflow else {}
     buffer_by_state = {
         state.id: next(
             item for item in buffers_by_core[core_by_rank[state.owner_rank]]
@@ -289,6 +325,8 @@ def lower_link_flexible_moe_multi(
     address_relocs = {role: {core: [] for core in cores} for role in ("state", "compute")}
     runtime_relocs = {role: {core: [] for core in cores} for role in ("state", "compute")}
     refs_by_action = defaultdict(list)
+    operand_views = {}
+    physical_children_by_action = {}
 
     def add_record(role, core, record, address=(), runtime=()):
         index = len(records[role][core])
@@ -300,6 +338,13 @@ def lower_link_flexible_moe_multi(
             )
         for field, symbol in runtime:
             runtime_relocs[role][core].append(RuntimeRelocation(index, field, symbol.id))
+
+    def view(role, core, operand_id, abi, offset_bytes, length_bytes):
+        if offset_bytes < 0 or length_bytes <= 0 or offset_bytes + length_bytes > abi.size_bytes:
+            raise SchemaError("expert projection view exceeds SRAM BufferABI", path="expert_projection")
+        operand_views[(role, core, len(records[role][core]), operand_id)] = TensorSlice(
+            abi.value_id, (offset_bytes // 2,), (length_bytes // 2,),
+        )
 
     def absolute(abi):
         return absolute_by_buffer[abi.id]
@@ -511,7 +556,7 @@ def lower_link_flexible_moe_multi(
             ),
         )
 
-    def add_bind(action, inputs, destination):
+    def add_bind(action, inputs, destination, *, source_action_id=None):
         operands = [RecordOperand.literal("input_count", len(inputs))]
         relocs = []
         for index in range(16):
@@ -525,7 +570,9 @@ def lower_link_flexible_moe_multi(
         label = label_by_buffer[destination.id]
         operands.append(RecordOperand.address("output_label", SemanticOperandId.SRAM_BIND_OUTPUT, label.id))
         relocs.append((SemanticOperandId.SRAM_BIND_OUTPUT, label, 0))
-        add_record("compute", core_by_rank[action.rank], RelocatableRecord(action.id, RecordOpcode.SRAM_BIND, tuple(operands)), tuple(relocs))
+        add_record("compute", core_by_rank[action.rank], RelocatableRecord(
+            action.id if source_action_id is None else source_action_id,
+            RecordOpcode.SRAM_BIND, tuple(operands)), tuple(relocs))
 
     for action in plan.actions:
         core = core_by_rank[action.rank]
@@ -542,6 +589,64 @@ def lower_link_flexible_moe_multi(
                 raise SchemaError("empty source action must declare zero logical work", path=f"actions[{action.id}]")
             # The P2 action/deps remain typed, while an empty source rank has
             # no gate rows, no activation to pack, and no result to combine.
+            continue
+        if full_model_dataflow and action.kind is MoeRectActionKind.EXPERT_FORWARD:
+            m = len(action.assignment_refs)
+            h, intermediate = spec.hidden_size, spec.intermediate_size
+            if action.flops != m * 6 * h * intermediate:
+                raise SchemaError("expert three-projection FLOPs disagree with P2", path=f"actions[{action.id}]")
+            if m == 0:
+                continue
+            weight = buffer_by_state[action.state_refs[0]]
+            weight_matrix_bytes = 2 * h * intermediate
+            if weight.size_bytes != 3 * weight_matrix_bytes:
+                raise SchemaError("expert gate/up/down tensor must contain all three FP16 matrices", path=f"actions[{action.id}]")
+            concat = projection_concat_by_rank[action.rank]
+            activated = projection_activated_by_rank[action.rank]
+            projection_bytes = 2 * m * intermediate
+            if concat.size_bytes < 2 * projection_bytes or activated.size_bytes < projection_bytes or output.size_bytes < 2 * m * h:
+                raise SchemaError("expert intermediate SRAM does not fit all three projections", path=f"actions[{action.id}]")
+            up_id, swiglu_id, down_id = expert_projection_action_ids(plan.id, action.id)
+            physical_children_by_action[action.id] = (up_id, swiglu_id, down_id)
+            for action_id, weight_offset, output_offset in (
+                (action.id, 0, 0), (up_id, weight_matrix_bytes, projection_bytes),
+            ):
+                add_bind(action, (activation,), concat, source_action_id=action_id)
+                view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS, weight, weight_offset, weight_matrix_bytes)
+                view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, concat, output_offset, projection_bytes)
+                add_record("compute", core, RelocatableRecord(action_id, RecordOpcode.MATMUL, (
+                    RecordOperand.literal("datatype", 1),
+                    RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activation).id),
+                    RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight).id),
+                    RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(concat).id),
+                    RecordOperand.literal("parameters", (1, m, h, intermediate)),
+                )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activation), 0),
+                     (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight), weight_offset),
+                     (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(concat), output_offset)))
+            add_bind(action, (concat,), activated, source_action_id=swiglu_id)
+            view("compute", core, SemanticOperandId.COMPUTE_INPUT_ADDRESS, concat, 0, 2 * projection_bytes)
+            view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, activated, 0, projection_bytes)
+            add_record("compute", core, RelocatableRecord(swiglu_id, RecordOpcode.SWIGLU, (
+                RecordOperand.literal("datatype", 1),
+                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(concat).id),
+                RecordOperand.literal("data_address", 0),
+                RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(activated).id),
+                RecordOperand.literal("parameters", (m * intermediate,)),
+            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(concat), 0),
+                 (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(activated), 0)))
+            add_bind(action, (activated,), output, source_action_id=down_id)
+            view("compute", core, SemanticOperandId.COMPUTE_INPUT_ADDRESS, activated, 0, projection_bytes)
+            view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS, weight, 2 * weight_matrix_bytes, weight_matrix_bytes)
+            view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output, 0, 2 * m * h)
+            add_record("compute", core, RelocatableRecord(down_id, RecordOpcode.MATMUL, (
+                RecordOperand.literal("datatype", 1),
+                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activated).id),
+                RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight).id),
+                RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(output).id),
+                RecordOperand.literal("parameters", (1, m, intermediate, h)),
+            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activated), 0),
+                 (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight), 2 * weight_matrix_bytes),
+                 (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(output), 0)))
             continue
         if action.kind is MoeRectActionKind.STATE_LOAD:
             state = state_by_ref.get(action.state_refs[0]) if action.state_refs else None
@@ -738,7 +843,12 @@ def lower_link_flexible_moe_multi(
                     abi = buffer_by_symbol[label_ref]
                 if abi is None:
                     raise SchemaError("address relocation has no rank-local BufferABI", path="fragments")
-                address_bindings.append(AddressOperandBinding(fragment.id, stream.logical_core, relocation.record_index, relocation.operand_id, (abi.id,), (abi.tensor_slice,)))
+                tensor_slice = operand_views.get(
+                    ("state" if fragment.id == state_fragment.id else "compute",
+                     stream.logical_core, relocation.record_index, relocation.operand_id),
+                    abi.tensor_slice,
+                )
+                address_bindings.append(AddressOperandBinding(fragment.id, stream.logical_core, relocation.record_index, relocation.operand_id, (abi.id,), (tensor_slice,)))
 
     definitions = [ProgramSymbolDefinition(
         shared_region, shared_region_name,
@@ -794,9 +904,10 @@ def lower_link_flexible_moe_multi(
     for core in cores:
         linked_refs = []
         for action in plan.actions:
-            for role, record_core, record_index in refs_by_action[action.id]:
-                if record_core == core:
-                    linked_refs.append(LinkedRecordRef(fragment_by_role[role].id, record_index, action.id))
+            for physical_action_id in (action.id, *physical_children_by_action.get(action.id, ())):
+                for role, record_core, record_index in refs_by_action[physical_action_id]:
+                    if record_core == core:
+                        linked_refs.append(LinkedRecordRef(fragment_by_role[role].id, record_index, physical_action_id))
         runtime_core_id = core.die_id * _P5_RUNTIME_CORES_PER_DIE
         linked_streams.append(LinkedCoreStream(core, runtime_core_id, tuple(linked_refs)))
 
@@ -846,4 +957,4 @@ def lower_link_flexible_moe_multi(
     return result
 
 
-__all__ = ["lower_link_flexible_moe_multi"]
+__all__ = ["expert_projection_action_ids", "lower_link_flexible_moe_multi"]
