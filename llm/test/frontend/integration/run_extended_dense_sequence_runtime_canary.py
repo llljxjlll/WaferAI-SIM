@@ -17,6 +17,7 @@ import re
 import resource
 import signal
 import subprocess
+import sys
 import time
 
 from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
@@ -383,6 +384,26 @@ def _seeds(profile) -> dict[str, bytes]:
     }
 
 
+def bound_frontend_sources() -> dict[str, str]:
+    """Bind the actual imported frontend/fixture Python bytes for this case."""
+    frontend_root = (_ROOT / "llm/frontend/wafer_frontend").resolve()
+    support = {
+        Path(__file__).resolve(),
+        (_ROOT / "llm/test/frontend/flexible_mesh_fixtures.py").resolve(),
+        (_ROOT / "llm/test/frontend/unit/_fixtures.py").resolve(),
+        (_ROOT / "llm/test/frontend/unit/test_legacy_dense_backend.py").resolve(),
+        (_ROOT / "llm/test/frontend/integration/flexible_mesh_release_hardware.py").resolve(),
+    }
+    paths = set(support)
+    for module in tuple(sys.modules.values()):
+        filename = getattr(module, "__file__", None)
+        if filename:
+            path = Path(filename).resolve()
+            if path.suffix == ".py" and path.is_relative_to(frontend_root):
+                paths.add(path)
+    return {str(path): _sha(path.read_bytes()) for path in sorted(paths)}
+
+
 def run(args: argparse.Namespace) -> dict[str, object]:
     rows, columns = _SHAPES[args.mesh_size]
     root = args.output.resolve()
@@ -397,6 +418,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             ("simulation", args.simulation),
         )
     }
+    frontend_sources = bound_frontend_sources()
+    (root / "frontend_source_binding.json").write_text(
+        json.dumps({
+            "file_count": len(frontend_sources),
+            "files": frontend_sources,
+            "sha256": _sha(canonical_json(frontend_sources).encode("utf-8")),
+        }, indent=2, sort_keys=True), encoding="utf-8",
+    )
     materialize_started = time.monotonic()
     manifest, template, fabric, spaces = build_case(rows, columns)
     materialize_wall = round(time.monotonic() - materialize_started, 3)
@@ -417,6 +446,27 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "tool_binding_sha256": tool_binding,
             "physical_hbm": physical_hbm,
             "dram_resources": dram_resources,
+            "runtime_status": "not_measured",
+        }, indent=2, sort_keys=True), encoding="utf-8",
+    )
+    codec_preflight = _stage(
+        (str(args.resolver.resolve()), "--multi-request-attention-preflight"),
+        root / "resolver_codec_preflight.stdout.txt",
+        cwd=args.resolver.resolve().parent, timeout=min(args.timeout, 60),
+    )
+    if (
+        "[PROGRAM_IO_CODEC_PREFLIGHT] "
+        "multi_request_prefill=1 unequal_context_rejected=1"
+        not in (root / "resolver_codec_preflight.stdout.txt").read_text(
+            encoding="utf-8",
+        )
+    ):
+        raise RuntimeError("resolver binary lacks multi-request attention codec")
+    (root / "resolver_codec_preflight.json").write_text(
+        json.dumps({
+            "codec": "real_16_requests_x_1_context_plus_unequal_negative",
+            "resolver_sha256": tool_binding["resolver"],
+            "stage": codec_preflight,
             "runtime_status": "not_measured",
         }, indent=2, sort_keys=True), encoding="utf-8",
     )
@@ -446,7 +496,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old_handler)
-    sequence.validate()
+    if any(_sha(Path(path).read_bytes()) != sha
+           for path, sha in frontend_sources.items()):
+        raise RuntimeError("bound Dense frontend source bytes changed during compile")
+    sequence_digest = sequence.digest
     compile_wall = round(time.monotonic() - compile_started, 3)
     common = root / "compiled"
     common.mkdir(exist_ok=True)
@@ -472,7 +525,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "attention_heads": 16, "kv_heads": 16, "head_dim": 2,
             "prefill_per_request": 1, "requests": 16, "decode_steps": 2,
         },
-        "sequence_digest": sequence.digest,
+        "sequence_digest": sequence_digest,
         "case_id": manifest.request.case_id,
         "request_digest": manifest.request.digest,
         "tool_binding_sha256": tool_binding,
@@ -507,7 +560,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "physical_hbm": physical_hbm,
             "dram_resources": dram_resources,
             "active_dies": evidence["active_dies"],
-            "sequence_digest": sequence.digest,
+            "sequence_digest": sequence_digest,
             "materialize_wall_seconds": materialize_wall,
             "compile_wall_seconds": compile_wall,
             "frontend_peak_rss_kib": evidence["frontend_peak_rss_kib"],
@@ -515,6 +568,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         }, indent=2, sort_keys=True), encoding="utf-8",
     )
     def verify_tool_binding() -> None:
+        if any(_sha(Path(path).read_bytes()) != sha
+               for path, sha in frontend_sources.items()):
+            raise RuntimeError("bound Dense frontend source bytes changed during case")
         for kind, path in (
             ("finalizer", args.finalizer),
             ("resolver", args.resolver),

@@ -6,6 +6,7 @@
 #include "memory/hbm_address_map.h"
 #include "memory/hbm_runtime.h"
 #include "isa/program_format.h"
+#include "isa/record_codec.h"
 #include "memory/sram/sram_region.h"
 #include "memory/sram/sram_storage.h"
 #include "nlohmann/json.hpp"
@@ -732,6 +733,43 @@ void TestSequenceSegmentPreservesHbm() {
             std::vector<uint8_t>({1, 2, 3, 4}),
         "filling a missing sequence range changed existing HBM bytes");
 }
+int RunMultiRequestAttentionPreflight() {
+    // Validate the codec in this *binary*: the linked program stores total
+    // query tokens while context_max is the per-request context length.
+    ExternalRecord record;
+    record.opcode = Opcode::ATTENTION_EXACT;
+    AttentionExactOperands attention;
+    attention.input.kind = SramAddressKind::ABSOLUTE;
+    attention.output.kind = SramAddressKind::ABSOLUTE;
+    attention.query_tokens = 16;
+    attention.tp_degree = 16;
+    attention.num_heads = 16;
+    attention.num_kv_heads = 16;
+    attention.rank_num_heads = 1;
+    attention.rank_num_kv_heads = 1;
+    attention.head_dim = 2;
+    attention.context_sum = 16;
+    attention.context_max = 1;
+    attention.query_key_pairs = 16;
+    attention.rank_kv_write_bytes = 128;
+    record.operands = attention;
+    const auto encoded = EncodeExternalRecord(record);
+    const auto decoded = DecodeExternalRecord(encoded, 0);
+    const auto &observed =
+        std::get<AttentionExactOperands>(decoded.record.operands);
+    Require(decoded.next_offset == encoded.size() &&
+                observed.mode == ExactAttentionMode::PREFILL &&
+                observed.query_tokens == 16 && observed.context_max == 1,
+            "multi-request prefill codec roundtrip failed");
+    attention.context_max = 3;
+    record.operands = attention;
+    ExpectFailure([&] { (void)EncodeExternalRecord(record); },
+                  "unequal multi-request prefill context");
+    std::cout << "[PROGRAM_IO_CODEC_PREFLIGHT] "
+                 "multi_request_prefill=1 unequal_context_rejected=1\n";
+    return 0;
+}
+
 int RunSelftest() {
     TestStrictParser();
     TestTaggedTargets();
@@ -750,6 +788,9 @@ int RunSelftest() {
 int sc_main(int argc, char **argv) {
     try {
         if (argc == 1) return RunSelftest();
+        if (argc == 2 &&
+            std::string(argv[1]) == "--multi-request-attention-preflight")
+            return RunMultiRequestAttentionPreflight();
         if (argc == 4 && std::string(argv[1]) == "--finalize") {
             const std::string manifest = ReadText(argv[2]);
             WriteBytes(argv[3],
@@ -769,7 +810,8 @@ int sc_main(int argc, char **argv) {
             return 0;
         }
         std::cerr << "usage: " << argv[0]
-                  << " [--finalize MANIFEST ARTIFACT | "
+                  << " [--multi-request-attention-preflight | "
+                     "--finalize MANIFEST ARTIFACT | "
                      "--resolve MANIFEST ARTIFACT SIDECAR]\n";
         return 2;
     } catch (const std::exception &error) {

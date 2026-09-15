@@ -8,11 +8,13 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from .run_extended_dense_sequence_runtime_canary import (
     _KV_BYTES,
     _ROOT,
     bind_dram_resources,
+    bound_frontend_sources,
     build_case,
     extended_hardware,
     observe_runtime,
@@ -152,6 +154,47 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
             self.assertEqual(public, private)
             private.validate_against(segment.linked_manifest)
             self.assertEqual(private.program_artifact_sha256, _DIGEST)
+
+    def test_multi_request_codec_gate_rejects_stale_resolver_before_compile(self) -> None:
+        build = _ROOT / "build-debug-final"
+        tools = (
+            build / "npusim_program_finalizer",
+            build / "npusim_program_io_selftest",
+            build / "npusim",
+        )
+        if not all(path.is_file() for path in tools):
+            self.skipTest("requires production binaries for physical HBM preflight")
+        with tempfile.TemporaryDirectory(prefix="old-resolver-gate-") as raw:
+            args = argparse.Namespace(
+                mesh_size="1x16", output=Path(raw), finalizer=tools[0],
+                resolver=tools[1], npusim=tools[2],
+                simulation=_ROOT / "llm/test/program/p5_behavioral_simulation.json",
+                timeout=900, compile_timeout=2400, program_io_timeout=900,
+            )
+            def stale_cli(_command, stdout, **_kw):
+                stdout.write_text("usage: old resolver has no codec handshake")
+                return {"exit_code": 0}
+            with mock.patch(
+                "llm.test.frontend.integration."
+                "run_extended_dense_sequence_runtime_canary._stage",
+                side_effect=stale_cli,
+            ), mock.patch(
+                "llm.test.frontend.integration."
+                "run_extended_dense_sequence_runtime_canary."
+                "compile_dense_e2e_sequence_runtime_profiles",
+            ) as compiler:
+                with self.assertRaisesRegex(
+                    RuntimeError, "resolver binary lacks multi-request attention codec",
+                ):
+                    run(args)
+                compiler.assert_not_called()
+            preflight = json.loads((Path(raw) / "preflight.json").read_text())
+            self.assertEqual(preflight["runtime_status"], "not_measured")
+            source = json.loads(
+                (Path(raw) / "frontend_source_binding.json").read_text()
+            )
+            self.assertGreater(source["file_count"], 100)
+            self.assertEqual(source["files"], bound_frontend_sources())
 
     def test_complete_runtime_observation(self) -> None:
         observed = observe_runtime(_valid_runtime_output())
