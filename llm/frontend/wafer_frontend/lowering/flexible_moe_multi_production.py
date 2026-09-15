@@ -50,6 +50,7 @@ from ..schema.flexible_moe import (
     FlexibleMoeSpec,
     MoeRectActionKind,
     MoeRectFlowStage,
+    MoeRectStateRole,
 )
 from ..schema.global_action import LogicalCoreRef
 from ..schema.ir2 import BufferOwnership, TensorSlice
@@ -78,6 +79,32 @@ def expert_projection_action_ids(plan_id: str, expert_action_id: str) -> tuple[s
         {"plan": plan_id, "expert": expert_action_id, "stage": stage},
         schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
     ) for stage in ("up", "swiglu", "down"))
+
+
+def expert_wgrad_action_ids(plan_id: str, source_action_id: str) -> tuple[str, ...]:
+    """Physically name three gradient GEMMs and their FP32 storage casts."""
+    return tuple(stable_artifact_id(
+        "flexible_moe_expert_wgrad_stage",
+        {"plan": plan_id, "wgrad": source_action_id, "stage": stage},
+        schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
+    ) for stage in ("up", "down", "cast_gate", "cast_up", "cast_down"))
+
+
+def gate_wgrad_cast_action_id(plan_id: str, source_action_id: str) -> str:
+    return stable_artifact_id(
+        "flexible_moe_gate_wgrad_cast_action",
+        {"plan": plan_id, "wgrad": source_action_id},
+        schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
+    )
+
+
+def expert_dgrad_action_ids(plan_id: str, source_action_id: str) -> tuple[str, ...]:
+    """Name the native backward SwiGLU and two projection/dX join stages."""
+    return tuple(stable_artifact_id(
+        "flexible_moe_expert_dgrad_stage",
+        {"plan": plan_id, "dgrad": source_action_id, "stage": stage},
+        schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
+    ) for stage in ("swiglu_backward", "gate", "up", "sum_dx"))
 
 
 _STATE_KINDS = (MoeRectActionKind.STATE_LOAD, MoeRectActionKind.STATE_STORE)
@@ -216,6 +243,24 @@ def lower_link_flexible_moe_multi(
     projection_activated_bytes = max(64, 2 * max_rank_tokens * spec.intermediate_size)
     projection_concat_offset = _align(workspace_bytes)
     projection_activated_offset = _align(projection_concat_offset + projection_concat_bytes)
+    wgrad_stage_offset = _align(projection_activated_offset + projection_activated_bytes)
+    wgrad_stage_bytes = max(64, 6 * spec.hidden_size * spec.intermediate_size)
+    gate_wgrad_stage_offset = _align(wgrad_stage_offset + wgrad_stage_bytes)
+    gate_wgrad_stage_bytes = max(64, 2 * spec.hidden_size * spec.expert_count)
+    gate_reduce_offset = _align(gate_wgrad_stage_offset + gate_wgrad_stage_bytes)
+    gate_gradient_bytes = 4 * spec.hidden_size * spec.expert_count
+    children_by_rank = {
+        rank: tuple(child for child in (2 * rank + 1, 2 * rank + 2)
+                    if child < rank_count)
+        for rank in range(rank_count)
+    }
+    gate_reduce_region_bytes = max(64, 3 * gate_gradient_bytes)
+    dgrad_activated_offset = _align(gate_reduce_offset + gate_reduce_region_bytes)
+    dgrad_activated_bytes = max(64, 2 * max_rank_tokens * spec.intermediate_size)
+    dgrad_gate_up_offset = _align(dgrad_activated_offset + dgrad_activated_bytes)
+    dgrad_gate_up_bytes = max(64, 4 * max_rank_tokens * spec.intermediate_size)
+    dgrad_dx_parts_offset = _align(dgrad_gate_up_offset + dgrad_gate_up_bytes)
+    dgrad_dx_parts_bytes = max(64, 4 * max_rank_tokens * spec.hidden_size)
     strict_training = full_model_dataflow and spec.mode is FlexibleMoeMode.TRAIN
     empty_source_kinds = (
         MoeRectActionKind.GATE,
@@ -244,14 +289,29 @@ def lower_link_flexible_moe_multi(
             region_ref=_REGION_REF if release_region else _COMM_REGION_REF,
         ))
         if full_model_dataflow:
-            for name, offset, size in (
+            stage_buffers = (
                 ("expert_gate_up", projection_concat_offset, projection_concat_bytes),
                 ("expert_activated", projection_activated_offset, projection_activated_bytes),
-            ):
+            )
+            if strict_training and expert_tokens[rank]:
+                stage_buffers += (("expert_wgrad_stage", wgrad_stage_offset, wgrad_stage_bytes),)
+            if strict_training and source_tokens[rank]:
+                stage_buffers += (("gate_wgrad_stage", gate_wgrad_stage_offset, gate_wgrad_stage_bytes),)
+            if strict_training and children_by_rank[rank]:
+                stage_buffers += (("gate_reduce_inputs", gate_reduce_offset,
+                                   gate_reduce_region_bytes),)
+            if strict_training and expert_tokens[rank]:
+                stage_buffers += (
+                    ("dgrad_activated", dgrad_activated_offset, dgrad_activated_bytes),
+                    ("dgrad_gate_up", dgrad_gate_up_offset, dgrad_gate_up_bytes),
+                    ("dgrad_dx_parts", dgrad_dx_parts_offset, dgrad_dx_parts_bytes),
+                )
+            for name, offset, size in stage_buffers:
                 buffers.append(_buffer(
                     name=f"rank{rank}.{name}", core=core,
                     offset=offset + (_COMM_REGION_BASE_BYTES if release_region else 0),
-                    size_bytes=size, dtype=DType.FP16,
+                    size_bytes=size,
+                    dtype=DType.FP32 if name == "gate_reduce_inputs" else DType.FP16,
                     ownership=BufferOwnership.OWNED,
                     action_count=len(actions_by_core[core]),
                     region_ref=_REGION_REF if release_region else _COMM_REGION_REF,
@@ -281,7 +341,8 @@ def lower_link_flexible_moe_multi(
             _align(offset) > _REGION_SIZE_BYTES
             or _align(workspace_bytes) > _COMM_REGION_SIZE_BYTES
             or (full_model_dataflow and
-                _align(projection_activated_offset + projection_activated_bytes) > _COMM_REGION_SIZE_BYTES)
+                _align((dgrad_dx_parts_offset + dgrad_dx_parts_bytes) if strict_training
+                       else (projection_activated_offset + projection_activated_bytes)) > _COMM_REGION_SIZE_BYTES)
         ):
             raise SchemaError("rank-local SRAM ABI exceeds the production region", path=f"rank[{rank}].buffers")
     buffers = tuple(sorted(buffers, key=lambda item: item.id))
@@ -322,6 +383,31 @@ def lower_link_flexible_moe_multi(
         rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".backward_gradient"))
         for rank, core in enumerate(cores)
     } if strict_training else {}
+    wgrad_stage_by_rank = {
+        rank: next(item for item in buffers_by_core[core]
+                   if item.value_id.endswith(".expert_wgrad_stage"))
+        for rank, core in enumerate(cores)
+        if expert_tokens[rank]
+    } if strict_training else {}
+    gate_wgrad_stage_by_rank = {
+        rank: next(item for item in buffers_by_core[core]
+                   if item.value_id.endswith(".gate_wgrad_stage"))
+        for rank, core in enumerate(cores)
+        if source_tokens[rank]
+    } if strict_training else {}
+    gate_reduce_by_rank = {
+        rank: next(item for item in buffers_by_core[core]
+                   if item.value_id.endswith(".gate_reduce_inputs"))
+        for rank, core in enumerate(cores)
+        if children_by_rank[rank]
+    } if strict_training else {}
+    dgrad_scratch_by_rank = {
+        rank: tuple(next(item for item in buffers_by_core[core]
+                         if item.value_id.endswith(f".{name}"))
+                    for name in ("dgrad_activated", "dgrad_gate_up", "dgrad_dx_parts"))
+        for rank, core in enumerate(cores)
+        if expert_tokens[rank]
+    } if strict_training else {}
     buffer_by_state = {
         state.id: next(
             item for item in buffers_by_core[core_by_rank[state.owner_rank]]
@@ -329,6 +415,11 @@ def lower_link_flexible_moe_multi(
         )
         for state in plan.state_bindings
     }
+    gate_gradient_by_rank = {
+        rank: buffer_by_state[next(state.id for state in states_by_rank[rank]
+                                   if state.role is MoeRectStateRole.GATE_GRADIENT)]
+        for rank in range(rank_count)
+    } if strict_training else {}
 
     shared_region = _symbol(ProgramSymbolKind.SRAM_REGION, _REGION_REF, "region")
     comm_region = (
@@ -368,8 +459,11 @@ def lower_link_flexible_moe_multi(
     def view(role, core, operand_id, abi, offset_bytes, length_bytes):
         if offset_bytes < 0 or length_bytes <= 0 or offset_bytes + length_bytes > abi.size_bytes:
             raise SchemaError("expert projection view exceeds SRAM BufferABI", path="expert_projection")
+        element_bytes = 4 if abi.dtype is DType.FP32 else 2
+        if offset_bytes % element_bytes or length_bytes % element_bytes:
+            raise SchemaError("projection view is not aligned to buffer dtype", path="expert_projection")
         operand_views[(role, core, len(records[role][core]), operand_id)] = TensorSlice(
-            abi.value_id, (offset_bytes // 2,), (length_bytes // 2,),
+            abi.value_id, (offset_bytes // element_bytes,), (length_bytes // element_bytes,),
         )
 
     def absolute(abi):
@@ -670,6 +764,208 @@ def lower_link_flexible_moe_multi(
                  (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight), 2 * weight_matrix_bytes),
                  (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(output), 0)))
             continue
+        if strict_training and action.kind is MoeRectActionKind.EXPERT_DGRAD:
+            m, h, intermediate = len(action.assignment_refs), spec.hidden_size, spec.intermediate_size
+            if action.flops != m * 6 * h * intermediate:
+                raise SchemaError("expert three-projection DGRAD FLOPs disagree with P2", path=action.id)
+            if m == 0:
+                continue
+            weight_ref = next(ref for ref in action.state_refs
+                              if next(state for state in plan.state_bindings if state.id == ref).role
+                              is MoeRectStateRole.EXPERT_PARAMETER)
+            weight = buffer_by_state[weight_ref]
+            weight_matrix_bytes = 2 * h * intermediate
+            if weight.size_bytes != 3 * weight_matrix_bytes:
+                raise SchemaError("DGRAD must read every forward expert weight projection", path=action.id)
+            activated_grad, gate_up_grad, dx_parts = dgrad_scratch_by_rank[action.rank]
+            forward_concat = projection_concat_by_rank[action.rank]
+            upstream = backward_by_rank[action.rank]
+            upstream_bytes, intermediate_bytes = 2 * m * h, 2 * m * intermediate
+            if (activated_grad.size_bytes < intermediate_bytes
+                    or gate_up_grad.size_bytes < 2 * intermediate_bytes
+                    or dx_parts.size_bytes < 2 * upstream_bytes
+                    or output.size_bytes < upstream_bytes):
+                raise SchemaError("expert backward SRAM stages do not fit P2 assignment", path=action.id)
+            swiglu_id, gate_id, up_id, sum_id = expert_dgrad_action_ids(plan.id, action.id)
+            physical_children_by_action[action.id] = (swiglu_id, gate_id, up_id, sum_id)
+            # dY (m×H) × Wdown (H×I) -> dActivated (m×I).
+            add_bind(action, (upstream,), activated_grad)
+            view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                 weight, 2 * weight_matrix_bytes, weight_matrix_bytes)
+            view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                 activated_grad, 0, intermediate_bytes)
+            add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.MATMUL, (
+                RecordOperand.literal("datatype", 1),
+                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(upstream).id),
+                RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight).id),
+                RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(activated_grad).id),
+                RecordOperand.literal("parameters", (1, m, h, intermediate)),
+            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(upstream), 0),
+                 (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight), 2 * weight_matrix_bytes),
+                 (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(activated_grad), 0)))
+            # Distinct derivative primitive: gate/up forward values and
+            # upstream dActivated feed physical gate/up gradients, SFU/vec>0.
+            add_bind(action, (forward_concat,), gate_up_grad, source_action_id=swiglu_id)
+            view("compute", core, SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                 forward_concat, 0, 2 * intermediate_bytes)
+            view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                 activated_grad, 0, intermediate_bytes)
+            view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                 gate_up_grad, 0, 2 * intermediate_bytes)
+            add_record("compute", core, RelocatableRecord(swiglu_id,
+                                                          RecordOpcode.SWIGLU_BACKWARD_TIMING, (
+                RecordOperand.literal("datatype", 1),
+                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(forward_concat).id),
+                RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(activated_grad).id),
+                RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(gate_up_grad).id),
+                RecordOperand.literal("parameters", (m * intermediate,)),
+            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(forward_concat), 0),
+                 (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(activated_grad), 0),
+                 (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(gate_up_grad), 0)))
+            # The two H×I gate/up transpose projections each charge 2mHI
+            # FLOPs; their disjoint dX halves are joined by actual FP16 sum.
+            for projection_index, projection_id in enumerate((gate_id, up_id)):
+                add_bind(action, (gate_up_grad,), dx_parts,
+                         source_action_id=projection_id)
+                view("compute", core, SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                     gate_up_grad, projection_index * intermediate_bytes,
+                     intermediate_bytes)
+                view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                     weight, projection_index * weight_matrix_bytes,
+                     weight_matrix_bytes)
+                view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                     dx_parts, projection_index * upstream_bytes,
+                     upstream_bytes)
+                add_record("compute", core, RelocatableRecord(projection_id,
+                                                              RecordOpcode.MATMUL, (
+                    RecordOperand.literal("datatype", 1),
+                    RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(gate_up_grad).id),
+                    RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight).id),
+                    RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(dx_parts).id),
+                    RecordOperand.literal("parameters", (1, m, intermediate, h)),
+                )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(gate_up_grad),
+                       projection_index * intermediate_bytes),
+                     (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(weight),
+                      projection_index * weight_matrix_bytes),
+                     (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(dx_parts),
+                      projection_index * upstream_bytes)))
+            view("compute", core, SemanticOperandId.SOURCE_ADDRESS,
+                 dx_parts, 0, 2 * upstream_bytes)
+            view("compute", core, SemanticOperandId.DESTINATION_ADDRESS,
+                 output, 0, upstream_bytes)
+            add_record("compute", core, RelocatableRecord(sum_id, RecordOpcode.LOCAL_REDUCE, (
+                RecordOperand.literal("input_dtype", 0),
+                RecordOperand.literal("accumulator_dtype", 1),
+                RecordOperand.literal("output_dtype", 0),
+                RecordOperand.literal("reduce_op", 1),
+                RecordOperand.literal("rounding", 0),
+                RecordOperand.literal("order", 0),
+                RecordOperand.literal("input_count", 2),
+                RecordOperand.literal("element_count", m * h),
+                RecordOperand.literal("input_stride_bytes", upstream_bytes),
+                RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(dx_parts).id),
+                RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, absolute(output).id),
+            )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(dx_parts), 0),
+                 (SemanticOperandId.DESTINATION_ADDRESS, absolute(output), 0)))
+            continue
+        if strict_training and action.kind is MoeRectActionKind.EXPERT_WGRAD:
+            m, h, intermediate = len(action.assignment_refs), spec.hidden_size, spec.intermediate_size
+            if action.flops != m * 6 * h * intermediate:
+                raise SchemaError("expert three-projection WGRAD FLOPs disagree with P2", path=f"actions[{action.id}]")
+            if m == 0:
+                continue
+            gradient_ref = next(ref for ref in action.state_refs
+                                if next(state for state in plan.state_bindings if state.id == ref).role
+                                is MoeRectStateRole.EXPERT_GRADIENT)
+            gradient = buffer_by_state[gradient_ref]
+            stage = wgrad_stage_by_rank[action.rank]
+            matrix_fp16 = 2 * h * intermediate
+            matrix_fp32 = 4 * h * intermediate
+            if gradient.dtype is not DType.FP32 or gradient.size_bytes != 3 * matrix_fp32 or stage.size_bytes < 3 * matrix_fp16:
+                raise SchemaError("expert WGRAD needs exactly three FP32 weight gradient matrices", path=f"actions[{action.id}]")
+            up_id, down_id, cast_gate, cast_up, cast_down = expert_wgrad_action_ids(plan.id, action.id)
+            children = (up_id, down_id, cast_gate, cast_up, cast_down)
+            physical_children_by_action[action.id] = children
+            for projection_index, gemm_id, cast_id in zip(range(3), (action.id, up_id, down_id), (cast_gate, cast_up, cast_down)):
+                input_abi = activation if projection_index != 2 else projection_activated_by_rank[action.rank]
+                data_abi = backward_by_rank[action.rank]
+                stage_offset = projection_index * matrix_fp16
+                gradient_offset = projection_index * matrix_fp32
+                params = ((1, h, m, intermediate) if projection_index != 2
+                          else (1, intermediate, m, h))
+                add_bind(action, (input_abi,), stage, source_action_id=gemm_id)
+                view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, stage, stage_offset, matrix_fp16)
+                add_record("compute", core, RelocatableRecord(gemm_id, RecordOpcode.MATMUL, (
+                    RecordOperand.literal("datatype", 1),
+                    RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(input_abi).id),
+                    RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data_abi).id),
+                    RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(stage).id),
+                    RecordOperand.literal("parameters", params),
+                )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(input_abi), 0),
+                     (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data_abi), 0),
+                     (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(stage), stage_offset)))
+                view("compute", core, SemanticOperandId.SOURCE_ADDRESS, stage, stage_offset, matrix_fp16)
+                view("compute", core, SemanticOperandId.DESTINATION_ADDRESS, gradient, gradient_offset, matrix_fp32)
+                add_record("compute", core, RelocatableRecord(cast_id, RecordOpcode.LOCAL_REDUCE, (
+                    RecordOperand.literal("input_dtype", 0),
+                    RecordOperand.literal("accumulator_dtype", 1),
+                    RecordOperand.literal("output_dtype", 1),
+                    RecordOperand.literal("reduce_op", 1),
+                    RecordOperand.literal("rounding", 0),
+                    RecordOperand.literal("order", 0),
+                    RecordOperand.literal("input_count", 1),
+                    RecordOperand.literal("element_count", h * intermediate),
+                    RecordOperand.literal("input_stride_bytes", matrix_fp16),
+                    RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(stage).id),
+                    RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, absolute(gradient).id),
+                )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(stage), stage_offset),
+                     (SemanticOperandId.DESTINATION_ADDRESS, absolute(gradient), gradient_offset)))
+            continue
+        if strict_training and action.kind is MoeRectActionKind.GATE_WGRAD:
+            m, h, e = len(action.assignment_refs), spec.hidden_size, spec.expert_count
+            if action.flops != m * 2 * h * e:
+                raise SchemaError("gate WGRAD FLOPs disagree with P2", path=f"actions[{action.id}]")
+            if m == 0:
+                continue
+            gradient_ref = next(ref for ref in action.state_refs
+                                if next(state for state in plan.state_bindings if state.id == ref).role
+                                is MoeRectStateRole.GATE_GRADIENT)
+            gradient = buffer_by_state[gradient_ref]
+            stage = gate_wgrad_stage_by_rank[action.rank]
+            local_destination = gate_reduce_by_rank.get(action.rank, gradient)
+            stage_bytes, gradient_bytes = 2 * h * e, 4 * h * e
+            if gradient.dtype is not DType.FP32 or gradient.size_bytes != gradient_bytes or stage.size_bytes < stage_bytes:
+                raise SchemaError("gate WGRAD needs one full FP32 gradient matrix", path=f"actions[{action.id}]")
+            cast_id = gate_wgrad_cast_action_id(plan.id, action.id)
+            physical_children_by_action[action.id] = (cast_id,)
+            add_bind(action, (activation,), stage)
+            view("compute", core, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, stage, 0, stage_bytes)
+            add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.MATMUL, (
+                RecordOperand.literal("datatype", 1),
+                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activation).id),
+                RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(backward_by_rank[action.rank]).id),
+                RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(stage).id),
+                RecordOperand.literal("parameters", (1, h, m, e)),
+            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activation), 0),
+                 (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(backward_by_rank[action.rank]), 0),
+                 (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(stage), 0)))
+            view("compute", core, SemanticOperandId.SOURCE_ADDRESS, stage, 0, stage_bytes)
+            view("compute", core, SemanticOperandId.DESTINATION_ADDRESS, local_destination, 0, gradient_bytes)
+            add_record("compute", core, RelocatableRecord(cast_id, RecordOpcode.LOCAL_REDUCE, (
+                RecordOperand.literal("input_dtype", 0),
+                RecordOperand.literal("accumulator_dtype", 1),
+                RecordOperand.literal("output_dtype", 1),
+                RecordOperand.literal("reduce_op", 1),
+                RecordOperand.literal("rounding", 0),
+                RecordOperand.literal("order", 0),
+                RecordOperand.literal("input_count", 1),
+                RecordOperand.literal("element_count", h * e),
+                RecordOperand.literal("input_stride_bytes", stage_bytes),
+                RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(stage).id),
+                RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, absolute(local_destination).id),
+            )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(stage), 0),
+                 (SemanticOperandId.DESTINATION_ADDRESS, absolute(local_destination), 0)))
+            continue
         if action.kind is MoeRectActionKind.STATE_LOAD:
             state = state_by_ref.get(action.state_refs[0]) if action.state_refs else None
             if state is None:
@@ -712,6 +1008,8 @@ def lower_link_flexible_moe_multi(
                     source_abi = output_by_rank[flow.source_rank]
                 elif strict_training and flow.stage is MoeRectFlowStage.BACKWARD_DX:
                     source_abi = output_by_rank[flow.source_rank]
+                elif strict_training and flow.stage is MoeRectFlowStage.GATE_ALL_REDUCE:
+                    source_abi = gate_gradient_by_rank[flow.source_rank]
                 else:
                     source_abi = activation_by_rank[flow.source_rank]
                 source = absolute(source_abi)
@@ -724,12 +1022,26 @@ def lower_link_flexible_moe_multi(
                     target_abi = activation_by_rank[flow.destination_rank]
                 elif strict_training and flow.stage is MoeRectFlowStage.BACKWARD_GRADIENT:
                     target_abi = backward_by_rank[flow.destination_rank]
+                elif strict_training and flow.stage is MoeRectFlowStage.GATE_ALL_REDUCE:
+                    is_reduce = flow.assignment_refs[0].startswith("gate_gradient.reduce.")
+                    target_abi = (gate_reduce_by_rank[flow.destination_rank] if is_reduce
+                                  else gate_gradient_by_rank[flow.destination_rank])
                 else:
                     target_abi = output_by_rank[flow.destination_rank]
                 destination = absolute(target_abi)
                 remote = peer(flow.source_rank)
+                recv_offset = (
+                    (1 + children_by_rank[flow.destination_rank].index(flow.source_rank))
+                    * gate_gradient_bytes
+                    if strict_training and flow.stage is MoeRectFlowStage.GATE_ALL_REDUCE
+                    and flow.assignment_refs[0].startswith("gate_gradient.reduce.")
+                    else 0
+                )
+                if recv_offset:
+                    view("compute", core, SemanticOperandId.DESTINATION_ADDRESS,
+                         target_abi, recv_offset, gate_gradient_bytes)
                 add_record("compute", core, _dte_recv(action.id, flow, destination, fsm, token, remote),
-                    ((SemanticOperandId.DESTINATION_ADDRESS, destination, 0),),
+                    ((SemanticOperandId.DESTINATION_ADDRESS, destination, recv_offset),),
                     ((RuntimeOperandField.DTE_TOKEN, token), (RuntimeOperandField.DTE_FSM, fsm), (RuntimeOperandField.PEER_CORE, remote)))
             else:
                 add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.DTE_WAIT, (
@@ -759,6 +1071,36 @@ def lower_link_flexible_moe_multi(
                 RecordOperand.literal("learning_rate_f64_bits", 4562254508917369340),
                 RecordOperand.literal("momentum_f64_bits", 0),
             )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(weight), 0), (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(gradient), 0), (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(weight), 0)))
+        elif strict_training and action.kind in (
+            MoeRectActionKind.GATE_GRADIENT_LOCAL_REDUCE,
+            MoeRectActionKind.GATE_GRADIENT_ALL_REDUCE,
+        ):
+            gradient = gate_gradient_by_rank[action.rank]
+            is_local = action.kind is MoeRectActionKind.GATE_GRADIENT_LOCAL_REDUCE
+            children = children_by_rank[action.rank] if is_local else ()
+            source_abi = (gate_reduce_by_rank[action.rank] if children else gradient)
+            input_count = len(children) + 1
+            if source_abi.dtype is not DType.FP32 or gradient.dtype is not DType.FP32:
+                raise SchemaError("gate gradient tree must reduce FP32 bytes", path=action.id)
+            if source_abi.size_bytes < input_count * gate_gradient_bytes:
+                raise SchemaError("gate rank-major FP32 SRAM staging is too short", path=action.id)
+            if source_abi is not gradient:
+                view("compute", core, SemanticOperandId.SOURCE_ADDRESS,
+                     source_abi, 0, input_count * gate_gradient_bytes)
+            add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.LOCAL_REDUCE, (
+                RecordOperand.literal("input_dtype", 1),
+                RecordOperand.literal("accumulator_dtype", 1),
+                RecordOperand.literal("output_dtype", 1),
+                RecordOperand.literal("reduce_op", 1),
+                RecordOperand.literal("rounding", 0),
+                RecordOperand.literal("order", 0),
+                RecordOperand.literal("input_count", input_count),
+                RecordOperand.literal("element_count", spec.hidden_size * spec.expert_count),
+                RecordOperand.literal("input_stride_bytes", gate_gradient_bytes),
+                RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(source_abi).id),
+                RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, absolute(gradient).id),
+            )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(source_abi), 0),
+                 (SemanticOperandId.DESTINATION_ADDRESS, absolute(gradient), 0)))
         elif action.kind in (MoeRectActionKind.PACK, MoeRectActionKind.WEIGHTED_COMBINE, MoeRectActionKind.COMBINE_BACKWARD, MoeRectActionKind.GATE_GRADIENT_LOCAL_REDUCE, MoeRectActionKind.GATE_GRADIENT_ALL_REDUCE):
             reduction_source = (
                 output if (

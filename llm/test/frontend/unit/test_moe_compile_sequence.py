@@ -11,6 +11,12 @@ from llm.frontend.wafer_frontend.passes.moe_compile_sequence import (
 from llm.frontend.wafer_frontend.passes.validate_moe_training_backward_handoff import (
     validate_moe_training_backward_handoff,
 )
+from llm.frontend.wafer_frontend.passes.validate_moe_training_fp32_gradient_producers import (
+    validate_moe_training_fp32_gradient_producers,
+)
+from llm.frontend.wafer_frontend.lowering.flexible_moe_multi_production import (
+    expert_dgrad_action_ids, expert_wgrad_action_ids, gate_wgrad_cast_action_id,
+)
 from llm.frontend.wafer_frontend.passes.workload_materialization import (
     materialize_workload_preflight,
 )
@@ -134,6 +140,50 @@ def _replace_unit(
 
 
 class MoeCompileSequenceTest(unittest.TestCase):
+    def test_strict_training_fp32_gradient_projection_cast_and_sgd_faults(self) -> None:
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING),
+            source_rank_policy="rank0_shared_spine",
+        )
+        self.assertIs(sequence.runtime_status, MoeCompileRuntimeStatus.RUNTIME_NOT_MATERIALIZED)
+        for unit in sequence.units:
+            validate_moe_training_fp32_gradient_producers(unit.plan, unit.spec,
+                                                           unit.linked_manifest)
+        unit = sequence.units[0]
+        expert = next(item for item in unit.plan.actions
+                      if item.kind is MoeRectActionKind.EXPERT_WGRAD and item.assignment_refs)
+        gate = next(item for item in unit.plan.actions
+                    if item.kind is MoeRectActionKind.GATE_WGRAD and item.assignment_refs)
+        sgd = next(item for item in unit.plan.actions
+                   if item.kind is MoeRectActionKind.EXPERT_SGD and item.rank == expert.rank)
+        gate_reduce = next(item for item in unit.plan.actions
+                           if item.kind is MoeRectActionKind.GATE_GRADIENT_LOCAL_REDUCE
+                           and item.rank == gate.rank)
+        gate_sgd = next(item for item in unit.plan.actions
+                        if item.kind is MoeRectActionKind.GATE_SGD and item.rank == gate.rank)
+        tree_flows = tuple(item for item in unit.plan.flows
+                           if item.stage is MoeRectFlowStage.GATE_ALL_REDUCE)
+        gate_tree_records = tuple(item.id for item in unit.plan.actions
+                                  if item.kind in (MoeRectActionKind.SEND, MoeRectActionKind.RECV)
+                                  and item.flow_ref in {flow.id for flow in tree_flows})
+        for dropped in (
+            expert.id,
+            *expert_wgrad_action_ids(unit.plan.id, expert.id),
+            gate.id,
+            gate_wgrad_cast_action_id(unit.plan.id, gate.id),
+            gate_reduce.id,
+            gate_sgd.id,
+            *gate_tree_records,
+            sgd.id,
+        ):
+            broken = replace(unit.linked_manifest, core_streams=tuple(replace(
+                stream, records=tuple(ref for ref in stream.records
+                                      if ref.source_global_action_id != dropped)
+            ) for stream in unit.linked_manifest.core_streams))
+            with self.assertRaisesRegex(SchemaError, "FP32 gradient lacks one physical record"):
+                validate_moe_training_fp32_gradient_producers(unit.plan,
+                                                                unit.spec, broken)
+
     def test_strict_training_backward_handoff_is_physical_and_fails_when_cut(self) -> None:
         sequence = compile_moe_sequence(
             _manifest(WorkloadFamily.MOE_TRAINING),
@@ -154,7 +204,9 @@ class MoeCompileSequenceTest(unittest.TestCase):
                        if item.stage is MoeRectFlowStage.BACKWARD_DX)
         dx_send_id = next(item.id for item in unit.plan.actions
                           if item.kind is MoeRectActionKind.SEND and item.flow_ref == dx_flow.id)
-        for dropped in (recv_id, dgrad_id, dx_send_id):
+        for dropped in (recv_id, dgrad_id,
+                        *expert_dgrad_action_ids(unit.plan.id, dgrad_id),
+                        dx_send_id):
             broken = replace(unit.linked_manifest, core_streams=tuple(replace(
                 stream, records=tuple(ref for ref in stream.records
                                       if ref.source_global_action_id != dropped)

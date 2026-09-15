@@ -356,6 +356,7 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x1f:
     case 0x20:
     case 0x21:
+    case 0x22:
     case 0x40:
     case 0x41:
     case 0x43:
@@ -1580,6 +1581,16 @@ uint64_t ComputeOperandBytes(const RelocatableRecordDto &record,
         elements = operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS
                        ? CheckedMultiply(2, parameters[0], path)
                        : parameters[0];
+    } else if (record.opcode == Opcode::SWIGLU_BACKWARD_TIMING) {
+        if (parameters.size() != 1)
+            Fail(path, "SWIGLU_BACKWARD_TIMING parameters must have one field");
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            elements = CheckedMultiply(2, parameters[0], path);
+        else if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            elements = parameters[0];
+        else
+            Fail(path, "backward SwiGLU has no such payload operand");
     } else if (record.opcode == Opcode::RESIDUAL) {
         if (parameters.size() != 1)
             Fail(path, "RESIDUAL parameters must have one field");
@@ -1603,6 +1614,7 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
     case Opcode::MATMUL:
     case Opcode::ATTENTION:
     case Opcode::SWIGLU:
+    case Opcode::SWIGLU_BACKWARD_TIMING:
     case Opcode::RESIDUAL:
     case Opcode::RMSNORM:
         return ComputeOperandBytes(record, operand_id, path);
@@ -1732,7 +1744,10 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
         const uint64_t one_input =
             CheckedMultiply(elements, dtype == 1 ? 4 : 2, path);
         if (operand_id == SemanticOperandId::DESTINATION_ADDRESS)
-            return one_input;
+            return CheckedMultiply(
+                elements,
+                LiteralU64(record.operands[2], path + ".output_dtype") == 1
+                    ? 4 : 2, path);
         const uint64_t count =
             LiteralU64(record.operands[6], path + ".input_count");
         const uint64_t stride =
@@ -1753,6 +1768,7 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
     case Opcode::MATMUL:
     case Opcode::ATTENTION:
     case Opcode::SWIGLU:
+    case Opcode::SWIGLU_BACKWARD_TIMING:
     case Opcode::RESIDUAL:
     case Opcode::RMSNORM:
     case Opcode::ROPE_QK_EXACT:
@@ -1807,7 +1823,9 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
             return BufferDTypeDto::FP32;
         return std::nullopt;
     case Opcode::LOCAL_REDUCE:
-        return LiteralU64(record.operands[0], "LOCAL_REDUCE.input_dtype") == 1
+        return LiteralU64(record.operands[
+                              operand_id == SemanticOperandId::DESTINATION_ADDRESS
+                                  ? 2 : 0], "LOCAL_REDUCE.dtype") == 1
                    ? BufferDTypeDto::FP32
                    : BufferDTypeDto::FP16;
     default:
@@ -2458,6 +2476,7 @@ ExternalRecord FinalizeRecord(
     } else if (record.opcode == Opcode::MATMUL ||
                record.opcode == Opcode::ATTENTION ||
                record.opcode == Opcode::SWIGLU ||
+               record.opcode == Opcode::SWIGLU_BACKWARD_TIMING ||
                record.opcode == Opcode::RESIDUAL ||
                record.opcode == Opcode::RMSNORM) {
         if (record.operands.size() != 5)
@@ -2467,6 +2486,7 @@ ExternalRecord FinalizeRecord(
                        SemanticOperandId::COMPUTE_INPUT_ADDRESS,
                        path + ".operands[1]");
         const bool has_data = record.opcode == Opcode::MATMUL ||
+                              record.opcode == Opcode::SWIGLU_BACKWARD_TIMING ||
                               record.opcode == Opcode::RESIDUAL ||
                               record.opcode == Opcode::RMSNORM;
         if (has_data)
@@ -3185,6 +3205,7 @@ std::set<std::string> ValidateActionSequence(
         const auto is_compute = [](Opcode opcode) {
             return opcode == Opcode::MATMUL || opcode == Opcode::ATTENTION ||
                    opcode == Opcode::SWIGLU || opcode == Opcode::RESIDUAL ||
+                   opcode == Opcode::SWIGLU_BACKWARD_TIMING ||
                    opcode == Opcode::RMSNORM ||
                    opcode == Opcode::ROPE_QK_EXACT ||
                    opcode == Opcode::ATTENTION_EXACT ||

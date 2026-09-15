@@ -51,6 +51,7 @@ bool IsProductionCompute(Opcode opcode) noexcept {
     case Opcode::GELU:
     case Opcode::SILU:
     case Opcode::SWIGLU:
+    case Opcode::SWIGLU_BACKWARD_TIMING:
     case Opcode::RELU:
     case Opcode::RESIDUAL:
     case Opcode::LAYERNORM:
@@ -220,6 +221,8 @@ LoweredPrimList LowerLocalReduce(const ExternalRecord &record,
     prim->length_bytes = operands.element_count * (fp32 ? 4 : 2);
     prim->input_count = static_cast<uint16_t>(operands.input_count);
     prim->dtype = fp32 ? CollDType::FP32 : CollDType::FP16;
+    prim->output_dtype = operands.output_dtype == LocalReduceDataType::FP32
+                             ? CollDType::FP32 : CollDType::FP16;
     prim->reduce_op = CollReduceOp::SUM;
     try {
         prim->Validate();

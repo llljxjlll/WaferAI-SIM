@@ -91,6 +91,7 @@ bool HasPublishedComputeSemantics(Opcode opcode) {
     case Opcode::GELU:
     case Opcode::SILU:
     case Opcode::SWIGLU:
+    case Opcode::SWIGLU_BACKWARD_TIMING:
     case Opcode::RELU:
     case Opcode::RESIDUAL:
     case Opcode::LAYERNORM:
@@ -623,7 +624,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 52, "executable opcode count");
+    checks.Check(executable_count == 53, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -1108,6 +1109,23 @@ void CheckPublishedComputeSemantics(Checks &checks) {
         static_cast<uint64_t>(std::numeric_limits<int>::max()) / 4 + 1);
     checks.Reject("SWIGLU concat input FP16 byte overflow",
                   [&] { EncodeExternalRecord(record); });
+    record = MakeRecord(*LookupRecordSchema(Opcode::SWIGLU_BACKWARD_TIMING),
+                        Boundary::MINIMUM);
+    std::get<ComputeOperands>(record.operands).datatype =
+        ExternalDataType::FP16;
+    SetComputeParameter(record, "N", 0);
+    checks.Reject("native backward SwiGLU rejects zero-work placeholder",
+                  [&] { EncodeExternalRecord(record); });
+    SetComputeParameter(
+        record, "N",
+        static_cast<uint64_t>(std::numeric_limits<int>::max()) / 6);
+    checks.Accept("native backward SwiGLU FP16 concat/gradient byte boundary",
+                  [&] { EncodeExternalRecord(record); });
+    SetComputeParameter(
+        record, "N",
+        static_cast<uint64_t>(std::numeric_limits<int>::max()) / 6 + 1);
+    checks.Reject("native backward SwiGLU FP16 byte boundary overflows",
+                  [&] { EncodeExternalRecord(record); });
     // External parameters are unsigned. A producer-side negative value has
     // high bits set and is rejected by the existing 30-bit range check.
 }
@@ -1167,14 +1185,54 @@ void CheckTypedRejections(Checks &checks) {
                          got.input_stride_bytes == 2048,
                      "exact DP2 FP32 LOCAL_REDUCE wire is stable");
     });
+    auto gradient_cast = MakeRecord(*LookupRecordSchema(Opcode::LOCAL_REDUCE),
+                                    Boundary::TYPICAL);
+    {
+        auto &operands = std::get<LocalReduceOperands>(gradient_cast.operands);
+        operands.input_dtype = LocalReduceDataType::FP16;
+        operands.accumulator_dtype = LocalReduceDataType::FP32;
+        operands.output_dtype = LocalReduceDataType::FP32;
+        operands.input_count = 1;
+        operands.element_count = 32;
+        operands.input_stride_bytes = 64;
+        operands.source.absolute_address_bytes = 0x1000;
+        operands.destination.absolute_address_bytes = 0x2000;
+    }
+    checks.Accept("gradient FP16-to-FP32 LOCAL_REDUCE casts 32 elements", [&] {
+        const auto bytes = EncodeExternalRecord(gradient_cast);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        const auto &got = std::get<LocalReduceOperands>(decoded.operands);
+        checks.Check(got.input_dtype == LocalReduceDataType::FP16 &&
+                         got.output_dtype == LocalReduceDataType::FP32 &&
+                         got.element_count == 32 && got.input_stride_bytes == 64,
+                     "gradient cast record keeps real input and output dtypes");
+    });
+    auto bad_gradient_cast = gradient_cast;
+    std::get<LocalReduceOperands>(bad_gradient_cast.operands).input_count = 2;
+    checks.Reject("gradient FP16-to-FP32 rejects more than one input", [&] {
+        EncodeExternalRecord(bad_gradient_cast);
+    });
+    bad_gradient_cast = gradient_cast;
+    std::get<LocalReduceOperands>(bad_gradient_cast.operands)
+        .destination.absolute_address_bytes += 2;
+    checks.Reject("gradient FP16-to-FP32 requires FP32 destination alignment", [&] {
+        EncodeExternalRecord(bad_gradient_cast);
+    });
     auto bad_fp32 = record;
     std::get<LocalReduceOperands>(bad_fp32.operands).input_count = 3;
-    checks.Reject("FP32 LOCAL_REDUCE rejects count other than two",
-                  [&] { EncodeExternalRecord(bad_fp32); });
+    checks.Accept("FP32 LOCAL_REDUCE supports bounded three-input gate tree", [&] {
+        const auto bytes = EncodeExternalRecord(bad_fp32);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        checks.Check(std::get<LocalReduceOperands>(decoded.operands).input_count == 3,
+                     "rank-major FP32 gate gradient reduction preserves three real inputs");
+    });
     bad_fp32 = record;
     std::get<LocalReduceOperands>(bad_fp32.operands).element_count = 511;
-    checks.Reject("FP32 LOCAL_REDUCE rejects non-512 elements",
-                  [&] { EncodeExternalRecord(bad_fp32); });
+    checks.Accept("FP32 LOCAL_REDUCE accepts a shape-derived gradient extent", [&] {
+        auto &operands = std::get<LocalReduceOperands>(bad_fp32.operands);
+        operands.input_stride_bytes = 511 * 4;
+        (void)EncodeExternalRecord(bad_fp32);
+    });
     bad_fp32 = record;
     std::get<LocalReduceOperands>(bad_fp32.operands).input_stride_bytes = 2044;
     checks.Reject("FP32 LOCAL_REDUCE rejects non-2048 stride",

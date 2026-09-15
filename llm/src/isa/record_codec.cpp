@@ -343,14 +343,18 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
         operands.input_dtype == LocalReduceDataType::FP16 &&
         operands.accumulator_dtype == LocalReduceDataType::FP32 &&
         operands.output_dtype == LocalReduceDataType::FP16;
-    const bool dp2_fp32 =
+    const bool fp32_same =
         operands.input_dtype == LocalReduceDataType::FP32 &&
         operands.accumulator_dtype == LocalReduceDataType::FP32 &&
         operands.output_dtype == LocalReduceDataType::FP32 &&
-        operands.input_count == 2 && operands.element_count == 512 &&
-        operands.input_stride_bytes == 2048;
-    Require(legacy || dp2_fp32,
-            "LOCAL_REDUCE dtype/count/shape must be legacy FP16 or exact DP2 FP32");
+        operands.input_count >= 1 && operands.input_count <= 3;
+    const bool fp16_to_fp32 =
+        operands.input_dtype == LocalReduceDataType::FP16 &&
+        operands.accumulator_dtype == LocalReduceDataType::FP32 &&
+        operands.output_dtype == LocalReduceDataType::FP32 &&
+        operands.input_count == 1;
+    Require(legacy || fp32_same || fp16_to_fp32,
+            "LOCAL_REDUCE dtype/count/shape must be legacy FP16, rank-major FP32 up to three inputs, or one-input FP16-to-FP32 cast");
     Require(operands.reduce_op == ReduceOperator::SUM,
             "LOCAL_REDUCE reduce_op must be SUM");
     Require(operands.rounding == LocalReduceRoundingMode::RNE,
@@ -362,7 +366,7 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
             "LOCAL_REDUCE input_count must be non-zero");
     Require(operands.element_count != 0,
             "LOCAL_REDUCE element_count must be non-zero");
-    const uint64_t element_bytes = dp2_fp32 ? 4 : 2;
+    const uint64_t element_bytes = fp32_same ? 4 : 2;
     Require(operands.element_count <=
                 std::numeric_limits<uint64_t>::max() / element_bytes,
             "LOCAL_REDUCE element_count*dtype_bytes overflows u64");
@@ -381,15 +385,21 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
                 operands.destination.kind == SramAddressKind::ABSOLUTE,
             "LOCAL_REDUCE V1 addresses must be ABSOLUTE");
     Require(operands.source.absolute_address_bytes % element_bytes == 0 &&
-                operands.destination.absolute_address_bytes % element_bytes == 0,
+                operands.destination.absolute_address_bytes %
+                    (fp16_to_fp32 ? 4 : element_bytes) == 0,
             "LOCAL_REDUCE addresses must be dtype aligned");
     Require(operands.source.absolute_address_bytes <=
                 std::numeric_limits<uint64_t>::max() -
                     (source_bytes - 1),
             "LOCAL_REDUCE source span overflows u64");
+    Require(operands.element_count <=
+                std::numeric_limits<uint64_t>::max() /
+                    (fp16_to_fp32 ? 4 : element_bytes),
+            "LOCAL_REDUCE output byte count overflows u64");
     Require(operands.destination.absolute_address_bytes <=
                 std::numeric_limits<uint64_t>::max() -
-                    (length_bytes - 1),
+                    (operands.element_count *
+                         (fp16_to_fp32 ? 4 : element_bytes) - 1),
             "LOCAL_REDUCE destination span overflows u64");
 }
 
@@ -1146,6 +1156,15 @@ void ValidatePublishedComputeSemantics(const ComputeOperands &operands,
         (void)CheckedMul(n, 4, "SWIGLU ops");
         return;
     }
+    case Opcode::SWIGLU_BACKWARD_TIMING: {
+        const uint64_t n = p("N");
+        ValidateNpuLayout(operands,
+                          {CheckedMul(2, n, "SwiGLU backward forward concat")},
+                          {n, CheckedMul(2, n, "SwiGLU backward output")},
+                          "SWIGLU_BACKWARD_TIMING");
+        (void)CheckedMul(8, n, "SwiGLU backward vector ops");
+        return;
+    }
     case Opcode::RESIDUAL: {
         const uint64_t n = p("N");
         ValidateNpuLayout(operands, {n, n}, {n}, "RESIDUAL");
@@ -1399,6 +1418,7 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
                 kSgdUpdatePayloadSize),
     FixedSchema(Opcode::ADAMW_UPDATE, RecordOperandKind::ADAMW_UPDATE,
                 kAdamwUpdatePayloadSize),
+    ComputeSchema(Opcode::SWIGLU_BACKWARD_TIMING, kN),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,

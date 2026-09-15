@@ -6,6 +6,7 @@
 #include <cstdint>
 
 inline constexpr uint8_t kCollectiveDataV1PrimWireVersion = 1;
+inline constexpr uint8_t kCollectiveDataV2CastWireVersion = 2;
 inline constexpr uint8_t kCollectiveDataV1PrimWireSegments = 6;
 
 enum class CollectiveDataV1PrimMode : uint8_t {
@@ -26,6 +27,9 @@ public:
     uint64_t length_bytes = 1;
     uint16_t input_count = 1;
     CollDType dtype = CollDType::UINT8;
+    // Equal to dtype on V1 wire. V2 is reserved for one-input FP16->FP32
+    // local reduction/cast and writes twice the source byte count.
+    CollDType output_dtype = CollDType::UINT8;
     CollReduceOp reduce_op = CollReduceOp::NONE;
 
     void Validate() const;
@@ -39,3 +43,7 @@ public:
         setPrimMainCategory(COMM_PRIM);
     }
 };
+
+// Byte-level arithmetic witness used by the ISA selftest for the V2 cast
+// and variable-size FP32 gate gradient local sum.
+bool CollectiveDataV2ArithmeticSelfTest();

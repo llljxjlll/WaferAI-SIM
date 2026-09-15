@@ -440,6 +440,7 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::CROSS_ENTROPY_BACKWARD:
     case Opcode::SGD_UPDATE:
     case Opcode::ADAMW_UPDATE:
+    case Opcode::SWIGLU_BACKWARD_TIMING:
         return true;
     default:
         return false;
@@ -560,6 +561,16 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                     prim->data_chunk ==
                         std::vector<std::pair<std::string, int>>{{"output", 2}},
                 "SWIGLU lowering initializes one concat input of 2N");
+        }
+        if (record.opcode == Opcode::SWIGLU_BACKWARD_TIMING) {
+            prim->initialize();
+            checks.Check(
+                prim->data_size_input == std::vector<int>{4} &&
+                    prim->data_chunk ==
+                        std::vector<std::pair<std::string, int>>{
+                            {"upstream_activation_gradient", 2},
+                            {"output", 4}},
+                "native backward SwiGLU retains forward concat2N, upstreamN and derivative output2N");
         }
         return;
     }
@@ -945,7 +956,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 47,
+    checks.Check(supported == 48,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

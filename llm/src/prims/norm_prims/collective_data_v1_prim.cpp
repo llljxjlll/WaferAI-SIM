@@ -8,6 +8,7 @@
 #include "utils/system_utils.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -103,8 +104,93 @@ uint64_t SourceBytes(const Collective_data_v1_prim &prim) {
                : prim.length_bytes;
 }
 
+bool IsFp16ToFp32Cast(const Collective_data_v1_prim &prim) {
+    return prim.mode == CollectiveDataV1PrimMode::REDUCE &&
+           prim.dtype == CollDType::FP16 &&
+           prim.output_dtype == CollDType::FP32 && prim.input_count == 1;
+}
+
+uint64_t DestinationBytes(const Collective_data_v1_prim &prim) {
+    return IsFp16ToFp32Cast(prim)
+               ? CheckedMultiply(prim.length_bytes, 2,
+                                 "FP16-to-FP32 destination overflows")
+               : prim.length_bytes;
+}
+
+std::vector<uint8_t> ExpandFp16ToFp32(const std::vector<uint8_t> &input) {
+    std::vector<uint8_t> result;
+    result.reserve(input.size() * 2);
+    for (size_t offset = 0; offset < input.size(); offset += 2) {
+        const uint16_t half = static_cast<uint16_t>(input[offset]) |
+                              (static_cast<uint16_t>(input[offset + 1]) << 8);
+        const uint32_t sign = static_cast<uint32_t>(half & 0x8000u) << 16;
+        const uint32_t exponent = (half >> 10) & 31u;
+        uint32_t fraction = half & 1023u;
+        uint32_t bits = sign;
+        if (exponent == 0 && fraction != 0) {
+            uint32_t shifts = 0;
+            while ((fraction & 1024u) == 0) {
+                fraction <<= 1;
+                ++shifts;
+            }
+            bits |= (127u - 14u - shifts) << 23;
+            bits |= (fraction & 1023u) << 13;
+        } else if (exponent == 31) {
+            bits |= 255u << 23;
+            bits |= fraction << 13;
+        } else if (exponent != 0) {
+            bits |= (exponent + 112u) << 23;
+            bits |= fraction << 13;
+        }
+        for (unsigned byte = 0; byte < 4; ++byte)
+            result.push_back(static_cast<uint8_t>(bits >> (8 * byte)));
+    }
+    return result;
+}
+
+std::vector<uint8_t> ReduceFp32RankMajor(const std::vector<uint8_t> &input,
+                                        uint16_t count, uint64_t length_bytes) {
+    if (count == 1)
+        return std::vector<uint8_t>(input.begin(),
+                                    input.begin() + static_cast<size_t>(length_bytes));
+    std::vector<uint8_t> result(static_cast<size_t>(length_bytes));
+    for (uint64_t offset = 0; offset < length_bytes; offset += 4) {
+        float sum = 0.0f;
+        for (uint16_t rank = 0; rank < count; ++rank) {
+            const uint64_t index = static_cast<uint64_t>(rank) * length_bytes + offset;
+            const uint32_t bits = static_cast<uint32_t>(input[index]) |
+                                  (static_cast<uint32_t>(input[index + 1]) << 8) |
+                                  (static_cast<uint32_t>(input[index + 2]) << 16) |
+                                  (static_cast<uint32_t>(input[index + 3]) << 24);
+            float value;
+            std::memcpy(&value, &bits, sizeof(value));
+            sum += value;
+        }
+        uint32_t bits;
+        std::memcpy(&bits, &sum, sizeof(bits));
+        for (unsigned byte = 0; byte < 4; ++byte)
+            result[static_cast<size_t>(offset) + byte] = static_cast<uint8_t>(bits >> (8 * byte));
+    }
+    return result;
+}
+
 int ComputeDelay(const Collective_data_v1_prim &prim,
                  const TaskCoreContext &context) {
+    if (IsFp16ToFp32Cast(prim)) {
+        const CoreHWConfig *hardware = GetCoreHWConfig(context.cid);
+        if (hardware == nullptr || hardware->vec == nullptr ||
+            hardware->vec->x_dims <= 0 || hardware->vec->count <= 0)
+            throw std::runtime_error("FP16-to-FP32 cast requires a valid vector unit");
+        const uint64_t lanes = CheckedMultiply(
+            static_cast<uint64_t>(hardware->vec->x_dims),
+            static_cast<uint64_t>(hardware->vec->count),
+            "FP16-to-FP32 vector lanes overflow");
+        const uint64_t elements = prim.length_bytes / 2;
+        const uint64_t cycles = elements / lanes + (elements % lanes != 0);
+        if (cycles > static_cast<uint64_t>(std::numeric_limits<int>::max()) / CYCLE)
+            throw std::overflow_error("FP16-to-FP32 cast cycles exceed int");
+        return static_cast<int>(cycles * CYCLE);
+    }
     if (prim.mode != CollectiveDataV1PrimMode::REDUCE ||
         prim.input_count == 1)
         return 0;
@@ -156,6 +242,9 @@ void Collective_data_v1_prim::Validate() const {
                 dtype == CollDType::INT64 || dtype == CollDType::FP16 ||
                 dtype == CollDType::FP32,
             "Collective_data_v1_prim rejects FP8");
+    Require(output_dtype == CollDType::UINT8 || output_dtype == dtype ||
+                IsFp16ToFp32Cast(*this),
+            "Collective_data_v1_prim mixed output requires exact one-input FP16-to-FP32 cast");
     Require(raw_reduce <= static_cast<uint8_t>(CollReduceOp::MAX),
             "Collective_data_v1_prim reduce_op enum is invalid");
     const bool local = key.group_id == 0;
@@ -191,13 +280,14 @@ void Collective_data_v1_prim::Validate() const {
     }
 
     const uint64_t source_bytes = SourceBytes(*this);
+    const uint64_t destination_bytes = DestinationBytes(*this);
     if (source_bytes > std::numeric_limits<size_t>::max() ||
-        length_bytes > std::numeric_limits<size_t>::max())
+        destination_bytes > std::numeric_limits<size_t>::max())
         throw std::overflow_error(
             "Collective_data_v1_prim byte size exceeds host size_t");
     ValidateSpan(source_address_bytes, source_bytes,
                  "Collective_data_v1_prim source span overflows");
-    ValidateSpan(destination_address_bytes, length_bytes,
+    ValidateSpan(destination_address_bytes, destination_bytes,
                  "Collective_data_v1_prim destination span overflows");
 }
 
@@ -210,13 +300,16 @@ Wire Collective_data_v1_prim::serialize() {
         wire[index] = 0;
         SetHeader(wire[index], id, index);
     }
-    wire[0].range(23, 16) = sc_bv<8>(kCollectiveDataV1PrimWireVersion);
+    const bool cast = IsFp16ToFp32Cast(*this);
+    wire[0].range(23, 16) = sc_bv<8>(
+        cast ? kCollectiveDataV2CastWireVersion : kCollectiveDataV1PrimWireVersion);
     wire[0].range(31, 24) = sc_bv<8>(kCollectiveDataV1PrimWireSegments);
     wire[0].range(32, 32) = sc_bv<1>(static_cast<uint8_t>(mode));
     const uint8_t wire_dtype = EncodeWireDType(dtype);
     wire[0].range(34, 33) = sc_bv<2>(wire_dtype & 0x3u);
     wire[0].range(36, 35) = sc_bv<2>(static_cast<uint8_t>(reduce_op));
     wire[0].range(37, 37) = sc_bv<1>((wire_dtype >> 2) & 0x1u);
+    wire[0].range(38, 38) = sc_bv<1>(cast);
 
     wire[1].range(47, 16) = sc_bv<32>(key.group_id);
     wire[1].range(79, 48) = sc_bv<32>(key.collective_id);
@@ -232,13 +325,16 @@ Wire Collective_data_v1_prim::serialize() {
 void Collective_data_v1_prim::deserialize(Wire wire) {
     RequireStrictTransport();
     ValidateHeaders(wire);
-    Require(wire[0].range(23, 16).to_uint64() ==
-                kCollectiveDataV1PrimWireVersion,
+    const uint64_t version = wire[0].range(23, 16).to_uint64();
+    Require(version == kCollectiveDataV1PrimWireVersion ||
+                version == kCollectiveDataV2CastWireVersion,
             "Collective_data_v1_prim wire version is unsupported");
     Require(wire[0].range(31, 24).to_uint64() ==
                 kCollectiveDataV1PrimWireSegments,
             "Collective_data_v1_prim wire count field is inconsistent");
-    Require(!wire[0].range(127, 38).or_reduce(),
+    Require(!wire[0].range(127, 39).or_reduce() &&
+                wire[0].range(38, 38).to_uint64() ==
+                    (version == kCollectiveDataV2CastWireVersion ? 1 : 0),
             "Collective_data_v1_prim metadata reserved bits are non-zero");
     Require(!wire[2].range(127, 80).or_reduce() &&
                 !wire[3].range(127, 80).or_reduce() &&
@@ -252,6 +348,8 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     decoded.dtype = DecodeWireDType(static_cast<uint8_t>(
         wire[0].range(34, 33).to_uint64() |
         (wire[0].range(37, 37).to_uint64() << 2)));
+    decoded.output_dtype = version == kCollectiveDataV2CastWireVersion
+                               ? CollDType::FP32 : decoded.dtype;
     decoded.reduce_op = static_cast<CollReduceOp>(
         wire[0].range(36, 35).to_uint64());
     decoded.key.group_id = static_cast<uint32_t>(
@@ -277,6 +375,7 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     length_bytes = decoded.length_bytes;
     input_count = decoded.input_count;
     dtype = decoded.dtype;
+    output_dtype = decoded.output_dtype;
     reduce_op = decoded.reduce_op;
 }
 
@@ -312,6 +411,10 @@ int Collective_data_v1_prim::taskCoreDefault(TaskCoreContext &context) {
     if (mode == CollectiveDataV1PrimMode::LOCAL_COPY) {
         result.assign(source.begin(), source.begin() +
                                         static_cast<size_t>(length_bytes));
+    } else if (IsFp16ToFp32Cast(*this)) {
+        result = ExpandFp16ToFp32(source);
+    } else if (dtype == CollDType::FP32) {
+        result = ReduceFp32RankMajor(source, input_count, length_bytes);
     } else {
         IsaV1CollectiveDataBuffer buffer(input_count, length_bytes,
                                          source_bytes);
@@ -333,10 +436,35 @@ int Collective_data_v1_prim::taskCoreDefault(TaskCoreContext &context) {
     write.initiator = sram::Initiator::kCompute;
     write.command = sram::Command::kWrite;
     write.address = destination_address_bytes;
-    write.size_bytes = length_bytes;
+    write.size_bytes = DestinationBytes(*this);
     write.payload = std::move(result);
     context.sram_access->Access(write);
     return compute_delay;
 }
 
 void Collective_data_v1_prim::printSelf() {}
+
+bool CollectiveDataV2ArithmeticSelfTest() {
+    const auto converted = ExpandFp16ToFp32({
+        0x00, 0x3c, // +1
+        0x00, 0x80, // -0
+        0x01, 0x00, // smallest half subnormal, 2^-24
+        0x00, 0x7c, // +infinity
+    });
+    if (converted != std::vector<uint8_t>({
+            0x00, 0x00, 0x80, 0x3f,
+            0x00, 0x00, 0x00, 0x80,
+            0x00, 0x00, 0x80, 0x33,
+            0x00, 0x00, 0x80, 0x7f,
+        }))
+        return false;
+    const auto summed = ReduceFp32RankMajor({
+        0x00, 0x00, 0x80, 0x3f, // rank0 1
+        0x00, 0x00, 0x00, 0x40, // rank1 2
+    }, 2, 4);
+    const auto identity = ReduceFp32RankMajor({
+        0x00, 0x00, 0x00, 0x80, // rank0 -0 must remain -0
+    }, 1, 4);
+    return summed == std::vector<uint8_t>({0x00, 0x00, 0x40, 0x40}) &&
+           identity == std::vector<uint8_t>({0x00, 0x00, 0x00, 0x80});
+}

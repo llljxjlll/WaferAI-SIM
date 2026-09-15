@@ -176,13 +176,34 @@ class FlexibleMoeProductionArtifacts:
         }
         expected = action_ids - zero_work_source_actions if allow_zero_work_omission else action_ids
         if allow_zero_work_omission and spec.mesh.rank_count > 1:
-            from .flexible_moe_multi_production import expert_projection_action_ids
+            from .flexible_moe_multi_production import (
+                expert_projection_action_ids, expert_wgrad_action_ids,
+                gate_wgrad_cast_action_id, expert_dgrad_action_ids,
+            )
             expected |= {
                 child_id
                 for action in plan.actions
                 if action.kind is MoeRectActionKind.EXPERT_FORWARD and action.assignment_refs
                 for child_id in expert_projection_action_ids(plan.id, action.id)
             }
+            if spec.mode is FlexibleMoeMode.TRAIN:
+                expected |= {
+                    child_id
+                    for action in plan.actions
+                    if action.kind is MoeRectActionKind.EXPERT_DGRAD and action.assignment_refs
+                    for child_id in expert_dgrad_action_ids(plan.id, action.id)
+                }
+                expected |= {
+                    child_id
+                    for action in plan.actions
+                    if action.kind is MoeRectActionKind.EXPERT_WGRAD and action.assignment_refs
+                    for child_id in expert_wgrad_action_ids(plan.id, action.id)
+                }
+                expected |= {
+                    gate_wgrad_cast_action_id(plan.id, action.id)
+                    for action in plan.actions
+                    if action.kind is MoeRectActionKind.GATE_WGRAD and action.assignment_refs
+                }
         if claimed != expected:
             raise SchemaError("production fragments must cover exactly the required plan actions", path=f"{path}.fragments")
         if self.manifest.source_global_dag_id != plan.id:

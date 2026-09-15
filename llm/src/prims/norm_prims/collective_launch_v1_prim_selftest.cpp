@@ -312,17 +312,17 @@ void TestStrictFactoryAndDispatch(Suite &suite) {
                 "ID60 manifest and untracked factory creator are canonical");
     delete created;
 
-    suite.Check(LookupPrim(uint16_t{69}) == nullptr,
-                "ID69 is the first unassigned PrimId");
+    suite.Check(LookupPrim(uint16_t{70}) == nullptr,
+                "ID70 is the first unassigned PrimId");
     const size_t registered_before = factory.registeredCount();
     suite.RejectsExact<std::invalid_argument>([&] {
         factory.registerPrim(
-            "__collective_launch_v1_id69__", static_cast<PrimId>(69),
+            "__collective_launch_v1_id70__", static_cast<PrimId>(70),
             []() -> PrimBase * { return new Collective_launch_v1_prim(); });
-    }, "unassigned PrimId cannot be registered: 69",
-       "factory rejects first-unassigned ID69 exactly");
+    }, "unassigned PrimId cannot be registered: 70",
+       "factory rejects first-unassigned ID70 exactly");
     suite.Check(factory.registeredCount() == registered_before,
-                "failed ID69 registration does not mutate the factory");
+                "failed ID70 registration does not mutate the factory");
 
     static int legacy_sram_address = 0;
     TaskCoreContext context(

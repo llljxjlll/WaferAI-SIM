@@ -152,6 +152,8 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
      L::STABLE, S::AVAILABLE},
     {PrimId::ADAMW_UPDATE, "Adamw_update_prim", C::COMPUTE, V::PUBLIC,
      L::STABLE, S::AVAILABLE},
+    {PrimId::SWIGLU_BACKWARD_TIMING, "swiglu_backward_timing", C::COMPUTE,
+     V::PUBLIC, L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

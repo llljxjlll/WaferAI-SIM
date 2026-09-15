@@ -645,6 +645,38 @@ void TestCollectiveDataV1Wire(TestState &state) {
                     local_fp32_wire[0].range(37, 37).to_uint() == 1 &&
                     local_fp32_decoded.dtype == CollDType::FP32,
                 "Collective_data_v1_prim wire dtype code 4 explicitly maps FP32");
+    Collective_data_v1_prim cast = local;
+    cast.input_count = 1;
+    cast.output_dtype = CollDType::FP32;
+    CheckRoundTrip(state, "Collective_data_v1_prim V2 FP16-to-FP32", cast);
+    const Wire cast_wire = cast.serialize();
+    Collective_data_v1_prim cast_decoded;
+    cast_decoded.deserialize(cast_wire);
+    state.Check(cast_wire[0].range(23, 16).to_uint() ==
+                    kCollectiveDataV2CastWireVersion &&
+                    cast_wire[0].range(38, 38).to_uint() == 1 &&
+                    cast_decoded.dtype == CollDType::FP16 &&
+                    cast_decoded.output_dtype == CollDType::FP32 &&
+                    cast_decoded.length_bytes == 32,
+                "V2 FP16 input length and FP32 output bit are explicit on wire");
+    state.Check(CollectiveDataV2ArithmeticSelfTest(),
+                "V2 cast preserves +1/-0/subnormal/infinity and rank-major FP32 sum");
+    state.Throws("V2 FP16-to-FP32 rejects two input vectors", [&] {
+        Collective_data_v1_prim bad = cast;
+        bad.input_count = 2;
+        (void)bad.serialize();
+    });
+    state.Throws("V2 FP16-to-FP32 rejects V1 output flag", [&] {
+        Wire bad = cast_wire;
+        bad[0].range(23, 16) = kCollectiveDataV1PrimWireVersion;
+        Collective_data_v1_prim decoded;
+        decoded.deserialize(std::move(bad));
+    });
+    state.Throws("V2 FP16-to-FP32 validates doubled destination bytes", [&] {
+        Collective_data_v1_prim bad = cast;
+        bad.destination_address_bytes = std::numeric_limits<uint64_t>::max() - 33;
+        (void)bad.serialize();
+    });
     state.Throws("Collective_data_v1_prim FP8 rejected", [&] {
         Collective_data_v1_prim bad = local;
         bad.dtype = CollDType::FP8;

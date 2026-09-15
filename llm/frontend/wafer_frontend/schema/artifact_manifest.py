@@ -120,6 +120,7 @@ class RecordOpcode(IntEnum):
     CROSS_ENTROPY_BACKWARD = 0x1F
     SGD_UPDATE = 0x20
     ADAMW_UPDATE = 0x21
+    SWIGLU_BACKWARD_TIMING = 0x22
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
@@ -856,6 +857,7 @@ _OPERAND_SCHEMAS = {
     RecordOpcode.MATMUL: _COMPUTE_OPERANDS_WITH_DATA,
     RecordOpcode.ATTENTION: _COMPUTE_OPERANDS_UNUSED_DATA,
     RecordOpcode.SWIGLU: _COMPUTE_OPERANDS_UNUSED_DATA,
+    RecordOpcode.SWIGLU_BACKWARD_TIMING: _COMPUTE_OPERANDS_WITH_DATA,
     RecordOpcode.RESIDUAL: _COMPUTE_OPERANDS_WITH_DATA,
     RecordOpcode.RMSNORM: _COMPUTE_OPERANDS_WITH_DATA,
     RecordOpcode.ROPE_QK_EXACT: _ROPE_QK_EXACT_OPERANDS,
@@ -956,6 +958,9 @@ _ALLOWED_ADDRESS_KINDS = {
     (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_DATA_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
+    (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
+    (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
+    (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
     (RecordOpcode.DTE_SEND, SemanticOperandId.SOURCE_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS, ProgramSymbolKind.SRAM_REGION),
     (RecordOpcode.DTE_RECV, SemanticOperandId.DESTINATION_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS, ProgramSymbolKind.SRAM_REGION),
     (RecordOpcode.LOCAL_NOC_SEND, SemanticOperandId.SOURCE_ADDRESS): (ProgramSymbolKind.ABSOLUTE_ADDRESS,),
@@ -1073,6 +1078,7 @@ _COMPUTE_PARAMETER_COUNTS = {
     RecordOpcode.MATMUL: 4,
     RecordOpcode.ATTENTION: 5,
     RecordOpcode.SWIGLU: 1,
+    RecordOpcode.SWIGLU_BACKWARD_TIMING: 1,
     RecordOpcode.RESIDUAL: 1,
     RecordOpcode.RMSNORM: 3,
 }

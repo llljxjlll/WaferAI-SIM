@@ -317,6 +317,20 @@ public:
     }
 };
 
+// Dedicated backward timing primitive: gate/up forward concat 2N and
+// upstream gradient N produce two N-element projection gradients.
+class swiglu_backward_timing : public NpuBase {
+public:
+    void taskCore(TaskCoreContext &context, string prim_name,
+                  u_int64_t &dram_time, u_int64_t &exu_ops,
+                  u_int64_t &sfu_ops, u_int64_t &vec_ops);
+    void initialize();
+    swiglu_backward_timing() {
+        name = "swiglu_backward_timing";
+        param_name.insert(param_name.end(), {"N"});
+    }
+};
+
 
 class Send_global_memory : public NpuBase {
 public:
