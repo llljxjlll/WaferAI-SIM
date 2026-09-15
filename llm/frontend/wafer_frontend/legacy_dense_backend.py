@@ -18,6 +18,7 @@ from .schema.common import stable_artifact_id, validate_nonempty
 from .schema.experiment import (
     ExperimentSpec,
     InferSource,
+    PlacementStrategy,
     WorkloadMode,
 )
 from .schema.ir1 import PhysicalFabric
@@ -198,13 +199,16 @@ def _compatibility_reasons(
         reasons.append("request.execution_baseline_required")
     if (request.parallel.dp, request.parallel.ep, request.parallel.pp) != (1, 1, 1):
         reasons.append("request.parallel_dp_ep_pp_must_equal_one")
-    if request.parallel.tp != request.mesh.rank_count:
-        reasons.append("request.parallel_tp_must_cover_mesh")
     expected_dies = tuple(range(request.mesh.rank_count))
-    if request.parallel.active_die_ids and request.parallel.active_die_ids != expected_dies:
-        reasons.append("request.placement_full_row_major_mesh_required")
-    if manifest.placement.active_die_ids != expected_dies:
-        reasons.append("manifest.placement_full_row_major_mesh_required")
+    active_dies = request.parallel.active_die_ids or expected_dies
+    if request.parallel.tp > request.mesh.rank_count:
+        reasons.append("request.parallel_tp_exceeds_mesh")
+    if request.parallel.tp < request.mesh.rank_count and not request.parallel.active_die_ids:
+        reasons.append("request.explicit_active_die_ids_required")
+    if len(active_dies) != request.parallel.tp:
+        reasons.append("request.active_die_ids_tp_mismatch")
+    if manifest.placement.active_die_ids != active_dies:
+        reasons.append("manifest.placement_active_die_ids_mismatch")
     if fabric.die_grid != (request.mesh.columns, request.mesh.rows):
         reasons.append("fabric.mesh_shape_mismatch")
     if len(fabric.dies) != request.mesh.rank_count:
@@ -269,6 +273,16 @@ def _compatibility_reasons(
         instances[0].pp,
     ) != (request.parallel.tp, 1, 1, 1):
         reasons.append("legacy.parallel_mismatch")
+    if legacy_spec.placement.strategy is PlacementStrategy.COMPACT:
+        if active_dies != expected_dies:
+            reasons.append("legacy.explicit_active_group_required")
+    elif len(instances) == 1:
+        expected_key = (instances[0].id, f"{instances[0].id}.mesh.tp")
+        groups = legacy_spec.placement.groups
+        if (len(groups) != 1
+                or (groups[0].instance_id, groups[0].mesh_ref) != expected_key
+                or groups[0].die_ids != active_dies):
+            reasons.append("legacy.active_group_mismatch")
     return tuple(reasons), profile_id
 
 

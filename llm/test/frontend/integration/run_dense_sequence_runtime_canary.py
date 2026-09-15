@@ -250,8 +250,22 @@ def run(args: argparse.Namespace) -> None:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, original_alarm)
     sequence.validate()
+    active_dies = set(manifest.placement.active_die_ids)
+    compiled_core_die_ids = tuple(
+        tuple(sorted({stream.logical_core.die_id
+                      for stream in segment.linked_manifest.core_streams}))
+        for segment in sequence.segments
+    )
+    if any(set(die_ids) != active_dies for die_ids in compiled_core_die_ids):
+        raise RuntimeError(
+            "compiled core streams do not exactly cover active workload Dies: "
+            f"active={sorted(active_dies)}, observed={compiled_core_die_ids}"
+        )
     (output / "compiled_receipt.json").write_text(json.dumps({
         "mesh": args.mesh_size,
+        "active_die_ids": manifest.placement.active_die_ids,
+        "idle_die_ids": manifest.placement.idle_die_ids,
+        "compiled_core_die_ids": compiled_core_die_ids,
         "workload_case_id": manifest.request.case_id,
         "source_request_sha256": canonical_digest(manifest.request),
         "sequence_digest": sequence.digest,

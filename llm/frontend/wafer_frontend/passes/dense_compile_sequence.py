@@ -15,8 +15,11 @@ from ..schema.dense_compile_sequence import (
 )
 from ..schema.experiment import (
     ExperimentSpec,
+    ExplicitGroupPlacement,
     InferSource,
     InstanceRole,
+    PlacementSpec,
+    PlacementStrategy,
     WorkloadMode,
 )
 from ..schema.ir1 import PhysicalFabric
@@ -93,13 +96,16 @@ def _validate_inputs(
         reasons.append("request.baseline_timing_only_required")
     if (request.parallel.dp, request.parallel.ep, request.parallel.pp) != (1, 1, 1):
         reasons.append("request.dp_ep_pp_must_equal_one")
-    if request.parallel.tp != request.mesh.rank_count:
-        reasons.append("request.tp_must_cover_mesh")
     expected_dies = tuple(range(request.mesh.rank_count))
-    if request.parallel.active_die_ids and request.parallel.active_die_ids != expected_dies:
-        reasons.append("request.full_row_major_mesh_required")
-    if manifest.placement.active_die_ids != expected_dies:
-        reasons.append("manifest.full_row_major_mesh_required")
+    active_dies = request.parallel.active_die_ids or expected_dies
+    if request.parallel.tp > request.mesh.rank_count:
+        reasons.append("request.tp_exceeds_mesh")
+    if request.parallel.tp < request.mesh.rank_count and not request.parallel.active_die_ids:
+        reasons.append("request.explicit_active_die_ids_required")
+    if len(active_dies) != request.parallel.tp:
+        reasons.append("request.active_die_ids_tp_mismatch")
+    if manifest.placement.active_die_ids != active_dies:
+        reasons.append("manifest.active_die_ids_mismatch")
     if fabric.die_grid != (request.mesh.columns, request.mesh.rows):
         reasons.append("fabric.mesh_shape_mismatch")
     if len(fabric.dies) != request.mesh.rank_count:
@@ -121,6 +127,13 @@ def _validate_inputs(
         instances[0].pp,
     ) != (request.parallel.tp, 1, 1, 1):
         reasons.append("legacy.parallel_mismatch")
+    if legacy_template.placement.strategy is PlacementStrategy.EXPLICIT and len(instances) == 1:
+        expected_key = (instances[0].id, f"{instances[0].id}.mesh.tp")
+        groups = legacy_template.placement.groups
+        if (len(groups) != 1
+                or (groups[0].instance_id, groups[0].mesh_ref) != expected_key
+                or groups[0].die_ids != active_dies):
+            reasons.append("legacy.active_group_mismatch")
     model = legacy_template.model
     target = request.model
     if (
@@ -180,10 +193,25 @@ def _segment_spec(
         role=(InstanceRole.PREFILL if segment_index == 0 else InstanceRole.DECODE),
         sp=template.parallel.instances[0].tp > 1,
     )
+    active_dies = manifest.placement.active_die_ids
+    full_row_major = tuple(range(manifest.request.mesh.rank_count))
+    placement = (
+        template.placement
+        if active_dies == full_row_major
+        else PlacementSpec(
+            PlacementStrategy.EXPLICIT,
+            (ExplicitGroupPlacement(
+                instance.id,
+                f"{instance.id}.mesh.tp",
+                active_dies,
+            ),),
+        )
+    )
     spec = replace(
         template,
         workload=replace(template.workload, infer=segment_infer, train=None),
         parallel=replace(template.parallel, instances=(instance,)),
+        placement=placement,
     )
     spec.validate(f"dense_compile_sequence.segment[{segment_index}].legacy_spec")
     return spec

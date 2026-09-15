@@ -650,13 +650,20 @@ def _validate_rect_mesh_compile_inputs(
             code=RectMeshFallbackReason.INCOMPATIBLE_SHARDING.value,
         )
     instance = spec.parallel.instances[0]
-    if instance.tp != mesh.rank_count:
+    if instance.tp > mesh.rank_count:
         raise SchemaError(
-            f"TP must equal rectangular Mesh rank count {mesh.rank_count}",
+            f"TP cannot exceed rectangular Mesh rank count {mesh.rank_count}",
             path="spec.parallel.instances[0].tp",
             code=RectMeshFallbackReason.INCOMPATIBLE_SHARDING.value,
         )
-    if spec.placement.strategy is PlacementStrategy.EXPLICIT:
+    if spec.placement.strategy is PlacementStrategy.COMPACT:
+        if instance.tp != mesh.rank_count:
+            raise SchemaError(
+                "a partial TP group requires explicit physical Die placement",
+                path="spec.placement.strategy",
+                code=RectMeshFallbackReason.INVALID_PLACEMENT.value,
+            )
+    elif spec.placement.strategy is PlacementStrategy.EXPLICIT:
         expected_key = (instance.id, f"{instance.id}.mesh.tp")
         if (
             len(spec.placement.groups) != 1
@@ -665,11 +672,14 @@ def _validate_rect_mesh_compile_inputs(
                 spec.placement.groups[0].mesh_ref,
             )
             != expected_key
-            or spec.placement.groups[0].die_ids
-            != tuple(range(mesh.rank_count))
+            or len(spec.placement.groups[0].die_ids) != instance.tp
+            or any(
+                die_id >= mesh.rank_count
+                for die_id in spec.placement.groups[0].die_ids
+            )
         ):
             raise SchemaError(
-                "explicit placement must be the complete hole-free row-major Mesh",
+                "explicit placement must bind exactly TP ranks to physical Mesh Dies",
                 path="spec.placement.groups",
                 code=RectMeshFallbackReason.INVALID_PLACEMENT.value,
             )

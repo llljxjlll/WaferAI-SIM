@@ -251,7 +251,7 @@ class RectMeshCompilerDispatchTest(unittest.TestCase):
             )
         self.assertEqual(
             sharding.exception.code,
-            RectMeshFallbackReason.INCOMPATIBLE_SHARDING.value,
+            RectMeshFallbackReason.INVALID_PLACEMENT.value,
         )
 
         reversed_placement = replace(
@@ -267,7 +267,7 @@ class RectMeshCompilerDispatchTest(unittest.TestCase):
                 ),
             ),
         )
-        with self.assertRaises(SchemaError) as placement:
+        with self.assertRaises(UnsupportedFeatureError) as placement:
             compile_rect_mesh(
                 reversed_placement,
                 self.fabric,
@@ -277,7 +277,7 @@ class RectMeshCompilerDispatchTest(unittest.TestCase):
             )
         self.assertEqual(
             placement.exception.code,
-            RectMeshFallbackReason.INVALID_PLACEMENT.value,
+            RectMeshFallbackReason.STANDARD_CHAIN_UNAVAILABLE.value,
         )
 
 

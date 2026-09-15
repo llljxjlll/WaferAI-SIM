@@ -1,13 +1,32 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 import unittest
 
+from llm.frontend.wafer_frontend.compiler import _validate_rect_mesh_compile_inputs
+from llm.frontend.wafer_frontend.errors import SchemaError, UnsupportedFeatureError
+from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
+    _segment_spec,
+    _validate_inputs,
+)
+from llm.frontend.wafer_frontend.passes.group_registry import build_group_registry
+from llm.frontend.wafer_frontend.schema.experiment import (
+    ExplicitGroupPlacement,
+    PlacementSpec,
+    PlacementStrategy,
+)
+from llm.frontend.wafer_frontend.schema.rect_mesh import RectMeshSpec
 from llm.frontend.wafer_frontend.schema.serde import canonical_digest
 from llm.test.frontend.integration.run_dense_sequence_runtime_canary import (
     _six_die_fixed_model_case,
 )
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
+from llm.test.frontend.unit.test_group_registry import (
+    context,
+    mesh_fabric,
+    mesh_graph,
+)
 
 
 class SixDieFixedDenseModelTest(unittest.TestCase):
@@ -91,6 +110,62 @@ class SixDieFixedDenseModelTest(unittest.TestCase):
             Counter((op.kind, op.step, op.layer)
                     for op in compact.logical_graph.operations),
         )
+
+    def test_nine_die_production_segments_and_physical_routes_preserve_idle_row(self) -> None:
+        manifest, template, fabric = _six_die_fixed_model_case(3, 3)
+        active = manifest.placement.active_die_ids
+        _validate_inputs(manifest, template, fabric,
+                         valid_hbm_address_spaces(fabric))
+        for index in range(3):
+            with self.subTest(segment=index):
+                spec = _segment_spec(template, manifest, index)
+                self.assertIs(spec.placement.strategy, PlacementStrategy.EXPLICIT)
+                self.assertEqual(spec.placement.groups[0].die_ids, active)
+                _validate_rect_mesh_compile_inputs(spec, fabric, RectMeshSpec(3, 3))
+
+        physical_group = build_group_registry(
+            mesh_graph(6),
+            context(mesh_fabric(3, 3), PlacementSpec(
+                PlacementStrategy.EXPLICIT,
+                (ExplicitGroupPlacement("P0", "mesh_tp", active),),
+            )),
+        )[0]
+        self.assertEqual(tuple(item.die_id for item in physical_group.placements),
+                         active)
+        routes = {(route.source_rank, route.destination_rank): route.die_path
+                  for route in physical_group.embedding.routes}
+        self.assertEqual(routes[(0, 3)], (0, 3, 6))
+        self.assertEqual(routes[(2, 5)], (2, 5, 8))
+        self.assertTrue({3, 4, 5}.isdisjoint(active))
+        self.assertEqual(len(routes), 6 * 5)
+
+    def test_nine_die_partial_group_rejects_compact_or_out_of_mesh_die(self) -> None:
+        manifest, template, fabric = _six_die_fixed_model_case(3, 3)
+        spec = _segment_spec(template, manifest, 0)
+        mesh = RectMeshSpec(3, 3)
+        with self.assertRaises(SchemaError):
+            _validate_rect_mesh_compile_inputs(replace(spec, placement=PlacementSpec(
+                PlacementStrategy.COMPACT, (),
+            )), fabric, mesh)
+        invalid = replace(spec, placement=PlacementSpec(
+            PlacementStrategy.EXPLICIT,
+            (ExplicitGroupPlacement(
+                spec.parallel.instances[0].id,
+                f"{spec.parallel.instances[0].id}.mesh.tp",
+                (0, 1, 2, 6, 7, 9)),),
+        ))
+        with self.assertRaises(SchemaError):
+            _validate_rect_mesh_compile_inputs(invalid, fabric, mesh)
+        mismatched_template = replace(template, placement=PlacementSpec(
+            PlacementStrategy.EXPLICIT,
+            (ExplicitGroupPlacement(
+                spec.parallel.instances[0].id,
+                f"{spec.parallel.instances[0].id}.mesh.tp",
+                tuple(range(6))),),
+        ))
+        with self.assertRaises(UnsupportedFeatureError):
+            _validate_inputs(manifest, mismatched_template, fabric,
+                             valid_hbm_address_spaces(fabric))
 
     def test_long_rectangles_preserve_six_active_dies_and_the_same_model(self) -> None:
         reference, template, _ = _six_die_fixed_model_case(2, 3)
