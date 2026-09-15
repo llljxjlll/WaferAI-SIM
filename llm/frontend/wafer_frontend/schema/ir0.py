@@ -26,6 +26,10 @@ from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
 )
+from .moe_full_training_block_workload import (
+    MoeForwardBlockKind,
+    MoeFullTrainingBlockWorkload,
+)
 
 
 IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha12"
@@ -54,6 +58,11 @@ class OpKind(str, Enum):
     EMBEDDING = "embedding"
     EMBEDDING_TABLE_WGRAD = "embedding_table_wgrad"
     NORM_GAMMA_WGRAD = "norm_gamma_wgrad"
+    MOE_ROUTER = "moe_router"
+    MOE_ROUTE_FREEZE = "moe_route_freeze"
+    MOE_DISPATCH = "moe_dispatch"
+    MOE_EXPERT_FORWARD = "moe_expert_forward"
+    MOE_COMBINE = "moe_combine"
     ROPE = "rope"
     SAMPLING = "sampling"
     CE_FORWARD = "ce_forward"
@@ -1464,6 +1473,7 @@ NodeWorkload = (
     | EmbeddingWorkload
     | EmbeddingTableWgradWorkload
     | NormGammaWgradWorkload
+    | MoeFullTrainingBlockWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
     | CrossEntropyForwardWorkload
@@ -1545,6 +1555,11 @@ class LogicalNode:
             OpKind.EMBEDDING: EmbeddingWorkload,
             OpKind.EMBEDDING_TABLE_WGRAD: EmbeddingTableWgradWorkload,
             OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
+            OpKind.MOE_ROUTER: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_ROUTE_FREEZE: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_EXPERT_FORWARD: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_COMBINE: MoeFullTrainingBlockWorkload,
             OpKind.ROPE: RopeQkWorkload,
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
@@ -1577,6 +1592,26 @@ class LogicalNode:
                     "native parameter WGRAD needs real FP32 gradient, exact operands and pure WGRAD phase",
                     path=path,
                 )
+        source_moe = {
+            OpKind.MOE_ROUTER: (MoeForwardBlockKind.ROUTER,3,1),
+            OpKind.MOE_ROUTE_FREEZE: (MoeForwardBlockKind.ROUTE_FREEZE,1,1),
+            OpKind.MOE_DISPATCH: (MoeForwardBlockKind.DISPATCH,2,
+                                  self.workload.expert_count),
+            OpKind.MOE_EXPERT_FORWARD: (MoeForwardBlockKind.EXPERT,4,1),
+            OpKind.MOE_COMBINE: (MoeForwardBlockKind.COMBINE,
+                                  self.workload.expert_count+1,1),
+        } if type(self.workload) is MoeFullTrainingBlockWorkload else {}
+        if self.kind in source_moe:
+            source_kind, input_count, output_count = source_moe[self.kind]
+            if (self.workload.kind is not source_kind
+                    or self.phase is not OpPhase.FWD
+                    or self.impl_ref != "moe_"+source_kind.value
+                    or len(self.inputs) != input_count
+                    or len(self.outputs) != output_count
+                    or self.math.accumulation_dtype is not DType.FP32
+                    or self.effects != NodeEffects(EffectKind.PURE,None,None)):
+                raise SchemaError("MoE source op needs exact route/expert primitive, FP32 accumulation, pure FWD phase and operand arity",
+                                  path=path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2050,6 +2085,42 @@ class IR0:
                         or operands[-2].producer is None
                         or operands[-1].producer != node.id):
                     raise SchemaError("native WGRAD requires real upstream producer and exact FP32 parameter shape",
+                                      path=f"{path}.nodes[{index}].inputs")
+            if node.kind in (
+                OpKind.MOE_ROUTER,OpKind.MOE_ROUTE_FREEZE,
+                OpKind.MOE_DISPATCH,OpKind.MOE_EXPERT_FORWARD,
+                OpKind.MOE_COMBINE,
+            ):
+                if self.job is not JobKind.TRAIN:
+                    raise SchemaError("this MoE forward source requires TRAIN job",
+                                      path=f"{path}.nodes[{index}].kind")
+                workload = node.workload
+                assert isinstance(workload,MoeFullTrainingBlockWorkload)
+                m,h,e,i = (workload.token_count,workload.hidden_size,
+                           workload.expert_count,workload.intermediate_size)
+                if node.kind is OpKind.MOE_ROUTER:
+                    specs = (((m,h),DType.FP16),
+                             *((((h,e),DType.FP16),) * 2),
+                             ((m,e),DType.FP32))
+                elif node.kind is OpKind.MOE_ROUTE_FREEZE:
+                    specs = (((m,e),DType.FP32),((m,),DType.INT32))
+                elif node.kind is OpKind.MOE_DISPATCH:
+                    specs = (((m,h),DType.FP16),((m,),DType.INT32),
+                             *(((n,h),DType.FP16) for n in
+                               workload.expert_histogram))
+                elif node.kind is OpKind.MOE_EXPERT_FORWARD:
+                    n=workload.expert_histogram[workload.expert]
+                    specs = (((n,h),DType.FP16),((h,i),DType.FP16),
+                             ((h,i),DType.FP16),((i,h),DType.FP16),
+                             ((n,h),DType.FP16))
+                else:
+                    specs = (*(((n,h),DType.FP16) for n in
+                               workload.expert_histogram),
+                             ((m,),DType.INT32),((m,h),DType.FP16))
+                actual = tuple((value_index[ref].shape,value_index[ref].dtype)
+                               for ref in (*node.inputs,*node.outputs))
+                if actual != specs:
+                    raise SchemaError("MoE source node route/three expert projections or FP32 router tensor shape differs from physical model",
                                       path=f"{path}.nodes[{index}].inputs")
             workload_profile = getattr(node.workload, "profile", None)
             if (

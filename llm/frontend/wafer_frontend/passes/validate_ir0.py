@@ -152,6 +152,11 @@ class DenseIR0Validator:
     @staticmethod
     def validate(graph: IR0, path: str = "ir0") -> None:
         graph.validate(path)
+        if graph.producer_pass == "moe_full_train_forward_replacement_ir0":
+            raise UnsupportedFeatureError(
+                "MoE full forward TRAIN requires a typed source phase with exact E2E EP owner and production StateABI provenance",
+                path=f"{path}.producer_pass",
+            )
         _validate_dependency_dag(graph, path)
 
         nodes = {node.id: node for node in graph.nodes}
@@ -305,6 +310,15 @@ class DenseIR0Validator:
                 DenseIR0Validator._validate_native_parameter_wgrad(
                     node, values, local_shapes, axis_sizes[node.mesh_ref],
                     node_path,
+                )
+            elif node.kind in (
+                OpKind.MOE_ROUTER, OpKind.MOE_ROUTE_FREEZE,
+                OpKind.MOE_DISPATCH, OpKind.MOE_EXPERT_FORWARD,
+                OpKind.MOE_COMBINE,
+            ):
+                raise UnsupportedFeatureError(
+                    "Dense job cannot attach MoE operations without exact source phase/EP owner contract",
+                    path=node_path,
                 )
             elif node.kind is OpKind.ROPE:
                 DenseIR0Validator._validate_rope(
