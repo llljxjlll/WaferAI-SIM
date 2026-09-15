@@ -8,6 +8,8 @@ import unittest
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes.dense_training_ce_backward import (
     build_dense_training_ce_backward_record,
+    build_dense_training_ce_backward_from_loss_gradient,
+    dense_training_per_row_loss_gradient_seed,
 )
 from llm.frontend.wafer_frontend.schema.artifact_manifest import (
     ProgramSymbol,
@@ -73,8 +75,31 @@ class DenseNativeCeBackwardTest(unittest.TestCase):
     def test_different_forward_loss_symbol_fails_closed(self) -> None:
         symbols = _symbols()
         symbols["upstream"] = replace(symbols["upstream"], id="stale_loss")
-        with self.assertRaisesRegex(SchemaError, "differ from physical forward"):
+        with self.assertRaisesRegex(SchemaError, "legacy timing surrogate"):
             build_dense_training_ce_backward_record(_forward(), **symbols)
+
+    def test_independent_loss_gradient_and_nonzero_per_row_seed(self) -> None:
+        symbols = _symbols()
+        independent = ProgramSymbol("symbol_independent_dloss", ProgramSymbolKind.ABSOLUTE_ADDRESS,
+                                    "sram:dloss")
+        result = build_dense_training_ce_backward_from_loss_gradient(
+            _forward(), logits=symbols["logits"], labels=symbols["labels"],
+            loss_gradient=independent, logits_gradient=symbols["logits_gradient"],
+        )
+        self.assertIs(result.opcode, RecordOpcode.CROSS_ENTROPY_BACKWARD)
+        self.assertEqual(result.operands[8].symbol_ref, independent.id)
+        self.assertNotEqual(result.operands[8].symbol_ref, _forward().operands[6].symbol_ref)
+        self.assertEqual(dense_training_per_row_loss_gradient_seed(4), b"\x00\x00\x80\x3f" * 4)
+        result.validate("independent_dloss_native")
+
+    def test_forward_loss_cannot_be_its_own_gradient(self) -> None:
+        symbols = _symbols()
+        with self.assertRaisesRegex(SchemaError, "independent of forward loss"):
+            build_dense_training_ce_backward_from_loss_gradient(
+                _forward(), logits=symbols["logits"], labels=symbols["labels"],
+                loss_gradient=symbols["upstream"],
+                logits_gradient=symbols["logits_gradient"],
+            )
 
     def test_native_ce_backward_cannot_label_output_as_fp32(self) -> None:
         result = build_dense_training_ce_backward_record(
