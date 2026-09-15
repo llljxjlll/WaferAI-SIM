@@ -71,6 +71,10 @@ def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
     if grid != receipt.get("native_core_grid") or not isinstance(grid, list) or len(grid) != 2 or any(type(side) is not int or side <= 0 for side in grid):
         raise ValueError("frontend/native per-Die core grids disagree")
     stride = grid[0] * grid[1]
+    hardware = json.loads((directory / "hardware.json").read_text(encoding="utf-8"))
+    die_hardware = hardware.get("die", {})
+    if (hardware.get("x"), hardware.get("y")) != tuple(grid) or (die_hardware.get("x"), die_hardware.get("y")) != (columns, rows):
+        raise ValueError("native hardware core or physical Die mesh differs from bound receipt")
     if receipt.get("frontend_cores_per_die") != stride or receipt.get("native_cores_per_die") != stride:
         raise ValueError("frontend/native core stride disagrees with hardware")
     used_cores = tuple(sorted({int(core) for core, issued in _MEMORY.findall(text) if int(issued) > 0}))

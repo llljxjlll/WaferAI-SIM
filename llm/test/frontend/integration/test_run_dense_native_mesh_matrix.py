@@ -32,8 +32,9 @@ def _fixture(root: Path) -> Path:
             file.write_bytes(f"{suffix}-{index}".encode())
             digests.append(hashlib.sha256(file.read_bytes()).hexdigest())
         binding[key] = digests
-    (directory / "hardware.json").write_text("{}")
-    binding["hardware_sha256"] = hashlib.sha256(b"{}").hexdigest()
+    hardware_text = json.dumps({"x": 2, "y": 2, "die": {"x": 4, "y": 1}})
+    (directory / "hardware.json").write_text(hardware_text)
+    binding["hardware_sha256"] = hashlib.sha256(hardware_text.encode()).hexdigest()
     (directory / "source_tool_binding.json").write_text(json.dumps(binding))
     receipt = {
         "runtime_status": "verified",
@@ -106,10 +107,30 @@ class NativeMatrixAuditTest(unittest.TestCase):
             receipt = json.loads((directory / "compiled_receipt.json").read_text())
             receipt["mesh"] = "4x1"
             (directory / "compiled_receipt.json").write_text(json.dumps(receipt))
+            hardware = json.loads((directory / "hardware.json").read_text())
+            hardware["die"] = {"x": 1, "y": 4}
+            hardware_text = json.dumps(hardware)
+            (directory / "hardware.json").write_text(hardware_text)
+            binding = json.loads((directory / "source_tool_binding.json").read_text())
+            binding["hardware_sha256"] = hashlib.sha256(hardware_text.encode()).hexdigest()
+            (directory / "source_tool_binding.json").write_text(json.dumps(binding))
             path = directory / "npusim.stdout.txt"
             path.write_text(path.read_text().replace(" dir=E ", " dir=N ").replace(" dir=W ", " dir=S "))
             observation = audit_fresh(directory, "4x1")
             self.assertEqual(observation["physical_die_ids"], (0, 1, 2, 3))
+
+    def test_hardware_die_grid_wrong_despite_receipt_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = _fixture(Path(raw))
+            hardware = json.loads((directory / "hardware.json").read_text())
+            hardware["die"] = {"x": 2, "y": 2}
+            hardware_text = json.dumps(hardware)
+            (directory / "hardware.json").write_text(hardware_text)
+            binding = json.loads((directory / "source_tool_binding.json").read_text())
+            binding["hardware_sha256"] = hashlib.sha256(hardware_text.encode()).hexdigest()
+            (directory / "source_tool_binding.json").write_text(json.dumps(binding))
+            with self.assertRaisesRegex(ValueError, "physical Die mesh"):
+                audit_fresh(directory, "1x4")
 
     def test_artifact_byte_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
