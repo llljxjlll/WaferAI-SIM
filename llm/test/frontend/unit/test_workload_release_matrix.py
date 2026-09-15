@@ -169,6 +169,37 @@ class WorkloadReleaseMatrixTest(unittest.TestCase):
             self.assertEqual(summary.runtime_pass_count, 32)
             self.assertFalse(summary.missing_case_ids)
 
+    def test_executor_failure_is_persisted_and_prevents_completion(self) -> None:
+        failed_case_id = self.m1.cases_for_shard(0)[0].id
+
+        def executor(plan, case):
+            if case.id == failed_case_id:
+                raise RuntimeError("injected backend failure")
+            return _passing_result(plan, case)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shard_dirs = tuple(
+                root / f"shard-{index}"
+                for index in range(self.m1.shard_count)
+            )
+            for index, directory in enumerate(shard_dirs):
+                run_workload_release_shard(self.m1, index, directory, executor)
+            summary = merge_workload_release_shards(self.m1, shard_dirs)
+            self.assertFalse(summary.all_planned_cases_complete)
+            self.assertEqual(summary.failed_count, 1)
+            self.assertFalse(summary.missing_case_ids)
+            failure = next(
+                result
+                for result in summary.results
+                if result.case_id == failed_case_id
+            )
+            self.assertIs(
+                failure.observed_outcome,
+                WorkloadReleaseObservedOutcome.FAILED,
+            )
+            self.assertEqual(failure.diagnostic_code, "executor.RuntimeError")
+
 
 if __name__ == "__main__":
     unittest.main()
