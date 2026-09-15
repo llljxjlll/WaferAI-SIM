@@ -165,11 +165,11 @@ def _all_die_scaled_model_case(rows: int, columns: int):
     model = replace(
         base.model,
         vocabulary_size=max(128, ranks),
-        hidden_size=2 * ranks,
-        intermediate_size=4 * ranks,
+        hidden_size=16 * ranks,
+        intermediate_size=16 * ranks,
         num_attention_heads=ranks,
         num_kv_heads=ranks,
-        head_dim=2,
+        head_dim=16,
     )
     request = WorkloadRunRequest.create(
         family=base.family,
@@ -215,7 +215,7 @@ def _all_die_scaled_model_case(rows: int, columns: int):
             NH=model.num_attention_heads,
             KVH=model.num_kv_heads,
             DH=model.head_dim,
-            rotary_dim=2,
+            rotary_dim=16,
         ),
         parallel=replace(template.parallel, instances=(
             replace(template.parallel.instances[0], tp=ranks, sp=False),
@@ -224,15 +224,13 @@ def _all_die_scaled_model_case(rows: int, columns: int):
     template.validate()
     sram_bytes = _SIX_DIE_SRAM_BYTES if ranks == 6 else 65536
     hardware = minimal_hardware(columns, rows, sram_bytes=sram_bytes)
-    if ranks == 6:
-        hardware["memory"]["sram"]["allocation_alignment_bytes"] = (
-            _SIX_DIE_SRAM_ALIGNMENT_BYTES
-        )
+    hardware["memory"]["sram"]["allocation_alignment_bytes"] = 32
     fabric = physical_fabric_from_data(hardware)
     return manifest, template, fabric
 
 
-def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
+def _run(command: tuple[str, ...], *, cwd: Path, timeout: int,
+         failure_log: Path | None = None) -> str:
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -243,9 +241,12 @@ def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
         timeout=timeout,
     )
     if completed.returncode != 0:
+        if failure_log is not None:
+            failure_log.write_text(completed.stdout, encoding="utf-8")
         raise RuntimeError(
             f"returncode={completed.returncode}: {' '.join(command)}\n"
-            f"{completed.stdout}"
+            f"stdout_file={failure_log if failure_log is not None else 'none'}\n"
+            f"stdout_tail={completed.stdout[-1600:]}"
         )
     return completed.stdout
 
@@ -445,6 +446,7 @@ def run(args: argparse.Namespace) -> None:
         _SIX_DIE_SRAM_BYTES if manifest.request.parallel.tp == 6 else 65536
     )
     sram_alignment = (
+        32 if args.scaled_all_dies else
         _SIX_DIE_SRAM_ALIGNMENT_BYTES
         if manifest.request.parallel.tp == 6 else 64
     )
@@ -487,7 +489,8 @@ def run(args: argparse.Namespace) -> None:
             not in preflight):
         raise RuntimeError("native SRAM hardware profile differs from compiled fabric")
     mapping_path.write_text("0:0\n", encoding="utf-8")
-    runtime_output = _run(
+    try:
+        runtime_output = _run(
         (
             str(args.npusim.resolve()),
             "--program-sequence",
@@ -506,8 +509,24 @@ def run(args: argparse.Namespace) -> None:
             "1000000",
         ),
         cwd=output,
-        timeout=args.timeout,
-    )
+            timeout=args.timeout,
+            failure_log=output / "npusim.failure.stdout.txt",
+        )
+    except Exception as error:
+        (output / "runtime_failure.json").write_text(json.dumps({
+            "mesh": args.mesh_size,
+            "workload_case_id": manifest.request.case_id,
+            "source_request_sha256": canonical_digest(manifest.request),
+            "phase": "native_npusim",
+            "runtime_status": "failed",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "wall_seconds": round(time.monotonic() - started, 3),
+            "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "source_tool_at_entry": source_tool_at_entry,
+            "npup_sha256": artifact_digests,
+        }, indent=2, sort_keys=True), encoding="utf-8")
+        raise
     (output / "npusim.stdout.txt").write_text(runtime_output, encoding="utf-8")
 
     segment_markers = re.findall(

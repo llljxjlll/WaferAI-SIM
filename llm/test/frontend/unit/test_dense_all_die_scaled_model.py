@@ -26,7 +26,7 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
                           request.model.intermediate_size,
                           request.model.num_attention_heads,
                           request.model.num_kv_heads,
-                          request.model.head_dim), (18, 36, 9, 9, 2))
+                          request.model.head_dim), (144, 144, 9, 9, 16))
         self.assertEqual((request.steps.inference.prefill_tokens,
                           request.steps.inference.decode_steps,
                           request.steps.inference.request_count), (1, 2, 9))
@@ -63,7 +63,7 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
         self.assertEqual(len(manifest.logical_graph.operations), 96)
         self.assertEqual((manifest.request.model.hidden_size,
                           manifest.request.model.intermediate_size,
-                          manifest.request.model.head_dim), (200, 400, 2))
+                          manifest.request.model.head_dim), (1600, 1600, 16))
         _validate_inputs(manifest, template, fabric,
                          valid_hbm_address_spaces(fabric))
         for index in range(3):
