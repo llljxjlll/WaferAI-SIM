@@ -97,15 +97,16 @@ def _four_die_rect_case(rows: int, columns: int):
 
 
 def _six_die_fixed_model_case(rows: int, columns: int):
-    """One unchanged two-layer TP6 model, including a 3x3 idle-middle row."""
+    """One unchanged two-layer TP6 model on a physical rectangle."""
 
-    if (rows, columns) not in ((2, 3), (3, 2), (1, 6), (6, 1), (3, 3)):
-        raise ValueError("fixed-model TP6 requires a six-die rectangle or 3x3")
+    if not (1 <= rows <= 10 and 1 <= columns <= 10 and rows * columns >= 6):
+        raise ValueError("fixed-model TP6 requires 6..100 physical Dies in 1..10 mesh")
     physical_dies = rows * columns
     ranks = 6
     active_dies = (
         (0, 1, 2, 6, 7, 8) if (rows, columns) == (3, 3)
-        else tuple(range(ranks))
+        else tuple(index * (physical_dies - 1) // (ranks - 1)
+                   for index in range(ranks))
     )
     base = _request(layers=2, prefill=6, decode=2)
     model = replace(
@@ -283,8 +284,12 @@ def _source_tool_snapshot(args: argparse.Namespace) -> dict[str, dict[str, str]]
 def run(args: argparse.Namespace) -> None:
     source_tool_at_entry = _source_tool_snapshot(args)
     rows, columns = (int(dimension) for dimension in args.mesh_size.split("x"))
+    if args.scaled_all_dies and args.fixed_global_tp6:
+        raise ValueError("select either scaled-all-dies or fixed-global-tp6")
     if args.scaled_all_dies:
         manifest, template, fabric = _all_die_scaled_model_case(rows, columns)
+    elif args.fixed_global_tp6:
+        manifest, template, fabric = _six_die_fixed_model_case(rows, columns)
     elif args.mesh_size == "1x1":
         manifest, template, fabric = _one_die_case()
     elif args.mesh_size == "2x2":
@@ -635,6 +640,11 @@ def _parse_args() -> argparse.Namespace:
         "--scaled-all-dies",
         action="store_true",
         help="two-layer Dense TP=all physical Dies; shape-scaled main case",
+    )
+    parser.add_argument(
+        "--fixed-global-tp6",
+        action="store_true",
+        help="unchanged two-layer Dense TP6 source on a physical mesh of >=6 Dies",
     )
     parser.add_argument(
         "--finalizer", type=Path, default=build / "npusim_program_finalizer"
