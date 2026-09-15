@@ -9,6 +9,8 @@ from llm.frontend.wafer_frontend.passes.flexible_dense_train import (
 )
 from llm.frontend.wafer_frontend.schema.common import DType
 from llm.frontend.wafer_frontend.schema.full_dense_gradient_requirements import (
+    DenseGradientDPReduction,
+    DenseGradientLossObjective,
     build_dense_full_train_requirements,
 )
 from llm.frontend.wafer_frontend.schema.rect_mesh import RectMeshSpec
@@ -47,6 +49,12 @@ class FullDenseGradientRequirementsTest(unittest.TestCase):
                     oracle.loss_gradient_seed_ref, oracle.forward_loss_value_ref
                 )
                 self.assertIs(oracle.loss_gradient_seed_dtype, DType.FP32)
+                self.assertEqual(oracle.loss_gradient_seed_per_row, 1.0)
+                self.assertIs(oracle.loss_objective,
+                              DenseGradientLossObjective.PER_ROW_CE_SUM)
+                self.assertIs(oracle.dp_reduction,
+                              DenseGradientDPReduction.FP32_RANK_MAJOR_SUM)
+                self.assertFalse(oracle.optimizer_gradient_normalization)
                 for step in range(2):
                     for template in plan.parameter_templates:
                         for rank in template.owner_ranks:
@@ -85,6 +93,18 @@ class FullDenseGradientRequirementsTest(unittest.TestCase):
             replace(oracle, loss_gradient_seed_ref=oracle.forward_loss_value_ref).validate_against(plan)
         with self.assertRaisesRegex(SchemaError, "two steps"):
             build_dense_full_train_requirements(plan, steps=1)
+
+    def test_zero_seed_or_false_mean_normalization_cannot_pass_as_sum(self) -> None:
+        plan = self._plan(2, 2)
+        oracle = build_dense_full_train_requirements(plan)
+        for changed in (
+            replace(oracle, loss_gradient_seed_per_row=0.0),
+            replace(oracle, dp_reduction="fp32_mean"),
+            replace(oracle, optimizer_gradient_normalization=True),
+        ):
+            with self.subTest(change=changed):
+                with self.assertRaisesRegex(SchemaError, "contract drifted"):
+                    changed.validate_against(plan)
 
 
 if __name__ == "__main__":

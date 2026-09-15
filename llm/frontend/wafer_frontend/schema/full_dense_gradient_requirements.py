@@ -8,6 +8,7 @@ labels; no caller may infer physical gradient coverage from these names.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from types import MappingProxyType
 from typing import Mapping
 
@@ -17,6 +18,18 @@ from .flexible_dense_train import FlexibleDenseTrainPlan
 from .ir0 import CrossEntropyForwardWorkload, OpKind, OpPhase
 from .persistent_state import StateKind
 from .serde import canonical_digest
+
+
+class DenseGradientLossObjective(str, Enum):
+    """Sum every independently seeded per-row CE loss, without a mean."""
+
+    PER_ROW_CE_SUM = "per_row_ce_sum"
+
+
+class DenseGradientDPReduction(str, Enum):
+    """Use the backend's rank-major FP32 SUM, not an implied MEAN."""
+
+    FP32_RANK_MAJOR_SUM = "fp32_rank_major_sum"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +66,10 @@ class DenseFullTrainRequirements:
     backward_ce_ref: str
     loss_gradient_seed_ref: str
     loss_gradient_seed_dtype: DType
+    loss_gradient_seed_per_row: float
+    loss_objective: DenseGradientLossObjective
+    dp_reduction: DenseGradientDPReduction
+    optimizer_gradient_normalization: bool
     forward_loss_value_ref: str
     required_forward_refs: tuple[str, ...]
     required_backbone_backward_refs: tuple[str, ...]
@@ -194,6 +211,10 @@ def build_dense_full_train_requirements(
         backward_ce_ref=f"{ce.id}_backward",
         loss_gradient_seed_ref=seed_ref,
         loss_gradient_seed_dtype=DType.FP32,
+        loss_gradient_seed_per_row=1.0,
+        loss_objective=DenseGradientLossObjective.PER_ROW_CE_SUM,
+        dp_reduction=DenseGradientDPReduction.FP32_RANK_MAJOR_SUM,
+        optimizer_gradient_normalization=False,
         forward_loss_value_ref=loss.id,
         required_forward_refs=tuple(node.id for node in graph.nodes),
         required_backbone_backward_refs=tuple(
