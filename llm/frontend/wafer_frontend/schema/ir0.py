@@ -22,6 +22,10 @@ from .persistent_state import (
     PersistentStateDecl,
 )
 from .stage3_profile import Stage3ProfileMode, Stage3StaticProfile
+from .moe_training_ir0_workloads import (
+    EmbeddingTableWgradWorkload,
+    NormGammaWgradWorkload,
+)
 
 
 IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha12"
@@ -48,6 +52,8 @@ class OpKind(str, Enum):
     COLLECTIVE = "collective"
     P2P = "p2p"
     EMBEDDING = "embedding"
+    EMBEDDING_TABLE_WGRAD = "embedding_table_wgrad"
+    NORM_GAMMA_WGRAD = "norm_gamma_wgrad"
     ROPE = "rope"
     SAMPLING = "sampling"
     CE_FORWARD = "ce_forward"
@@ -1456,6 +1462,8 @@ NodeWorkload = (
     | ResidualWorkload
     | AttentionWorkload
     | EmbeddingWorkload
+    | EmbeddingTableWgradWorkload
+    | NormGammaWgradWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
     | CrossEntropyForwardWorkload
@@ -1535,6 +1543,8 @@ class LogicalNode:
             OpKind.COLLECTIVE: CollectiveWorkload,
             OpKind.P2P: P2PByteWorkload,
             OpKind.EMBEDDING: EmbeddingWorkload,
+            OpKind.EMBEDDING_TABLE_WGRAD: EmbeddingTableWgradWorkload,
+            OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
             OpKind.ROPE: RopeQkWorkload,
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
@@ -1549,6 +1559,24 @@ class LogicalNode:
         self.workload.validate(f"{path}.workload")
         self.math.validate(f"{path}.math")
         self.effects.validate(f"{path}.effects")
+        native_gradients = {
+            OpKind.EMBEDDING_TABLE_WGRAD:
+                ("embedding_table_wgrad_timing", 3),
+            OpKind.NORM_GAMMA_WGRAD:
+                ("norm_gamma_wgrad_timing", 2),
+        }
+        if self.kind in native_gradients:
+            impl, input_count = native_gradients[self.kind]
+            if (self.phase is not OpPhase.WGRAD
+                    or self.impl_ref != impl
+                    or len(self.inputs) != input_count
+                    or len(self.outputs) != 1
+                    or self.math.accumulation_dtype is not DType.FP32
+                    or self.effects != NodeEffects(EffectKind.PURE, None, None)):
+                raise SchemaError(
+                    "native parameter WGRAD needs real FP32 gradient, exact operands and pure WGRAD phase",
+                    path=path,
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1992,6 +2020,37 @@ class IR0:
                     )
             else:
                 node_profile = next(iter(expected_profiles))
+            if node.kind in (
+                OpKind.EMBEDDING_TABLE_WGRAD, OpKind.NORM_GAMMA_WGRAD
+            ):
+                if self.job is not JobKind.TRAIN:
+                    raise SchemaError("native parameter WGRAD is TRAIN-only",
+                                      path=f"{path}.nodes[{index}].kind")
+                operands = tuple(value_index[ref] for ref in
+                                 (*node.inputs, *node.outputs))
+                workload = node.workload
+                if node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
+                    assert isinstance(workload, EmbeddingTableWgradWorkload)
+                    shape = ((workload.logical_rows,),
+                             (workload.vocab_rows, workload.hidden_size),
+                             (workload.logical_rows, workload.hidden_size),
+                             (workload.vocab_rows, workload.hidden_size))
+                    dtypes = (DType.INT32, DType.FP16, DType.FP16, DType.FP32)
+                    if operands[0].producer is not None:
+                        raise SchemaError("embedding indices must be externally sourced INT32 IDs",
+                                          path=f"{path}.nodes[{index}].inputs[0]")
+                else:
+                    assert isinstance(workload, NormGammaWgradWorkload)
+                    shape = ((workload.logical_rows, workload.hidden_size),
+                             (workload.logical_rows, workload.hidden_size),
+                             (workload.hidden_size,))
+                    dtypes = (DType.FP16, DType.FP16, DType.FP32)
+                if (tuple(value.shape for value in operands) != shape
+                        or tuple(value.dtype for value in operands) != dtypes
+                        or operands[-2].producer is None
+                        or operands[-1].producer != node.id):
+                    raise SchemaError("native WGRAD requires real upstream producer and exact FP32 parameter shape",
+                                      path=f"{path}.nodes[{index}].inputs")
             workload_profile = getattr(node.workload, "profile", None)
             if (
                 multiple_profiles

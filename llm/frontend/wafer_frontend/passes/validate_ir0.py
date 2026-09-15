@@ -54,6 +54,10 @@ from ..schema.persistent_state import (
     StateKind,
 )
 from ..schema.stage3_profile import Stage3ProfileMode
+from ..schema.moe_training_ir0_workloads import (
+    EmbeddingTableWgradWorkload,
+    NormGammaWgradWorkload,
+)
 
 
 _DTYPE_BYTES = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}
@@ -295,6 +299,13 @@ class DenseIR0Validator:
                     profile,
                     node_path,
                 )
+            elif node.kind in (
+                OpKind.EMBEDDING_TABLE_WGRAD, OpKind.NORM_GAMMA_WGRAD,
+            ):
+                DenseIR0Validator._validate_native_parameter_wgrad(
+                    node, values, local_shapes, axis_sizes[node.mesh_ref],
+                    node_path,
+                )
             elif node.kind is OpKind.ROPE:
                 DenseIR0Validator._validate_rope(
                     node,
@@ -339,6 +350,40 @@ class DenseIR0Validator:
             path,
         )
         DenseIR0Validator._validate_job_contract(graph, path)
+
+    @staticmethod
+    def _validate_native_parameter_wgrad(
+        node: LogicalNode,
+        values: dict[str, TensorValue],
+        local_shapes: dict[str, tuple[int, ...]],
+        axes: dict[MeshAxisName, int],
+        path: str,
+    ) -> None:
+        """A public FP32 WGRAD is not the internal FP16 dX primitive."""
+        workload = node.workload
+        tp = axes.get(MeshAxisName.TP, 1)
+        if node.phase is not OpPhase.WGRAD or workload.tp_degree != tp:
+            _fail("native gradient TP geometry or WGRAD phase differs from source mesh",
+                  f"{path}.workload")
+        actual = tuple(local_shapes[ref] for ref in (*node.inputs, *node.outputs))
+        if node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
+            assert isinstance(workload, EmbeddingTableWgradWorkload)
+            expected = ((workload.rank_rows,),
+                        (workload.vocab_rows, workload.hidden_size),
+                        (workload.rank_rows, workload.hidden_size),
+                        (workload.vocab_rows, workload.hidden_size))
+            if values[node.inputs[0]].producer is not None:
+                _fail("INT32 embedding indices require actual external token source",
+                      f"{path}.inputs[0]")
+        else:
+            assert isinstance(workload, NormGammaWgradWorkload)
+            expected = ((workload.rank_rows, workload.hidden_size),
+                        (workload.rank_rows, workload.hidden_size),
+                        (workload.hidden_size,))
+        if actual != expected:
+            _fail("native FP32 WGRAD operand or result physical rank shape differs",
+                  f"{path}.workload")
+        _require_pure(node, path)
 
     @staticmethod
     def _validate_job_contract(graph: IR0, path: str) -> None:
