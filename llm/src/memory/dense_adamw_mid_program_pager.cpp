@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <tuple>
@@ -71,6 +72,30 @@ bool CoveredBySeed(const DenseAdamwPagerSpan &span,
                span.external_address + span.size_bytes <=
                    seed.address + seed.payload.size();
     });
+}
+
+void EmitRoleValues(const std::map<std::string, std::vector<uint8_t>> &roles,
+                    uint64_t version, uint64_t pending) {
+    const std::map<std::string, std::pair<size_t, size_t>> expected{
+        {"trainable_parameter", {15, 4576}},
+        {"optimizer_master", {17, 9152}},
+        {"optimizer_moment1", {17, 9152}},
+        {"optimizer_moment2", {17, 9152}},
+        {"optimizer_step", {17, 68}},
+    };
+    if (roles.size() != expected.size() || pending != 0)
+        Fail("external role probe coverage/pending drifted");
+    for (const auto &[name, count_bytes] : expected) {
+        const auto found = roles.find(name);
+        if (found == roles.end() || found->second.size() != count_bytes.second)
+            Fail("real external role probe bytes changed for " + name);
+        std::cout << "[DENSE_ADAMW_EXTERNAL_ROLE_VALUE] role=" << name
+                  << " version=" << version << " bytes=" << found->second.size()
+                  << " digest=" << frontend::program_io::Sha256Hex(found->second)
+                  << " state_count=" << count_bytes.first
+                  << " pending=" << pending << " functional=0 pass=1"
+                  << std::endl;
+    }
 }
 } // namespace
 
@@ -381,12 +406,15 @@ void DenseAdamwMidProgramPager::CompleteStep(uint64_t index) {
         Fail("segment ended with incomplete DMA, dirty state or active pin");
     std::vector<uint8_t> authority;
     authority.reserve(32100);
+    std::map<std::string, std::vector<uint8_t>> role_values;
     for (const auto &span : spans_) {
         auto payload = runtime_->ProbeExternal(
             external_capacity_ref_, span.external_address, span.size_bytes);
         if (payload.size() != span.size_bytes)
             Fail("physical external StateABI readback was incomplete");
         authority.insert(authority.end(), payload.begin(), payload.end());
+        role_values[span.kind].insert(role_values[span.kind].end(),
+                                     payload.begin(), payload.end());
         ++external_probes_;
     }
     if (authority.size() != 32100 || external_probes_ != (index + 1) * 83)
@@ -400,6 +428,7 @@ void DenseAdamwMidProgramPager::CompleteStep(uint64_t index) {
                 probe.expected_payload)
                 Fail("external final true source probe disagrees with seed");
     }
+    EmitRoleValues(role_values, index + 1, runtime_->Outstanding());
 }
 
 std::string DenseAdamwMidProgramPager::ProbeInitialAuthority() const {
@@ -407,13 +436,19 @@ std::string DenseAdamwMidProgramPager::ProbeInitialAuthority() const {
         Fail("initial external authority must be probed before compute");
     std::vector<uint8_t> authority;
     authority.reserve(32100);
+    std::map<std::string, std::vector<uint8_t>> role_values;
     for (const auto &span : spans_) {
         const auto payload = runtime_->ProbeExternal(
             external_capacity_ref_, span.external_address, span.size_bytes);
+        if (payload.size() != span.size_bytes)
+            Fail("initial external StateABI probe read was incomplete");
         authority.insert(authority.end(), payload.begin(), payload.end());
+        role_values[span.kind].insert(role_values[span.kind].end(),
+                                     payload.begin(), payload.end());
     }
     if (authority.size() != 32100)
         Fail("initial external authority does not cover 83 physical spans");
+    EmitRoleValues(role_values, 0, runtime_->Outstanding());
     return frontend::program_io::Sha256Hex(authority);
 }
 
