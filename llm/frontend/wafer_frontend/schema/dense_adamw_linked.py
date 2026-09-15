@@ -8,7 +8,8 @@ from ..errors import SchemaError
 from .artifact_manifest import (
     LinkedProgramManifest, ManifestInputKind, RecordOpcode,
 )
-from .common import stable_artifact_id
+from .common import DType, stable_artifact_id
+from .e2e_workload_graph import E2EStateKind
 from .flexible_dense_backward import FlexibleDenseBackwardLinkedProgram
 from .persistent_state import StateKind
 from .serde import canonical_digest
@@ -138,6 +139,49 @@ class DenseAdamwLinkedProgram:
         )
         if physical_parameter_bytes != logical_parameter_bytes:
             raise SchemaError("packed physical weight ABI differs from logical P3 parameters", path=path)
+        source_steps = {
+            item.id: item for item in self.materialization.logical_graph.state_versions
+            if item.kind is E2EStateKind.OPTIMIZER_STEP and item.version == 0
+        }
+        source_step_views = tuple(
+            value for value in self.materialization.logical_graph.tensor_values
+            if value.state_ref in source_steps
+        )
+        if (
+            len(source_steps) != 17
+            or len(source_step_views) != 17
+            or {value.state_ref for value in source_step_views} != set(source_steps)
+            or any(
+                value.dtype is not DType.INT32
+                or value.shape != (1,)
+                or value.size_bytes != 4
+                for value in source_step_views
+            )
+        ):
+            raise SchemaError("17 independent INT32 source step states required", path=path)
+        role_kinds = (
+            ("master", StateKind.OPTIMIZER_MASTER),
+            ("m", StateKind.OPTIMIZER_MOMENT1),
+            ("v", StateKind.OPTIMIZER_MOMENT2),
+            ("step", StateKind.OPTIMIZER_STEP),
+        )
+        for role, kind in role_kinds:
+            actual = tuple(item for item in state if item.kind is kind)
+            inventory = tuple(
+                item for item in self.materialization.state_inventory
+                if item.logical_name.startswith(f"optimizer.adamw.{role}.")
+            )
+            if len(actual) != 17 or len(inventory) != 1 or (
+                sum(item.size_bytes for item in actual) != inventory[0].size_bytes
+            ):
+                raise SchemaError(
+                    f"AdamW {role} ABI bytes differ from source P3 inventory",
+                    path=path,
+                )
+        if sum(value.size_bytes for value in source_step_views) != sum(
+            item.size_bytes for item in state if item.kind is StateKind.OPTIMIZER_STEP
+        ):
+            raise SchemaError("rank-local INT32 step bytes differ from StateABI", path=path)
 
 
 __all__ = ["DenseAdamwLinkedProgram"]

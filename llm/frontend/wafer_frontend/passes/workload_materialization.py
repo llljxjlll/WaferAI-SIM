@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from ..errors import SchemaError, UnsupportedFeatureError
-from ..schema.common import stable_artifact_id
-from ..schema.e2e_workload_graph import E2EOperationKind, E2EWorkloadGraph
+from ..schema.common import DType, stable_artifact_id
+from ..schema.e2e_workload_graph import E2EOperationKind, E2EStateKind, E2EWorkloadGraph
 from ..schema.ir1 import PhysicalFabric
 from ..schema.memory_plan import (
     MemoryAllocationRequest,
@@ -112,7 +112,9 @@ def _state(
     )
 
 
-def _state_inventory(request: WorkloadRunRequest, placement) -> tuple[WorkloadStateInventoryItem, ...]:
+def _state_inventory(
+    request: WorkloadRunRequest, placement, logical_graph: E2EWorkloadGraph
+) -> tuple[WorkloadStateInventoryItem, ...]:
     shared_bytes, expert_bytes = _parameter_bytes(request)
     states: list[WorkloadStateInventoryItem] = []
     for owner in placement.ownership_domains:
@@ -142,7 +144,55 @@ def _state_inventory(request: WorkloadRunRequest, placement) -> tuple[WorkloadSt
             * request.steps.training.sequence_length
         )
         parameter_states = tuple(states)
+        step_states = {
+            state.id: state
+            for state in logical_graph.state_versions
+            if state.version == 0 and state.kind is E2EStateKind.OPTIMIZER_STEP
+        }
+        step_bytes: dict[tuple[str, int], int] = {}
+        seen_step_views: set[tuple[str, int]] = set()
+        for value in logical_graph.tensor_values:
+            if value.state_ref not in step_states:
+                continue
+            if value.shape != (1,) or value.dtype is not DType.INT32 or value.size_bytes != 4:
+                raise SchemaError(
+                    "AdamW source step must be one INT32 per logical parameter",
+                    path="logical_graph.tensor_values",
+                )
+            if value.owner_domain_ref is None:
+                raise SchemaError(
+                    "AdamW source step must have parameter ownership",
+                    path="logical_graph.tensor_values",
+                )
+            view = (value.state_ref, value.logical_rank)
+            if view in seen_step_views:
+                raise SchemaError(
+                    "duplicate AdamW source step view",
+                    path="logical_graph.tensor_values",
+                )
+            seen_step_views.add(view)
+            key = (value.owner_domain_ref, value.logical_rank)
+            step_bytes[key] = step_bytes.get(key, 0) + value.size_bytes
+        if request.optimizer is not None and request.optimizer.kind.value == "adamw":
+            if len(seen_step_views) != sum(
+                len(owner.replica_ranks)
+                for owner in placement.ownership_domains
+                for state in step_states.values()
+                if state.expert == owner.expert_id
+            ):
+                raise SchemaError(
+                    "AdamW step inventory must cover every version-0 rank-local state",
+                    path="logical_graph.tensor_values",
+                )
         for parameter in parameter_states:
+            if request.optimizer is not None and request.optimizer.kind.value == "adamw":
+                if not step_bytes.get(
+                    (parameter.owner_domain_ref, parameter.logical_rank), 0
+                ):
+                    raise SchemaError(
+                        "AdamW step inventory missing rank-local parameter states",
+                        path="logical_graph.tensor_values",
+                    )
             states.append(
                 _state(
                     name=parameter.logical_name.replace("parameter.", "gradient.", 1),
@@ -158,7 +208,9 @@ def _state_inventory(request: WorkloadRunRequest, placement) -> tuple[WorkloadSt
                     ("master", parameter.size_bytes * 2),
                     ("m", parameter.size_bytes * 2),
                     ("v", parameter.size_bytes * 2),
-                    ("step", 4),
+                    ("step", step_bytes.get(
+                        (parameter.owner_domain_ref, parameter.logical_rank), 0
+                    )),
                 ):
                     states.append(
                         _state(
@@ -418,7 +470,7 @@ def materialize_workload_preflight(
     placement = _placement(request)
     logical_graph = build_e2e_workload_graph(request, placement)
     validate_e2e_workload_coverage(logical_graph)
-    inventory = _state_inventory(request, placement)
+    inventory = _state_inventory(request, placement, logical_graph)
     communication = _transport_requests(request, placement, logical_graph)
     validate_parallel_transport_workload_bindings(
         communication,

@@ -85,6 +85,33 @@ class DenseAdamwCompileSequenceTest(unittest.TestCase):
     def test_real_source_17_updates_with_68_optimizer_states(self):
         linked = compile_dense_adamw_step(self.adamw, self.physical, 0)
         fragment = linked.manifest.fragments[0]
+        inventory = {
+            item.logical_name.split(".")[2]: item.size_bytes
+            for item in self.adamw.state_inventory
+            if item.logical_name.startswith("optimizer.adamw.")
+        }
+        self.assertEqual(inventory, {
+            "master": 9152, "m": 9152, "v": 9152, "step": 68,
+        })
+        source_step_ids = {
+            item.id for item in self.adamw.logical_graph.state_versions
+            if item.kind.value == "optimizer_step" and item.version == 0
+        }
+        source_step_values = tuple(
+            item for item in self.adamw.logical_graph.tensor_values
+            if item.state_ref in source_step_ids
+        )
+        self.assertEqual(len(source_step_ids), 17)
+        self.assertEqual(len(source_step_values), 17)
+        self.assertEqual(sum(item.size_bytes for item in source_step_values), 68)
+        self.assertEqual(
+            sum(item.size_bytes for item in fragment.state_abi),
+            32100,
+        )
+        self.assertEqual(
+            sum(item.size_bytes for item in fragment.state_abi
+                if item.kind.value == "optimizer_step"), 68,
+        )
         records = fragment.core_streams[0].records
         self.assertEqual(sum(r.opcode is RecordOpcode.ADAMW_UPDATE for r in records), 17)
         self.assertEqual(sum(r.opcode is RecordOpcode.SGD_UPDATE for r in records), 0)
