@@ -10,6 +10,7 @@
 class Event_engine;
 namespace external_memory { class DenseAdamwMidProgramPager; }
 namespace external_memory { class DenseInferenceMidProgramPager; }
+namespace external_memory { class MoeInferenceMidProgramPager; }
 
 namespace sram {
 
@@ -99,6 +100,10 @@ class CoreLsuUnit : public sc_module {
         external_memory::DenseInferenceMidProgramPager *pager) {
         inference_pager_ = pager;
     }
+    void SetMoeInferencePager(
+        external_memory::MoeInferenceMidProgramPager *pager) {
+        moe_inference_pager_ = pager;
+    }
 
     size_t OutstandingCount() const { return records_.size(); }
     uint32_t max_outstanding() const { return max_outstanding_; }
@@ -142,6 +147,7 @@ class CoreLsuUnit : public sc_module {
     int core_id_ = -1;
     external_memory::DenseAdamwMidProgramPager *adamw_pager_ = nullptr;
     external_memory::DenseInferenceMidProgramPager *inference_pager_ = nullptr;
+    external_memory::MoeInferenceMidProgramPager *moe_inference_pager_ = nullptr;
 };
 
 } // namespace sram

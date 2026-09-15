@@ -21,6 +21,7 @@
 #include "memory/external_dma_program.h"
 #include "memory/dense_adamw_mid_program_pager.h"
 #include "memory/dense_inference_mid_program_pager.h"
+#include "memory/moe_inference_mid_program_pager.h"
 #include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_control_core.h"
@@ -149,6 +150,9 @@ Define_string_opt("--dense-adamw-paged-runtime",
 Define_string_opt("--dense-inference-paged-runtime",
                   g_flag_dense_inference_paged_runtime, std::string{},
                   "source-signed blocking parameter/KV DMA for Prefill+2Decode");
+Define_string_opt("--moe-inference-paged-runtime",
+                  g_flag_moe_inference_paged_runtime, std::string{},
+                  "source-signed blocking full MoE EP2 expert/weight/KV DMA");
 Define_string_opt(
     "--external-dma-binding", g_flag_external_dma_binding, std::string{},
     "typed external DMA startup binding for --program-sequence");
@@ -1008,14 +1012,19 @@ int sc_main(int argc, char *argv[]) {
     const bool adamw_paged = !g_flag_dense_adamw_paged_runtime.empty();
     const bool inference_paged =
         !g_flag_dense_inference_paged_runtime.empty();
-    if (adamw_paged && inference_paged) {
-        LOG_ERROR(CONFIG) << "only one source-signed Dense pager may be bound";
+    const bool moe_inference_paged =
+        !g_flag_moe_inference_paged_runtime.empty();
+    if (static_cast<int>(adamw_paged) +
+            static_cast<int>(inference_paged) +
+            static_cast<int>(moe_inference_paged) > 1) {
+        LOG_ERROR(CONFIG) << "only one source-signed mid-program pager may be bound";
         return 2;
     }
     const bool sequence_any = !g_flag_program_sequence.empty() ||
                               !g_flag_linked_manifest_sequence.empty() ||
                               !g_flag_program_io_sequence.empty() ||
-                              adamw_paged || inference_paged;
+                              adamw_paged || inference_paged ||
+                              moe_inference_paged;
     if (sequence_any &&
         (g_flag_program_sequence.empty() ||
          g_flag_linked_manifest_sequence.empty() ||
@@ -1034,7 +1043,8 @@ int sc_main(int argc, char *argv[]) {
             << "--external-dma-binding requires --program-sequence";
         return 2;
     }
-    if ((adamw_paged || inference_paged) && external_dma_requested) {
+    if ((adamw_paged || inference_paged || moe_inference_paged) &&
+        external_dma_requested) {
         LOG_ERROR(CONFIG) << "on-demand paged DMA cannot share an all-state "
                              "startup/final-writeback phase";
         return 2;
@@ -1447,7 +1457,8 @@ int sc_main(int argc, char *argv[]) {
                     (!adamw_paged &&
                      sidecar_paths.size() != program_paths.size()) ||
                     (adamw_paged && program_paths.size() != 2) ||
-                    (inference_paged && program_paths.size() != 3))
+                    (inference_paged && program_paths.size() != 3) ||
+                    (moe_inference_paged && program_paths.size() != 3))
                     throw std::runtime_error(
                         "Program sequence path lists or strict two-step shape drifted");
                 for (std::size_t index = 0;
@@ -1512,9 +1523,10 @@ int sc_main(int argc, char *argv[]) {
                                  })))
                     throw std::runtime_error(
                         "paged external DMA requires actual two-step 17-parameter Dense AdamW");
-                if (inference_paged && dense_training_sequence)
+                if ((inference_paged || moe_inference_paged) &&
+                    dense_training_sequence)
                     throw std::runtime_error(
-                        "paged inference DMA requires actual three-segment Dense KV sequence");
+                        "paged inference DMA requires actual three-segment KV sequence");
                 if (dense_training_sequence)
                     ValidateDenseTrainingStateContinuity(
                         sequence_training_state_ranges);
@@ -1698,6 +1710,8 @@ int sc_main(int argc, char *argv[]) {
         adamw_mid_program_pager;
     std::unique_ptr<external_memory::DenseInferenceMidProgramPager>
         inference_mid_program_pager;
+    std::unique_ptr<external_memory::MoeInferenceMidProgramPager>
+        moe_inference_mid_program_pager;
     std::unique_ptr<ExternalDmaStartupCoordinator>
         external_dma_coordinator;
     if (external_dma_program.has_value()) {
@@ -1799,6 +1813,46 @@ int sc_main(int argc, char *argv[]) {
                       << " highest_state_end=10560 pass=1" << std::endl;
         } catch (const std::exception &error) {
             LOG_ERROR(CONFIG) << "Dense inference paged DMA binding failed: "
+                              << error.what();
+            return 2;
+        }
+    }
+
+    if (moe_inference_paged) {
+        try {
+            if (monitor->hbmRuntime == nullptr ||
+                monitor->workerCores[0] == nullptr ||
+                monitor->workerCores[16] == nullptr ||
+                !monitor->workerCores[0]->lsu_memory ||
+                !monitor->workerCores[16]->lsu_memory)
+                throw std::runtime_error(
+                    "paged full MoE inference requires physical Core0/Core16 LSU");
+            auto *home0 = monitor->hbmRuntime->Find(0, 0);
+            auto *home1 = monitor->hbmRuntime->Find(1, 0);
+            if (!home0 || !home1 || !home0->backend || !home1->backend)
+                throw std::runtime_error(
+                    "paged full MoE inference requires both real HBM backends");
+            std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends{
+                {{0, 0}, home0->backend.get()},
+                {{1, 0}, home1->backend.get()}};
+            moe_inference_mid_program_pager = std::make_unique<
+                external_memory::MoeInferenceMidProgramPager>(
+                    "moe_inference_mid_program_pager",
+                    std::filesystem::path(g_flag_moe_inference_paged_runtime),
+                    sequence_manifest_texts, std::move(backends),
+                    sc_time(CYCLE, SC_NS));
+            monitor->workerCores[0]->lsu_memory->SetMoeInferencePager(
+                moe_inference_mid_program_pager.get());
+            monitor->workerCores[16]->lsu_memory->SetMoeInferencePager(
+                moe_inference_mid_program_pager.get());
+            std::cout << "[MOE_INFERENCE_PAGED_BINDING] source="
+                      << moe_inference_mid_program_pager->SourceRef()
+                      << " mesh=1x2 ep=2 physical_weights=19 kv_pages=4"
+                      << " lsu_gates=89 hbm_capacity_per_die=1024"
+                      << " workspace_end=464 highest_relative_state_end=960"
+                      << " pass=1" << std::endl;
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG) << "MoE inference paged DMA binding failed: "
                               << error.what();
             return 2;
         }
@@ -1973,6 +2027,13 @@ int sc_main(int argc, char *argv[]) {
                   << " digest=" << digest
                   << " authority=external functional=0 pass=1" << std::endl;
     }
+    if (sequence_mode && moe_inference_paged) {
+        const std::string digest =
+            moe_inference_mid_program_pager->ProbeInitialKvAuthority();
+        std::cout << "[MOE_INFERENCE_PAGED_KV] version=0 bytes=0"
+                  << " digest=" << digest
+                  << " authority=external functional=0 pass=1" << std::endl;
+    }
 
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
     sc_clock clk("clk", CYCLE, SC_NS);
@@ -1999,6 +2060,8 @@ int sc_main(int argc, char *argv[]) {
             } else {
                 if (inference_paged)
                     inference_mid_program_pager->CompleteSegment(expected);
+                if (moe_inference_paged)
+                    moe_inference_mid_program_pager->CompleteSegment(expected);
                 const frontend::program_io::Result io_result =
                     frontend::program_io::VerifyAfterSimulation(
                         *sequence_program_io_applied);
@@ -2015,6 +2078,15 @@ int sc_main(int argc, char *argv[]) {
                               << inference_mid_program_pager->KvAuthorityBytes()
                               << " pending="
                               << inference_mid_program_pager->Pending()
+                              << " functional=0 pass=1" << std::endl;
+                if (moe_inference_paged)
+                    std::cout << "[MOE_INFERENCE_PAGED_EXTERNAL_PROGRAM_IO]"
+                              << " index=" << expected
+                              << " logits_probes=" << io_result.probes.size()
+                              << " kv_probes=4 kv_bytes="
+                              << moe_inference_mid_program_pager->KvAuthorityBytes()
+                              << " parameter_immutable=1 pending="
+                              << moe_inference_mid_program_pager->Pending()
                               << " functional=0 pass=1" << std::endl;
             }
             std::cout
@@ -2078,6 +2150,19 @@ int sc_main(int argc, char *argv[]) {
                               << " pass=1 authority=external" << std::endl;
                     std::cout << "[DENSE_INFERENCE_PAGED_KV] version="
                               << expected + 1 << " bytes=" << kv_bytes
+                              << " digest=" << digest
+                              << " authority=external functional=0 pass=1"
+                              << std::endl;
+                } else if (moe_inference_paged) {
+                    const auto bytes =
+                        moe_inference_mid_program_pager->KvAuthorityBytes();
+                    const auto &digest =
+                        moe_inference_mid_program_pager->KvAuthorityDigest();
+                    std::cout << "[DENSE_SEQUENCE_KV] index=" << expected
+                              << " bytes=" << bytes << " digest=" << digest
+                              << " pass=1 authority=external" << std::endl;
+                    std::cout << "[MOE_INFERENCE_PAGED_KV] version="
+                              << expected + 1 << " bytes=" << bytes
                               << " digest=" << digest
                               << " authority=external functional=0 pass=1"
                               << std::endl;
@@ -2170,6 +2255,31 @@ int sc_main(int argc, char *argv[]) {
                 throw std::runtime_error(
                     "paged Dense inference real shared DMA/StateABI drain disagreed with byte oracle");
             std::cout << "[DENSE_INFERENCE_PAGED_DMA_DRAIN] events=65"
+                      << " kv_probes=12 submitted=" << stats.submitted_requests
+                      << " completed=" << stats.completed_requests
+                      << " external_read_bytes=" << stats.external_read_bytes
+                      << " external_write_bytes=" << stats.external_write_bytes
+                      << " hbm_read_bytes=" << stats.hbm_read_bytes
+                      << " hbm_write_bytes=" << stats.hbm_write_bytes
+                      << " pending=0 dirty=0 pinned=0 pass=1" << std::endl;
+        }
+        if (moe_inference_paged) {
+            const auto &stats = moe_inference_mid_program_pager->Stats();
+            if (moe_inference_mid_program_pager->CompletedEvents() != 89 ||
+                moe_inference_mid_program_pager->ExternalKvProbes() != 12 ||
+                moe_inference_mid_program_pager->Pending() != 0 ||
+                moe_inference_mid_program_pager->Dirty() != 0 ||
+                moe_inference_mid_program_pager->Pinned() != 0 ||
+                stats.submitted_requests != 89 ||
+                stats.completed_requests != 89 ||
+                stats.failed_requests != 0 ||
+                stats.external_read_bytes != 4600 ||
+                stats.hbm_write_bytes != 4600 ||
+                stats.external_write_bytes != 2880 ||
+                stats.hbm_read_bytes != 2880)
+                throw std::runtime_error(
+                    "full MoE inference shared DMA/StateABI drain disagreed with 89-gate byte oracle");
+            std::cout << "[MOE_INFERENCE_PAGED_DMA_DRAIN] events=89"
                       << " kv_probes=12 submitted=" << stats.submitted_requests
                       << " completed=" << stats.completed_requests
                       << " external_read_bytes=" << stats.external_read_bytes
