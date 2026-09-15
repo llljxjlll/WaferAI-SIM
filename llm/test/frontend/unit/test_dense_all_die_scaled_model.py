@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from llm.frontend.wafer_frontend.passes.build_ir0 import build_ir0
+from llm.frontend.wafer_frontend.passes.logical_expand import logical_expand
 from llm.frontend.wafer_frontend.compiler import _validate_rect_mesh_compile_inputs
 from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
     _segment_spec,
@@ -24,7 +26,7 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
                           request.model.intermediate_size,
                           request.model.num_attention_heads,
                           request.model.num_kv_heads,
-                          request.model.head_dim), (9, 18, 9, 9, 1))
+                          request.model.head_dim), (18, 36, 9, 9, 2))
         self.assertEqual((request.steps.inference.prefill_tokens,
                           request.steps.inference.decode_steps,
                           request.steps.inference.request_count), (1, 2, 9))
@@ -48,6 +50,8 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
                                  profile_tokens)
                 _validate_rect_mesh_compile_inputs(spec, fabric,
                                                    RectMeshSpec(3, 3))
+                expanded = logical_expand(build_ir0(spec))
+                self.assertGreater(len(expanded.entries[0].graph.nodes), 0)
 
     def test_hundred_die_candidate_has_full_fabric_but_no_runtime_claim(self) -> None:
         manifest, template, fabric = _all_die_scaled_model_case(10, 10)
@@ -57,14 +61,20 @@ class DenseAllDieScaledModelTest(unittest.TestCase):
         self.assertEqual(len(fabric.dies), 100)
         self.assertEqual(len(fabric.links), 360)
         self.assertEqual(len(manifest.logical_graph.operations), 96)
+        self.assertEqual((manifest.request.model.hidden_size,
+                          manifest.request.model.intermediate_size,
+                          manifest.request.model.head_dim), (200, 400, 2))
         _validate_inputs(manifest, template, fabric,
                          valid_hbm_address_spaces(fabric))
         for index in range(3):
+            spec = _segment_spec(template, manifest, index)
             _validate_rect_mesh_compile_inputs(
-                _segment_spec(template, manifest, index),
+                spec,
                 fabric,
                 RectMeshSpec(10, 10),
             )
+            expanded = logical_expand(build_ir0(spec))
+            self.assertGreater(len(expanded.entries[0].graph.nodes), 0)
         self.assertNotEqual(manifest.request.case_id,
                             _all_die_scaled_model_case(3, 3)[0].request.case_id)
 

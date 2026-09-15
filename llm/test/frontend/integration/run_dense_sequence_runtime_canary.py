@@ -165,11 +165,11 @@ def _all_die_scaled_model_case(rows: int, columns: int):
     model = replace(
         base.model,
         vocabulary_size=max(128, ranks),
-        hidden_size=ranks,
-        intermediate_size=2 * ranks,
+        hidden_size=2 * ranks,
+        intermediate_size=4 * ranks,
         num_attention_heads=ranks,
         num_kv_heads=ranks,
-        head_dim=1,
+        head_dim=2,
     )
     request = WorkloadRunRequest.create(
         family=base.family,
@@ -215,7 +215,7 @@ def _all_die_scaled_model_case(rows: int, columns: int):
             NH=model.num_attention_heads,
             KVH=model.num_kv_heads,
             DH=model.head_dim,
-            rotary_dim=1,
+            rotary_dim=2,
         ),
         parallel=replace(template.parallel, instances=(
             replace(template.parallel.instances[0], tp=ranks, sp=False),
