@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from llm.frontend.wafer_frontend.errors import SchemaError
@@ -17,10 +18,14 @@ from llm.frontend.wafer_frontend.schema.workload_release_matrix import (
     WorkloadReleaseExpectedOutcome,
     WorkloadReleaseMilestone,
     WorkloadReleaseObservedOutcome,
+    WorkloadReleaseCase,
+    WorkloadReleasePlan,
 )
 from llm.frontend.wafer_frontend.schema.workload_run import (
     WorkloadFamily,
     WorkloadMemoryMode,
+    WorkloadParallelSpec,
+    WorkloadRunRequest,
 )
 from llm.frontend.wafer_frontend.workload_release_runner import (
     merge_workload_release_shards,
@@ -96,6 +101,57 @@ class WorkloadReleaseMatrixTest(unittest.TestCase):
                         (WorkloadReleaseCapacityProfile.OFFLOAD_BOUNDED, WorkloadMemoryMode.EXTERNAL_OFFLOAD, WorkloadReleaseExpectedOutcome.RUNTIME_PASS),
                     },
                 )
+
+    def test_bounded_pair_rejects_different_model_or_placement(self) -> None:
+        bounded = next(
+            case for case in self.m2.cases
+            if case.request.memory.mode is WorkloadMemoryMode.EXTERNAL_OFFLOAD
+            and case.request.mesh.rank_count == 4
+        )
+        for change in ("model", "parallel"):
+            with self.subTest(change=change):
+                request = bounded.request
+                replacement = (
+                    {"model": replace(request.model, intermediate_size=16)}
+                    if change == "model"
+                    else {"parallel": WorkloadParallelSpec(
+                        tp=request.parallel.tp,
+                        dp=request.parallel.dp,
+                        ep=request.parallel.ep,
+                        active_die_ids=tuple(reversed(request.parallel.active_die_ids)),
+                    )}
+                )
+                changed_request = WorkloadRunRequest.create(
+                    family=request.family,
+                    model=replacement.get("model", request.model),
+                    steps=request.steps,
+                    mesh=request.mesh,
+                    parallel=replacement.get("parallel", request.parallel),
+                    memory=request.memory,
+                    optimizer=request.optimizer,
+                    execution=request.execution,
+                )
+                changed_case = WorkloadReleaseCase.create(
+                    request=changed_request,
+                    capacity_profile=bounded.capacity_profile,
+                    expected_outcome=bounded.expected_outcome,
+                    execution_count=bounded.execution_count,
+                )
+                cases = tuple(
+                    changed_case if case.id == bounded.id else case
+                    for case in self.m2.cases
+                )
+                with self.assertRaisesRegex(
+                    SchemaError, "same logical workload and placement"
+                ):
+                    WorkloadReleasePlan.create(
+                        milestone=self.m2.milestone,
+                        source_digest=SOURCE,
+                        binary_digest=BINARY,
+                        toolchain_digest=TOOLCHAIN,
+                        shard_count=self.m2.shard_count,
+                        cases=cases,
+                    )
 
     def test_shards_are_an_exact_stable_partition(self) -> None:
         partitions = [self.m3.cases_for_shard(index) for index in range(self.m3.shard_count)]

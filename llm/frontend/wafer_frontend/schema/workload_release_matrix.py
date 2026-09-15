@@ -307,6 +307,28 @@ class WorkloadReleasePlan:
             }
         if len(grouped) != shape_count * len(WorkloadFamily) or any(value != expected_group for value in grouped.values()):
             raise SchemaError("shape/family memory pairing is incomplete", path=f"{path}.cases")
+        by_key: dict[tuple[int, int, WorkloadFamily], list[WorkloadReleaseCase]] = {}
+        for case in self.cases:
+            by_key.setdefault(case.matrix_key, []).append(case)
+        for matrix_key, paired_cases in by_key.items():
+            reference = paired_cases[0].request
+            for case in paired_cases[1:]:
+                request = case.request
+                if (
+                    request.model != reference.model
+                    or request.steps != reference.steps
+                    or request.mesh != reference.mesh
+                    or request.parallel != reference.parallel
+                    or request.optimizer != reference.optimizer
+                    or request.memory.allow_sram_spill != reference.memory.allow_sram_spill
+                    or request.execution.timing != reference.execution.timing
+                    or request.execution.functional != reference.execution.functional
+                    or request.execution.strategy != reference.execution.strategy
+                ):
+                    raise SchemaError(
+                        "paired capacity cases must use the same logical workload and placement",
+                        path=f"{path}.cases.{matrix_key}",
+                    )
         expected = stable_artifact_id(
             "workload_release_plan",
             self._key(),
