@@ -321,11 +321,16 @@ class FullTrainingTimelineLinkerTest(unittest.TestCase):
         self.assertEqual(len(self.moe.units), 4)
         for unit in self.moe.units:
             cut = cut_moe_training_unit(unit.plan, unit.linked_manifest)
-            self.assertEqual(sorted(n for _, n in cut.first_backward_index), [26, 32])
+            first_backward = dict(cut.first_backward_index)
             original = {stream.logical_core: stream.records
                         for stream in unit.linked_manifest.core_streams}
             self.assertEqual(set(original), {stream.logical_core for stream in cut.forward})
+            self.assertEqual(set(first_backward), set(original))
             for early, late in zip(cut.forward, cut.backward):
+                self.assertGreater(len(early.records), 0)
+                self.assertGreater(len(late.records), 0)
+                self.assertEqual(first_backward[early.logical_core],
+                                 len(early.records))
                 self.assertEqual(early.records + late.records,
                                  original[early.logical_core])
 
