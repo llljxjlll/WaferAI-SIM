@@ -471,7 +471,11 @@ std::vector<DenseSequenceKvRange> DenseTrainingStateRanges(
         if (fragment == nullptr)
             fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
         for (const frontend::StateAbiDto &abi : fragment->state_abi) {
-            if (abi.kind != frontend::StateKindDto::TRAINABLE_PARAMETER)
+            if (abi.kind != frontend::StateKindDto::TRAINABLE_PARAMETER &&
+                abi.kind != frontend::StateKindDto::OPTIMIZER_MASTER &&
+                abi.kind != frontend::StateKindDto::OPTIMIZER_MOMENT1 &&
+                abi.kind != frontend::StateKindDto::OPTIMIZER_MOMENT2 &&
+                abi.kind != frontend::StateKindDto::OPTIMIZER_STEP)
                 continue;
             DenseSequenceKvRange range{
                 abi.id, abi.kind, abi.die_id, abi.address, abi.size_bytes};
@@ -536,14 +540,36 @@ void ValidateDenseTrainingStateContinuity(
 struct DenseTrainingProgramWitness {
     std::size_t matmul_records = 0;
     std::size_t sgd_records = 0;
+    std::size_t adamw_records = 0;
+    std::size_t load_records = 0;
     std::size_t store_records = 0;
+    std::size_t trainable_states = 0;
+    std::size_t optimizer_states = 0;
 };
 
 DenseTrainingProgramWitness DenseTrainingWitness(
-    const std::string &manifest_text, std::size_t state_count) {
+    const std::string &manifest_text,
+    const std::vector<DenseSequenceKvRange> &ranges) {
     const frontend::LinkedProgramManifestDto manifest =
         frontend::ProgramArtifactFinalizer::Parse(manifest_text);
     DenseTrainingProgramWitness result;
+    std::map<frontend::StateKindDto, std::size_t> state_kinds;
+    for (const DenseSequenceKvRange &range : ranges) ++state_kinds[range.kind];
+    result.trainable_states =
+        state_kinds[frontend::StateKindDto::TRAINABLE_PARAMETER];
+    result.optimizer_states = ranges.size() - result.trainable_states;
+    const bool adamw = result.optimizer_states != 0;
+    if (adamw &&
+        (state_kinds[frontend::StateKindDto::OPTIMIZER_MASTER] !=
+             result.trainable_states ||
+         state_kinds[frontend::StateKindDto::OPTIMIZER_MOMENT1] !=
+             result.trainable_states ||
+         state_kinds[frontend::StateKindDto::OPTIMIZER_MOMENT2] !=
+             result.trainable_states ||
+         state_kinds[frontend::StateKindDto::OPTIMIZER_STEP] !=
+             result.trainable_states))
+        throw std::runtime_error(
+            "Dense AdamW sequence requires four StateABI groups per parameter");
     for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
         const frontend::CommandFragmentDto *fragment =
             std::get_if<frontend::CommandFragmentDto>(&linked);
@@ -555,16 +581,28 @@ DenseTrainingProgramWitness DenseTrainingWitness(
                     ++result.matmul_records;
                 else if (record.opcode == Opcode::SGD_UPDATE)
                     ++result.sgd_records;
+                else if (record.opcode == Opcode::ADAMW_UPDATE)
+                    ++result.adamw_records;
+                else if (record.opcode == Opcode::LSU_LOAD)
+                    ++result.load_records;
                 else if (record.opcode == Opcode::LSU_STORE)
                     ++result.store_records;
             }
         }
     }
-    if (result.matmul_records < state_count ||
-        result.sgd_records != state_count ||
-        result.store_records != state_count)
+    if (!result.trainable_states ||
+        result.matmul_records < result.trainable_states ||
+        (adamw &&
+         (result.sgd_records != 0 ||
+          result.adamw_records != result.trainable_states ||
+          result.load_records != ranges.size() ||
+          result.store_records != ranges.size())) ||
+        (!adamw &&
+         (result.adamw_records != 0 ||
+          result.sgd_records != result.trainable_states ||
+          result.store_records != result.trainable_states)))
         throw std::runtime_error(
-            "Dense training sequence lacks WGRAD/SGD/store record coverage");
+            "Dense training sequence lacks exact WGRAD/optimizer/state load-store coverage");
     return result;
 }
 
@@ -1383,8 +1421,7 @@ int sc_main(int argc, char *argv[]) {
                         sequence_training_state_ranges.push_back(
                             training_ranges);
                         sequence_training_witnesses.push_back(
-                            DenseTrainingWitness(
-                                manifest, training_ranges.size()));
+                            DenseTrainingWitness(manifest, training_ranges));
                     } else {
                         if (kv_ranges.empty() || !training_ranges.empty())
                             throw std::runtime_error(
@@ -1819,11 +1856,22 @@ int sc_main(int argc, char *argv[]) {
                     << " input_version=" << expected
                     << " output_version=" << expected + 1
                     << " trainable_states="
-                    << sequence_training_state_ranges[expected].size()
+                    << witness.trainable_states
                     << " matmul_records=" << witness.matmul_records
                     << " sgd_records=" << witness.sgd_records
                     << " store_records=" << witness.store_records
                     << " functional=0 pass=1" << std::endl;
+                if (witness.adamw_records != 0)
+                    std::cout
+                        << "[DENSE_ADAMW_SEQUENCE_STEP] index=" << expected
+                        << " input_version=" << expected
+                        << " output_version=" << expected + 1
+                        << " trainable_states=" << witness.trainable_states
+                        << " optimizer_states=" << witness.optimizer_states
+                        << " adamw_records=" << witness.adamw_records
+                        << " load_records=" << witness.load_records
+                        << " store_records=" << witness.store_records
+                        << " functional=0 pass=1" << std::endl;
             } else {
                 PrintDenseKvBoundary(
                     *monitor->hbmRuntime, expected,
