@@ -148,7 +148,7 @@ def _model(family: WorkloadFamily) -> WorkloadModelSpec:
     )
 
 
-def _request(
+def build_workload_shape_request(
     family: WorkloadFamily,
     rows: int,
     columns: int,
@@ -249,7 +249,7 @@ def build_workload_shape_case_report(
     """Materialize one deterministic schema/preflight case; never run a backend."""
 
     capability = capability or _preflight_capability()
-    mode, request = _request(family, rows, columns)
+    mode, request = build_workload_shape_request(family, rows, columns)
     manifest = materialize_workload_preflight(
         request,
         capability,
@@ -297,4 +297,5 @@ def build_workload_shape_matrix() -> WorkloadShapeMatrix:
 __all__ = [
     "build_workload_shape_case_report",
     "build_workload_shape_matrix",
+    "build_workload_shape_request",
 ]

@@ -1447,6 +1447,8 @@ from .workload_run import *
 from .workload_run import __all__ as _workload_run_all
 from .workload_materialization import *
 from .workload_materialization import __all__ as _workload_materialization_all
+from .workload_release_matrix import *
+from .workload_release_matrix import __all__ as _workload_release_matrix_all
 
 __all__ = list(dict.fromkeys((
     *__all__,
@@ -1466,6 +1468,7 @@ __all__ = list(dict.fromkeys((
     *_parallel_transport_all,
     *_workload_run_all,
     *_workload_materialization_all,
+    *_workload_release_matrix_all,
 )))
 from .external_memory import *
 from .external_memory import __all__ as _external_memory_all

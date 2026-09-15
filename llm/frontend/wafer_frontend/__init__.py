@@ -76,6 +76,15 @@ from .workload_runner import (
     run_workload,
 )
 from .passes.workload_materialization import materialize_workload_preflight
+from .passes.workload_release_matrix import (
+    PRIMARY_RELEASE_SHAPES,
+    build_workload_release_plan,
+)
+from .workload_release_runner import (
+    WorkloadReleaseExecutor,
+    merge_workload_release_shards,
+    run_workload_release_shard,
+)
 from .schema.experiment import EXPERIMENT_SCHEMA_VERSION, ExperimentSpec
 from .schema.rect_mesh import RectMeshSpec
 from .schema.rect_mesh_compile import (
@@ -271,6 +280,11 @@ __all__ = [
     "materialize_flexible_dense_train_forward",
     "materialize_flexible_dense_backward",
     "materialize_workload_preflight",
+    "PRIMARY_RELEASE_SHAPES",
+    "WorkloadReleaseExecutor",
+    "build_workload_release_plan",
+    "merge_workload_release_shards",
+    "run_workload_release_shard",
     "meshslice_execution_mode",
     "lower_link_flexible_moe_production",
     "observe_flexible_moe_production_runtime",
