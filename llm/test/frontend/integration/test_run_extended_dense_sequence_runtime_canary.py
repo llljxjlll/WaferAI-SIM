@@ -12,6 +12,7 @@ import unittest
 from .run_extended_dense_sequence_runtime_canary import (
     _KV_BYTES,
     _ROOT,
+    bind_dram_resources,
     build_case,
     extended_hardware,
     observe_runtime,
@@ -80,6 +81,34 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
         hardware["memory_system"]["address_policy"]["home_ranges"][5]["size_bytes"] += 64
         with self.assertRaisesRegex(RuntimeError, "physical HBM capacity"):
             validate_physical_hbm(json.dumps(hardware), spaces, 1, 16)
+
+    def test_behavioral_dram_resources_bind_monitor_and_all_channels(self) -> None:
+        _, _, _, spaces = build_case(1, 16)
+        hardware = extended_hardware(1, 16, spaces)
+        simulation = _ROOT / "llm/test/program/p5_behavioral_simulation.json"
+        binding = bind_dram_resources(
+            hardware, simulation, _ROOT / "build-debug-final",
+        )
+        self.assertEqual(binding["channel_reference_count"], 17)
+        self.assertEqual(
+            binding["hbm2_config"]["path"],
+            str((_ROOT / "DRAMSys/configs/hbm2-example.json").resolve()),
+        )
+        self.assertEqual(
+            set(binding["dependencies"]),
+            {"addressmapping", "mcconfig", "memspec", "simconfig"},
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(RuntimeError, "behavioral DRAMSys resources"):
+                bind_dram_resources(hardware, simulation, Path(raw) / "tools")
+        mutated = json.loads(hardware)
+        mutated["memory_system"]["hbm_stacks"][0]["channel_dram_config"] = (
+            "../DRAMSys/configs/absent.json"
+        )
+        with self.assertRaisesRegex(RuntimeError, "monitor/channel DRAM config"):
+            bind_dram_resources(
+                json.dumps(mutated), simulation, _ROOT / "build-debug-final",
+            )
 
     def test_release_and_unmeasured_hardware_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "outside release"):

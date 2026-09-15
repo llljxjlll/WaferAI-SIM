@@ -201,6 +201,60 @@ def validate_physical_hbm(hardware: str, spaces, rows: int, columns: int) -> dic
     }
 
 
+def bind_dram_resources(
+    hardware: str, simulation: Path, simulator_cwd: Path,
+) -> dict[str, object]:
+    """Close the real monitor and all HBM channels against cwd DRAMSys files."""
+
+    cwd = simulator_cwd.resolve()
+    resource_root = (cwd / "../DRAMSys/configs").resolve()
+    if not resource_root.is_dir():
+        raise RuntimeError(f"behavioral DRAMSys resources are absent from {cwd}")
+    checked_in = (_ROOT / "DRAMSys/configs/hbm2-example.json").resolve()
+    document = json.loads(hardware)
+    sim_bytes = simulation.resolve().read_bytes()
+    monitor = json.loads(sim_bytes)["gpu"]["dram_config_file"]
+    channels = [
+        stack["channel_dram_config"]
+        for stack in document["memory_system"]["hbm_stacks"]
+    ]
+    references = [monitor, *channels]
+    if len(channels) != 16 or any(type(item) is not str or not item for item in references):
+        raise RuntimeError("behavioral monitor/channel DRAM config is incomplete")
+    resolved = [
+        (cwd / name).resolve() if not Path(name).is_absolute()
+        else Path(name).resolve()
+        for name in references
+    ]
+    if any(path != checked_in or not path.is_file() for path in resolved):
+        raise RuntimeError("behavioral monitor/channel DRAM config path differs")
+    config = json.loads(checked_in.read_text(encoding="utf-8"))["simulation"]
+    dependencies = {
+        kind: resource_root / directory / config[kind]
+        for kind, directory in (
+            ("addressmapping", "addressmapping"),
+            ("mcconfig", "mcconfig"),
+            ("memspec", "memspec"),
+            ("simconfig", "simconfig"),
+        )
+    }
+    if any(not path.is_file() for path in dependencies.values()):
+        raise RuntimeError("behavioral DRAMSys dependency is absent")
+    return {
+        "simulator_cwd": str(cwd),
+        "resource_root": str(resource_root),
+        "simulation_sha256": _sha(sim_bytes),
+        "channel_reference_count": len(resolved),
+        "hbm2_config": {
+            "path": str(checked_in), "sha256": _sha(checked_in.read_bytes()),
+        },
+        "dependencies": {
+            kind: {"path": str(path.resolve()), "sha256": _sha(path.read_bytes())}
+            for kind, path in dependencies.items()
+        },
+    }
+
+
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -348,6 +402,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     materialize_wall = round(time.monotonic() - materialize_started, 3)
     hardware = extended_hardware(rows, columns, spaces)
     physical_hbm = validate_physical_hbm(hardware, spaces, rows, columns)
+    dram_resources = bind_dram_resources(
+        hardware, args.simulation, args.npusim.resolve().parent,
+    )
     (root / "preflight.json").write_text(
         json.dumps({
             "mesh": {"rows": rows, "columns": columns},
@@ -359,6 +416,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "compile_budget_seconds": args.compile_timeout,
             "tool_binding_sha256": tool_binding,
             "physical_hbm": physical_hbm,
+            "dram_resources": dram_resources,
             "runtime_status": "not_measured",
         }, indent=2, sort_keys=True), encoding="utf-8",
     )
@@ -408,6 +466,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "mesh": {"rows": rows, "columns": columns},
         "active_dies": list(manifest.placement.active_die_ids),
         "physical_hbm": physical_hbm,
+        "dram_resources": dram_resources,
         "model": {
             "layers": 2, "hidden": 32, "intermediate": 64,
             "attention_heads": 16, "kv_heads": 16, "head_dim": 2,
@@ -446,6 +505,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "request_digest": manifest.request.digest,
             "tool_binding_sha256": tool_binding,
             "physical_hbm": physical_hbm,
+            "dram_resources": dram_resources,
             "active_dies": evidence["active_dies"],
             "sequence_digest": sequence.digest,
             "materialize_wall_seconds": materialize_wall,
@@ -463,6 +523,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         ):
             if _sha(path.resolve().read_bytes()) != tool_binding[kind]:
                 raise RuntimeError(f"bound {kind} bytes changed during this case")
+        if bind_dram_resources(
+            hardware, args.simulation, args.npusim.resolve().parent,
+        ) != dram_resources:
+            raise RuntimeError("bound behavioral DRAMSys resources changed during case")
 
     for execution_index in range(2):
         verify_tool_binding()
@@ -594,6 +658,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             runtime_stdout, cwd=args.npusim.resolve().parent,
             timeout=args.timeout,
         )
+        verify_tool_binding()
         observed = observe_runtime(runtime_stdout.read_text(encoding="utf-8"))
         execution = {
             "index": execution_index,
