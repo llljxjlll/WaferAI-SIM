@@ -32,9 +32,13 @@ def _write_json(path: Path, value: object, *, replace: bool = False) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        if not replace and path.exists():
-            raise SchemaError("artifact already exists", path=str(path))
-        os.replace(temporary, path)
+        if replace:
+            os.replace(temporary, path)
+        else:
+            try:
+                os.link(temporary, path)
+            except FileExistsError as error:
+                raise SchemaError("artifact already exists", path=str(path)) from error
     finally:
         if temporary.exists():
             temporary.unlink()
