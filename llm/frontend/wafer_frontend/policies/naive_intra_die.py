@@ -339,7 +339,9 @@ def _minimum_root(
     return root
 
 
-def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
+def _ordinary_schedule(
+    dag: IntraDieDAG, ir1: IR1, *, wire_address_limit_bytes: int | None = None,
+) -> IntraDieSchedule:
     topological = _canonical_kahn(dag)
     split_k_refined = any(".split_k." in task.id for task in dag.tasks)
     supported = {
@@ -1131,6 +1133,72 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
             reusable.region_offset_bytes if reusable is not None
             else sequential_offset
         )
+        if wire_address_limit_bytes is not None:
+            # Compute record SRAM addresses have a uint16 absolute wire.  An
+            # opt-in profile must fit *every* SRAM view inside that extent,
+            # while the actual hardware capacity remains unchanged.  BORROWED
+            # ProgramIO inputs are all initialized before the first task:
+            # protect their bytes from t=0 through their last real reader.
+            addressable = min(
+                region.size_bytes,
+                wire_address_limit_bytes - region.base_bytes,
+            )
+            if addressable < size_bytes:
+                _fail(
+                    f"wire-addressable SRAM capacity exceeded: required={size_bytes}, "
+                    f"available={max(addressable, 0)}, value={value_id!r}",
+                    f"schedule.die_{dag.die_id}.core_{core_id}.{region.id}",
+                )
+            new_start = 0 if not owned else lifetime_start
+            blockers = tuple(
+                binding for binding in binding_by_key.values()
+                if binding.core_id == core_id
+                and binding.region_ref == region.id
+                and (
+                    0 if binding.ownership is BufferOwnership.BORROWED
+                    else binding.lifetime_start
+                ) < lifetime_end
+                and new_start < binding.lifetime_end_exclusive
+            )
+            gap_offsets = {0}
+            gap_offsets.update(
+                _align_up(
+                    binding.region_offset_bytes + binding.size_bytes,
+                    alignment_bytes,
+                )
+                for binding in blockers
+            )
+            legal_offsets = tuple(
+                candidate for candidate in sorted(gap_offsets)
+                if candidate + size_bytes <= addressable
+                and all(
+                    candidate + size_bytes <= binding.region_offset_bytes
+                    or binding.region_offset_bytes + binding.size_bytes <= candidate
+                    for binding in blockers
+                )
+            )
+            if not legal_offsets:
+                _fail(
+                    f"wire-addressable SRAM liveness capacity exceeded: "
+                    f"required={size_bytes}, available={addressable}, "
+                    f"value={value_id!r}, lifetime=({new_start},{lifetime_end})",
+                    f"schedule.die_{dag.die_id}.core_{core_id}.{region.id}",
+                )
+            offset = legal_offsets[0]
+            # The native fixed allocator also imposes the *hardware* minimum
+            # alignment.  Packed reduction inputs may use a smaller logical
+            # stride, but only a matching physical SRAM profile can execute
+            # their fixed addresses.  Reject incompatible profiles at compile
+            # time instead of letting a valid NPUP crash during Decode.
+            absolute_address = region.base_bytes + offset
+            if absolute_address % profile.allocation_alignment_bytes:
+                _fail(
+                    "fixed SRAM allocation address violates physical alignment: "
+                    f"address={absolute_address}, "
+                    f"required={profile.allocation_alignment_bytes}, "
+                    f"value={value_id!r}",
+                    f"schedule.die_{dag.die_id}.core_{core_id}.{region.id}",
+                )
         # Preserve every previously fitting identity schedule byte-for-byte.
         # Only when append allocation would fail, place an owned nonterminal
         # value into a gap whose existing lifetimes are disjoint.  This makes
@@ -1526,6 +1594,17 @@ def _ordinary_schedule(dag: IntraDieDAG, ir1: IR1) -> IntraDieSchedule:
 class NaiveIntraDiePolicy:
     """Sequential allocator and component-round-robin scheduler."""
 
+    def __init__(self, *, wire_address_limit_bytes: int | None = None) -> None:
+        if wire_address_limit_bytes is not None and (
+            type(wire_address_limit_bytes) is not int
+            or wire_address_limit_bytes < 64
+            or wire_address_limit_bytes > 65536
+            or wire_address_limit_bytes % 64
+        ):
+            _fail("wire address limit must be aligned within the uint16 SRAM ABI",
+                  "wire_address_limit_bytes")
+        self.wire_address_limit_bytes = wire_address_limit_bytes
+
     def schedule(
         self,
         projection: IR2ProjectionResult,
@@ -1540,7 +1619,10 @@ class NaiveIntraDiePolicy:
         if projection.source_ir1_id != ir1.id:
             _fail("projection references a different IR-1", "projection.source_ir1_id")
         schedules = tuple(
-            _ordinary_schedule(dag, ir1) for dag in projection.dags
+            _ordinary_schedule(
+                dag, ir1,
+                wire_address_limit_bytes=self.wire_address_limit_bytes,
+            ) for dag in projection.dags
         )
         result = IntraDieScheduleSet.create(
             producer_pass="intra_die_schedule",

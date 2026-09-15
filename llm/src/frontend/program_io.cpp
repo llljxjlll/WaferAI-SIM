@@ -2185,6 +2185,21 @@ ResolvedContract Resolve(const Contract &contract,
                  absolute,
                  blobs.at(entry.blob_ref)->bytes,
                  std::nullopt});
+            // The manifest linker validates disjoint SRAM allocation lifetimes.
+            // A probe can observe a recycled span after program completion only
+            // when it belongs to the final live interval on this runtime core:
+            // every other overlapping allocation must have finished before the
+            // terminal writer starts.  The other linkers retain their own gates.
+            uint64_t final_lifetime_end = 0;
+            if (manifest.producer_pass == "manifest_linker") {
+                for (const auto &candidate_entry : closure.allocations) {
+                    const Allocation &candidate = candidate_entry.second;
+                    if (candidate.runtime_core_id == allocation.runtime_core_id)
+                        final_lifetime_end = std::max(
+                            final_lifetime_end,
+                            candidate.abi->lifetime_end_exclusive);
+                }
+            }
             for (const auto &other_entry : closure.allocations) {
                 const Allocation &other = other_entry.second;
                 if (&other == &allocation ||
@@ -2194,6 +2209,11 @@ ResolvedContract Resolve(const Contract &contract,
                     continue;
                 if (absolute < other.absolute_start + other.size_bytes &&
                     other.absolute_start < end &&
+                    !(manifest.producer_pass == "manifest_linker" &&
+                      allocation.abi->lifetime_end_exclusive ==
+                          final_lifetime_end &&
+                      other.abi->lifetime_end_exclusive <=
+                          allocation.abi->lifetime_start) &&
                     !AllowsExactFourStreamUnfusedTerminalReuse(
                         manifest, allocation, other, absolute, end) &&
                     !AllowsExactMoeTerminalReuse(

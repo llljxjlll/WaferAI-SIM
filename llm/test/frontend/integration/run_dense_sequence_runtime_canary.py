@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
 import re
+import resource
+import signal
 import subprocess
+import sys
+import time
 
 from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
     compile_dense_e2e_sequence_runtime_profiles,
@@ -18,13 +23,17 @@ from llm.frontend.wafer_frontend.passes.workload_materialization import (
     materialize_workload_preflight,
 )
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RegionManifest
+from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.ir2 import StateUseAccess
 from llm.frontend.wafer_frontend.schema.memory_plan import MemoryTier, MemoryTierCapacity
 from llm.frontend.wafer_frontend.schema.serde import canonical_digest, canonical_json
 from llm.frontend.wafer_frontend.schema.workload_run import (
+    WorkloadInferenceSteps,
     WorkloadMeshSpec,
+    WorkloadParallelSpec,
     WorkloadRunCapability,
     WorkloadRunRequest,
+    WorkloadStepSpec,
 )
 from llm.test.frontend.flexible_mesh_fixtures import minimal_hardware
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
@@ -32,7 +41,9 @@ from llm.test.frontend.unit.test_dense_compile_sequence import (
     _one_die_case,
     _two_by_two_case,
 )
-from llm.test.frontend.unit.test_legacy_dense_backend import _capability
+from llm.test.frontend.unit.test_legacy_dense_backend import (
+    _capability, _legacy_spec, _request,
+)
 
 from .flexible_mesh_release_hardware import (
     specialize_p5_large_release_hardware,
@@ -40,6 +51,8 @@ from .flexible_mesh_release_hardware import (
 
 
 _ROOT = Path(__file__).resolve().parents[4]
+_SIX_DIE_SRAM_BYTES = 128 * 1024
+_SIX_DIE_SRAM_ALIGNMENT_BYTES = 32
 
 
 def _four_die_rect_case(rows: int, columns: int):
@@ -83,6 +96,59 @@ def _four_die_rect_case(rows: int, columns: int):
     return manifest, template, fabric
 
 
+def _six_die_fixed_model_case(rows: int, columns: int):
+    """One unchanged two-layer model on horizontal and vertical six-die TP6."""
+
+    if (rows, columns) not in ((2, 3), (3, 2)):
+        raise ValueError("six-die fixed-model canary requires 2x3 or 3x2")
+    ranks = rows * columns
+    base = _request(layers=2, prefill=6, decode=2)
+    model = replace(
+        base.model, hidden_size=48, intermediate_size=96,
+        num_attention_heads=6, num_kv_heads=6, head_dim=8,
+    )
+    steps = WorkloadStepSpec(inference=WorkloadInferenceSteps(
+        prefill_tokens=6, decode_steps=2, request_count=6,
+    ))
+    request = WorkloadRunRequest.create(
+        family=base.family, model=model, steps=steps,
+        mesh=WorkloadMeshSpec(rows, columns),
+        parallel=WorkloadParallelSpec(tp=ranks, active_die_ids=tuple(range(ranks))),
+        memory=base.memory, execution=base.execution,
+    )
+    baseline = _capability()
+    capability = WorkloadRunCapability.create(
+        max_mesh_rows=3, max_mesh_columns=3, max_mesh_ranks=6,
+        families=baseline.families,
+    )
+    capacities = tuple(MemoryTierCapacity.create(
+        tier=MemoryTier.HBM, location_ref=f"die:{rank}",
+        base_address=0, capacity_bytes=1 << 30, alignment_bytes=64,
+    ) for rank in range(ranks))
+    manifest = materialize_workload_preflight(
+        request, capability, capacities=capacities,
+    )
+    template = _legacy_spec(layers=2, prefill=6, decode=0)
+    template = replace(
+        template,
+        model=replace(template.model, H=48, I=96, NH=6, KVH=6, DH=8),
+        parallel=replace(template.parallel, instances=(
+            replace(template.parallel.instances[0], tp=ranks, sp=True),
+        )),
+    )
+    template.validate()
+    compiled_hardware = minimal_hardware(
+        columns, rows, sram_bytes=_SIX_DIE_SRAM_BYTES
+    )
+    # Decode's 96B TP reduce inputs are tightly packed at 32B boundaries.
+    # Fixed SRAM_ALLOC_AT uses the same physical alignment in NpuSim.
+    compiled_hardware["memory"]["sram"][
+        "allocation_alignment_bytes"
+    ] = _SIX_DIE_SRAM_ALIGNMENT_BYTES
+    fabric = physical_fabric_from_data(compiled_hardware)
+    return manifest, template, fabric
+
+
 def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
     completed = subprocess.run(
         command,
@@ -101,25 +167,97 @@ def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
     return completed.stdout
 
 
+def _source_tool_snapshot(args: argparse.Namespace) -> dict[str, dict[str, str]]:
+    """Bind loaded repository Python and the exact executable bytes in use."""
+
+    sources: dict[str, str] = {}
+    tracked_roots = (
+        _ROOT / "llm/frontend/wafer_frontend",
+        _ROOT / "llm/test/frontend",
+    )
+    for module in tuple(sys.modules.values()):
+        module_path = getattr(module, "__file__", None)
+        if type(module_path) is not str or not module_path.endswith(".py"):
+            continue
+        path = Path(module_path).resolve()
+        if not any(path.is_relative_to(root) for root in tracked_roots):
+            continue
+        sources[str(path.relative_to(_ROOT))] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+    sources[str(Path(__file__).resolve().relative_to(_ROOT))] = hashlib.sha256(
+        Path(__file__).read_bytes()
+    ).hexdigest()
+    tools = {
+        name: hashlib.sha256(getattr(args, name).resolve().read_bytes()).hexdigest()
+        for name in ("finalizer", "resolver", "npusim", "simulation")
+    }
+    return {"imported_python_sha256": dict(sorted(sources.items())),
+            "tool_sha256": dict(sorted(tools.items()))}
+
+
 def run(args: argparse.Namespace) -> None:
+    source_tool_at_entry = _source_tool_snapshot(args)
     rows, columns = (int(dimension) for dimension in args.mesh_size.split("x"))
     if args.mesh_size == "1x1":
         manifest, template, fabric = _one_die_case()
     elif args.mesh_size == "2x2":
         manifest, template, fabric = _two_by_two_case()
+    elif args.mesh_size in ("2x3", "3x2"):
+        manifest, template, fabric = _six_die_fixed_model_case(rows, columns)
     else:
         manifest, template, fabric = _four_die_rect_case(rows, columns)
     hbm_address_spaces = valid_hbm_address_spaces(fabric)
-    sequence, linked_profiles = compile_dense_e2e_sequence_runtime_profiles(
-        manifest,
-        template,
-        fabric,
-        hbm_address_spaces=hbm_address_spaces,
-    )
-    sequence.validate()
-
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+
+    def _compile_budget_expired(_signal: int, _frame: object) -> None:
+        raise TimeoutError(f"Dense compile exceeded {args.compile_timeout}s")
+
+    original_alarm = signal.signal(signal.SIGALRM, _compile_budget_expired)
+    signal.alarm(args.compile_timeout)
+    try:
+        with builder_validation_session():
+            sequence, linked_profiles = compile_dense_e2e_sequence_runtime_profiles(
+                manifest, template, fabric,
+                hbm_address_spaces=hbm_address_spaces,
+                intra_die_wire_address_limit_bytes=(
+                    65536 if rows * columns == 6 else None
+                ),
+            )
+    except Exception as error:
+        (output / "compile_failure.json").write_text(json.dumps({
+            "mesh": args.mesh_size,
+            "workload_case_id": manifest.request.case_id,
+            "source_request_sha256": canonical_digest(manifest.request),
+            "phase": "production_compile",
+            "runtime_status": "not_measured",
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "wall_seconds": round(time.monotonic() - started, 3),
+            "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "source_tool_at_entry": source_tool_at_entry,
+        }, indent=2, sort_keys=True), encoding="utf-8")
+        raise
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, original_alarm)
+    sequence.validate()
+    (output / "compiled_receipt.json").write_text(json.dumps({
+        "mesh": args.mesh_size,
+        "workload_case_id": manifest.request.case_id,
+        "source_request_sha256": canonical_digest(manifest.request),
+        "sequence_digest": sequence.digest,
+        "linked_manifest_sha256": [canonical_digest(segment.linked_manifest)
+                                   for segment in sequence.segments],
+        "wall_seconds": round(time.monotonic() - started, 3),
+        "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "runtime_status": "not_measured",
+        "intra_die_wire_address_limit_bytes": (
+            65536 if rows * columns == 6 else None
+        ),
+    }, indent=2, sort_keys=True), encoding="utf-8")
     manifests: list[Path] = []
     programs: list[Path] = []
     sidecars: list[Path] = []
@@ -184,15 +322,34 @@ def run(args: argparse.Namespace) -> None:
         contract.validate_against(segment.linked_manifest)
         sidecar_path = output / f"segment_{index}.program_io.json"
         sidecar_path.write_text(canonical_json(contract), encoding="utf-8")
+        resolved = _run(
+            (
+                str(args.resolver.resolve()), "--resolve",
+                str(manifest_path), str(artifact_path), str(sidecar_path),
+            ),
+            cwd=args.resolver.resolve().parent,
+            timeout=min(args.timeout, 900),
+        )
+        (output / f"segment_{index}.resolver.stdout.txt").write_text(
+            resolved, encoding="utf-8",
+        )
+        if (f"initializations={len(contract.initializations)}" not in resolved
+                or f"probes={len(contract.output_probes)}" not in resolved):
+            raise RuntimeError(f"segment {index} native ProgramIO resolver closure failed")
         sidecars.append(sidecar_path)
 
     hardware_path = output / "hardware.json"
     mapping_path = output / "mapping.spec"
     hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
-    hardware["memory"]["sram_size"] = 65536
-    hardware["memory"]["sram"]["capacity_bytes"] = 65536
+    sram_bytes = _SIX_DIE_SRAM_BYTES if rows * columns == 6 else 65536
+    sram_alignment = (
+        _SIX_DIE_SRAM_ALIGNMENT_BYTES if rows * columns == 6 else 64
+    )
+    hardware["memory"]["sram_size"] = sram_bytes
+    hardware["memory"]["sram"]["capacity_bytes"] = sram_bytes
+    hardware["memory"]["sram"]["allocation_alignment_bytes"] = sram_alignment
     hardware["memory"]["sram"]["regions"][0]["name"] = "sram"
-    hardware["memory"]["sram"]["regions"][0]["size_bytes"] = 65536
+    hardware["memory"]["sram"]["regions"][0]["size_bytes"] = sram_bytes
     address_spaces_by_die = {
         space.die_id: space for space in hbm_address_spaces
     }
@@ -214,6 +371,18 @@ def run(args: argparse.Namespace) -> None:
         json.dumps(hardware, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )
+    preflight = _run(
+        (str(args.resolver.resolve()), "--validate-hardware-sram",
+         str(hardware_path), str(sram_bytes), str(sram_alignment)),
+        cwd=args.resolver.resolve().parent, timeout=60,
+    )
+    (output / "hardware_sram_preflight.stdout.txt").write_text(
+        preflight, encoding="utf-8",
+    )
+    if (f"region=sram capacity_bytes={sram_bytes} "
+            f"alignment_bytes={sram_alignment} region_count=1"
+            not in preflight):
+        raise RuntimeError("native SRAM hardware profile differs from compiled fabric")
     mapping_path.write_text("0:0\n", encoding="utf-8")
     runtime_output = _run(
         (
@@ -253,17 +422,69 @@ def run(args: argparse.Namespace) -> None:
     )
     if segment_markers != [("0", "0"), ("1", "0"), ("2", "1")]:
         raise RuntimeError(f"segment marker closure failed: {segment_markers}")
-    expected_kv_bytes = (
-        [("0", "512"), ("1", "640"), ("2", "768")]
-        if args.mesh_size == "1x1"
-        else [("0", "4096"), ("1", "5120"), ("2", "6144")]
+    inference = manifest.request.steps.inference
+    assert inference is not None
+    model = manifest.request.model
+    if model.dtype.value != "fp16":
+        raise RuntimeError("KV byte oracle requires actual FP16 model")
+    kv_bytes_per_token = (
+        2 * model.num_layers * model.num_kv_heads * model.head_dim * 2
     )
+    prefill_context = inference.prefill_tokens * inference.request_count
+    expected_kv_bytes = [
+        (str(index), str((prefill_context + index * inference.request_count)
+                         * kv_bytes_per_token))
+        for index in range(3)
+    ]
     if [tuple(item[:2]) for item in kv_markers] != expected_kv_bytes:
         raise RuntimeError(f"KV boundary closure failed: {kv_markers}")
     if drain_markers != [("3", "1")]:
         raise RuntimeError(f"one-shot drain closure failed: {drain_markers}")
     if runtime_output.count("[SIM_RESULT]") != 1:
         raise RuntimeError("runtime did not emit exactly one SIM_RESULT")
+    source_tool_at_exit = _source_tool_snapshot(args)
+    drifted_sources = sorted(
+        path for path, digest in
+        source_tool_at_entry["imported_python_sha256"].items()
+        if source_tool_at_exit["imported_python_sha256"].get(path) != digest
+    )
+    drifted_tools = sorted(
+        name for name, digest in source_tool_at_entry["tool_sha256"].items()
+        if source_tool_at_exit["tool_sha256"].get(name) != digest
+    )
+    if drifted_sources or drifted_tools:
+        raise RuntimeError(
+            f"loaded source/tool drifted while NpuSim ran: "
+            f"python={drifted_sources}, tools={drifted_tools}"
+        )
+    (output / "source_tool_binding.json").write_text(json.dumps({
+        "source_tool_at_entry": source_tool_at_entry,
+        "additional_imported_python_sha256": {
+            path: digest for path, digest in
+            source_tool_at_exit["imported_python_sha256"].items()
+            if path not in source_tool_at_entry["imported_python_sha256"]
+        },
+        "hardware_sha256": hashlib.sha256(hardware_path.read_bytes()).hexdigest(),
+        "linked_manifest_sha256": [hashlib.sha256(path.read_bytes()).hexdigest()
+                                   for path in manifests],
+        "npup_sha256": artifact_digests,
+        "program_io_sha256": [hashlib.sha256(path.read_bytes()).hexdigest()
+                              for path in sidecars],
+        "sequence_digest": sequence.digest,
+        "workload_case_id": manifest.request.case_id,
+        "kv_boundaries_bytes": [int(item[1]) for item in kv_markers],
+        "runtime_status": "verified",
+    }, indent=2, sort_keys=True), encoding="utf-8")
+    compiled_receipt_path = output / "compiled_receipt.json"
+    compiled_receipt = json.loads(compiled_receipt_path.read_text(encoding="utf-8"))
+    compiled_receipt["runtime_status"] = "verified"
+    compiled_receipt["total_wall_seconds"] = round(time.monotonic() - started, 3)
+    compiled_receipt["source_tool_binding_sha256"] = hashlib.sha256(
+        (output / "source_tool_binding.json").read_bytes()
+    ).hexdigest()
+    compiled_receipt_path.write_text(
+        json.dumps(compiled_receipt, indent=2, sort_keys=True), encoding="utf-8"
+    )
     print(
         f"Dense sequence runtime canary PASS mesh={args.mesh_size} "
         f"sequence={sequence.digest} artifacts={','.join(artifact_digests)} "
@@ -279,7 +500,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mesh-size",
-        choices=("1x1", "2x2", "1x4", "4x1"),
+        choices=("1x1", "2x2", "1x4", "4x1", "2x3", "3x2"),
         default="1x1",
         help="physical mesh and matching full-participation Dense fixture",
     )
@@ -287,16 +508,19 @@ def _parse_args() -> argparse.Namespace:
         "--finalizer", type=Path, default=build / "npusim_program_finalizer"
     )
     parser.add_argument("--npusim", type=Path, default=build / "npusim")
+    parser.add_argument("--resolver", type=Path,
+                        default=build / "npusim_program_io_selftest")
     parser.add_argument(
         "--simulation",
         type=Path,
         default=_ROOT / "llm/test/program/p5_behavioral_simulation.json",
     )
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--compile-timeout", type=int, default=2400)
     args = parser.parse_args()
-    if args.timeout <= 0:
-        parser.error("--timeout must be positive")
-    for name in ("finalizer", "npusim", "simulation"):
+    if args.timeout <= 0 or args.compile_timeout <= 0:
+        parser.error("--timeout and --compile-timeout must be positive")
+    for name in ("finalizer", "npusim", "resolver", "simulation"):
         if not getattr(args, name).is_file():
             parser.error(f"--{name} must name an existing file")
     return args

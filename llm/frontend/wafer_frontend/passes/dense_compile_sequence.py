@@ -233,6 +233,7 @@ def _compile_dense_e2e_sequence_with_profiles(
     fabric: PhysicalFabric,
     *,
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
+    intra_die_wire_address_limit_bytes: int | None = None,
 ) -> tuple[DenseCompileSequence, tuple[LinkedProgramProfile, ...]]:
     """Compile the sequence while retaining sources needed for ProgramIO."""
 
@@ -257,6 +258,7 @@ def _compile_dense_e2e_sequence_with_profiles(
             persistent_state_reservation_policy=reservation_policy,
             mode=RectMeshCompileMode.AUTO,
             producer_pass=f"dense_e2e_segment_{segment_index}",
+            intra_die_wire_address_limit_bytes=intra_die_wire_address_limit_bytes,
         )
         compilation.validate()
         report = compilation.capability_report
@@ -322,6 +324,7 @@ def compile_dense_e2e_sequence(
     fabric: PhysicalFabric,
     *,
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
+    intra_die_wire_address_limit_bytes: int | None = None,
 ) -> DenseCompileSequence:
     """Compile three independent linked programs; do not claim runtime splice."""
 
@@ -330,6 +333,7 @@ def compile_dense_e2e_sequence(
         legacy_template,
         fabric,
         hbm_address_spaces=hbm_address_spaces,
+        intra_die_wire_address_limit_bytes=intra_die_wire_address_limit_bytes,
     )
     return sequence
 
@@ -340,6 +344,7 @@ def compile_dense_e2e_sequence_runtime_profiles(
     fabric: PhysicalFabric,
     *,
     hbm_address_spaces: tuple[HbmAddressSpace, ...],
+    intra_die_wire_address_limit_bytes: int | None = None,
 ) -> tuple[DenseCompileSequence, tuple[LinkedProgramProfile, ...]]:
     """Return exact sequence and linked sources for typed ProgramIO creation."""
 
@@ -348,6 +353,7 @@ def compile_dense_e2e_sequence_runtime_profiles(
         legacy_template,
         fabric,
         hbm_address_spaces=hbm_address_spaces,
+        intra_die_wire_address_limit_bytes=intra_die_wire_address_limit_bytes,
     )
 
 

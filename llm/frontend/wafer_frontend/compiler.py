@@ -36,6 +36,7 @@ from .schema.common import (
 from .schema.experiment import (
     ExperimentSpec,
     InterDiePolicyName,
+    IntraDiePolicyName,
     PlacementStrategy,
     WorkloadMode,
 )
@@ -417,6 +418,7 @@ def compile_naive(
     producer_pass: str = "naive_frontend",
     registry: PolicyRegistry | None = None,
     intra_die_refine_options: SplitKRefineOptions | IntraDieOptimizationOptions | None = None,
+    intra_die_wire_address_limit_bytes: int | None = None,
 ) -> NaiveCompilation:
     """Compile one validated experiment through the fixed naive Python path."""
 
@@ -443,6 +445,18 @@ def compile_naive(
         RegistryKind.INTRA_DIE,
         spec.policy.intra_die.value,
     )
+    schedule_implementation = intra_die_policy.implementation
+    if intra_die_wire_address_limit_bytes is not None:
+        if spec.policy.intra_die is not IntraDiePolicyName.NAIVE:
+            raise SchemaError(
+                "wire-addressable SRAM compaction requires the NAIVE scheduler",
+                path="intra_die_wire_address_limit_bytes",
+            )
+        from .policies.naive_intra_die import NaiveIntraDiePolicy
+
+        schedule_implementation = NaiveIntraDiePolicy(
+            wire_address_limit_bytes=intra_die_wire_address_limit_bytes,
+        )
 
     placement_context = PlacementContext.create(
         producer_pass=producer_pass,
@@ -496,7 +510,7 @@ def compile_naive(
     )
     selected_schedule_bundle = partial(
         _schedule_refined_bundle,
-        policy=intra_die_policy.implementation,
+        policy=schedule_implementation,
     )
 
     manager = PassManager()
@@ -674,6 +688,7 @@ def compile_rect_mesh(
     intra_die_refine_options: (
         SplitKRefineOptions | IntraDieOptimizationOptions | None
     ) = None,
+    intra_die_wire_address_limit_bytes: int | None = None,
 ) -> RectMeshCompilation:
     """Compile an H by W Dense workload with diagnosable dispatch.
 
@@ -707,6 +722,7 @@ def compile_rect_mesh(
         producer_pass=producer_pass,
         registry=registry,
         intra_die_refine_options=intra_die_refine_options,
+        intra_die_wire_address_limit_bytes=intra_die_wire_address_limit_bytes,
     )
     manifests = tuple(entry.manifest for entry in compilation.linked.entries)
     report = RectMeshCompileCapabilityReport.create(

@@ -509,7 +509,12 @@ Allocation RegionTable::AllocateAt(
     const uint64_t absolute_address = region.base_bytes + offset_bytes;
     if (absolute_address % effective_alignment != 0)
         throw std::invalid_argument(
-            "SRAM fixed allocation address is not aligned");
+            "SRAM fixed allocation address is not aligned: region=" +
+            std::string(region_name) + " label=" + label +
+            " offset=" + std::to_string(offset_bytes) +
+            " base=" + std::to_string(region.base_bytes) +
+            " requested_alignment=" + std::to_string(alignment_bytes) +
+            " effective_alignment=" + std::to_string(effective_alignment));
     const uint64_t aligned =
         AlignUp(size_bytes, config_.allocation_alignment_bytes);
     const ByteRange wanted{offset_bytes, aligned};

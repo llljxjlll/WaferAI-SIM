@@ -1573,9 +1573,19 @@ class ProgramIoContract:
         )
         _validate_nonoverlap(probe_ranges, f"{path}.output_probes")
 
-        # AFTER_PROGRAM is sound with UNFUSED reuse only when every overlapping
-        # allocation finished before the probed terminal storage became live.
+        # AFTER_PROGRAM is sound with a scheduled terminal allocation only when
+        # every overlapping allocation finished before its producer writes it.
+        # Manifest-linker SRAM reuse is already checked for disjoint lifetimes
+        # above; still reject any allocation that could overwrite the probe.
         all_allocations = tuple(allocations.values())
+        terminal_end_by_core = {
+            core_id: max(
+                allocation.abi.lifetime_end_exclusive
+                for allocation in all_allocations
+                if allocation.runtime_core_id == core_id
+            )
+            for core_id in {allocation.runtime_core_id for allocation in all_allocations}
+        }
         for index, entry in enumerate(self.output_probes):
             sram_target = entry.target
             if type(sram_target) is ProgramHbmTarget:
@@ -1594,14 +1604,18 @@ class ProgramIoContract:
                     and target_start < other.absolute_start + other.size_bytes
                     and other.absolute_start < target_end
                     and not (
-                        manifest.producer_pass
-                        == "unfused_comparison_standard_linker"
-                        and other.abi.lifetime_end_exclusive
+                        other.abi.lifetime_end_exclusive
                         <= target.abi.lifetime_start
-                        or manifest.producer_pass
-                        == "moe_swizzle_standard_linker"
-                        and other.abi.lifetime_end_exclusive
-                        <= target.abi.lifetime_start
+                        and (
+                            manifest.producer_pass in (
+                                "unfused_comparison_standard_linker",
+                                "moe_swizzle_standard_linker",
+                            )
+                            or manifest.producer_pass == "manifest_linker"
+                            and target.abi.ownership is BufferOwnership.OWNED
+                            and target.abi.lifetime_end_exclusive
+                            == terminal_end_by_core[target.runtime_core_id]
+                        )
                     )
                 ):
                     raise SchemaError(

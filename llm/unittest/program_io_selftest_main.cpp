@@ -733,20 +733,27 @@ void TestSequenceSegmentPreservesHbm() {
             std::vector<uint8_t>({1, 2, 3, 4}),
         "filling a missing sequence range changed existing HBM bytes");
 }
-int RunHardwareSramPreflight(const std::string &hardware_path) {
+int RunHardwareSramPreflight(const std::string &hardware_path,
+                            uint64_t expected_capacity_bytes,
+                            uint64_t expected_alignment_bytes = 0) {
     const auto document = nlohmann::json::parse(ReadText(hardware_path));
     Require(document.is_object() && document.contains("memory"),
             "hardware preflight must contain memory");
     // ParseConfig calls the production SRAM validator used by NpuSim:
     // region alignment, capacity, initiator access, and overlap all apply.
     const auto config = sram::ParseConfig(document.at("memory"));
-    Require(config.capacity_bytes == 1048576 && config.regions.size() == 1 &&
+    Require(config.capacity_bytes == expected_capacity_bytes &&
+                (expected_alignment_bytes == 0 ||
+                 config.allocation_alignment_bytes == expected_alignment_bytes) &&
+                config.regions.size() == 1 &&
                 config.regions[0].name == "sram" &&
                 config.regions[0].base_bytes == 0 &&
                 config.regions[0].size_bytes == config.capacity_bytes,
-            "TP16 linked SRAM ABI requires one full 1MiB 'sram' region");
+            "linked SRAM ABI requires one full 'sram' region with the exact compiled capacity and allocation alignment");
     std::cout << "[HARDWARE_SRAM_PREFLIGHT] "
-                 "region=sram capacity_bytes=1048576 region_count=1\n";
+                 "region=sram capacity_bytes=" << expected_capacity_bytes
+              << " alignment_bytes=" << config.allocation_alignment_bytes
+              << " region_count=1\n";
     return 0;
 }
 
@@ -838,7 +845,14 @@ int sc_main(int argc, char **argv) {
             return RunMultiRequestAttentionPreflight();
         if (argc == 3 &&
             std::string(argv[1]) == "--validate-hardware-sram")
-            return RunHardwareSramPreflight(argv[2]);
+            return RunHardwareSramPreflight(argv[2], 1048576);
+        if (argc == 4 &&
+            std::string(argv[1]) == "--validate-hardware-sram")
+            return RunHardwareSramPreflight(argv[2], std::stoull(argv[3]));
+        if (argc == 5 &&
+            std::string(argv[1]) == "--validate-hardware-sram")
+            return RunHardwareSramPreflight(
+                argv[2], std::stoull(argv[3]), std::stoull(argv[4]));
         if (argc == 4 && std::string(argv[1]) == "--finalize") {
             const std::string manifest = ReadText(argv[2]);
             WriteBytes(argv[3],
@@ -859,7 +873,7 @@ int sc_main(int argc, char **argv) {
         }
         std::cerr << "usage: " << argv[0]
                   << " [--multi-request-attention-preflight | "
-                     "--validate-hardware-sram HARDWARE | "
+                     "--validate-hardware-sram HARDWARE [EXPECTED_BYTES [EXPECTED_ALIGNMENT]] | "
                      "--finalize MANIFEST ARTIFACT | "
                      "--resolve MANIFEST ARTIFACT SIDECAR]\n";
         return 2;
