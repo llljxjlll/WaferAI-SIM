@@ -1,6 +1,7 @@
 #pragma once
 
 #include "memory/external_dma_program.h"
+#include "memory/dense_adamw_versioned_role_contract.h"
 
 #include <filesystem>
 #include <map>
@@ -60,6 +61,7 @@ private:
     std::string connection_ref_;
     std::string external_capacity_ref_;
     std::unique_ptr<ExternalMemoryRuntimeBridge> runtime_;
+    std::unique_ptr<DenseAdamwVersionedRoleContract> role_contract_;
     std::vector<DenseAdamwPagerSpan> spans_;
     std::vector<DenseAdamwPagerEvent> events_;
     std::map<std::string, bool> resident_;
