@@ -104,6 +104,15 @@ def _state_tensor_spec(
             "gradient.synced."
         )
         return _parameter_shape(request, parameter), DType.FP32
+    if kind in (
+        E2EStateKind.OPTIMIZER_MASTER,
+        E2EStateKind.OPTIMIZER_MOMENT1,
+        E2EStateKind.OPTIMIZER_MOMENT2,
+    ):
+        parameter = logical_name.split(".", 3)[-1]
+        return _parameter_shape(request, parameter), DType.FP32
+    if kind is E2EStateKind.OPTIMIZER_STEP:
+        return (1,), DType.INT32
     if kind is E2EStateKind.KV:
         assert request.steps.inference is not None
         cached_tokens = (
@@ -200,7 +209,14 @@ class _GraphBuilder:
                 dtype=dtype,
             )
             if owned is None:
-                owned = kind in (E2EStateKind.PARAMETER, E2EStateKind.GRADIENT)
+                owned = kind in (
+                    E2EStateKind.PARAMETER,
+                    E2EStateKind.GRADIENT,
+                    E2EStateKind.OPTIMIZER_MASTER,
+                    E2EStateKind.OPTIMIZER_MOMENT1,
+                    E2EStateKind.OPTIMIZER_MOMENT2,
+                    E2EStateKind.OPTIMIZER_STEP,
+                )
             bindings: list[tuple[int, int, str | None]] = []
             if owned:
                 for owner in self._owners(expert):
@@ -386,6 +402,48 @@ def _parameter_states(
             version,
             layer=layer,
             expert=expert,
+        )
+        for name, layer, expert in specs
+    }
+
+
+def _adamw_states(
+    builder: _GraphBuilder,
+    specs: tuple[tuple[str, int | None, int | None], ...],
+    version: int,
+) -> dict[str, tuple[str, str, str, str]]:
+    """Return exact FP32 master/m/v and INT32 step state per parameter."""
+
+    return {
+        name: (
+            builder.state(
+                f"optimizer.adamw.master.{name}",
+                E2EStateKind.OPTIMIZER_MASTER,
+                version,
+                layer=layer,
+                expert=expert,
+            ),
+            builder.state(
+                f"optimizer.adamw.m.{name}",
+                E2EStateKind.OPTIMIZER_MOMENT1,
+                version,
+                layer=layer,
+                expert=expert,
+            ),
+            builder.state(
+                f"optimizer.adamw.v.{name}",
+                E2EStateKind.OPTIMIZER_MOMENT2,
+                version,
+                layer=layer,
+                expert=expert,
+            ),
+            builder.state(
+                f"optimizer.adamw.step.{name}",
+                E2EStateKind.OPTIMIZER_STEP,
+                version,
+                layer=layer,
+                expert=expert,
+            ),
         )
         for name, layer, expert in specs
     }
@@ -805,6 +863,12 @@ def _build_training(
     specs = _parameter_specs(request)
     for step in range(request.steps.training.step_count):
         parameter_states = _parameter_states(builder, specs, step)
+        adamw_states = (
+            _adamw_states(builder, specs, step)
+            if request.optimizer is not None
+            and request.optimizer.kind is WorkloadOptimizerKind.ADAMW
+            else None
+        )
         for name, layer, expert in specs:
             builder.add(
                 E2EOperationKind.PARAMETER_LOAD,
@@ -815,6 +879,16 @@ def _build_training(
                 parameter_ref=name,
                 reads=(parameter_states[name],),
             )
+            if adamw_states is not None:
+                builder.add(
+                    E2EOperationKind.OPTIMIZER_LOAD,
+                    phase="optimizer_load",
+                    step=step,
+                    layer=layer,
+                    expert=expert,
+                    parameter_ref=name,
+                    reads=adamw_states[name],
+                )
         _add_forward(
             builder,
             parameter_states,
@@ -880,6 +954,11 @@ def _build_training(
                     writes=(backward_state,),
                 )
         next_parameters = _parameter_states(builder, specs, step + 1)
+        next_adamw_states = (
+            _adamw_states(builder, specs, step + 1)
+            if adamw_states is not None
+            else None
+        )
         stores: list[str] = []
         for name, layer, expert in specs:
             raw_gradient = builder.state(
@@ -924,15 +1003,24 @@ def _build_training(
                 reduce_op=ReduceOp.SUM,
                 normalization_denominator=normalization_denominator,
             )
+            update_kind = (
+                E2EOperationKind.ADAMW_UPDATE
+                if adamw_states is not None
+                else E2EOperationKind.SGD_UPDATE
+            )
+            optimizer_reads = adamw_states[name] if adamw_states is not None else ()
+            optimizer_writes = (
+                next_adamw_states[name] if next_adamw_states is not None else ()
+            )
             builder.add(
-                E2EOperationKind.SGD_UPDATE,
+                update_kind,
                 phase="optimizer",
                 step=step,
                 layer=layer,
                 expert=expert,
                 parameter_ref=name,
-                reads=(parameter_states[name], synced_gradient),
-                writes=(next_parameters[name],),
+                reads=(parameter_states[name], synced_gradient, *optimizer_reads),
+                writes=(next_parameters[name], *optimizer_writes),
             )
             store = builder.add(
                 E2EOperationKind.PARAMETER_STORE,
@@ -944,6 +1032,17 @@ def _build_training(
                 reads=(next_parameters[name],),
             )
             stores.append(store.id)
+            if next_adamw_states is not None:
+                optimizer_store = builder.add(
+                    E2EOperationKind.OPTIMIZER_STORE,
+                    phase="optimizer_store",
+                    step=step,
+                    layer=layer,
+                    expert=expert,
+                    parameter_ref=name,
+                    reads=next_adamw_states[name],
+                )
+                stores.append(optimizer_store.id)
         builder.add(
             E2EOperationKind.STEP_COMMIT,
             phase="step_commit",
@@ -979,11 +1078,6 @@ def build_e2e_workload_graph(
                 path="request.steps.training.step_count",
             )
         assert request.optimizer is not None
-        if request.optimizer.kind is not WorkloadOptimizerKind.SGD:
-            raise UnsupportedFeatureError(
-                "P3 baseline graph requires SGD; AdamW belongs to P4",
-                path="request.optimizer.kind",
-            )
         return _build_training(request, placement)
     assert request.steps.inference is not None
     if request.steps.inference.prefill_tokens == 0:

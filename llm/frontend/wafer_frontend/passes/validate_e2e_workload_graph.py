@@ -17,6 +17,7 @@ from ..schema.e2e_workload_graph import (
 )
 from ..schema.ir0 import ReduceOp
 from ..schema.parallel_placement import ParameterOwnershipKind
+from ..schema.workload_run import WorkloadOptimizerKind
 
 
 _OperationKey = tuple[
@@ -302,6 +303,19 @@ def _expected_operations(graph: E2EWorkloadGraph) -> Counter[_OperationKey]:
                 expert,
                 parameter,
             )
+            if (
+                graph.request.optimizer is not None
+                and graph.request.optimizer.kind is WorkloadOptimizerKind.ADAMW
+            ):
+                _add(
+                    expected,
+                    E2EOperationKind.OPTIMIZER_LOAD,
+                    "optimizer_load",
+                    step,
+                    layer,
+                    expert,
+                    parameter,
+                )
         _forward_expected(
             graph,
             expected,
@@ -376,7 +390,12 @@ def _expected_operations(graph: E2EWorkloadGraph) -> Counter[_OperationKey]:
             )
             _add(
                 expected,
-                E2EOperationKind.SGD_UPDATE,
+                (
+                    E2EOperationKind.ADAMW_UPDATE
+                    if graph.request.optimizer is not None
+                    and graph.request.optimizer.kind is WorkloadOptimizerKind.ADAMW
+                    else E2EOperationKind.SGD_UPDATE
+                ),
                 "optimizer",
                 step,
                 layer,
@@ -392,6 +411,19 @@ def _expected_operations(graph: E2EWorkloadGraph) -> Counter[_OperationKey]:
                 expert,
                 parameter,
             )
+            if (
+                graph.request.optimizer is not None
+                and graph.request.optimizer.kind is WorkloadOptimizerKind.ADAMW
+            ):
+                _add(
+                    expected,
+                    E2EOperationKind.OPTIMIZER_STORE,
+                    "optimizer_store",
+                    step,
+                    layer,
+                    expert,
+                    parameter,
+                )
         _add(expected, E2EOperationKind.STEP_COMMIT, "step_commit", step)
     return expected
 
@@ -564,6 +596,12 @@ def _validate_inference_lineage(graph: E2EWorkloadGraph) -> None:
 def _validate_training_lineage(graph: E2EWorkloadGraph) -> None:
     assert graph.request.steps.training is not None
     step_count = graph.request.steps.training.step_count
+    update_kind = (
+        E2EOperationKind.ADAMW_UPDATE
+        if graph.request.optimizer is not None
+        and graph.request.optimizer.kind is WorkloadOptimizerKind.ADAMW
+        else E2EOperationKind.SGD_UPDATE
+    )
     for step in range(step_count):
         loss = _one_operation(
             graph,
@@ -628,7 +666,7 @@ def _validate_training_lineage(graph: E2EWorkloadGraph) -> None:
             else:
                 update = _one_operation(
                     graph,
-                    kind=E2EOperationKind.SGD_UPDATE,
+                    kind=update_kind,
                     step=version - 1,
                     parameter=parameter,
                 )
@@ -668,7 +706,7 @@ def _validate_training_lineage(graph: E2EWorkloadGraph) -> None:
                 )
                 update = _one_operation(
                     graph,
-                    kind=E2EOperationKind.SGD_UPDATE,
+                    kind=update_kind,
                     step=version,
                     parameter=parameter,
                 )
@@ -708,6 +746,79 @@ def _validate_training_lineage(graph: E2EWorkloadGraph) -> None:
                     raise SchemaError(
                         "parameter gradient/sync/update/store lineage is incomplete",
                         path="e2e_workload_graph.state_versions",
+                    )
+                if update_kind is E2EOperationKind.ADAMW_UPDATE:
+                    optimizer_load = _one_operation(
+                        graph,
+                        kind=E2EOperationKind.OPTIMIZER_LOAD,
+                        step=version,
+                        parameter=parameter,
+                    )
+                    optimizer_store = _one_operation(
+                        graph,
+                        kind=E2EOperationKind.OPTIMIZER_STORE,
+                        step=version,
+                        parameter=parameter,
+                    )
+                    names_and_kinds = (
+                        (
+                            f"optimizer.adamw.master.{parameter}",
+                            E2EStateKind.OPTIMIZER_MASTER,
+                        ),
+                        (
+                            f"optimizer.adamw.m.{parameter}",
+                            E2EStateKind.OPTIMIZER_MOMENT1,
+                        ),
+                        (
+                            f"optimizer.adamw.v.{parameter}",
+                            E2EStateKind.OPTIMIZER_MOMENT2,
+                        ),
+                        (
+                            f"optimizer.adamw.step.{parameter}",
+                            E2EStateKind.OPTIMIZER_STEP,
+                        ),
+                    )
+                    current_optimizer = tuple(
+                        _one_state(
+                            graph,
+                            logical_name=name,
+                            kind=kind,
+                            version=version,
+                        )
+                        for name, kind in names_and_kinds
+                    )
+                    next_optimizer = tuple(
+                        _one_state(
+                            graph,
+                            logical_name=name,
+                            kind=kind,
+                            version=version + 1,
+                        )
+                        for name, kind in names_and_kinds
+                    )
+                    if (
+                        optimizer_load.reads
+                        != tuple(item.id for item in current_optimizer)
+                        or not all(item.id in update.reads for item in current_optimizer)
+                        or not all(item.id in update.writes for item in next_optimizer)
+                        or optimizer_store.reads
+                        != tuple(item.id for item in next_optimizer)
+                    ):
+                        raise SchemaError(
+                            "AdamW master/m/v/step lineage is incomplete",
+                            path="e2e_workload_graph.state_versions",
+                        )
+                    _require_happens_before(
+                        graph,
+                        optimizer_load,
+                        update,
+                        "optimizer state load must happen before AdamW update",
+                    )
+                    _require_happens_before(
+                        graph,
+                        update,
+                        optimizer_store,
+                        "AdamW update must happen before optimizer state store",
                     )
                 _require_happens_before(
                     graph,
@@ -754,6 +865,15 @@ def _expected_state_tensor(
             "gradient.raw."
         ).removeprefix("gradient.synced.")
         return _parameter_shape(graph, parameter), DType.FP32, True
+    if state.kind in (
+        E2EStateKind.OPTIMIZER_MASTER,
+        E2EStateKind.OPTIMIZER_MOMENT1,
+        E2EStateKind.OPTIMIZER_MOMENT2,
+    ):
+        parameter = state.logical_name.split(".", 3)[-1]
+        return _parameter_shape(graph, parameter), DType.FP32, True
+    if state.kind is E2EStateKind.OPTIMIZER_STEP:
+        return (1,), DType.INT32, True
     if state.kind is E2EStateKind.KV:
         assert graph.request.steps.inference is not None
         cached_tokens = (

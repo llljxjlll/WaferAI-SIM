@@ -91,6 +91,25 @@ def _request(family: WorkloadFamily) -> WorkloadRunRequest:
     )
 
 
+def _adamw_request() -> WorkloadRunRequest:
+    source = _request(WorkloadFamily.DENSE_TRAINING)
+    return WorkloadRunRequest.create(
+        family=source.family,
+        model=source.model,
+        steps=source.steps,
+        mesh=source.mesh,
+        parallel=source.parallel,
+        optimizer=WorkloadOptimizerSpec(
+            kind=WorkloadOptimizerKind.ADAMW,
+            learning_rate=0.001,
+            weight_decay=0.01,
+            beta1=0.9,
+            beta2=0.999,
+            epsilon=1.0e-8,
+        ),
+    )
+
+
 def _count(graph, kind: E2EOperationKind) -> int:
     return sum(operation.kind is kind for operation in graph.operations)
 
@@ -307,6 +326,33 @@ class E2EWorkloadGraphTest(unittest.TestCase):
                     {len(groups[item].ranks) for item in operation.group_refs},
                     {operation.normalization_denominator},
                 )
+
+    def test_dense_adamw_tracks_master_m_v_and_step_across_two_steps(self) -> None:
+        graph = build_e2e_workload_graph(_adamw_request())
+        validate_e2e_workload_coverage(graph)
+        parameter_count = sum(
+            state.kind is E2EStateKind.PARAMETER and state.version == 0
+            for state in graph.state_versions
+        )
+        self.assertEqual(
+            _count(graph, E2EOperationKind.ADAMW_UPDATE), 2 * parameter_count
+        )
+        self.assertEqual(_count(graph, E2EOperationKind.SGD_UPDATE), 0)
+        self.assertEqual(
+            _count(graph, E2EOperationKind.OPTIMIZER_LOAD), 2 * parameter_count
+        )
+        self.assertEqual(
+            _count(graph, E2EOperationKind.OPTIMIZER_STORE), 2 * parameter_count
+        )
+        for kind in (
+            E2EStateKind.OPTIMIZER_MASTER,
+            E2EStateKind.OPTIMIZER_MOMENT1,
+            E2EStateKind.OPTIMIZER_MOMENT2,
+            E2EStateKind.OPTIMIZER_STEP,
+        ):
+            states = tuple(item for item in graph.state_versions if item.kind is kind)
+            self.assertEqual(len(states), 3 * parameter_count)
+            self.assertEqual({item.version for item in states}, {0, 1, 2})
 
     def test_moe_inference_and_training_cover_routing_and_experts(self) -> None:
         inference = build_e2e_workload_graph(

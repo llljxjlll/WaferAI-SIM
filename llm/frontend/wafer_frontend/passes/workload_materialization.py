@@ -154,18 +154,26 @@ def _state_inventory(request: WorkloadRunRequest, placement) -> tuple[WorkloadSt
                 )
             )
             if request.optimizer is not None and request.optimizer.kind.value == "adamw":
-                states.append(
-                    _state(
-                        name=parameter.logical_name.replace(
-                            "parameter.", "optimizer.adamw.", 1
-                        ),
-                        kind=MemoryObjectKind.OPTIMIZER,
-                        rank=parameter.logical_rank,
-                        size=parameter.size_bytes * 6,
-                        writable=True,
-                        owner=parameter.owner_domain_ref,
+                for state_name, state_bytes in (
+                    ("master", parameter.size_bytes * 2),
+                    ("m", parameter.size_bytes * 2),
+                    ("v", parameter.size_bytes * 2),
+                    ("step", 4),
+                ):
+                    states.append(
+                        _state(
+                            name=parameter.logical_name.replace(
+                                "parameter.",
+                                f"optimizer.adamw.{state_name}.",
+                                1,
+                            ),
+                            kind=MemoryObjectKind.OPTIMIZER,
+                            rank=parameter.logical_rank,
+                            size=state_bytes,
+                            writable=True,
+                            owner=parameter.owner_domain_ref,
+                        )
                     )
-                )
     else:
         assert request.steps.inference is not None
         tokens = (
