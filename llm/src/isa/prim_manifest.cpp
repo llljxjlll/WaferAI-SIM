@@ -158,6 +158,12 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
      V::INTERNAL, L::STABLE, S::AVAILABLE},
     {PrimId::ATTENTION_BACKWARD_TIMING, "attention_backward_timing",
      C::COMPUTE, V::INTERNAL, L::STABLE, S::AVAILABLE},
+    {PrimId::EMBEDDING_TABLE_WGRAD_TIMING,
+     "embedding_table_wgrad_timing", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
+    {PrimId::NORM_GAMMA_WGRAD_TIMING,
+     "norm_gamma_wgrad_timing", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {
