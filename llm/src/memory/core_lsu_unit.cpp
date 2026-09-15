@@ -1,4 +1,5 @@
 #include "memory/core_lsu_unit.h"
+#include "memory/dense_adamw_mid_program_pager.h"
 
 #include "trace/Event_engine.h"
 
@@ -174,6 +175,8 @@ void CoreLsuUnit::Fence() {
 
 void CoreLsuUnit::Load(uint64_t hbm_addr, uint64_t sram_addr,
                        uint64_t size_bytes) {
+    if (adamw_pager_)
+        adamw_pager_->BeforeLoad(hbm_addr, size_bytes);
     Wait(IssueLoad(hbm_addr, sram_addr, size_bytes));
 }
 
@@ -182,6 +185,8 @@ void CoreLsuUnit::Store(uint64_t sram_addr, uint64_t hbm_addr,
                         std::vector<uint8_t> byte_enable) {
     Wait(IssueStore(sram_addr, hbm_addr, size_bytes,
                     std::move(byte_enable)));
+    if (adamw_pager_)
+        adamw_pager_->AfterStore(hbm_addr, size_bytes);
 }
 
 void CoreLsuUnit::Complete(const std::shared_ptr<TokenRecord> &record,

@@ -8,6 +8,7 @@
 #include <sysc/kernel/sc_dynamic_processes.h>
 
 class Event_engine;
+namespace external_memory { class DenseAdamwMidProgramPager; }
 
 namespace sram {
 
@@ -90,6 +91,9 @@ class CoreLsuUnit : public sc_module {
     void Load(uint64_t hbm_addr, uint64_t sram_addr, uint64_t size_bytes);
     void Store(uint64_t sram_addr, uint64_t hbm_addr, uint64_t size_bytes,
                std::vector<uint8_t> byte_enable = {});
+    void SetDenseAdamwPager(external_memory::DenseAdamwMidProgramPager *pager) {
+        adamw_pager_ = pager;
+    }
 
     size_t OutstandingCount() const { return records_.size(); }
     uint32_t max_outstanding() const { return max_outstanding_; }
@@ -131,6 +135,7 @@ class CoreLsuUnit : public sc_module {
     std::vector<LsuTraceRecord> trace_;
     Event_engine *event_engine_ = nullptr;
     int core_id_ = -1;
+    external_memory::DenseAdamwMidProgramPager *adamw_pager_ = nullptr;
 };
 
 } // namespace sram

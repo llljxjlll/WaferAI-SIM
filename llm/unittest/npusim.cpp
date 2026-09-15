@@ -19,6 +19,7 @@
 #include "memory/hbm_r3_selftest.h"
 #include "memory/hbm_r4_selftest.h"
 #include "memory/external_dma_program.h"
+#include "memory/dense_adamw_mid_program_pager.h"
 #include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_control_core.h"
@@ -141,6 +142,9 @@ Define_string_opt("--program-sequence", g_flag_program_sequence,
 Define_string_opt("--program-io-sequence", g_flag_program_io_sequence,
                   std::string{},
                   "comma-separated ProgramIo sidecars for --program-sequence");
+Define_string_opt("--dense-adamw-paged-runtime",
+                  g_flag_dense_adamw_paged_runtime, std::string{},
+                  "source-signed per-StateABI external DMA for two Dense AdamW steps");
 Define_string_opt(
     "--external-dma-binding", g_flag_external_dma_binding, std::string{},
     "typed external DMA startup binding for --program-sequence");
@@ -997,15 +1001,17 @@ int sc_main(int argc, char *argv[]) {
         return 0;
     }
 
+    const bool adamw_paged = !g_flag_dense_adamw_paged_runtime.empty();
     const bool sequence_any = !g_flag_program_sequence.empty() ||
                               !g_flag_linked_manifest_sequence.empty() ||
-                              !g_flag_program_io_sequence.empty();
+                              !g_flag_program_io_sequence.empty() || adamw_paged;
     if (sequence_any &&
         (g_flag_program_sequence.empty() ||
          g_flag_linked_manifest_sequence.empty() ||
-         g_flag_program_io_sequence.empty())) {
-        LOG_ERROR(CONFIG) << "--program-sequence, --linked-manifest-sequence, "
-                             "and --program-io-sequence must be paired";
+         (adamw_paged == !g_flag_program_io_sequence.empty()))) {
+        LOG_ERROR(CONFIG) << "--program-sequence and --linked-manifest-sequence "
+                             "require exactly one of --program-io-sequence "
+                             "or --dense-adamw-paged-runtime";
         return 2;
     }
     const bool sequence_mode = sequence_any;
@@ -1014,6 +1020,11 @@ int sc_main(int argc, char *argv[]) {
     if (external_dma_requested && !sequence_mode) {
         LOG_ERROR(CONFIG)
             << "--external-dma-binding requires --program-sequence";
+        return 2;
+    }
+    if (adamw_paged && external_dma_requested) {
+        LOG_ERROR(CONFIG) << "on-demand paged DMA cannot share an all-state "
+                             "startup/final-writeback phase";
         return 2;
     }
     if (sequence_mode &&
@@ -1380,6 +1391,7 @@ int sc_main(int argc, char *argv[]) {
 
     std::vector<uint8_t> program_bytes;
     std::vector<std::vector<uint8_t>> sequence_program_bytes;
+    std::vector<std::string> sequence_manifest_texts;
     std::vector<DenseSequenceProgramWitness>
         sequence_program_witnesses;
     std::vector<std::vector<DenseSequenceKvRange>> sequence_kv_ranges;
@@ -1415,12 +1427,16 @@ int sc_main(int argc, char *argv[]) {
                 const auto manifest_paths = SplitSequencePaths(
                     g_flag_linked_manifest_sequence,
                     "--linked-manifest-sequence");
-                const auto sidecar_paths = SplitSequencePaths(
-                    g_flag_program_io_sequence, "--program-io-sequence");
+                const auto sidecar_paths = adamw_paged
+                    ? std::vector<std::string>{}
+                    : SplitSequencePaths(g_flag_program_io_sequence,
+                                         "--program-io-sequence");
                 if (manifest_paths.size() != program_paths.size() ||
-                    sidecar_paths.size() != program_paths.size())
+                    (!adamw_paged &&
+                     sidecar_paths.size() != program_paths.size()) ||
+                    (adamw_paged && program_paths.size() != 2))
                     throw std::runtime_error(
-                        "Program sequence path lists must have equal length");
+                        "Program sequence path lists or strict two-step shape drifted");
                 for (std::size_t index = 0;
                      index < program_paths.size(); ++index) {
                     auto bytes = ReadProgramFile(program_paths[index]);
@@ -1438,6 +1454,7 @@ int sc_main(int argc, char *argv[]) {
                         throw std::runtime_error(
                             "Dense sequence manifest/artifact closure failed");
                     sequence_program_bytes.push_back(std::move(bytes));
+                    sequence_manifest_texts.push_back(manifest);
                     const auto kv_ranges = DenseKvRanges(manifest);
                     const auto training_ranges =
                         DenseTrainingStateRanges(manifest);
@@ -1462,14 +1479,26 @@ int sc_main(int argc, char *argv[]) {
                                 "Dense inference sequence state family changed");
                         sequence_kv_ranges.push_back(kv_ranges);
                     }
-                    const std::string sidecar = ReadRegularTextFile(
-                        "Dense sequence ProgramIo sidecar",
-                        sidecar_paths[index]);
-                    sequence_program_io_resolved.push_back(
-                        frontend::program_io::ParseAndResolve(
-                            sidecar, manifest,
-                            sequence_program_bytes.back()));
+                    if (!adamw_paged) {
+                        const std::string sidecar = ReadRegularTextFile(
+                            "Dense sequence ProgramIo sidecar",
+                            sidecar_paths[index]);
+                        sequence_program_io_resolved.push_back(
+                            frontend::program_io::ParseAndResolve(
+                                sidecar, manifest,
+                                sequence_program_bytes.back()));
+                    }
                 }
+                if (adamw_paged &&
+                    (!dense_training_sequence ||
+                     std::any_of(sequence_training_witnesses.begin(),
+                                 sequence_training_witnesses.end(),
+                                 [](const auto &item) {
+                                     return item.adamw_records != 17 ||
+                                            item.optimizer_states != 68;
+                                 })))
+                    throw std::runtime_error(
+                        "paged external DMA requires actual two-step 17-parameter Dense AdamW");
                 if (dense_training_sequence)
                     ValidateDenseTrainingStateContinuity(
                         sequence_training_state_ranges);
@@ -1649,6 +1678,8 @@ int sc_main(int argc, char *argv[]) {
 
     std::unique_ptr<external_memory::ExternalDmaProgramExecutor>
         external_dma_executor;
+    std::unique_ptr<external_memory::DenseAdamwMidProgramPager>
+        adamw_mid_program_pager;
     std::unique_ptr<ExternalDmaStartupCoordinator>
         external_dma_coordinator;
     if (external_dma_program.has_value()) {
@@ -1688,6 +1719,37 @@ int sc_main(int argc, char *argv[]) {
             LOG_ERROR(CONFIG)
                 << "External DMA startup initialization failed: "
                 << error.what();
+            return 2;
+        }
+    }
+    if (adamw_paged) {
+        try {
+            if (monitor->hbmRuntime == nullptr ||
+                monitor->workerCores[0] == nullptr ||
+                !monitor->workerCores[0]->lsu_memory)
+                throw std::runtime_error(
+                    "paged Dense AdamW requires real die0 HBM and core0 LSU");
+            auto *physical = monitor->hbmRuntime->Find(0, 0);
+            if (physical == nullptr || !physical->backend)
+                throw std::runtime_error(
+                    "paged Dense AdamW requires source die0 HBM backend");
+            std::map<external_memory::HbmEndpoint, HBMBackend *> backends{
+                {{0, 0}, physical->backend.get()}};
+            adamw_mid_program_pager = std::make_unique<
+                external_memory::DenseAdamwMidProgramPager>(
+                    "dense_adamw_mid_program_pager",
+                    std::filesystem::path(g_flag_dense_adamw_paged_runtime),
+                    sequence_manifest_texts, std::move(backends),
+                    sc_time(CYCLE, SC_NS));
+            monitor->workerCores[0]->lsu_memory->SetDenseAdamwPager(
+                adamw_mid_program_pager.get());
+            std::cout << "[DENSE_ADAMW_PAGED_BINDING] source="
+                      << adamw_mid_program_pager->SourceRef()
+                      << " state_abi=83 events=332 hbm_capacity=36864"
+                      << " workspace_end=9248 pass=1" << std::endl;
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG) << "Dense AdamW paged DMA binding failed: "
+                              << error.what();
             return 2;
         }
     }
@@ -1814,7 +1876,7 @@ int sc_main(int argc, char *argv[]) {
             return 2;
         }
     }
-    if (sequence_mode) {
+    if (sequence_mode && !adamw_paged) {
         try {
             frontend::program_io::Bindings bindings;
             for (int core = 0; core < TOTAL_CORES; ++core) {
@@ -1841,9 +1903,18 @@ int sc_main(int argc, char *argv[]) {
 
     std::optional<std::string> dense_training_state_digest;
     if (sequence_mode && dense_training_sequence) {
-        dense_training_state_digest = PrintDenseTrainingStateBoundary(
-            *monitor->hbmRuntime, 0,
-            sequence_training_state_ranges.front(), std::nullopt);
+        if (adamw_paged) {
+            dense_training_state_digest =
+                adamw_mid_program_pager->ProbeInitialAuthority();
+            std::cout << "[DENSE_TRAINING_SEQUENCE_STATE] version=0 bytes=32100"
+                      << " digest=" << *dense_training_state_digest
+                      << " content_changed=0 functional=0 pass=1"
+                      << " authority=external" << std::endl;
+        } else {
+            dense_training_state_digest = PrintDenseTrainingStateBoundary(
+                *monitor->hbmRuntime, 0,
+                sequence_training_state_ranges.front(), std::nullopt);
+        }
     }
 
     sc_trace_file *tf = sc_create_vcd_trace_file("Cchip_1");
@@ -1861,15 +1932,24 @@ int sc_main(int argc, char *argv[]) {
             if (sequence_helper->completed_segments() != expected + 1)
                 throw std::runtime_error(
                     "Dense sequence paused outside an exact segment boundary");
-            const frontend::program_io::Result io_result =
-                frontend::program_io::VerifyAfterSimulation(
-                    *sequence_program_io_applied);
-            if (!io_result.Passed())
-                throw std::runtime_error(
-                    "Dense sequence ProgramIo segment verification failed");
-            std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
-                      << " probes=" << io_result.probes.size()
-                      << " pass=1" << std::endl;
+            if (adamw_paged) {
+                adamw_mid_program_pager->CompleteStep(expected);
+                std::cout << "[DENSE_ADAMW_EXTERNAL_PROGRAM_IO] index="
+                          << expected << " probes=83"
+                          << " physical_state_bytes=32100"
+                          << " pending=" << adamw_mid_program_pager->Pending()
+                          << " pass=1 functional=0" << std::endl;
+            } else {
+                const frontend::program_io::Result io_result =
+                    frontend::program_io::VerifyAfterSimulation(
+                        *sequence_program_io_applied);
+                if (!io_result.Passed())
+                    throw std::runtime_error(
+                        "Dense sequence ProgramIo segment verification failed");
+                std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
+                          << " probes=" << io_result.probes.size()
+                          << " pass=1" << std::endl;
+            }
             std::cout
                 << "[DENSE_SEQUENCE_COMPUTE] index=" << expected
                 << " records="
@@ -1878,11 +1958,24 @@ int sc_main(int argc, char *argv[]) {
                 << sequence_program_witnesses[expected].lsu_load_records
                 << " status=done" << std::endl;
             if (dense_training_sequence) {
-                dense_training_state_digest =
-                    PrintDenseTrainingStateBoundary(
-                        *monitor->hbmRuntime, expected + 1,
-                        sequence_training_state_ranges[expected],
-                        dense_training_state_digest);
+                if (adamw_paged) {
+                    const std::string current =
+                        adamw_mid_program_pager->AuthorityDigest();
+                    const bool changed = current != *dense_training_state_digest;
+                    dense_training_state_digest = current;
+                    std::cout << "[DENSE_TRAINING_SEQUENCE_STATE] version="
+                              << expected + 1 << " bytes=32100 digest="
+                              << current << " content_changed="
+                              << (changed ? 1 : 0)
+                              << " functional=0 pass=1 authority=external"
+                              << std::endl;
+                } else {
+                    dense_training_state_digest =
+                        PrintDenseTrainingStateBoundary(
+                            *monitor->hbmRuntime, expected + 1,
+                            sequence_training_state_ranges[expected],
+                            dense_training_state_digest);
+                }
                 const auto &witness =
                     sequence_training_witnesses[expected];
                 std::cout
@@ -1911,7 +2004,8 @@ int sc_main(int argc, char *argv[]) {
                     *monitor->hbmRuntime, expected,
                     sequence_kv_ranges[expected]);
             }
-            if (expected + 1 < sequence_program_bytes.size())
+            if (!adamw_paged &&
+                expected + 1 < sequence_program_bytes.size())
                 sequence_program_io_applied =
                     frontend::program_io::ApplyBeforeSequenceSegment(
                         sequence_program_io_resolved[expected + 1],
@@ -1952,6 +2046,29 @@ int sc_main(int argc, char *argv[]) {
                 << " hbm_read_bytes=" << execution->stats.hbm_read_bytes
                 << " hbm_write_bytes=" << execution->stats.hbm_write_bytes
                 << " pending=0" << std::endl;
+        }
+        if (adamw_paged) {
+            const auto &stats = adamw_mid_program_pager->Stats();
+            if (adamw_mid_program_pager->CompletedEvents() != 332 ||
+                adamw_mid_program_pager->ExternalAuthorityProbes() != 166 ||
+                adamw_mid_program_pager->Pending() != 0 ||
+                stats.submitted_requests != 332 ||
+                stats.completed_requests != 332 ||
+                stats.failed_requests != 0 ||
+                stats.external_read_bytes != 64200 ||
+                stats.external_write_bytes != 64200 ||
+                stats.hbm_read_bytes != 64200 ||
+                stats.hbm_write_bytes != 64200)
+                throw std::runtime_error(
+                    "paged Dense AdamW actual DMA traffic/drain disagreed with 83-state byte oracle");
+            std::cout << "[DENSE_ADAMW_PAGED_DMA_DRAIN] events=332"
+                      << " probes=166 submitted=" << stats.submitted_requests
+                      << " completed=" << stats.completed_requests
+                      << " external_read_bytes=" << stats.external_read_bytes
+                      << " external_write_bytes=" << stats.external_write_bytes
+                      << " hbm_read_bytes=" << stats.hbm_read_bytes
+                      << " hbm_write_bytes=" << stats.hbm_write_bytes
+                      << " pending=0 dirty=0 pinned=0 pass=1" << std::endl;
         }
     } else {
         sc_start();

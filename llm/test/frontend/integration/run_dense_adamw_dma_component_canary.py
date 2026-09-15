@@ -44,7 +44,8 @@ _GROUP_KINDS = {
 }
 
 
-def run(args: argparse.Namespace) -> dict[str, object]:
+def build_source_dma_program():
+    """Same two-layer source, five exact real allocation payloads and controller."""
     source, physical = _adamw_case()
     window = preflight_dense_adamw_offload_window(source)
     if window.startup_window_sufficient:
@@ -116,6 +117,11 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     action_graph = build_external_dma_action_graph(
         manifest=offload, plan=plan, program=program,
     )
+    return source, physical, window, program, action_graph
+
+
+def run(args: argparse.Namespace) -> dict[str, object]:
+    _source, _physical, window, program, action_graph = build_source_dma_program()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     program_path = output / "external_dma_program.json"
