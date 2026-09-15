@@ -504,9 +504,25 @@ IsaV1SelfTestResult CheckNpuCostModelSelfTest() {
           "DRAM longer than compute leaves no extra delay");
 
     cost = CalculateNpuCost(NpuOps{31, 3, 3}, hardware, 0);
-    Check(result, cost.exu_cycle_ns == 1 && cost.sfu_cycle_ns == 0 &&
-                      cost.vec_cycle_ns == 0,
-          "historical cost divisions truncate instead of rounding up");
+    Check(result, cost.exu_cycle_ns == 2 && cost.sfu_cycle_ns == 2 &&
+                      cost.vec_cycle_ns == 2,
+          "positive EXU/SFU/VEC work costs at least one hardware cycle");
+
+    cost = CalculateNpuCost(NpuOps{1, 0, 0}, hardware, 0);
+    Check(result, cost.exu_cycle_ns == hardware.cycle_ns &&
+                      cost.compute_cycle_ns == hardware.cycle_ns,
+          "tiny positive EXU work never quantizes to zero elapsed time");
+    cost = CalculateNpuCost(NpuOps{0, 1, 0}, hardware, 0);
+    Check(result, cost.sfu_cycle_ns == hardware.cycle_ns &&
+                      cost.compute_cycle_ns == hardware.cycle_ns,
+          "tiny positive SFU work never quantizes to zero elapsed time");
+    cost = CalculateNpuCost(NpuOps{0, 0, 1}, hardware, 0);
+    Check(result, cost.vec_cycle_ns == hardware.cycle_ns &&
+                      cost.compute_cycle_ns == hardware.cycle_ns,
+          "tiny positive vector work never quantizes to zero elapsed time");
+    cost = CalculateNpuCost(NpuOps{0, 0, 0}, hardware, 0);
+    Check(result, cost.exu_cycle_ns == 0 && cost.compute_cycle_ns == 0,
+          "zero EXU work remains zero elapsed compute time");
 
     NpuCostHardware bad = hardware;
     bad.exu_x_dims = 0;

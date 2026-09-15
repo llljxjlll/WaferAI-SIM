@@ -32,9 +32,10 @@ NpuCostSnapshot CalculateNpuCost(const NpuOps &ops,
                                  uint64_t dram_time_ns) {
     ValidateHardware(hardware);
 
-    // Preserve the historical EXU floating-point truncation. SFU/VEC use the
-    // historical integer division. Checked final multiplication avoids a
-    // wrapped delay entering SystemC.
+    // Preserve historical EXU truncation beyond a full hardware cycle.
+    // Positive EXU work needs at least one cycle, even when a tiny tile's
+    // fractional cycle rounds to zero nanoseconds. SFU/VEC retain their
+    // historical integer division above one cycle and the same nonzero floor.
     const float exu_denominator =
         static_cast<float>(hardware.exu_x_dims) *
         static_cast<float>(hardware.exu_x_dims) * 2.0F *
@@ -52,14 +53,19 @@ NpuCostSnapshot CalculateNpuCost(const NpuOps &ops,
 
     NpuCostSnapshot result;
     result.ops = ops;
-    result.exu_cycle_ns = static_cast<uint64_t>(raw_exu_cycles);
-    result.sfu_cycle_ns = CheckedMultiply(
-        ops.sfu / hardware.sfu_x_dims, hardware.cycle_ns,
-        "NPU SFU cycle count");
-    result.vec_cycle_ns = CheckedMultiply(
-        ops.vec / CheckedMultiply(hardware.vec_x_dims, hardware.vec_count,
-                                  "NPU vector width"),
-        hardware.cycle_ns, "NPU vector cycle count");
+    result.exu_cycle_ns = std::max(
+        static_cast<uint64_t>(raw_exu_cycles),
+        ops.exu == 0 ? uint64_t{0} : hardware.cycle_ns);
+    result.sfu_cycle_ns = std::max(
+        CheckedMultiply(ops.sfu / hardware.sfu_x_dims, hardware.cycle_ns,
+                        "NPU SFU cycle count"),
+        ops.sfu == 0 ? uint64_t{0} : hardware.cycle_ns);
+    result.vec_cycle_ns = std::max(
+        CheckedMultiply(
+            ops.vec / CheckedMultiply(hardware.vec_x_dims, hardware.vec_count,
+                                      "NPU vector width"),
+            hardware.cycle_ns, "NPU vector cycle count"),
+        ops.vec == 0 ? uint64_t{0} : hardware.cycle_ns);
     result.compute_cycle_ns =
         std::max(result.exu_cycle_ns,
                  std::max(result.sfu_cycle_ns, result.vec_cycle_ns));

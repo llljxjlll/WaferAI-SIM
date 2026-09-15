@@ -7,6 +7,7 @@ from enum import Enum
 
 from ..errors import SchemaError
 from .common import stable_artifact_id, validate_nonempty, validate_uint64
+from .artifact_manifest import LinkedProgramManifest, RecordOpcode
 from .dense_compile_sequence import expected_segment_profile
 from .e2e_workload_graph import E2EOperationKind
 from .flexible_moe import MoeRectActionKind, MoeRectFlowStage
@@ -34,11 +35,11 @@ class MoeFullModelCoverage(str, Enum):
 
 
 class MoeFullModelCompileStatus(str, Enum):
-    PRODUCTION_COMPONENTS_LINKED = "production_components_linked"
+    FULL_MODEL_RUNTIME_LINKED = "full_model_runtime_linked"
 
 
 class MoeFullModelRuntimeStatus(str, Enum):
-    RUNTIME_NOT_MATERIALIZED = "runtime_not_materialized"
+    EXECUTABLE_MANIFEST_MATERIALIZED = "executable_manifest_materialized"
 
 
 class MoeFullModelLowering(str, Enum):
@@ -117,6 +118,8 @@ class MoeFullModelCompileSegment:
     replaced_dense_mlp_node_refs: tuple[str, ...]
     operation_bindings: tuple[MoeFullModelOperationBinding, ...]
     moe_unit_refs: tuple[str, ...]
+    executable_manifest: LinkedProgramManifest
+    executable_manifest_digest: str
 
     @classmethod
     def create(cls, **semantic: object) -> "MoeFullModelCompileSegment":
@@ -177,6 +180,11 @@ class MoeFullModelCompileSegment:
             raise SchemaError("operation is lowered more than once", path=f"{path}.operation_bindings")
         if not self.moe_unit_refs or len(set(self.moe_unit_refs)) != len(self.moe_unit_refs):
             raise SchemaError("MoE unit refs must be non-empty and unique", path=f"{path}.moe_unit_refs")
+        self.executable_manifest.validate(f"{path}.executable_manifest")
+        if self.executable_manifest_digest != canonical_digest(self.executable_manifest):
+            raise SchemaError("executable manifest digest mismatch", path=f"{path}.executable_manifest_digest")
+        if tuple(item.logical_core.die_id for item in self.executable_manifest.core_streams) != self.replica_die_ids:
+            raise SchemaError("executable manifest must cover every EP die", path=f"{path}.executable_manifest")
         expected = stable_artifact_id(
             "moe_full_model_compile_segment",
             self._semantic(),
@@ -210,8 +218,8 @@ class MoeFullModelCompileSequence:
             "moe_blocks_digest": canonical_digest(moe_blocks),
             "segments": segments,
             "coverage": MoeFullModelCoverage.FULL_MODEL,
-            "compile_status": MoeFullModelCompileStatus.PRODUCTION_COMPONENTS_LINKED,
-            "runtime_status": MoeFullModelRuntimeStatus.RUNTIME_NOT_MATERIALIZED,
+            "compile_status": MoeFullModelCompileStatus.FULL_MODEL_RUNTIME_LINKED,
+            "runtime_status": MoeFullModelRuntimeStatus.EXECUTABLE_MANIFEST_MATERIALIZED,
         }
         result = cls(
             schema_version=MOE_FULL_MODEL_SEQUENCE_SCHEMA_VERSION,
@@ -255,8 +263,8 @@ class MoeFullModelCompileSequence:
             raise SchemaError("MoE block digest mismatch", path=f"{path}.moe_blocks_digest")
         if (
             self.coverage is not MoeFullModelCoverage.FULL_MODEL
-            or self.compile_status is not MoeFullModelCompileStatus.PRODUCTION_COMPONENTS_LINKED
-            or self.runtime_status is not MoeFullModelRuntimeStatus.RUNTIME_NOT_MATERIALIZED
+            or self.compile_status is not MoeFullModelCompileStatus.FULL_MODEL_RUNTIME_LINKED
+            or self.runtime_status is not MoeFullModelRuntimeStatus.EXECUTABLE_MANIFEST_MATERIALIZED
         ):
             raise SchemaError("coverage/runtime claim drifted", path=path)
         inference = request.steps.inference
@@ -289,6 +297,61 @@ class MoeFullModelCompileSequence:
             )
             if segment.replaced_dense_mlp_node_refs != expected_replaced:
                 raise SchemaError("Dense MLP replacement set is not exact", path=f"{segment_path}.replaced_dense_mlp_node_refs")
+            dense_actions = {
+                action.id: getattr(action.origin_ref, "op_id", getattr(action.origin_ref, "node_ref", None))
+                for action in segment.shared_spine_profile.lowering_context.global_dag.actions
+            }
+            executable_actions = {
+                record.source_global_action_id
+                for fragment in segment.executable_manifest.fragments
+                for stream in fragment.core_streams
+                for record in stream.records
+            }
+            replaced_actions = {
+                action_id for action_id, node_ref in dense_actions.items()
+                if node_ref in set(expected_replaced)
+            }
+            retained_actions = set(dense_actions) - replaced_actions
+            expected_moe_actions = {
+                stable_artifact_id(
+                    "moe_full_model_action",
+                    {
+                        "source": segment.executable_manifest.source_global_dag_id,
+                        "layer": moe_units[ref].layer,
+                        "action": action_id,
+                    },
+                    schema_version="wafer_frontend.moe_full_model_region_linker/v1alpha1",
+                )
+                for ref in segment.moe_unit_refs
+                for action_id in {
+                    record.source_global_action_id
+                    for fragment in moe_units[ref].linked_manifest.fragments
+                    for stream in fragment.core_streams
+                    for record in stream.records
+                }
+            }
+            if (
+                not replaced_actions
+                or executable_actions & replaced_actions
+                or not retained_actions.issubset(executable_actions)
+                or not expected_moe_actions.issubset(executable_actions)
+            ):
+                raise SchemaError("executable manifest is not an exact Dense-MLP region replacement", path=f"{segment_path}.executable_manifest")
+            opcodes = {
+                record.opcode
+                for fragment in segment.executable_manifest.fragments
+                for stream in fragment.core_streams
+                for record in stream.records
+            }
+            if not {
+                RecordOpcode.EMBEDDING_LOOKUP,
+                RecordOpcode.ATTENTION_EXACT,
+                RecordOpcode.DTE_SEND,
+                RecordOpcode.DTE_RECV,
+                RecordOpcode.LOCAL_REDUCE,
+                RecordOpcode.MATMUL,
+            }.issubset(opcodes):
+                raise SchemaError("executable manifest lacks shared-spine/MoE/head records", path=f"{segment_path}.executable_manifest")
             ir1 = segment.shared_spine_profile.lowering_context.ir1
             if (
                 ir1.fabric.die_grid != (1, 1)
@@ -339,7 +402,7 @@ class MoeFullModelCompileSequence:
                     or binding.production_refs != expected_refs
                 ):
                     raise SchemaError(
-                        "production lineage does not exactly lower the P3 operation",
+                        f"production lineage does not exactly lower the P3 operation {operation.kind.value}: {binding.production_refs!r} != {expected_refs!r}",
                         path=f"{segment_path}.operation_bindings",
                     )
                 observed_step.append(binding.operation_ref)

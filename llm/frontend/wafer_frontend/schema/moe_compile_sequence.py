@@ -359,7 +359,7 @@ class MoeCompileUnit:
         validate_uint64(self.layer, f"{path}.layer")
         validate_nonempty(self.route_trace_ref, f"{path}.route_trace_ref")
         validate_nonempty(self.route_trace_digest, f"{path}.route_trace_digest")
-        if self.source_rank_policy != "token_index_mod_ep":
+        if self.source_rank_policy not in ("token_index_mod_ep", "rank0_shared_spine"):
             raise SchemaError("unsupported source-rank policy", path=f"{path}.source_rank_policy")
         if type(self.operation_binding) is not MoeOperationBinding:
             raise SchemaError("must carry a typed operation binding", path=f"{path}.operation_binding")
@@ -576,7 +576,11 @@ class MoeCompileSequence:
             or tuple(item.token_index for item in assignments)
             != tuple(range(trace.token_count))
             or tuple(item.source_rank for item in assignments)
-            != tuple(index % unit.spec.expert_parallel_degree for index in range(trace.token_count))
+            != (
+                (0,) * trace.token_count
+                if unit.source_rank_policy == "rank0_shared_spine"
+                else tuple(index % unit.spec.expert_parallel_degree for index in range(trace.token_count))
+            )
             or tuple(item.expert_index for item in assignments) != trace.expert_by_token
             or tuple(item.expert_home_rank for item in assignments) != trace.expert_by_token
         ):

@@ -26,6 +26,7 @@ from ..schema.rect_mesh_compile import RectMeshCompileMode
 from ..schema.serde import canonical_digest
 from ..schema.workload_materialization import WorkloadMaterializationManifest
 from ..schema.workload_run import WorkloadFamily, WorkloadModelArchitecture
+from ..lowering.moe_full_model_linker import link_moe_full_model_segment
 from .dense_compile_sequence import _kv_reservation_policy
 from .moe_compile_sequence import compile_moe_sequence
 
@@ -244,9 +245,6 @@ def _moe_refs(unit, kind: E2EOperationKind, expert: int | None) -> tuple[str, ..
         action_kinds = {MoeRectActionKind.WEIGHTED_COMBINE}
     else:
         raise SchemaError("not a MoE forward operation", path="operation.kind")
-    refs = [
-        action.id for action in unit.plan.actions if action.kind in action_kinds
-    ]
     if kind in (E2EOperationKind.DISPATCH, E2EOperationKind.COMBINE):
         stage = (
             MoeRectFlowStage.DISPATCH
@@ -254,11 +252,15 @@ def _moe_refs(unit, kind: E2EOperationKind, expert: int | None) -> tuple[str, ..
             else MoeRectFlowStage.COMBINE
         )
         flow_refs = {flow.id for flow in unit.plan.flows if flow.stage is stage}
-        refs.extend(
+        refs = [
             action.id
             for action in unit.plan.actions
-            if action.flow_ref in flow_refs
-        )
+            if action.kind in action_kinds or action.flow_ref in flow_refs
+        ]
+    else:
+        refs = [
+            action.id for action in unit.plan.actions if action.kind in action_kinds
+        ]
     result = tuple(dict.fromkeys(refs))
     if not result:
         raise SchemaError("MoE production action closure is empty", path="moe_unit.plan")
@@ -334,7 +336,9 @@ def compile_moe_full_model_inference_sequence(
     if type(manifest) is not WorkloadMaterializationManifest:
         raise SchemaError("must be a WorkloadMaterializationManifest", path="manifest")
     _validate_inputs(manifest, legacy_template, fabric, hbm_address_spaces)
-    moe_blocks = compile_moe_sequence(manifest)
+    moe_blocks = compile_moe_sequence(
+        manifest, source_rank_policy="rank0_shared_spine"
+    )
     operations = manifest.logical_graph.operations
     segments = []
     for step in range(3):
@@ -352,19 +356,23 @@ def compile_moe_full_model_inference_sequence(
             for operation in operations
             if operation.step == step
         )
+        replaced = tuple(
+            f"{origin}.layer{layer}.{name}"
+            for layer in range(manifest.request.model.num_layers)
+            for name in ("gate_up", "swiglu", "down")
+        )
+        executable = link_moe_full_model_segment(profile, units, replaced)
         segments.append(MoeFullModelCompileSegment.create(
             phase="prefill" if step == 0 else "decode",
             step=step,
             shared_spine_profile=profile,
             shared_spine_digest=canonical_digest(profile),
             replica_die_ids=manifest.placement.active_die_ids,
-            replaced_dense_mlp_node_refs=tuple(
-                f"{origin}.layer{layer}.{name}"
-                for layer in range(manifest.request.model.num_layers)
-                for name in ("gate_up", "swiglu", "down")
-            ),
+            replaced_dense_mlp_node_refs=replaced,
             operation_bindings=bindings,
             moe_unit_refs=tuple(unit.id for unit in units),
+            executable_manifest=executable,
+            executable_manifest_digest=canonical_digest(executable),
         ))
     return MoeFullModelCompileSequence.create(
         moe_blocks=moe_blocks,

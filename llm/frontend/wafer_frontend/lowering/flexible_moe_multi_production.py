@@ -48,6 +48,7 @@ from ..schema.flexible_moe import (
     FlexibleMoeExecutablePlan,
     FlexibleMoeSpec,
     MoeRectActionKind,
+    MoeRectFlowStage,
 )
 from ..schema.global_action import LogicalCoreRef
 from ..schema.ir2 import BufferOwnership
@@ -148,6 +149,7 @@ def lower_link_flexible_moe_multi(
     spec: FlexibleMoeSpec,
     *,
     physical_region_name: str | None = None,
+    full_model_dataflow: bool = False,
 ) -> FlexibleMoeProductionArtifacts:
     """Materialize a deterministic multi-die timing manifest, fail closed."""
 
@@ -529,6 +531,18 @@ def lower_link_flexible_moe_multi(
         core = core_by_rank[action.rank]
         activation = activation_by_rank[action.rank]
         output = output_by_rank[action.rank]
+        if full_model_dataflow and (
+            action.kind in (
+                MoeRectActionKind.GATE,
+                MoeRectActionKind.PACK,
+                MoeRectActionKind.WEIGHTED_COMBINE,
+            ) and not action.assignment_refs
+        ):
+            if action.flops != 0 or action.logical_bytes != 0:
+                raise SchemaError("empty source action must declare zero logical work", path=f"actions[{action.id}]")
+            # The P2 action/deps remain typed, while an empty source rank has
+            # no gate rows, no activation to pack, and no result to combine.
+            continue
         if action.kind is MoeRectActionKind.STATE_LOAD:
             state = state_by_ref.get(action.state_refs[0]) if action.state_refs else None
             if state is None:
@@ -565,13 +579,21 @@ def lower_link_flexible_moe_multi(
                     fan_in_waits[action.id], key=lambda item: item[0].id,
                 ):
                     add_fan_in_event(action, RecordOpcode.EVENT_WAIT, fence)
-                source = absolute(activation_by_rank[flow.source_rank])
+                source = absolute(
+                    output_by_rank[flow.source_rank]
+                    if full_model_dataflow and flow.stage is MoeRectFlowStage.COMBINE
+                    else activation_by_rank[flow.source_rank]
+                )
                 remote = peer(flow.destination_rank)
                 add_record("compute", core, _dte_send(action.id, flow, source, fsm, remote),
                     ((SemanticOperandId.SOURCE_ADDRESS, source, 0),),
                     ((RuntimeOperandField.DTE_FSM, fsm), (RuntimeOperandField.PEER_CORE, remote)))
             elif action.kind is MoeRectActionKind.RECV:
-                destination = absolute(output_by_rank[flow.destination_rank])
+                destination = absolute(
+                    activation_by_rank[flow.destination_rank]
+                    if full_model_dataflow and flow.stage is MoeRectFlowStage.DISPATCH
+                    else output_by_rank[flow.destination_rank]
+                )
                 remote = peer(flow.source_rank)
                 add_record("compute", core, _dte_recv(action.id, flow, destination, fsm, token, remote),
                     ((SemanticOperandId.DESTINATION_ADDRESS, destination, 0),),
@@ -605,6 +627,10 @@ def lower_link_flexible_moe_multi(
                 RecordOperand.literal("momentum_f64_bits", 0),
             )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(weight), 0), (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(gradient), 0), (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(weight), 0)))
         elif action.kind in (MoeRectActionKind.PACK, MoeRectActionKind.WEIGHTED_COMBINE, MoeRectActionKind.COMBINE_BACKWARD, MoeRectActionKind.GATE_GRADIENT_LOCAL_REDUCE, MoeRectActionKind.GATE_GRADIENT_ALL_REDUCE):
+            reduction_source = (
+                output if full_model_dataflow and action.kind is MoeRectActionKind.WEIGHTED_COMBINE
+                else activation
+            )
             add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.LOCAL_REDUCE, (
                 RecordOperand.literal("input_dtype", 0),
                 RecordOperand.literal("accumulator_dtype", 1),
@@ -615,9 +641,9 @@ def lower_link_flexible_moe_multi(
                 RecordOperand.literal("input_count", 1),
                 RecordOperand.literal("element_count", activation.size_bytes // 2),
                 RecordOperand.literal("input_stride_bytes", activation.size_bytes),
-                RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(activation).id),
+                RecordOperand.address("source_address", SemanticOperandId.SOURCE_ADDRESS, absolute(reduction_source).id),
                 RecordOperand.address("destination_address", SemanticOperandId.DESTINATION_ADDRESS, absolute(output).id),
-            )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(activation), 0), (SemanticOperandId.DESTINATION_ADDRESS, absolute(output), 0)))
+            )), ((SemanticOperandId.SOURCE_ADDRESS, absolute(reduction_source), 0), (SemanticOperandId.DESTINATION_ADDRESS, absolute(output), 0)))
         else:
             wgrad = action.kind in (
                 MoeRectActionKind.EXPERT_WGRAD, MoeRectActionKind.GATE_WGRAD,
@@ -625,7 +651,16 @@ def lower_link_flexible_moe_multi(
             data = activation if wgrad else (
                 state_buffers[0] if state_buffers else activation
             )
-            if action.kind is MoeRectActionKind.GATE or wgrad:
+            if full_model_dataflow and action.kind is MoeRectActionKind.GATE:
+                # P2 declares one H×E FP16 gate tensor and exactly one gate
+                # row per source assignment.  Empty gates were omitted above.
+                if action.flops != len(action.assignment_refs) * 2 * spec.hidden_size * spec.expert_count:
+                    raise SchemaError("gate MATMUL operation count differs from P2 plan", path=f"actions[{action.id}]")
+                parameters = (
+                    1, len(action.assignment_refs), spec.hidden_size,
+                    spec.expert_count,
+                )
+            elif action.kind is MoeRectActionKind.GATE or wgrad:
                 parameters = (1, 32, 1, 16)
             else:
                 parameters = (
@@ -666,7 +701,7 @@ def lower_link_flexible_moe_multi(
     )
     compute_fragment = CommandFragment.create(
         producer_pass=_LOWERING_PASS, source_global_dag_id=plan.id, kind=FragmentKind.COARSE,
-        claimed_action_ids=tuple(sorted(action.id for action in plan.actions if action.kind not in _STATE_KINDS)),
+        claimed_action_ids=tuple(sorted({record.source_global_action_id for core in cores for record in records["compute"][core]})),
         core_streams=tuple(CoreFragmentStream(
             core, tuple(records["compute"][core]),
             tuple(runtime_relocs["compute"][core]),
@@ -807,7 +842,7 @@ def lower_link_flexible_moe_multi(
             path="flexible_moe_multi_production_manifest",
         )
     result = FlexibleMoeProductionArtifacts(standard_ir, fragments, manifest, True, False)
-    result.validate_against(plan, spec)
+    result.validate_against(plan, spec, allow_zero_work_omission=full_model_dataflow)
     return result
 
 

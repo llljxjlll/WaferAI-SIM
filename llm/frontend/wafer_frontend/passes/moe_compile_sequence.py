@@ -141,6 +141,7 @@ def _one_operation(graph, kind, step, layer, expert=None, parameter=None):
 def _flexible_spec(
     manifest: WorkloadMaterializationManifest,
     trace: E2ERouteTrace,
+    source_rank_policy: str,
 ) -> FlexibleMoeSpec:
     request = manifest.request
     next_slot = [0] * request.model.num_experts
@@ -148,7 +149,11 @@ def _flexible_spec(
     for token, expert in enumerate(trace.expert_by_token):
         assignments.append(MoeRectTraceAssignment(
             token_index=token,
-            source_rank=token % request.parallel.ep,
+            source_rank=(
+                0
+                if source_rank_policy == "rank0_shared_spine"
+                else token % request.parallel.ep
+            ),
             expert_index=expert,
             expert_home_rank=expert,
             slot_index=next_slot[expert],
@@ -401,19 +406,26 @@ def _parameter_read_binding(
 
 def compile_moe_sequence(
     manifest: WorkloadMaterializationManifest,
+    *,
+    source_rank_policy: str = "token_index_mod_ep",
 ) -> MoeCompileSequence:
     """Compile every P3 MoE block without claiming full-model runtime."""
 
     if type(manifest) is not WorkloadMaterializationManifest:
         raise SchemaError("must be a WorkloadMaterializationManifest", path="manifest")
+    if source_rank_policy not in ("token_index_mod_ep", "rank0_shared_spine"):
+        raise SchemaError("unsupported source-rank policy", path="source_rank_policy")
     _validate_inputs(manifest)
     graph = manifest.logical_graph
     training = manifest.request.family is WorkloadFamily.MOE_TRAINING
     units = []
     for trace in sorted(graph.route_traces, key=lambda item: (item.step, item.layer)):
-        spec = _flexible_spec(manifest, trace)
+        spec = _flexible_spec(manifest, trace, source_rank_policy)
         plan = compile_flexible_moe_baseline(spec)
-        artifacts = lower_link_flexible_moe_production(plan, spec)
+        artifacts = lower_link_flexible_moe_production(
+            plan, spec,
+            full_model_dataflow=source_rank_policy == "rank0_shared_spine",
+        )
         operation_binding = _operation_binding(graph, trace, training)
         units.append(MoeCompileUnit.create(
             phase=trace.phase,
@@ -462,7 +474,7 @@ def compile_moe_sequence(
                 if training
                 else ()
             ),
-            source_rank_policy="token_index_mod_ep",
+            source_rank_policy=source_rank_policy,
             spec=spec,
             plan=plan,
             linked_manifest=artifacts.manifest,

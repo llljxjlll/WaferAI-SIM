@@ -10,6 +10,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
     compile_moe_full_model_inference_sequence,
 )
 from llm.frontend.wafer_frontend.schema.e2e_workload_graph import E2EOperationKind
+from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.common import stable_artifact_id
+from llm.frontend.wafer_frontend.schema.flexible_moe import MoeRectActionKind
 from llm.frontend.wafer_frontend.schema.moe_full_model_compile_sequence import (
     MoeFullModelCompileSegment,
     MoeFullModelCompileSequence,
@@ -19,6 +22,7 @@ from llm.frontend.wafer_frontend.schema.moe_full_model_compile_sequence import (
     MoeFullModelRuntimeStatus,
 )
 from llm.frontend.wafer_frontend.schema.serde import (
+    canonical_digest,
     canonical_json,
     from_data,
     loads_dataclass,
@@ -85,7 +89,7 @@ class MoeFullModelCompileSequenceTest(unittest.TestCase):
         self.assertIs(sequence.coverage, MoeFullModelCoverage.FULL_MODEL)
         self.assertIs(
             sequence.runtime_status,
-            MoeFullModelRuntimeStatus.RUNTIME_NOT_MATERIALIZED,
+            MoeFullModelRuntimeStatus.EXECUTABLE_MANIFEST_MATERIALIZED,
         )
         self.assertEqual(
             tuple((segment.phase, segment.step) for segment in sequence.segments),
@@ -118,6 +122,9 @@ class MoeFullModelCompileSequenceTest(unittest.TestCase):
             E2EOperationKind.SGD_UPDATE,
             E2EOperationKind.PARAMETER_STORE,
             E2EOperationKind.STEP_COMMIT,
+            E2EOperationKind.OPTIMIZER_LOAD,
+            E2EOperationKind.OPTIMIZER_STORE,
+            E2EOperationKind.ADAMW_UPDATE,
         }
         self.assertEqual(
             {binding.kind for segment in sequence.segments for binding in segment.operation_bindings},
@@ -141,6 +148,73 @@ class MoeFullModelCompileSequenceTest(unittest.TestCase):
                 MoeFullModelLowering.FLEXIBLE_MOE_TRACE,
             }.issubset(lowerings))
             self.assertEqual(segment.replica_die_ids, (0, 1))
+
+    def test_executable_manifest_replaces_dense_mlp_with_real_layer_blocks(self) -> None:
+        for segment in self.sequence.segments:
+            manifest = segment.executable_manifest
+            records = {
+                (fragment.id, index): record
+                for fragment in manifest.fragments
+                for stream in fragment.core_streams
+                for index, record in enumerate(stream.records)
+            }
+            dense_actions = {
+                action.id: getattr(
+                    action.origin_ref,
+                    "op_id",
+                    getattr(action.origin_ref, "node_ref", None),
+                )
+                for action in segment.shared_spine_profile.lowering_context.global_dag.actions
+            }
+            linked_actions = {
+                ref.source_global_action_id
+                for stream in manifest.core_streams for ref in stream.records
+            }
+            self.assertFalse({
+                action_id for action_id, node_ref in dense_actions.items()
+                if node_ref in segment.replaced_dense_mlp_node_refs
+            } & linked_actions)
+            core0 = manifest.core_streams[0]
+            opcodes = tuple(
+                records[(ref.fragment_id, ref.fragment_record_index)].opcode
+                for ref in core0.records
+            )
+            self.assertEqual(opcodes.count(RecordOpcode.DTE_ISSUE), 4)
+            self.assertEqual(opcodes.count(RecordOpcode.DTE_SEND), 2)
+            self.assertIn(RecordOpcode.EMBEDDING_LOOKUP, opcodes)
+            self.assertIn(RecordOpcode.ATTENTION_EXACT, opcodes)
+            self.assertEqual(tuple(stream.logical_core.die_id for stream in manifest.core_streams), (0, 1))
+            self.assertEqual(segment.executable_manifest_digest, canonical_digest(manifest))
+
+    def test_missing_bridge_gate_or_last_layer_fails_physical_dataflow_oracle(self) -> None:
+        from llm.test.frontend.integration.run_moe_full_model_sequence_runtime_canary import (
+            prove_full_model_dataflow,
+        )
+        segment = self.sequence.segments[0]
+        manifest = segment.executable_manifest
+        units = {item.id: item for item in self.sequence.moe_blocks.units}
+        layer_units = tuple(units[ref] for ref in segment.moe_unit_refs)
+        prove_full_model_dataflow(segment, layer_units)
+        source = manifest.source_global_dag_id
+        schema = "wafer_frontend.moe_full_model_region_linker/v1alpha1"
+        gate = next(action for action in layer_units[0].plan.actions if action.kind is MoeRectActionKind.GATE and action.rank == 0)
+        gate_id = stable_artifact_id("moe_full_model_action", {"source": source, "layer": 0, "action": gate.id}, schema_version=schema)
+        last_layer_actions = {
+            stable_artifact_id("moe_full_model_action", {"source": source, "layer": 1, "action": action.id}, schema_version=schema)
+            for action in layer_units[1].plan.actions
+        }
+        bridge_id = stable_artifact_id("moe_full_model_bridge_action", {"source": source, "layer": 0, "role": "input"}, schema_version=schema)
+        for dropped, message in (
+            ({bridge_id}, "MoE dataflow lacks exact action record"),
+            ({gate_id}, "MoE dataflow lacks exact action record"),
+            (last_layer_actions, "MoE dataflow lacks exact action record"),
+        ):
+            broken_streams = tuple(replace(
+                core, records=tuple(ref for ref in core.records if ref.source_global_action_id not in dropped)
+            ) for core in manifest.core_streams)
+            broken = replace(segment, executable_manifest=replace(manifest, core_streams=broken_streams))
+            with self.assertRaisesRegex(RuntimeError, message):
+                prove_full_model_dataflow(broken, layer_units)
 
     def test_canonical_artifact_round_trip_preserves_full_cover(self) -> None:
         rebuilt = loads_dataclass(

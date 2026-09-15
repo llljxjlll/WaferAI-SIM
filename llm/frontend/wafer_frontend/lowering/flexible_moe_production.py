@@ -103,6 +103,8 @@ class FlexibleMoeProductionArtifacts:
         plan: FlexibleMoeExecutablePlan,
         spec: FlexibleMoeSpec,
         path: str = "flexible_moe_production_artifacts",
+        *,
+        allow_zero_work_omission: bool = False,
     ) -> None:
         plan.validate_against(spec, f"{path}.plan")
         self.standard_ir.validate_against(plan, spec, f"{path}.standard_ir")
@@ -153,13 +155,23 @@ class FlexibleMoeProductionArtifacts:
                 path=f"{path}.manifest.input_digests",
             )
         action_ids = {action.id for action in plan.actions}
+        zero_work_source_actions = {
+            action.id for action in plan.actions
+            if action.kind in (
+                MoeRectActionKind.GATE,
+                MoeRectActionKind.PACK,
+                MoeRectActionKind.WEIGHTED_COMBINE,
+            ) and not action.assignment_refs
+            and action.flops == 0 and action.logical_bytes == 0
+        }
         claimed = {
             action_id
             for fragment in self.fragments
             for action_id in fragment.claimed_action_ids
         }
-        if claimed != action_ids:
-            raise SchemaError("production fragments must cover every plan action", path=f"{path}.fragments")
+        expected = action_ids - zero_work_source_actions if allow_zero_work_omission else action_ids
+        if claimed != expected:
+            raise SchemaError("production fragments must cover exactly the required plan actions", path=f"{path}.fragments")
         if self.manifest.source_global_dag_id != plan.id:
             raise SchemaError("manifest must retain exact plan provenance", path=f"{path}.manifest")
         if self.lower_link_verified is not True or self.runtime_verified is not False:
@@ -425,6 +437,7 @@ def lower_link_flexible_moe_production(
     spec: FlexibleMoeSpec,
     *,
     physical_region_name: str | None = None,
+    full_model_dataflow: bool = False,
 ) -> FlexibleMoeProductionArtifacts:
     """Lower/link the exact timing subset into one real public manifest."""
 
@@ -438,6 +451,7 @@ def lower_link_flexible_moe_production(
 
         return lower_link_flexible_moe_multi(
             plan, spec, physical_region_name=physical_region_name,
+            full_model_dataflow=full_model_dataflow,
         )
     if plan.flows:
         raise SchemaError("1x1 production plan must not contain remote flows", path="plan.flows")
