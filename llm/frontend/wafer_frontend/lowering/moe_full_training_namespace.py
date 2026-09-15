@@ -13,11 +13,12 @@ from dataclasses import dataclass, replace
 from ..errors import SchemaError
 from ..schema.artifact_manifest import (
     AddressOperandBinding, BufferABI, CommandFragment, LinkedCoreStream,
-    LinkedRecordRef, ProgramSymbolDefinition, ProgramSymbolKind,
+    LinkedRecordRef, ProgramSymbolDefinition, ProgramSymbolKind, RecordOpcode,
     RuntimeSymbolDefinition, RuntimeSymbolKind, StateABI, StateOperandBinding,
 )
 from ..schema.common import stable_artifact_id
 from ..schema.moe_compile_sequence import MoeCompileUnit
+from ..schema.flexible_moe import MoeRectActionKind
 from ..schema.global_action import LogicalCoreRef
 from ..schema.persistent_state import HbmAddressSpace
 from .full_training_timeline_linker import cut_moe_training_unit
@@ -46,6 +47,90 @@ class NamespacedMoeTrainingUnit:
     address_bindings: tuple[AddressOperandBinding, ...]
     state_bindings: tuple[StateOperandBinding, ...]
     action_ids: tuple[tuple[str, str], ...]
+
+
+def derive_moe_training_transport_edges(
+    unit: MoeCompileUnit,
+    named: NamespacedMoeTrainingUnit,
+) -> tuple[tuple[str, str], ...]:
+    """Require every original P2 flow to depend on its real opposite-die DTE."""
+    if (unit.id != named.source_unit_id
+            or (unit.step, unit.layer) != (named.step, named.layer)):
+        raise SchemaError("named transport lacks its source unit step/layer",
+                          path="training_moe_transport")
+    actions = tuple(unit.plan.actions)
+    mapping = dict(named.action_ids)
+    records = {record.source_global_action_id: record.opcode
+               for fragment in named.fragments for stream in fragment.core_streams
+               for record in stream.records if record.opcode in (
+                   RecordOpcode.DTE_SEND, RecordOpcode.DTE_RECV)}
+    edges = []
+    for flow in unit.plan.flows:
+        sends = [action for action in actions
+                 if action.kind is MoeRectActionKind.SEND
+                 and action.flow_ref == flow.id and action.rank == flow.source_rank]
+        recvs = [action for action in actions
+                 if action.kind is MoeRectActionKind.RECV
+                 and action.flow_ref == flow.id and action.rank == flow.destination_rank]
+        if len(sends) != 1 or len(recvs) != 1:
+            raise SchemaError("P2 source transport lacks exact SEND→RECV actions",
+                              path=f"training_moe_transport[{flow.id}]")
+        source, target = mapping.get(sends[0].id), mapping.get(recvs[0].id)
+        if (source is None or target is None
+                or records.get(source) is not RecordOpcode.DTE_SEND
+                or records.get(target) is not RecordOpcode.DTE_RECV):
+            raise SchemaError("P2 SEND→RECV has no actual cloned DTE carrier",
+                              path=f"training_moe_transport[{flow.id}]")
+        edges.append((source, target))
+    return tuple(sorted(set(edges)))
+
+
+def derive_moe_training_state_version_edges(
+    before: NamespacedMoeTrainingUnit,
+    after: NamespacedMoeTrainingUnit,
+) -> tuple[tuple[str, str], ...]:
+    """Tie each step0 physical parameter STORE to step1 LOAD at the same home."""
+    if (before.step, after.step) != (0, 1) or before.layer != after.layer:
+        raise SchemaError("version edge needs SGD step0→1 of the same MoE layer",
+                          path="training_moe_state_version")
+
+    def operands(named: NamespacedMoeTrainingUnit, wanted: RecordOpcode):
+        fragment_map = {fragment.id: fragment for fragment in named.fragments}
+        witnessed = {}
+        for binding in named.state_bindings:
+            fragment = fragment_map[binding.fragment_id]
+            local = next(stream for stream in fragment.core_streams
+                         if stream.logical_core == binding.logical_core)
+            record = local.records[binding.fragment_record_index]
+            if record.opcode is not wanted:
+                continue
+            abi = next(state for state in fragment.state_abi
+                       if state.id == binding.state_abi_id)
+            key = (abi.die_id, abi.state_ref)
+            if key in witnessed:
+                raise SchemaError("one parameter needs one source HBM closure per step",
+                                  path=f"training_moe_state_version[{key}]")
+            witnessed[key] = (abi, record.source_global_action_id)
+        return witnessed
+
+    old = operands(before, RecordOpcode.LSU_STORE)
+    new = operands(after, RecordOpcode.LSU_LOAD)
+    if len(old) != 4 or set(old) != set(new):
+        raise SchemaError("every Die/layer expert+gate parameter needs STORE→LOAD",
+                          path="training_moe_state_version")
+    edges = []
+    for key in sorted(old):
+        old_abi, source = old[key]
+        new_abi, target = new[key]
+        if (old_abi.id != new_abi.id
+                or (old_abi.address, old_abi.size_bytes, old_abi.dtype,
+                    old_abi.shape, old_abi.access)
+                != (new_abi.address, new_abi.size_bytes, new_abi.dtype,
+                    new_abi.shape, new_abi.access)):
+            raise SchemaError("SGD parameter home or typed shape changed between steps",
+                              path=f"training_moe_state_version[{key}]")
+        edges.append((source, target))
+    return tuple(sorted(edges))
 
 
 def namespace_moe_training_unit(
@@ -249,4 +334,6 @@ def namespace_moe_training_unit(
     )
 
 
-__all__ = ["NamespacedMoeTrainingUnit", "namespace_moe_training_unit"]
+__all__ = ["NamespacedMoeTrainingUnit", "namespace_moe_training_unit",
+           "derive_moe_training_transport_edges",
+           "derive_moe_training_state_version_edges"]
