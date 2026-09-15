@@ -211,6 +211,15 @@ Json Stage2Compute(const std::string &action, uint64_t opcode) {
             Address("gradient_address", 3, "p_abs_output"),
             Literal("logical_rows", 2), Literal("rank_rows", 2),
             Literal("tp_degree", 1), Literal("hidden_size", 8)}));
+    if (opcode == 0x25)
+        return Record(action, opcode, Json::array({
+            Literal("activation_datatype", 1),
+            Literal("upstream_datatype", 1),
+            Literal("gradient_datatype", 3),
+            Address("activation_address", 1, "p_abs_input"),
+            Address("upstream_address", 2, "p_abs_data"),
+            Address("gradient_address", 3, "p_abs_output"),
+            Literal("m", 8), Literal("n", 16), Literal("k", 4)}));
     if (opcode == 0x20)
         return Record(action, opcode, Json::array({
             Literal("weight_datatype", 1),
@@ -759,11 +768,12 @@ Json Stage2Manifest(uint64_t opcode) {
     const bool has_data = opcode == 0x10 || opcode == 0x1c ||
                           opcode == 0x1e || opcode == 0x1f ||
                           opcode == 0x20 || opcode == 0x23 ||
-                          opcode == 0x24;
+                          opcode == 0x24 || opcode == 0x25;
     const bool has_aux = opcode == 0x1f || opcode == 0x23;
     const bool binds_data = opcode == 0x1c || opcode == 0x1e ||
                             opcode == 0x1f || opcode == 0x20 ||
-                            opcode == 0x23 || opcode == 0x24;
+                            opcode == 0x23 || opcode == 0x24 ||
+                            opcode == 0x25;
     Json input_shape = Json::array({1, 4, 2});
     Json data_shape = Json::array({1, 32});
     Json output_shape = input_shape;
@@ -818,6 +828,14 @@ Json Stage2Manifest(uint64_t opcode) {
         data_shape = input_shape;
         output_shape = Json::array({8});
         input_size = data_size = output_size = 32;
+        output_dtype = "fp32";
+    } else if (opcode == 0x25) {
+        input_shape = Json::array({4, 8});
+        data_shape = Json::array({4, 16});
+        output_shape = Json::array({8, 16});
+        input_size = 64;
+        data_size = 128;
+        output_size = 512;
         output_dtype = "fp32";
     } else if (opcode == 0x20) {
         input_shape = Json::array({32});
@@ -903,7 +921,8 @@ Json Stage2Manifest(uint64_t opcode) {
         abi["tensor_slice"]["shape"] = shape;
         abi["size_bytes"] = size;
         abi["dtype"] = dtype;
-        if (opcode == 0x23 && binding != "abs_output")
+        if ((opcode == 0x23 || opcode == 0x25) &&
+            binding != "abs_output")
             abi["ownership"] = "borrowed";
     }
     const std::string old_fragment_id = fragment["id"].get<std::string>();
@@ -1987,9 +2006,9 @@ void Run() {
     ExpectFailure([&] { finalizer.FinalizeJson(missing_local_wait.dump()); },
                   "LOCAL_NOC missing destination WAIT");
 
-    for (uint64_t opcode : std::array<uint64_t, 10>{{
+    for (uint64_t opcode : std::array<uint64_t, 11>{{
              0x10, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
-             0x23, 0x24}}) {
+             0x23, 0x24, 0x25}}) {
         const Json stage2 = Stage2Manifest(opcode);
         const auto stage2_dto =
             ProgramArtifactFinalizer::Parse(stage2.dump());
@@ -2032,6 +2051,59 @@ void Run() {
     RefreshManifestIds(bad_gamma_gradient);
     ExpectFailure([&] { finalizer.FinalizeJson(bad_gamma_gradient.dump()); },
                   "NORM_GAMMA_WGRAD gradient_datatype");
+    Json bad_gemm_dtype = Stage2Manifest(0x25);
+    for (Json &stream : bad_gemm_dtype["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][2]["literal_value"] = 1;
+    RefreshManifestIds(bad_gemm_dtype);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_gemm_dtype.dump()); },
+                  "GEMM_WEIGHT_WGRAD rejects FP16 gradient ABI");
+    Json bad_gemm_geometry = Stage2Manifest(0x25);
+    for (Json &stream : bad_gemm_geometry["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][8]["literal_value"] = 0;
+    RefreshManifestIds(bad_gemm_geometry);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_gemm_geometry.dump()); },
+                  "GEMM_WEIGHT_WGRAD rejects zero forward rows");
+    Json bad_gemm_extent = Stage2Manifest(0x25);
+    for (Json &abi : bad_gemm_extent["fragments"][0]["buffer_abi"])
+        if (abi["binding_id"] == "abs_output") abi["size_bytes"] = 256;
+    RefreshManifestIds(bad_gemm_extent);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_gemm_extent.dump()); },
+                  "GEMM_WEIGHT_WGRAD rejects FP16-sized FP32 buffer extent");
+    Json scoped_gemm = Stage2Manifest(0x25);
+    scoped_gemm["producer_pass"] = "public_gemm_wgrad_allocated_fragment";
+    for (Json &stream : scoped_gemm["fragments"][0]["core_streams"]) {
+        Json &records = stream["records"];
+        Require(records.size() == 8 && records[7]["opcode"] == 0x86,
+                "0x25 scope fixture output FREE drifted");
+        records.erase(records.end() - 1);
+        Json &relocations = stream["address_relocations"];
+        relocations.erase(std::remove_if(relocations.begin(), relocations.end(),
+            [](const Json &item) { return item["record_index"] == 7; }),
+            relocations.end());
+    }
+    for (Json &stream : scoped_gemm["core_streams"]) {
+        Json &records = stream["records"];
+        records.erase(std::remove_if(records.begin(), records.end(),
+            [](const Json &item) { return item["fragment_record_index"] == 7; }),
+            records.end());
+    }
+    Json &gemm_bindings = scoped_gemm["address_operand_bindings"];
+    gemm_bindings.erase(std::remove_if(gemm_bindings.begin(), gemm_bindings.end(),
+        [](const Json &item) { return item["fragment_record_index"] == 7; }),
+        gemm_bindings.end());
+    RefreshManifestIds(scoped_gemm);
+    const ProgramArtifact scoped_gemm_artifact =
+        finalizer.FinalizeJson(scoped_gemm.dump());
+    Require(scoped_gemm_artifact.cores.size() == 2,
+            "0x25 scoped finalizer must preserve two physical cores");
+    for (const ProgramCore &core : scoped_gemm_artifact.cores) {
+        Require(core.records.size() == 7 &&
+                    core.records[2].opcode == Opcode::SRAM_ALLOC_AT &&
+                    core.records[4].opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING &&
+                    std::get<SramAllocAtOperands>(core.records[2].operands).lifetime ==
+                        SramLifetime::PERSISTENT,
+                "public 0x25 source promotes exactly its owned FP32 terminal allocation");
+    }
     const Json adamw = AdamwManifest();
     const ProgramArtifact adamw_artifact =
         finalizer.Finalize(ProgramArtifactFinalizer::Parse(adamw.dump()));
@@ -5127,6 +5199,9 @@ int main(int argc, char **argv) {
         } else if (argc == 2 &&
                    std::string(argv[1]) == "--emit-wgrad-manifest") {
             std::cout << Stage2Manifest(0x23).dump() << '\n';
+        } else if (argc == 2 &&
+                   std::string(argv[1]) == "--emit-gemm-wgrad-manifest") {
+            std::cout << Stage2Manifest(0x25).dump() << '\n';
         } else if (argc == 2 && std::string(argv[1]) == "--stdin") {
             RunPythonProducedManifest();
         } else if (argc == 2 &&

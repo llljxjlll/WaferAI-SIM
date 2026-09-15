@@ -11,6 +11,7 @@ from dataclasses import replace
 
 from ..errors import SchemaError
 from ..schema.common import DType, TensorValue
+from ..schema.gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from ..schema.ir0 import (
     EdgeKind,
     EffectKind,
@@ -120,14 +121,15 @@ def append_dense_training_head_backward_source(source: IR0) -> IR0:
     v = weight.shape[1]
     pure = NodeEffects(EffectKind.PURE, None, None)
     wgrad = LogicalNode(
-        id=weight_grad_ref, instance_id=instance.id, kind=OpKind.GEMM,
-        phase=OpPhase.WGRAD, stage=head.stage, mesh_ref=head.mesh_ref,
+        id=weight_grad_ref, instance_id=instance.id,
+        kind=OpKind.GEMM_WEIGHT_WGRAD, phase=OpPhase.WGRAD, stage=head.stage, mesh_ref=head.mesh_ref,
         inputs=(hidden.id, dlogits.id), outputs=(weight_grad.id,),
-        workload=GemmWorkload(
-            logical_shape=(h, v, m), rank_shape=(h, v, m),
-            partition=GemmPartition.REPLICATED, dtype=DType.FP16,
+        workload=GemmWeightWgradWorkload(
+            m=h, n=v, k=m, source_forward_op_ref=head.id,
+            source_parameter_state_ref=state.id,
         ),
-        math=head.math, effects=pure, impl_ref="lm_head_wgrad",
+        math=head.math, effects=pure,
+        impl_ref="gemm_weight_wgrad_timing",
     )
     dgrad = LogicalNode(
         id=hidden_grad_ref, instance_id=instance.id, kind=OpKind.GEMM,

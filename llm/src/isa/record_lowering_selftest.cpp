@@ -6,6 +6,7 @@
 #include "prims/dte_endpoint_prims.h"
 #include "prims/exact_stage2_prims.h"
 #include "prims/weight_gradient_timing_prims.h"
+#include "prims/gemm_weight_wgrad_timing_prim.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -193,6 +194,17 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         operands.rank_rows = 2;
         operands.tp_degree = 4;
         operands.hidden_size = 16;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::GEMM_WEIGHT_WGRAD: {
+        GemmWeightWGradOperands operands;
+        operands.activation = Absolute(0);
+        operands.upstream = Absolute(256);
+        operands.gradient = Absolute(1024);
+        operands.m = 8;
+        operands.n = 16;
+        operands.k = 4;
         record.operands = operands;
         break;
     }
@@ -475,6 +487,7 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::SWIGLU_BACKWARD_TIMING:
     case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
+    case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
         return true;
     default:
         return false;
@@ -532,6 +545,21 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                              work.gamma_gradient.bytes == 64 &&
                              work.gamma_gradient.dtype == WeightGradBufferDType::FP32,
                          "external Norm gamma uses distinct FP16 tape and FP32 output");
+        }
+        return;
+    }
+    if (record.opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING) {
+        auto *prim = dynamic_cast<gemm_weight_wgrad_timing *>(&base);
+        checks.Check(prim != nullptr, "GEMM Weight WGrad lowers to named Prim74");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(work.activation.bytes == 64 &&
+                             work.upstream.bytes == 128 &&
+                             work.gradient.bytes == 512 &&
+                             work.gradient.dtype == WeightGradBufferDType::FP32 &&
+                             work.fma_ops == 512 &&
+                             work.fp32_gradient_read_modify_write_bytes == 1024,
+                         "GEMM WGrad preserves three physical typed buffers and work");
         }
         return;
     }
@@ -1018,7 +1046,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 50,
+    checks.Check(supported == 51,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

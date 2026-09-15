@@ -20,6 +20,7 @@ constexpr uint32_t kAttentionExactPayloadSize = 116;
 constexpr uint32_t kEmbeddingLookupPayloadSize = 96;
 constexpr uint32_t kEmbeddingTableWGradPayloadSize = 192;
 constexpr uint32_t kNormGammaWGradPayloadSize = 92;
+constexpr uint32_t kGemmWeightWGradPayloadSize = 88;
 constexpr uint32_t kGreedySamplePayloadSize = 76;
 constexpr uint32_t kCrossEntropyForwardPayloadSize = 92;
 constexpr uint32_t kCrossEntropyBackwardPayloadSize = 122;
@@ -840,6 +841,32 @@ void ValidateNormGammaWGrad(const NormGammaWGradOperands &o) {
         "NORM_GAMMA_WGRAD");
 }
 
+void ValidateGemmWeightWGrad(const GemmWeightWGradOperands &o) {
+    RequireExactDataType(o.activation_datatype, ExternalDataType::FP16,
+                         "GEMM_WEIGHT_WGRAD activation_datatype");
+    RequireExactDataType(o.upstream_datatype, ExternalDataType::FP16,
+                         "GEMM_WEIGHT_WGRAD upstream_datatype");
+    RequireExactDataType(o.gradient_datatype, ExternalDataType::FP32,
+                         "GEMM_WEIGHT_WGRAD gradient_datatype");
+    for (const auto value : {o.m, o.n, o.k})
+        Require(value > 0 && value <= kExternalNpuParameterMax,
+                "GEMM_WEIGHT_WGRAD M/N/K must be positive 30-bit");
+    const uint64_t km = CheckedMul(o.k, o.m, "GEMM_WEIGHT_WGRAD KxM");
+    const uint64_t kn = CheckedMul(o.k, o.n, "GEMM_WEIGHT_WGRAD KxN");
+    const uint64_t mn = CheckedMul(o.m, o.n, "GEMM_WEIGHT_WGRAD MxN");
+    RequireGradientNonOverlap({
+        ValidateGradientSramSpan(o.activation,
+            CheckedMul(2, km, "GEMM_WEIGHT_WGRAD activation bytes"),
+            "GEMM_WEIGHT_WGRAD activation"),
+        ValidateGradientSramSpan(o.upstream,
+            CheckedMul(2, kn, "GEMM_WEIGHT_WGRAD upstream bytes"),
+            "GEMM_WEIGHT_WGRAD upstream"),
+        ValidateGradientSramSpan(o.gradient,
+            CheckedMul(4, mn, "GEMM_WEIGHT_WGRAD gradient bytes"),
+            "GEMM_WEIGHT_WGRAD gradient")}, "GEMM_WEIGHT_WGRAD");
+    (void)CheckedMul(o.k, mn, "GEMM_WEIGHT_WGRAD FMA work");
+}
+
 void ValidateGreedySample(const GreedySampleOperands &o) {
     RequireExactDataType(o.logits_datatype, ExternalDataType::FP16,
                          "GREEDY_SAMPLE logits_datatype");
@@ -1553,6 +1580,9 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
     FixedSchema(Opcode::NORM_GAMMA_WGRAD_TIMING,
                 RecordOperandKind::NORM_GAMMA_WGRAD,
                 kNormGammaWGradPayloadSize),
+    FixedSchema(Opcode::GEMM_WEIGHT_WGRAD_TIMING,
+                RecordOperandKind::GEMM_WEIGHT_WGRAD,
+                kGemmWeightWGradPayloadSize),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,
@@ -1650,6 +1680,10 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
         ValidateNormGammaWGrad(
             RequireOperands<NormGammaWGradOperands>(
                 record, "NORM_GAMMA_WGRAD_TIMING"));
+        return;
+    case RecordOperandKind::GEMM_WEIGHT_WGRAD:
+        ValidateGemmWeightWGrad(RequireOperands<GemmWeightWGradOperands>(
+            record, "GEMM_WEIGHT_WGRAD_TIMING"));
         return;
     case RecordOperandKind::GREEDY_SAMPLE:
         ValidateGreedySample(RequireOperands<GreedySampleOperands>(
@@ -1852,6 +1886,19 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         EncodeAddress(payload, o.gradient);
         for (const auto value : {o.logical_rows, o.rank_rows, o.tp_degree,
                                  o.hidden_size})
+            AppendLittleEndian(payload, value, 4);
+        break;
+    }
+    case RecordOperandKind::GEMM_WEIGHT_WGRAD: {
+        const auto &o = std::get<GemmWeightWGradOperands>(record.operands);
+        payload.push_back(EnumByte(o.activation_datatype));
+        payload.push_back(EnumByte(o.upstream_datatype));
+        payload.push_back(EnumByte(o.gradient_datatype));
+        payload.push_back(0); // reserved: canonical zero, no synthetic numeric mode
+        EncodeAddress(payload, o.activation);
+        EncodeAddress(payload, o.upstream);
+        EncodeAddress(payload, o.gradient);
+        for (const auto value : {o.m, o.n, o.k})
             AppendLittleEndian(payload, value, 4);
         break;
     }
@@ -2315,6 +2362,28 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         o.rank_rows = ReadLittleEndian(payload, 80, 4, "rank_rows");
         o.tp_degree = ReadLittleEndian(payload, 84, 4, "tp_degree");
         o.hidden_size = ReadLittleEndian(payload, 88, 4, "hidden_size");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::GEMM_WEIGHT_WGRAD: {
+        GemmWeightWGradOperands o;
+        o.activation_datatype = DecodeEnum<ExternalDataType>(
+            payload, 0, "activation_datatype");
+        o.upstream_datatype = DecodeEnum<ExternalDataType>(
+            payload, 1, "upstream_datatype");
+        o.gradient_datatype = DecodeEnum<ExternalDataType>(
+            payload, 2, "gradient_datatype");
+        Require(payload[3] == 0,
+                "GEMM_WEIGHT_WGRAD reserved byte must be zero");
+        o.activation = DecodeAddress(payload, 4,
+                                     "GEMM_WEIGHT_WGRAD activation");
+        o.upstream = DecodeAddress(payload, 28,
+                                   "GEMM_WEIGHT_WGRAD upstream");
+        o.gradient = DecodeAddress(payload, 52,
+                                   "GEMM_WEIGHT_WGRAD gradient");
+        o.m = ReadLittleEndian(payload, 76, 4, "M");
+        o.n = ReadLittleEndian(payload, 80, 4, "N");
+        o.k = ReadLittleEndian(payload, 84, 4, "K");
         record.operands = std::move(o);
         break;
     }

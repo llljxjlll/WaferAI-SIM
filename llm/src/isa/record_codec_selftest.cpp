@@ -240,6 +240,17 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::GEMM_WEIGHT_WGRAD: {
+        GemmWeightWGradOperands operands;
+        operands.activation = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.upstream = {SramAddressKind::ABSOLUTE, 256, 0, 0};
+        operands.gradient = {SramAddressKind::ABSOLUTE, 1024, 0, 0};
+        operands.m = 8;
+        operands.n = 16;
+        operands.k = 4;
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::GREEDY_SAMPLE: {
         GreedySampleOperands operands;
         operands.logits = Address(boundary);
@@ -655,7 +666,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 55, "executable opcode count");
+    checks.Check(executable_count == 56, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -1804,6 +1815,41 @@ void CheckExactStage2Rejections(Checks &checks) {
     gamma.gradient.absolute_address_bytes = 272;
     checks.Reject("NORM_GAMMA_WGRAD rejects overlapping gamma buffer", [&] {
         EncodeExternalRecord(record);
+    });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::GEMM_WEIGHT_WGRAD_TIMING),
+                        Boundary::TYPICAL);
+    auto &gemm = std::get<GemmWeightWGradOperands>(record.operands);
+    checks.Accept("GEMM_WEIGHT_WGRAD exact FP32 public wire", [&] {
+        const auto bytes = EncodeExternalRecord(record);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        const auto &out = std::get<GemmWeightWGradOperands>(decoded.operands);
+        checks.Check(out.m == 8 && out.n == 16 && out.k == 4 &&
+                         out.gradient_datatype == ExternalDataType::FP32 &&
+                         EncodeExternalRecord(decoded) == bytes,
+                     "GEMM_WEIGHT_WGRAD geometry and typed roundtrip");
+    });
+    gemm.gradient_datatype = ExternalDataType::FP16;
+    checks.Reject("GEMM_WEIGHT_WGRAD rejects FP16 gradient", [&] {
+        EncodeExternalRecord(record);
+    });
+    gemm.gradient_datatype = ExternalDataType::FP32;
+    gemm.k = 0;
+    checks.Reject("GEMM_WEIGHT_WGRAD rejects zero K", [&] {
+        EncodeExternalRecord(record);
+    });
+    gemm.k = 4;
+    gemm.upstream.absolute_address_bytes = 48;
+    checks.Reject("GEMM_WEIGHT_WGRAD rejects overlap", [&] {
+        EncodeExternalRecord(record);
+    });
+    gemm.upstream.absolute_address_bytes = 256;
+    checks.Accept("GEMM_WEIGHT_WGRAD raw reserved corruption setup", [&] {
+        auto bytes = EncodeExternalRecord(record);
+        bytes[11] = 1; // external header 8B + reserved payload byte 3
+        checks.Reject("GEMM_WEIGHT_WGRAD rejects reserved wire mode", [&] {
+            DecodeExternalRecordExact(bytes);
+        });
     });
 }
 

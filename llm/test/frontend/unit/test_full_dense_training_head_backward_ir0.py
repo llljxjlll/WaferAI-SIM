@@ -13,6 +13,9 @@ from llm.frontend.wafer_frontend.passes.full_dense_training_head_backward_ir0 im
 from llm.frontend.wafer_frontend.passes.validate_ir0 import DenseIR0Validator
 from llm.frontend.wafer_frontend.schema.common import DType
 from llm.frontend.wafer_frontend.schema.ir0 import EdgeKind, OpKind, OpPhase
+from llm.frontend.wafer_frontend.schema.gemm_weight_wgrad_workload import (
+    GemmWeightWgradWorkload,
+)
 from llm.test.frontend.unit.test_flexible_dense_train import _spec
 
 
@@ -27,12 +30,25 @@ class DenseTrainingHeadBackwardIR0Test(unittest.TestCase):
         self.assertEqual(len(graph.nodes), 29)
         head = next(node for node in source.nodes if node.id == "T0.lm_head")
         ce_backward, wgrad, dgrad = graph.nodes[-3:]
+        values = {value.id: value for value in graph.values}
         self.assertIs(ce_backward.kind, OpKind.CE_BACKWARD)
         self.assertEqual(wgrad.id, f"backward::{head.id}::{graph.state_accesses[-1].state_ref}")
         self.assertEqual(dgrad.id, f"backward::{head.id}")
         self.assertIs(wgrad.phase, OpPhase.WGRAD)
+        self.assertIs(wgrad.kind, OpKind.GEMM_WEIGHT_WGRAD)
+        self.assertIsInstance(wgrad.workload, GemmWeightWgradWorkload)
+        self.assertEqual(wgrad.impl_ref, "gemm_weight_wgrad_timing")
+        self.assertEqual((wgrad.workload.m, wgrad.workload.n, wgrad.workload.k),
+                         (head.workload.rank_shape[2],
+                          head.workload.rank_shape[1],
+                          head.workload.rank_shape[0]))
+        self.assertEqual(wgrad.workload.source_forward_op_ref, head.id)
+        self.assertEqual(wgrad.workload.source_parameter_state_ref,
+                         graph.state_accesses[-1].state_ref)
+        self.assertEqual(wgrad.workload.gradient_bytes,
+                         values[head.inputs[1]].shape[0] *
+                         values[head.inputs[1]].shape[1] * 4)
         self.assertIs(dgrad.phase, OpPhase.DGRAD)
-        values = {value.id: value for value in graph.values}
         self.assertEqual(wgrad.inputs, (head.inputs[0], ce_backward.outputs[0]))
         self.assertEqual(dgrad.inputs, (ce_backward.outputs[0], head.inputs[1]))
         self.assertIs(values[wgrad.outputs[0]].dtype, DType.FP32)

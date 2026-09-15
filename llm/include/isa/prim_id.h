@@ -101,6 +101,7 @@ enum class PrimId : uint8_t {
     ATTENTION_BACKWARD_TIMING = 71,
     EMBEDDING_TABLE_WGRAD_TIMING = 72,
     NORM_GAMMA_WGRAD_TIMING = 73,
+    GEMM_WEIGHT_WGRAD_TIMING = 74,
 };
 
 constexpr uint8_t PrimIdValue(PrimId id) {
@@ -108,4 +109,4 @@ constexpr uint8_t PrimIdValue(PrimId id) {
 }
 
 constexpr uint8_t kMaxAssignedPrimId =
-    PrimIdValue(PrimId::NORM_GAMMA_WGRAD_TIMING);
+    PrimIdValue(PrimId::GEMM_WEIGHT_WGRAD_TIMING);

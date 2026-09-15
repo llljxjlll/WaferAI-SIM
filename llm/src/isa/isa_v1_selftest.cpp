@@ -28,6 +28,7 @@
 #include "isa/record_lowering_selftest.h"
 #include "isa/backward_timing_prim_selftest.h"
 #include "isa/weight_gradient_timing_prim_selftest.h"
+#include "isa/gemm_weight_wgrad_timing_prim_selftest.h"
 #include "prims/collective_data_v1_prim.h"
 #include "prims/collective_launch_v1_prim.h"
 #include "prims/collective_phase_barrier_v1_prim.h"
@@ -136,8 +137,8 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
               "external manifest contains only public entries");
     }
 
-    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 36,
-          "compute range contains 36 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 37,
+          "compute range contains 37 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 7,
           "communication range contains 7 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::MEMORY) == 10,
@@ -212,7 +213,7 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
     }
 
     constexpr std::array<uint8_t, 7> kReservedEncoding{{
-        0x00, 0x25, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
+        0x00, 0x26, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
     }};
     for (uint8_t value : kReservedEncoding) {
         Check(result, LookupOpcode(value) == nullptr,
@@ -345,7 +346,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
             deprecated_ids.insert(PrimIdValue(entry.id));
         }
     }
-    Check(result, compute == 45 && communication == 8 && memory == 14 &&
+    Check(result, compute == 46 && communication == 8 && memory == 14 &&
                       synchronization == 4 && dynamic == 2,
           "Prim primary-category counts match frozen inventory");
     Check(result, public_count == 34,
@@ -659,6 +660,8 @@ int RunIsaV1SelfTest() {
         RunBackwardTimingPrimSelfTest();
     const int weight_gradient_timing_wire_failures =
         RunWeightGradientTimingPrimSelfTest();
+    const int gemm_weight_wgrad_wire_failures =
+        RunGemmWeightWGradTimingPrimSelfTest();
     const int format_failures = RunProgramFormatV1SelfTest();
     const int lowering_failures = RunIsaV1RecordLoweringSelfTest();
     const int helper_failures = RunConfigHelperProgramSelfTest();
@@ -702,6 +705,7 @@ int RunIsaV1SelfTest() {
     return static_cast<int>(result.failures.size()) + record_failures +
            wire_failures + backward_timing_wire_failures +
            weight_gradient_timing_wire_failures +
+           gemm_weight_wgrad_wire_failures +
            format_failures + lowering_failures +
            helper_failures + coll_plan_failures + coll_byte_wire_failures +
            coll_dca_payload_failures + coll_data_failures +

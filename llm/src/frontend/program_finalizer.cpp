@@ -359,6 +359,7 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x22:
     case 0x23:
     case 0x24:
+    case 0x25:
     case 0x40:
     case 0x41:
     case 0x43:
@@ -1686,6 +1687,18 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
             return CheckedMultiply(4, hidden, path);
         Fail(path, "NORM_GAMMA_WGRAD_TIMING has no such payload operand");
     }
+    case Opcode::GEMM_WEIGHT_WGRAD_TIMING: {
+        const uint64_t m = LiteralU64(record.operands[6], path);
+        const uint64_t n = LiteralU64(record.operands[7], path);
+        const uint64_t k = LiteralU64(record.operands[8], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            return CheckedMultiply(2, CheckedMultiply(k, m, path), path);
+        if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            return CheckedMultiply(2, CheckedMultiply(k, n, path), path);
+        if (operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return CheckedMultiply(4, CheckedMultiply(m, n, path), path);
+        Fail(path, "GEMM_WEIGHT_WGRAD_TIMING has no such payload operand");
+    }
     case Opcode::GREEDY_SAMPLE: {
         const uint64_t samples = LiteralU64(record.operands[9], path);
         if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
@@ -1814,6 +1827,7 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
             return BufferDTypeDto::FP16;
         return std::nullopt;
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
+    case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
         return operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS
                    ? BufferDTypeDto::FP32 : BufferDTypeDto::FP16;
     case Opcode::GREEDY_SAMPLE:
@@ -2360,6 +2374,42 @@ ExternalRecord FinalizeRecord(
         operands.rank_rows = LiteralU64(record.operands[8], path);
         operands.tp_degree = LiteralU64(record.operands[9], path);
         operands.hidden_size = LiteralU64(record.operands[10], path);
+        result.operands = std::move(operands);
+    } else if (record.opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING) {
+        if (record.operands.size() != 9)
+            Fail(path + ".operands",
+                 "GEMM_WEIGHT_WGRAD_TIMING requires nine operands");
+        constexpr std::array<std::string_view, 9> names{{
+            "activation_datatype", "upstream_datatype", "gradient_datatype",
+            "activation_address", "upstream_address", "gradient_address",
+            "m", "n", "k"}};
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (i >= 3 && i <= 5) continue;
+            RequireLiteral(record.operands[i], names[i],
+                           path + ".operands[" + std::to_string(i) + "]");
+        }
+        RequireAddress(record.operands[3], "activation_address",
+                       SemanticOperandId::COMPUTE_INPUT_ADDRESS,
+                       path + ".operands[3]");
+        RequireAddress(record.operands[4], "upstream_address",
+                       SemanticOperandId::COMPUTE_DATA_ADDRESS,
+                       path + ".operands[4]");
+        RequireAddress(record.operands[5], "gradient_address",
+                       SemanticOperandId::COMPUTE_OUTPUT_ADDRESS,
+                       path + ".operands[5]");
+        GemmWeightWGradOperands operands;
+        operands.activation_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[0], path);
+        operands.upstream_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[1], path);
+        operands.gradient_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[2], path);
+        operands.activation = absolute_address(SemanticOperandId::COMPUTE_INPUT_ADDRESS);
+        operands.upstream = absolute_address(SemanticOperandId::COMPUTE_DATA_ADDRESS);
+        operands.gradient = absolute_address(SemanticOperandId::COMPUTE_OUTPUT_ADDRESS);
+        operands.m = LiteralU64(record.operands[6], path);
+        operands.n = LiteralU64(record.operands[7], path);
+        operands.k = LiteralU64(record.operands[8], path);
         result.operands = std::move(operands);
     } else if (record.opcode == Opcode::GREEDY_SAMPLE) {
         if (record.operands.size() != 11)
@@ -3341,6 +3391,7 @@ std::set<std::string> ValidateActionSequence(
                    opcode == Opcode::EMBEDDING_LOOKUP ||
                    opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING ||
                    opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
+                   opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
                    opcode == Opcode::GREEDY_SAMPLE ||
                    opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                    opcode == Opcode::CROSS_ENTROPY_BACKWARD ||
@@ -3375,6 +3426,7 @@ std::set<std::string> ValidateActionSequence(
                 (compute_opcode == Opcode::RESIDUAL ||
                  compute_opcode == Opcode::EMBEDDING_LOOKUP ||
                  compute_opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
+                 compute_opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
                  compute_opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                  compute_opcode == Opcode::SGD_UPDATE) ? 2 : 1;
             if (records[cursor]->operands.empty() ||
@@ -3614,7 +3666,12 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         const bool moe_swizzle_link =
             manifest.producer_pass == "moe_swizzle_standard_linker";
         const bool public_wgrad_fragment =
-            manifest.producer_pass == "public_embedding_wgrad_allocated_fragment";
+            manifest.producer_pass == "public_embedding_wgrad_allocated_fragment" ||
+            manifest.producer_pass == "public_gemm_wgrad_allocated_fragment";
+        const Opcode public_wgrad_expected_opcode =
+            manifest.producer_pass == "public_gemm_wgrad_allocated_fragment"
+                ? Opcode::GEMM_WEIGHT_WGRAD_TIMING
+                : Opcode::EMBEDDING_TABLE_WGRAD_TIMING;
         bool moe_swizzle_c1_matmul_bind = false;
         const bool moe_calibration_link =
             manifest.producer_pass ==
@@ -7959,11 +8016,11 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             if (public_wgrad_fragment) {
                 std::size_t gradient_records = 0;
                 for (const RelocatableRecordDto *record : source_records)
-                    if (record->opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING)
+                    if (record->opcode == public_wgrad_expected_opcode)
                         ++gradient_records;
                 if (gradient_records != 1 || moe_terminal_labels.size() != 1)
                     Fail("linked_program_manifest.core_streams",
-                         "public WGRAD fragment requires one 0x23 and one owned FP32 terminal root");
+                         "public WGRAD fragment requires one exact typed gradient record and one owned FP32 terminal root");
             }
             const std::set<std::string> terminal_tape_labels =
                 [&]() {

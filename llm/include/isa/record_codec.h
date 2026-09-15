@@ -174,6 +174,19 @@ struct NormGammaWGradOperands {
     uint64_t hidden_size = 1;
 };
 
+struct GemmWeightWGradOperands {
+    ExternalDataType activation_datatype = ExternalDataType::FP16;
+    ExternalDataType upstream_datatype = ExternalDataType::FP16;
+    ExternalDataType gradient_datatype = ExternalDataType::FP32;
+    SramAddressOperand activation;
+    SramAddressOperand upstream;
+    SramAddressOperand gradient;
+    // X[k,m], dY[k,n] -> dW[m,n]; each value is a positive 30-bit profile.
+    uint64_t m = 1;
+    uint64_t n = 1;
+    uint64_t k = 1;
+};
+
 struct GreedySampleOperands {
     ExternalDataType logits_datatype = ExternalDataType::FP16;
     ExternalDataType output_datatype = ExternalDataType::INT32;
@@ -419,6 +432,7 @@ using RecordOperands =
     std::variant<ComputeOperands, RopeQkExactOperands,
                  AttentionExactOperands, EmbeddingLookupOperands,
                  EmbeddingTableWGradOperands, NormGammaWGradOperands,
+                 GemmWeightWGradOperands,
                  GreedySampleOperands, CrossEntropyForwardOperands,
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
                  AdamwUpdateOperands,
@@ -444,6 +458,7 @@ enum class RecordOperandKind : uint8_t {
     EMBEDDING_LOOKUP,
     EMBEDDING_TABLE_WGRAD,
     NORM_GAMMA_WGRAD,
+    GEMM_WEIGHT_WGRAD,
     GREEDY_SAMPLE,
     CROSS_ENTROPY_FORWARD,
     CROSS_ENTROPY_BACKWARD,

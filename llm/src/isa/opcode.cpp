@@ -122,6 +122,10 @@ constexpr std::array<E, kOpcodeManifestSize> kManifest{{
      "NORM_GAMMA_WGRAD_TIMING", OpcodeVisibility::PUBLIC,
      OpcodeLifecycle::STABLE, OpcodeSupport::AVAILABLE,
      OpcodeCategory::COMPUTE},
+    {Opcode::GEMM_WEIGHT_WGRAD_TIMING,
+     "GEMM_WEIGHT_WGRAD_TIMING", OpcodeVisibility::PUBLIC,
+     OpcodeLifecycle::STABLE, OpcodeSupport::AVAILABLE,
+     OpcodeCategory::COMPUTE},
 
     {Opcode::DTE_SEND, "DTE_SEND", OpcodeVisibility::PUBLIC,
      OpcodeLifecycle::STABLE, OpcodeSupport::AVAILABLE,

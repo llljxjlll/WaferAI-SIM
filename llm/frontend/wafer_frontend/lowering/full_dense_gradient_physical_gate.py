@@ -9,7 +9,6 @@ closed while the Dense native reverse source/physical chain is incomplete.
 from __future__ import annotations
 
 from collections import defaultdict
-from math import prod
 from typing import Mapping
 
 from ..errors import SchemaError
@@ -86,13 +85,42 @@ def require_source_gemm_wgrad_geometry(
     forward = nodes[path.forward_op_refs[0]]
     if (forward.kind is not OpKind.GEMM or len(state.shape) != 2
             or type(m) is not int or type(n) is not int or type(k) is not int
-            or min(m, n, k) < 1 or m * n != prod(state.shape)
-            or (m, n) not in (state.shape, state.shape[::-1])
+            or min(m, n, k) < 1 or state.shape != (m, n)
             or k != forward.workload.rank_shape[0]
-            or forward.workload.rank_shape[1] *
-                forward.workload.rank_shape[2] != prod(state.shape)):
+            or forward.workload.rank_shape[1:] != (n, m)):
         raise SchemaError("native WGRAD M×N and K differ from source weight shard and rows",
                           path=f"gradient_path[{path.parameter_state_ref}].geometry")
+
+
+def require_named_gemm_wgrad_typed_buffers(
+    *, rank: int, m: int, n: int, k: int,
+    activation: BufferABI, upstream: BufferABI, gradient: BufferABI,
+    literals: Mapping[str, int], path: str,
+) -> None:
+    """Prove the three native 0x25 SRAM values and their FP32 gradient extent."""
+    if (type(m) is not int or type(n) is not int or type(k) is not int
+            or min(m, n, k) < 1
+            or any(literals.get(field) != value for field, value in (
+                ("m", m), ("n", n), ("k", k),
+                ("activation_datatype", 1), ("upstream_datatype", 1),
+                ("gradient_datatype", 3),
+            ))):
+        raise SchemaError("native GEMM FP32 WGRAD dimensions or datatypes differ",
+                          path=path)
+    for role, abi, dtype, size in (
+        ("activation", activation, DType.FP16, 2 * k * m),
+        ("upstream", upstream, DType.FP16, 2 * k * n),
+        ("gradient", gradient, DType.FP32, 4 * m * n),
+    ):
+        if (abi.dtype is not dtype or abi.size_bytes != size
+                or abi.logical_core.die_id != rank):
+            raise SchemaError(
+                f"native {role} physical footprint/dtype differs from GEMM FP32 WGRAD",
+                path=f"{path}.{role}",
+            )
+    if len({activation.storage_id, upstream.storage_id, gradient.storage_id}) != 3:
+        raise SchemaError("GEMM FP32 WGRAD operands require independent SRAM storage",
+                          path=path)
 
 
 def require_full_dense_physical_gradient_paths(
@@ -133,7 +161,7 @@ def require_full_dense_physical_gradient_paths(
                           path="required_wgrad_opcodes")
     source_nodes = {node.id: node for node in plan.forward_graph.nodes}
     reverse_native = {
-        OpKind.GEMM: RecordOpcode.MATMUL,
+        OpKind.GEMM: getattr(RecordOpcode, "GEMM_DX_TIMING", None),
         OpKind.NORM: getattr(RecordOpcode, "RMSNORM_BACKWARD_TIMING", None),
         OpKind.ATTENTION: getattr(RecordOpcode, "ATTENTION_BACKWARD_TIMING", None),
         OpKind.ROPE: getattr(RecordOpcode, "ROPE_BACKWARD_TIMING", None),
@@ -163,7 +191,7 @@ def require_full_dense_physical_gradient_paths(
         families = {source_nodes[ref].kind for ref in template.forward_consumer_refs}
         opcode = required_wgrad_opcodes[template.wgrad_ref]
         allowed = {
-            OpKind.GEMM: RecordOpcode.MATMUL,
+            OpKind.GEMM: RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
             OpKind.NORM: getattr(RecordOpcode, "NORM_GAMMA_WGRAD_TIMING", None),
             OpKind.EMBEDDING: getattr(RecordOpcode, "EMBEDDING_TABLE_WGRAD_TIMING", None),
         }
@@ -260,19 +288,29 @@ def require_full_dense_physical_gradient_paths(
         if (produced.dtype is not DType.FP32
                 or produced.size_bytes != path.gradient_bytes
                 or produced.logical_core.die_id != rank
-                or literals.get("output_datatype") != 3):
+                or literals.get("gradient_datatype") != 3):
             raise SchemaError("WGRAD FP32 physical output/dimensions differ from source parameter",
                               path=f"gradient_path[{path.parameter_state_ref}].wgrad")
-        if derivative_opcode is RecordOpcode.MATMUL and (
+        if derivative_opcode is RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING and (
             not all(type(literals.get(field)) is int and literals[field] > 0
                     for field in ("m", "k", "n"))
         ):
             raise SchemaError("native GEMM derivative shape differs from exact source parameter",
                               path=f"gradient_path[{path.parameter_state_ref}].wgrad")
-        if derivative_opcode is RecordOpcode.MATMUL:
+        if derivative_opcode is RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING:
             require_source_gemm_wgrad_geometry(
                 plan, path, m=literals["m"], n=literals["n"],
                 k=literals["k"],
+            )
+            require_named_gemm_wgrad_typed_buffers(
+                rank=rank, m=literals["m"], n=literals["n"],
+                k=literals["k"],
+                activation=buffer(wgrad, fid, idx,
+                                  SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+                upstream=buffer(wgrad, fid, idx,
+                                SemanticOperandId.COMPUTE_DATA_ADDRESS),
+                gradient=produced, literals=literals,
+                path=f"gradient_path[{path.parameter_state_ref}].wgrad",
             )
         if len(path.dp_group_ranks) > 1:
             waves = tuple(wave for wave in plan.gradient_waves

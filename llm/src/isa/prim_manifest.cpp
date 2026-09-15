@@ -164,6 +164,9 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
     {PrimId::NORM_GAMMA_WGRAD_TIMING,
      "norm_gamma_wgrad_timing", C::COMPUTE, V::INTERNAL,
      L::STABLE, S::AVAILABLE},
+    {PrimId::GEMM_WEIGHT_WGRAD_TIMING,
+     "gemm_weight_wgrad_timing", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

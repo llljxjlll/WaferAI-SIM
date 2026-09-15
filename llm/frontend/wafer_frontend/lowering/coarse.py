@@ -390,6 +390,21 @@ def _fixed_compute_operands(
             *(RecordOperand.literal(name, values[name]) for name in (
                 "logical_rows", "rank_rows", "tp_degree", "hidden_size")),
         )
+    if abi.opcode is RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING:
+        if data_address is None:
+            raise SchemaError("0x25 needs independent upstream FP16 address", path="action.compute")
+        return (
+            *(RecordOperand.literal(name, values[name]) for name in (
+                "activation_datatype", "upstream_datatype", "gradient_datatype")),
+            RecordOperand.address("activation_address",
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS, input_address.id),
+            RecordOperand.address("upstream_address",
+                SemanticOperandId.COMPUTE_DATA_ADDRESS, data_address.id),
+            RecordOperand.address("gradient_address",
+                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output_address.id),
+            *(RecordOperand.literal(name, values[name])
+              for name in ("m", "n", "k")),
+        )
     if abi.opcode is RecordOpcode.GREEDY_SAMPLE:
         return (
             *(
