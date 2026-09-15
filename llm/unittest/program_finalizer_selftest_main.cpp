@@ -1022,6 +1022,117 @@ Json Stage2Manifest(uint64_t opcode) {
     RefreshManifestIds(manifest);
     return manifest;
 }
+
+Json AdamwManifest() {
+    Json manifest = Stage2Manifest(0x20);
+    Json &fragment = manifest["fragments"][0];
+    const std::string fragment_id = fragment["id"].get<std::string>();
+    static constexpr std::array<const char *, 4> names{{"master", "m", "v", "step"}};
+    static constexpr std::array<uint64_t, 4> offsets{{0x400, 0x480, 0x500, 0x580}};
+    static constexpr std::array<uint64_t, 4> ids{{13, 14, 15, 16}};
+    const Json cores = Json::array({Core(0, 0), Core(0, 1)});
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        const std::string which = names[index];
+        const std::string absolute = "p_abs_" + which;
+        const std::string label = "p_label_" + which;
+        const uint64_t bytes = index == 3 ? 4 : 128;
+        fragment["program_symbols"].push_back(ProgramSymbol(
+            absolute, 1, "abs_" + which));
+        fragment["program_symbols"].push_back(ProgramSymbol(
+            label, 3, "label_" + which));
+        manifest["program_symbol_definitions"].push_back(Definition(
+            absolute, 1, "abs_" + which, "abs." + which,
+            offsets[index], bytes, cores));
+        manifest["program_symbol_definitions"].push_back(Definition(
+            label, 3, "label_" + which, "label." + which,
+            0, 0, cores));
+        manifest["fragment_interfaces"][0]["program_exports"].push_back(absolute);
+        manifest["fragment_interfaces"][0]["program_exports"].push_back(label);
+        for (const std::pair<Json, std::string> &owner :
+             std::array<std::pair<Json, std::string>, 2>{{
+                 {Core(0, 0), "0"}, {Core(0, 1), "1"}}}) {
+            Json abi = Buffer(owner.first, owner.second, which, offsets[index]);
+            abi["tensor_slice"]["offset"] = Json::array({0});
+            abi["tensor_slice"]["shape"] = Json::array({index == 3 ? 1 : 32});
+            abi["size_bytes"] = bytes;
+            abi["dtype"] = index == 3 ? "int32" : "fp32";
+            abi["ownership"] = "borrowed";
+            fragment["buffer_abi"].push_back(abi);
+        }
+    }
+    for (Json &stream : fragment["core_streams"]) {
+        const Json &core = stream["logical_core"];
+        const std::string action =
+            stream["records"][4]["source_global_action_id"].get<std::string>();
+        Json &bind = stream["records"][3]["operands"];
+        bind[0]["literal_value"] = 6;
+        Json &relocations = stream["address_relocations"];
+        Json adamw = Json::array({
+            Literal("weight_datatype", 1), Literal("gradient_datatype", 3),
+            Literal("state_datatype", 3), Literal("output_datatype", 1),
+            Literal("rounding", 0),
+            Address("weight_address", 1, "p_abs_input"),
+            Address("gradient_address", 2, "p_abs_data"),
+            Address("master_weight_address", 13, "p_abs_master"),
+            Address("first_moment_address", 14, "p_abs_m"),
+            Address("second_moment_address", 15, "p_abs_v"),
+            Address("step_counter_address", 16, "p_abs_step"),
+            Address("updated_weight_address", 3, "p_abs_input"),
+            Address("updated_master_weight_address", 17, "p_abs_master"),
+            Address("updated_first_moment_address", 18, "p_abs_m"),
+            Address("updated_second_moment_address", 19, "p_abs_v"),
+            Address("updated_step_counter_address", 20, "p_abs_step"),
+            Literal("element_count", 32), Literal("step", 1),
+            Literal("learning_rate_f64_bits", UINT64_C(0x3f50624dd2f1a9fc)),
+            Literal("beta1_f64_bits", UINT64_C(0x3feccccccccccccd)),
+            Literal("beta2_f64_bits", UINT64_C(0x3feff7ced916872b)),
+            Literal("epsilon_f64_bits", UINT64_C(0x3e45798ee2308c3a)),
+            Literal("weight_decay_f64_bits", UINT64_C(0x3f847ae147ae147b))});
+        stream["records"][4] = Record(action, 0x21, std::move(adamw));
+        const std::string prefix =
+            core == Core(0, 0) ? "b0_" : "b1_";
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const std::string which = names[index];
+            const std::string absolute = "p_abs_" + which;
+            const std::string label = "p_label_" + which;
+            const uint64_t label_id = 0x102 + index;
+            bind[1 + 2 + index] = Address("input_label_" +
+                std::to_string(2 + index), label_id, label);
+            relocations.push_back(Relocation(3, label_id, 3, label));
+            relocations.push_back(Relocation(4, ids[index], 1, absolute));
+            relocations.push_back(Relocation(4, ids[index] + 4, 1, absolute));
+            for (uint64_t operand : {label_id, ids[index], ids[index] + 4}) {
+                Json binding = AddressBinding(core, operand == label_id ? 3 : 4,
+                                              operand, prefix + which);
+                binding["fragment_id"] = fragment_id;
+                manifest["address_operand_bindings"].push_back(binding);
+            }
+        }
+        std::sort(relocations.begin(), relocations.end(),
+                  [](const Json &lhs, const Json &rhs) {
+            return std::make_pair(lhs["record_index"].get<uint64_t>(),
+                                  lhs["operand_id"].get<uint64_t>()) <
+                   std::make_pair(rhs["record_index"].get<uint64_t>(),
+                                  rhs["operand_id"].get<uint64_t>());
+        });
+    }
+    std::sort(fragment["program_symbols"].begin(),
+              fragment["program_symbols"].end(), [](const Json &lhs, const Json &rhs) {
+        return lhs["id"].get<std::string>() < rhs["id"].get<std::string>();
+    });
+    std::sort(manifest["fragment_interfaces"][0]["program_exports"].begin(),
+              manifest["fragment_interfaces"][0]["program_exports"].end());
+    std::sort(manifest["program_symbol_definitions"].begin(),
+              manifest["program_symbol_definitions"].end(),
+              [](const Json &lhs, const Json &rhs) {
+        return lhs["symbol"]["id"].get<std::string>() <
+               rhs["symbol"]["id"].get<std::string>();
+    });
+    for (Json &binding : manifest["address_operand_bindings"])
+        binding.erase("tensor_slices");
+    RefreshManifestIds(manifest);
+    return manifest;
+}
 Json TransferManifest() {
     Json manifest = Manifest();
     const Json core0 = Core(0, 0);
@@ -1845,6 +1956,39 @@ void Run() {
                     EncodeProgramArtifact(stage2_artifact),
                 "Stage2 fixed record failed byte round-trip");
     }
+    const Json adamw = AdamwManifest();
+    const ProgramArtifact adamw_artifact =
+        finalizer.Finalize(ProgramArtifactFinalizer::Parse(adamw.dump()));
+    uint64_t adamw_count = 0;
+    for (const ProgramCore &core : adamw_artifact.cores)
+        for (const ExternalRecord &record : core.records)
+            if (record.opcode == Opcode::ADAMW_UPDATE) {
+                ++adamw_count;
+                const AdamwUpdateOperands &state =
+                    std::get<AdamwUpdateOperands>(record.operands);
+                Require(state.element_count == 32 && state.step == 1 &&
+                            state.weight.absolute_address_bytes == 0x100 &&
+                            state.master_weight.absolute_address_bytes == 0x400 &&
+                            state.first_moment.absolute_address_bytes == 0x480 &&
+                            state.second_moment.absolute_address_bytes == 0x500 &&
+                            state.step_counter.absolute_address_bytes == 0x580,
+                        "AdamW must finalize exact weight/master/m/v/step spans");
+            }
+    Require(adamw_count == 2,
+            "AdamW synthetic fixed record did not finalize on both cores");
+    Json bad_adamw_alias = adamw;
+    for (Json &stream : bad_adamw_alias["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][12]["symbol_ref"] = "p_abs_m";
+    RefreshManifestIds(bad_adamw_alias);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_adamw_alias.dump()); },
+                  "ADAMW_UPDATE master output must alias exact input");
+    Json bad_adamw_beta = adamw;
+    for (Json &stream : bad_adamw_beta["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][19]["literal_value"] =
+            UINT64_C(0x3ff0000000000000);
+    RefreshManifestIds(bad_adamw_beta);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_adamw_beta.dump()); },
+                  "ADAMW_UPDATE beta1 must remain below one");
     Json bad_attention = Stage2Manifest(0x1b);
     for (Json &stream : bad_attention["fragments"][0]["core_streams"])
         stream["records"][4]["operands"][15]["literal_value"] = 2;

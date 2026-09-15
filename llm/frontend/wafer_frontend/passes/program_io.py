@@ -440,6 +440,28 @@ def _flexible_dense_backward_semantic_uses(
             BufferUseRole.COMP_OUTPUT,
             0,
         ),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferAccess.READ, BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferAccess.READ, BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_MASTER_ADDRESS):
+            (BufferAccess.READ, BufferUseRole.COMP_INPUT, 2),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS):
+            (BufferAccess.READ, BufferUseRole.COMP_INPUT, 3),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS):
+            (BufferAccess.READ, BufferUseRole.COMP_INPUT, 4),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_STEP_ADDRESS):
+            (BufferAccess.READ, BufferUseRole.COMP_INPUT, 5),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS):
+            (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 1),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS):
+            (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 2),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS):
+            (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 3),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS):
+            (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 4),
         (RecordOpcode.LSU_STORE, SemanticOperandId.SOURCE_ADDRESS): (
             BufferAccess.READ,
             BufferUseRole.DMA_SOURCE,
@@ -678,6 +700,28 @@ def _semantic_uses(
                 (BufferAccess.READ, BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.SGD_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
                 (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_MASTER_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 2),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 3),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 4),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_STEP_ADDRESS):
+                (BufferAccess.READ, BufferUseRole.COMP_INPUT, 5),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 1),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 2),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 3),
+            (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS):
+                (BufferAccess.WRITE, BufferUseRole.COMP_OUTPUT, 4),
             (RecordOpcode.LSU_STORE, SemanticOperandId.SOURCE_ADDRESS):
                 (BufferAccess.READ, BufferUseRole.DMA_SOURCE, 0),
         }

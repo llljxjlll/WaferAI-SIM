@@ -335,7 +335,7 @@ ProgramSymbolKind ParseProgramSymbolKind(const Json &value,
 SemanticOperandId ParseOperandId(const Json &value,
                                  const std::string &path) {
     const uint64_t raw = U64(value, path);
-    if ((raw >= 1 && raw <= 12) || (raw >= 0x100 && raw <= 0x110))
+    if ((raw >= 1 && raw <= 20) || (raw >= 0x100 && raw <= 0x110))
         return static_cast<SemanticOperandId>(raw);
     Fail(path, "unknown SemanticOperandId");
 }
@@ -355,6 +355,7 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x1e:
     case 0x1f:
     case 0x20:
+    case 0x21:
     case 0x40:
     case 0x41:
     case 0x43:
@@ -1667,6 +1668,24 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
             return CheckedMultiply(4, elements, path);
         Fail(path, "SGD_UPDATE has no such payload operand");
     }
+    case Opcode::ADAMW_UPDATE: {
+        const uint64_t elements = LiteralU64(record.operands[16], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return CheckedMultiply(2, elements, path);
+        if (operand_id == SemanticOperandId::COMPUTE_STEP_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_STEP_ADDRESS)
+            return 4;
+        if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_MASTER_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_FIRST_MOMENT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_SECOND_MOMENT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_MASTER_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS)
+            return CheckedMultiply(4, elements, path);
+        Fail(path, "ADAMW_UPDATE has no such payload operand");
+    }
     case Opcode::DTE_SEND:
         return LiteralU64(record.operands[7], path + ".length_bytes");
     case Opcode::DTE_RECV:
@@ -1745,6 +1764,22 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
             operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
             return BufferDTypeDto::FP16;
         if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            return BufferDTypeDto::FP32;
+        return std::nullopt;
+    case Opcode::ADAMW_UPDATE:
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return BufferDTypeDto::FP16;
+        if (operand_id == SemanticOperandId::COMPUTE_STEP_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_STEP_ADDRESS)
+            return BufferDTypeDto::INT32;
+        if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_MASTER_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_FIRST_MOMENT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_SECOND_MOMENT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_MASTER_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS)
             return BufferDTypeDto::FP32;
         return std::nullopt;
     case Opcode::LOCAL_REDUCE:
@@ -2003,9 +2038,9 @@ ExternalRecord FinalizeRecord(
             Fail(path + ".operands", "SRAM_BIND requires eighteen operands");
         RequireLiteral(record.operands[0], "input_count", path + ".operands[0]");
         const uint64_t count = LiteralU64(record.operands[0], path + ".operands[0]");
-        if (count < 1 || count > 3)
+        if (count < 1 || count > kSramBindInputLimit)
             Fail(path + ".operands[0]",
-                 "SRAM_BIND input_count must be one, two, or three");
+                 "SRAM_BIND input_count must be in [1,16]");
         SramBindOperands operands;
         operands.input_count = count;
         for (std::size_t index = 0; index < kSramBindInputLimit; ++index) {
@@ -2329,6 +2364,72 @@ ExternalRecord FinalizeRecord(
         operands.learning_rate_f64_bits =
             LiteralU64(record.operands[8], path);
         operands.momentum_f64_bits = LiteralU64(record.operands[9], path);
+        result.operands = operands;
+    } else if (record.opcode == Opcode::ADAMW_UPDATE) {
+        if (record.operands.size() != 23)
+            Fail(path + ".operands", "ADAMW_UPDATE requires 23 operands");
+        static constexpr std::array<const char *, 23> names{{
+            "weight_datatype", "gradient_datatype", "state_datatype",
+            "output_datatype", "rounding", "weight_address",
+            "gradient_address", "master_weight_address",
+            "first_moment_address", "second_moment_address",
+            "step_counter_address", "updated_weight_address",
+            "updated_master_weight_address", "updated_first_moment_address",
+            "updated_second_moment_address", "updated_step_counter_address",
+            "element_count", "step", "learning_rate_f64_bits",
+            "beta1_f64_bits", "beta2_f64_bits", "epsilon_f64_bits",
+            "weight_decay_f64_bits"}};
+        static constexpr std::array<SemanticOperandId, 11> ids{{
+            SemanticOperandId::COMPUTE_INPUT_ADDRESS,
+            SemanticOperandId::COMPUTE_DATA_ADDRESS,
+            SemanticOperandId::COMPUTE_MASTER_ADDRESS,
+            SemanticOperandId::COMPUTE_FIRST_MOMENT_ADDRESS,
+            SemanticOperandId::COMPUTE_SECOND_MOMENT_ADDRESS,
+            SemanticOperandId::COMPUTE_STEP_ADDRESS,
+            SemanticOperandId::COMPUTE_OUTPUT_ADDRESS,
+            SemanticOperandId::COMPUTE_UPDATED_MASTER_ADDRESS,
+            SemanticOperandId::COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS,
+            SemanticOperandId::COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS,
+            SemanticOperandId::COMPUTE_UPDATED_STEP_ADDRESS}};
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const std::string field = path + ".operands[" +
+                                      std::to_string(index) + "]";
+            if (index >= 5 && index <= 15)
+                RequireAddress(record.operands[index], names[index],
+                               ids[index - 5], field);
+            else
+                RequireLiteral(record.operands[index], names[index], field);
+        }
+        for (std::size_t index = 0; index < 5; ++index) {
+            const std::size_t input = (std::array<std::size_t, 5>{{5, 7, 8, 9, 10}})[index];
+            if (record.operands[input].symbol_ref !=
+                record.operands[11 + index].symbol_ref)
+                Fail(path, "ADAMW_UPDATE state outputs must alias exact input symbols");
+        }
+        AdamwUpdateOperands operands;
+        operands.weight_datatype = LiteralEnum<ExternalDataType>(record.operands[0], path);
+        operands.gradient_datatype = LiteralEnum<ExternalDataType>(record.operands[1], path);
+        operands.state_datatype = LiteralEnum<ExternalDataType>(record.operands[2], path);
+        operands.output_datatype = LiteralEnum<ExternalDataType>(record.operands[3], path);
+        operands.rounding = LiteralEnum<OptimizerRoundingMode>(record.operands[4], path);
+        operands.weight = absolute_address(ids[0]);
+        operands.gradient = absolute_address(ids[1]);
+        operands.master_weight = absolute_address(ids[2]);
+        operands.first_moment = absolute_address(ids[3]);
+        operands.second_moment = absolute_address(ids[4]);
+        operands.step_counter = absolute_address(ids[5]);
+        operands.updated_weight = absolute_address(ids[6]);
+        operands.updated_master_weight = absolute_address(ids[7]);
+        operands.updated_first_moment = absolute_address(ids[8]);
+        operands.updated_second_moment = absolute_address(ids[9]);
+        operands.updated_step_counter = absolute_address(ids[10]);
+        operands.element_count = LiteralU64(record.operands[16], path);
+        operands.step = LiteralU64(record.operands[17], path);
+        operands.learning_rate_f64_bits = LiteralU64(record.operands[18], path);
+        operands.beta1_f64_bits = LiteralU64(record.operands[19], path);
+        operands.beta2_f64_bits = LiteralU64(record.operands[20], path);
+        operands.epsilon_f64_bits = LiteralU64(record.operands[21], path);
+        operands.weight_decay_f64_bits = LiteralU64(record.operands[22], path);
         result.operands = operands;
     } else if (record.opcode == Opcode::MATMUL ||
                record.opcode == Opcode::ATTENTION ||
@@ -3067,7 +3168,8 @@ std::set<std::string> ValidateActionSequence(
                    opcode == Opcode::GREEDY_SAMPLE ||
                    opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                    opcode == Opcode::CROSS_ENTROPY_BACKWARD ||
-                   opcode == Opcode::SGD_UPDATE;
+                   opcode == Opcode::SGD_UPDATE ||
+                   opcode == Opcode::ADAMW_UPDATE;
         };
         bool valid_body = false;
         if (moe_calibration_link && suffix == cursor &&
@@ -3088,6 +3190,7 @@ std::set<std::string> ValidateActionSequence(
             is_compute(records[cursor + 1]->opcode)) {
             const Opcode compute_opcode = records[cursor + 1]->opcode;
             const uint64_t expected_inputs =
+                compute_opcode == Opcode::ADAMW_UPDATE ? 6 :
                 compute_opcode == Opcode::CROSS_ENTROPY_BACKWARD ? 3 :
                 ((s3_lite_backward_link || moe_calibration_link ||
                   moe_swizzle_c1_matmul_bind) &&
