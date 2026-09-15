@@ -58,6 +58,8 @@
 #include <memory>
 #include <map>
 #include <optional>
+#include <numeric>
+#include <algorithm>
 #include <set>
 
 // 假设 json.hpp 文件在当前目录或包含路径中
@@ -518,6 +520,136 @@ std::vector<DenseSequenceKvRange> DenseTrainingStateRanges(
     return result;
 }
 
+struct ExternalAuthoritySpan {
+    DenseSequenceKvRange state;
+    std::vector<uint8_t> seed;
+};
+
+std::vector<ExternalAuthoritySpan> ExternalTrainingAuthority(
+    const external_memory::ExternalDmaProgram &program,
+    const std::vector<DenseSequenceKvRange> &states) {
+    if (states.empty() || program.external_seeds.empty() ||
+        program.external_probes.empty())
+        throw std::runtime_error("external training StateABI source is empty");
+    std::vector<ExternalAuthoritySpan> spans;
+    bool nonzero = false;
+    for (const auto &state : states) {
+        std::vector<ExternalAuthoritySpan> candidates;
+        for (const auto &descriptor : program.descriptors) {
+            if (descriptor.direction !=
+                    external_memory::TransferDirection::kExternalToHbm ||
+                state.address < descriptor.hbm_address ||
+                state.size_bytes > descriptor.size_bytes ||
+                state.address - descriptor.hbm_address >
+                    descriptor.size_bytes - state.size_bytes)
+                continue;
+            const auto connection = std::find_if(
+                program.fabric.connections.begin(),
+                program.fabric.connections.end(),
+                [&](const auto &item) {
+                    return item.id == descriptor.connection_ref &&
+                           item.target_die_id == state.die_id;
+                });
+            if (connection == program.fabric.connections.end()) continue;
+            const auto link = std::find_if(
+                program.fabric.links.begin(), program.fabric.links.end(),
+                [&](const auto &item) { return item.id == connection->link_ref; });
+            if (link == program.fabric.links.end())
+                throw std::runtime_error("external StateABI link disappeared");
+            const uint64_t external_address = descriptor.external_address +
+                state.address - descriptor.hbm_address;
+            for (const auto &seed : program.external_seeds) {
+                if (seed.external_capacity_ref != link->external_capacity_ref ||
+                    external_address < seed.address ||
+                    state.size_bytes > seed.payload.size() ||
+                    external_address - seed.address >
+                        seed.payload.size() - state.size_bytes)
+                    continue;
+                const auto begin = seed.payload.begin() +
+                    static_cast<std::ptrdiff_t>(external_address - seed.address);
+                ExternalAuthoritySpan candidate{
+                    state, std::vector<uint8_t>(
+                        begin, begin + static_cast<std::ptrdiff_t>(state.size_bytes))};
+                const bool final_writeback = std::any_of(
+                    program.descriptors.begin(), program.descriptors.end(),
+                    [&](const auto &write) {
+                        if (write.direction !=
+                                external_memory::TransferDirection::kHbmToExternal ||
+                            state.address < write.hbm_address ||
+                            state.size_bytes > write.size_bytes ||
+                            state.address - write.hbm_address >
+                                write.size_bytes - state.size_bytes ||
+                            write.external_address + state.address -
+                                write.hbm_address != external_address)
+                            return false;
+                        const auto target = std::find_if(
+                            program.fabric.connections.begin(),
+                            program.fabric.connections.end(),
+                            [&](const auto &item) {
+                                return item.id == write.connection_ref &&
+                                       item.target_die_id == state.die_id &&
+                                       item.link_ref == connection->link_ref;
+                            });
+                        return target != program.fabric.connections.end();
+                    });
+                const bool final_probe = std::any_of(
+                    program.external_probes.begin(), program.external_probes.end(),
+                    [&](const auto &probe) {
+                        return probe.external_capacity_ref ==
+                                link->external_capacity_ref &&
+                               external_address >= probe.address &&
+                               state.size_bytes <= probe.expected_payload.size() &&
+                               external_address - probe.address <=
+                                   probe.expected_payload.size() - state.size_bytes;
+                    });
+                if (final_writeback && final_probe)
+                    candidates.push_back(std::move(candidate));
+            }
+        }
+        if (candidates.size() != 1)
+            throw std::runtime_error(
+                "external training StateABI lacks exactly one signed "
+                "seeded E2H and same-authority H2E/probe: " + state.id);
+        nonzero |= std::any_of(candidates.front().seed.begin(),
+                               candidates.front().seed.end(),
+                               [](uint8_t value) { return value != 0; });
+        spans.push_back(std::move(candidates.front()));
+    }
+    if (!nonzero)
+        throw std::runtime_error(
+            "external training restore lacks a nonzero payload witness");
+    return spans;
+}
+
+uint64_t InspectExternalTrainingHbm(
+    HBMRuntime &hbm, const std::vector<ExternalAuthoritySpan> &spans,
+    bool expect_restored) {
+    uint64_t present = 0;
+    for (const auto &span : spans) {
+        const auto snapshot = hbm.DebugPeek(
+            span.state.address, static_cast<int>(span.state.die_id),
+            span.state.size_bytes);
+        if (snapshot.payload.size() != span.seed.size())
+            throw std::runtime_error("external StateABI HBM snapshot truncated");
+        for (const auto &chunk : snapshot.chunks)
+            for (const uint8_t bit : chunk.backend.present)
+                present += bit != 0;
+        if (expect_restored && snapshot.payload != span.seed)
+            throw std::runtime_error(
+                "external DMA restored wrong physical HBM StateABI payload: " +
+                span.state.id);
+    }
+    const uint64_t bytes = std::accumulate(
+        spans.begin(), spans.end(), uint64_t{0},
+        [](uint64_t total, const auto &span) {
+            return total + span.state.size_bytes;
+        });
+    if (present != (expect_restored ? bytes : 0))
+        throw std::runtime_error(expect_restored
+            ? "external DMA did not physically restore every StateABI byte"
+            : "external training StateABI was already present in HBM before DMA");
+    return bytes;
+}
 void ValidateDenseKvContinuity(
     const std::vector<std::vector<DenseSequenceKvRange>> &segments) {
     if (segments.size() < 2 || segments[0].empty())
@@ -921,6 +1053,14 @@ public:
     Execution() const { return execution_; }
     const std::string &Error() const { return error_; }
     void ReleaseFinalWriteback() { executor_.ReleaseFinalWriteback(); }
+    bool BringInReady() const { return bring_in_ready_; }
+    void ReleaseComputeAfterRestore() {
+        if (!bring_in_ready_ || compute_released_)
+            throw std::runtime_error(
+                "external authority compute released before bring-in/restore");
+        compute_released_ = true;
+        compute_gate_.notify(SC_ZERO_TIME);
+    }
 
 private:
     void Run() {
@@ -942,6 +1082,11 @@ private:
                     << " external_read_bytes=" << stats.external_read_bytes
                     << " hbm_write_bytes=" << stats.hbm_write_bytes
                     << " pending=0" << std::endl;
+                // Pause with workers still blocked on ReadyEvent: the host
+                // inspects the actual HBM backing before compute may start.
+                bring_in_ready_ = true;
+                sc_pause();
+                wait(compute_gate_);
                 ready_.notify(SC_ZERO_TIME);
                 execution_ = executor_.Wait();
                 ValidateFinalExecution();
@@ -982,6 +1127,9 @@ private:
     std::optional<external_memory::ExternalDmaProgramExecution> execution_;
     std::string error_;
     sc_event ready_;
+    sc_event compute_gate_;
+    bool bring_in_ready_ = false;
+    bool compute_released_ = false;
 };
 } // namespace
 
@@ -1438,6 +1586,7 @@ int sc_main(int argc, char *argv[]) {
         external_dma_binding;
     std::optional<external_memory::ExternalDmaProgram>
         external_dma_program;
+    std::vector<ExternalAuthoritySpan> external_authority_spans;
     try {
         if (program_mode) {
             ValidatePlatformConfigInputs(
@@ -1550,6 +1699,25 @@ int sc_main(int argc, char *argv[]) {
                         throw std::runtime_error(
                             "external DMA final writeback phase requires a "
                             "Dense training sequence");
+                    if (external_dma_binding->phase_mode ==
+                            external_memory::ExternalDmaRuntimePhaseMode::
+                                kBringInThenFinalWriteback) {
+                        for (const auto &io : sequence_program_io_resolved) {
+                            if (std::any_of(io.initializations.begin(),
+                                            io.initializations.end(),
+                                            [](const auto &entry) {
+                                                return std::holds_alternative<
+                                                    frontend::program_io::HbmTarget>(
+                                                    entry.source.target);
+                                            }))
+                                throw std::runtime_error(
+                                    "external training ProgramIO preloaded HBM StateABI "
+                                    "before authoritative E2H restore");
+                        }
+                        external_authority_spans = ExternalTrainingAuthority(
+                            *external_dma_program,
+                            sequence_training_state_ranges.front());
+                    }
                 }
             } else {
                 program_bytes = ReadProgramFile(g_flag_program);
@@ -2014,11 +2182,19 @@ int sc_main(int argc, char *argv[]) {
                       << " digest=" << *dense_training_state_digest
                       << " content_changed=0 functional=0 pass=1"
                       << " authority=external" << std::endl;
-        } else {
+        } else if (external_authority_spans.empty()) {
             dense_training_state_digest = PrintDenseTrainingStateBoundary(
                 *monitor->hbmRuntime, 0,
                 sequence_training_state_ranges.front(), std::nullopt);
         }
+    }
+    if (!external_authority_spans.empty()) {
+        const uint64_t bytes = InspectExternalTrainingHbm(
+            *monitor->hbmRuntime, external_authority_spans, false);
+        std::cout << "[EXTERNAL_AUTHORITY_PRELOAD] state_abis="
+                  << external_authority_spans.size()
+                  << " hbm_initializations=0 present_bytes=0"
+                  << " source_bytes=" << bytes << " pass=1" << std::endl;
     }
     if (sequence_mode && inference_paged) {
         const std::string digest =
@@ -2039,6 +2215,28 @@ int sc_main(int argc, char *argv[]) {
     sc_clock clk("clk", CYCLE, SC_NS);
 
     if (sequence_mode) {
+        if (!external_authority_spans.empty()) {
+            // Only the external bridge runs; workers still wait for the
+            // host-controlled startup event until physical restore is proven.
+            sc_start();
+            if (!external_dma_coordinator->Error().empty())
+                throw std::runtime_error("external DMA bring-in failed: " +
+                                         external_dma_coordinator->Error());
+            if (!external_dma_coordinator->BringInReady() ||
+                sequence_helper->completed_segments() != 0)
+                throw std::runtime_error(
+                    "external restore did not pause before any training compute");
+            const uint64_t bytes = InspectExternalTrainingHbm(
+                *monitor->hbmRuntime, external_authority_spans, true);
+            std::cout << "[EXTERNAL_AUTHORITY_RESTORED] state_abis="
+                      << external_authority_spans.size()
+                      << " payload_bytes=" << bytes
+                      << " matched=1 pending=0 pass=1" << std::endl;
+            dense_training_state_digest = PrintDenseTrainingStateBoundary(
+                *monitor->hbmRuntime, 0,
+                sequence_training_state_ranges.front(), std::nullopt);
+            external_dma_coordinator->ReleaseComputeAfterRestore();
+        }
         for (std::size_t expected = 0;
              expected < sequence_program_bytes.size(); ++expected) {
             sc_start();
