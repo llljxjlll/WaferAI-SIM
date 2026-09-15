@@ -2278,7 +2278,9 @@ class StateABI:
             raise SchemaError(
                 "must be a non-empty immutable tuple", path=f"{path}.shape"
             )
-        if type(self.dtype) is not DType or self.dtype not in (DType.FP16, DType.FP32):
+        if type(self.dtype) is not DType or self.dtype not in (
+            DType.FP16, DType.FP32, DType.INT32,
+        ):
             raise SchemaError("unsupported state dtype", path=f"{path}.dtype")
         elements = 1
         for index, extent in enumerate(self.shape):
@@ -2305,6 +2307,29 @@ class StateABI:
             raise SchemaError(
                 "must equal product(shape) * dtype bytes",
                 path=f"{path}.size_bytes",
+            )
+        adamw_kinds = (
+            StateKind.OPTIMIZER_MASTER,
+            StateKind.OPTIMIZER_MOMENT1,
+            StateKind.OPTIMIZER_MOMENT2,
+            StateKind.OPTIMIZER_STEP,
+        )
+        if self.kind in adamw_kinds:
+            required = (
+                DType.INT32 if self.kind is StateKind.OPTIMIZER_STEP
+                else DType.FP32
+            )
+            if self.dtype is not required or (
+                self.kind is StateKind.OPTIMIZER_STEP and self.shape != (1,)
+            ):
+                raise SchemaError(
+                    "AdamW states require FP32 vectors or one INT32 step counter",
+                    path=path,
+                )
+        elif self.dtype is DType.INT32:
+            raise SchemaError(
+                "INT32 StateABI belongs only to AdamW step",
+                path=f"{path}.dtype",
             )
         if (
             self.alignment_bytes == 0
@@ -2344,6 +2369,14 @@ class StateABI:
             ):
                 raise SchemaError(
                     "KV state must be PERSISTENT and READ_WRITE", path=path
+                )
+        elif self.kind in adamw_kinds:
+            if (
+                self.lifetime is not PersistentStateLifetime.PERSISTENT
+                or self.access is not PersistentStateAccess.READ_WRITE
+            ):
+                raise SchemaError(
+                    "AdamW StateABI must be PERSISTENT and READ_WRITE", path=path
                 )
         elif self.access is not PersistentStateAccess.RESERVED:
             raise SchemaError(

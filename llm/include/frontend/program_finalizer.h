@@ -139,6 +139,10 @@ enum class StateKindDto {
     KV_KEY,
     KV_VALUE,
     OPTIMIZER_RESERVED,
+    OPTIMIZER_MASTER,
+    OPTIMIZER_MOMENT1,
+    OPTIMIZER_MOMENT2,
+    OPTIMIZER_STEP,
 };
 enum class StateLifetimeDto { STEP, PERSISTENT };
 enum class StateAccessDto { READ_ONLY, READ_WRITE, RESERVED };

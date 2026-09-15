@@ -31,7 +31,7 @@ STATE_STAGING_ID_SCHEMA_VERSION = (
 )
 
 _INT32_MAX = (1 << 31) - 1
-_DTYPE_BYTES = {DType.FP16: 2, DType.FP32: 4}
+_DTYPE_BYTES = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}
 
 
 class StateKind(str, Enum):
@@ -40,6 +40,18 @@ class StateKind(str, Enum):
     KV_KEY = "kv_key"
     KV_VALUE = "kv_value"
     OPTIMIZER_RESERVED = "optimizer_reserved"
+    OPTIMIZER_MASTER = "optimizer_master"
+    OPTIMIZER_MOMENT1 = "optimizer_moment1"
+    OPTIMIZER_MOMENT2 = "optimizer_moment2"
+    OPTIMIZER_STEP = "optimizer_step"
+
+
+_ADAMW_STATE_KINDS = (
+    StateKind.OPTIMIZER_MASTER,
+    StateKind.OPTIMIZER_MOMENT1,
+    StateKind.OPTIMIZER_MOMENT2,
+    StateKind.OPTIMIZER_STEP,
+)
 
 
 class PersistentStateLifetime(str, Enum):
@@ -180,6 +192,7 @@ class PersistentStateIdentity:
             StateKind.PARAMETER,
             StateKind.TRAINABLE_PARAMETER,
             StateKind.OPTIMIZER_RESERVED,
+            *_ADAMW_STATE_KINDS,
         ):
             if self.tensor_ref is None:
                 raise SchemaError(
@@ -285,6 +298,24 @@ class PersistentStateDecl:
                 "must equal product(shape) * dtype bytes",
                 path=f"{path}.tensor_bytes",
             )
+        if self.identity.kind in _ADAMW_STATE_KINDS:
+            required_dtype = (
+                DType.INT32 if self.identity.kind is StateKind.OPTIMIZER_STEP
+                else DType.FP32
+            )
+            if self.dtype is not required_dtype or (
+                self.identity.kind is StateKind.OPTIMIZER_STEP
+                and self.shape != (1,)
+            ):
+                raise SchemaError(
+                    "AdamW state kind requires FP32 tensors or an INT32 scalar step",
+                    path=path,
+                )
+        elif self.dtype is DType.INT32:
+            raise SchemaError(
+                "INT32 persistent state is reserved for AdamW step",
+                path=f"{path}.dtype",
+            )
         if self.identity.kind is StateKind.PARAMETER:
             if (
                 self.lifetime is not PersistentStateLifetime.PERSISTENT
@@ -309,6 +340,14 @@ class PersistentStateDecl:
             ):
                 raise SchemaError(
                     "KV state must be PERSISTENT and READ_WRITE", path=path
+                )
+        elif self.identity.kind in _ADAMW_STATE_KINDS:
+            if (
+                self.lifetime is not PersistentStateLifetime.PERSISTENT
+                or self.access is not PersistentStateAccess.READ_WRITE
+            ):
+                raise SchemaError(
+                    "AdamW state must be PERSISTENT and READ_WRITE", path=path
                 )
         elif self.access is not PersistentStateAccess.RESERVED:
             raise SchemaError(

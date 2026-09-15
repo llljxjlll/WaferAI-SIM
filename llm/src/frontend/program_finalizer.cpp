@@ -490,6 +490,10 @@ StateKindDto ParseStateKind(const Json &value, const std::string &path) {
     if (raw == "kv_key") return StateKindDto::KV_KEY;
     if (raw == "kv_value") return StateKindDto::KV_VALUE;
     if (raw == "optimizer_reserved") return StateKindDto::OPTIMIZER_RESERVED;
+    if (raw == "optimizer_master") return StateKindDto::OPTIMIZER_MASTER;
+    if (raw == "optimizer_moment1") return StateKindDto::OPTIMIZER_MOMENT1;
+    if (raw == "optimizer_moment2") return StateKindDto::OPTIMIZER_MOMENT2;
+    if (raw == "optimizer_step") return StateKindDto::OPTIMIZER_STEP;
     Fail(path, "unknown StateKind");
 }
 
@@ -671,8 +675,20 @@ StateAbiDto ParseStateAbi(const Json &value, const std::string &path) {
     result.access = ParseStateAccess(Field(value, "access"), path + ".access");
     result.shape = U64s(Field(value, "shape"), path + ".shape");
     result.dtype = ParseDType(Field(value, "dtype"), path + ".dtype");
-    if (result.dtype == BufferDTypeDto::INT32)
-        Fail(path + ".dtype", "StateABI dtype must be fp16 or fp32");
+    const bool adamw_state =
+        result.kind == StateKindDto::OPTIMIZER_MASTER ||
+        result.kind == StateKindDto::OPTIMIZER_MOMENT1 ||
+        result.kind == StateKindDto::OPTIMIZER_MOMENT2 ||
+        result.kind == StateKindDto::OPTIMIZER_STEP;
+    const BufferDTypeDto required_optimizer_dtype =
+        result.kind == StateKindDto::OPTIMIZER_STEP
+            ? BufferDTypeDto::INT32
+            : BufferDTypeDto::FP32;
+    if ((adamw_state && (result.dtype != required_optimizer_dtype ||
+                         (result.kind == StateKindDto::OPTIMIZER_STEP &&
+                          result.shape != std::vector<uint64_t>{1}))) ||
+        (!adamw_state && result.dtype == BufferDTypeDto::INT32))
+        Fail(path + ".dtype", "only AdamW step StateABI may be an INT32 scalar");
     result.layout = String(Field(value, "layout"), path + ".layout");
     result.die_id = U64(Field(value, "die_id"), path + ".die_id");
     result.address = U64(Field(value, "address"), path + ".address");
@@ -721,6 +737,10 @@ StateAbiDto ParseStateAbi(const Json &value, const std::string &path) {
         if (result.lifetime != StateLifetimeDto::PERSISTENT ||
             result.access != StateAccessDto::READ_WRITE)
             Fail(path, "KV state must be PERSISTENT and READ_WRITE");
+    } else if (adamw_state) {
+        if (result.lifetime != StateLifetimeDto::PERSISTENT ||
+            result.access != StateAccessDto::READ_WRITE)
+            Fail(path, "AdamW state must be PERSISTENT and READ_WRITE");
     } else if (result.access != StateAccessDto::RESERVED) {
         Fail(path + ".access",
              "optimizer reservation cannot grant DMA access");
