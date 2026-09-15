@@ -155,6 +155,83 @@ def _six_die_fixed_model_case(rows: int, columns: int):
     return manifest, template, fabric
 
 
+def _all_die_scaled_model_case(rows: int, columns: int):
+    """One two-layer Dense source with every physical Die doing TP work."""
+
+    if not (1 <= rows <= 10 and 1 <= columns <= 10):
+        raise ValueError("scaled all-die case requires the 1..10 release envelope")
+    ranks = rows * columns
+    base = _request(layers=2, prefill=2, decode=2)
+    model = replace(
+        base.model,
+        vocabulary_size=max(128, ranks),
+        hidden_size=ranks,
+        intermediate_size=2 * ranks,
+        num_attention_heads=ranks,
+        num_kv_heads=ranks,
+        head_dim=1,
+    )
+    request = WorkloadRunRequest.create(
+        family=base.family,
+        model=model,
+        steps=WorkloadStepSpec(inference=WorkloadInferenceSteps(
+            prefill_tokens=1,
+            decode_steps=2,
+            request_count=ranks,
+        )),
+        mesh=WorkloadMeshSpec(rows, columns),
+        parallel=WorkloadParallelSpec(
+            tp=ranks,
+            active_die_ids=tuple(range(ranks)),
+        ),
+        memory=base.memory,
+        execution=base.execution,
+    )
+    baseline = _capability()
+    capability = WorkloadRunCapability.create(
+        max_mesh_rows=max(rows, 3),
+        max_mesh_columns=max(columns, 3),
+        max_mesh_ranks=ranks,
+        families=baseline.families,
+    )
+    capacities = tuple(MemoryTierCapacity.create(
+        tier=MemoryTier.HBM,
+        location_ref=f"die:{die_id}",
+        base_address=0,
+        capacity_bytes=1 << 30,
+        alignment_bytes=64,
+    ) for die_id in range(ranks))
+    manifest = materialize_workload_preflight(
+        request, capability, capacities=capacities,
+    )
+    template = _legacy_spec(layers=2, prefill=2, decode=0)
+    template = replace(
+        template,
+        model=replace(
+            template.model,
+            V=model.vocabulary_size,
+            H=model.hidden_size,
+            I=model.intermediate_size,
+            NH=model.num_attention_heads,
+            KVH=model.num_kv_heads,
+            DH=model.head_dim,
+            rotary_dim=1,
+        ),
+        parallel=replace(template.parallel, instances=(
+            replace(template.parallel.instances[0], tp=ranks, sp=False),
+        )),
+    )
+    template.validate()
+    sram_bytes = _SIX_DIE_SRAM_BYTES if ranks == 6 else 65536
+    hardware = minimal_hardware(columns, rows, sram_bytes=sram_bytes)
+    if ranks == 6:
+        hardware["memory"]["sram"]["allocation_alignment_bytes"] = (
+            _SIX_DIE_SRAM_ALIGNMENT_BYTES
+        )
+    fabric = physical_fabric_from_data(hardware)
+    return manifest, template, fabric
+
+
 def _run(command: tuple[str, ...], *, cwd: Path, timeout: int) -> str:
     completed = subprocess.run(
         command,
@@ -205,7 +282,9 @@ def _source_tool_snapshot(args: argparse.Namespace) -> dict[str, dict[str, str]]
 def run(args: argparse.Namespace) -> None:
     source_tool_at_entry = _source_tool_snapshot(args)
     rows, columns = (int(dimension) for dimension in args.mesh_size.split("x"))
-    if args.mesh_size == "1x1":
+    if args.scaled_all_dies:
+        manifest, template, fabric = _all_die_scaled_model_case(rows, columns)
+    elif args.mesh_size == "1x1":
         manifest, template, fabric = _one_die_case()
     elif args.mesh_size == "2x2":
         manifest, template, fabric = _two_by_two_case()
@@ -263,6 +342,7 @@ def run(args: argparse.Namespace) -> None:
         )
     (output / "compiled_receipt.json").write_text(json.dumps({
         "mesh": args.mesh_size,
+        "scaled_all_dies": args.scaled_all_dies,
         "active_die_ids": manifest.placement.active_die_ids,
         "idle_die_ids": manifest.placement.idle_die_ids,
         "compiled_core_die_ids": compiled_core_die_ids,
@@ -523,10 +603,16 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mesh-size",
-        choices=("1x1", "2x2", "1x4", "4x1", "2x3", "3x2",
-                 "1x6", "6x1", "3x3"),
+        choices=tuple(f"{rows}x{columns}"
+                      for rows in range(1, 11)
+                      for columns in range(1, 11)),
         default="1x1",
-        help="physical mesh and matching full-participation Dense fixture",
+        help="physical mesh within the 1..10 release envelope",
+    )
+    parser.add_argument(
+        "--scaled-all-dies",
+        action="store_true",
+        help="two-layer Dense TP=all physical Dies; shape-scaled main case",
     )
     parser.add_argument(
         "--finalizer", type=Path, default=build / "npusim_program_finalizer"
@@ -542,6 +628,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--compile-timeout", type=int, default=2400)
     args = parser.parse_args()
+    fixed_shapes = {"1x1", "2x2", "1x4", "4x1", "2x3", "3x2",
+                    "1x6", "6x1", "3x3"}
+    if not args.scaled_all_dies and args.mesh_size not in fixed_shapes:
+        parser.error("this mesh size requires --scaled-all-dies")
     if args.timeout <= 0 or args.compile_timeout <= 0:
         parser.error("--timeout and --compile-timeout must be positive")
     for name in ("finalizer", "npusim", "resolver", "simulation"):
