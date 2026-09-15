@@ -147,8 +147,14 @@ def extended_hardware(rows: int, columns: int, spaces) -> str:
     memory = hardware["memory"]
     memory["sram_size"] = _SRAM_BYTES
     memory["sram"]["capacity_bytes"] = _SRAM_BYTES
-    memory["sram"]["regions"][0]["name"] = "sram"
-    memory["sram"]["regions"][0]["size_bytes"] = _SRAM_BYTES
+    # The three linked programs define exactly one 1MiB SRAM region named
+    # "sram".  Template double_b/input/comm/etc would overlap a full-span
+    # region; match its name, physical partition, and all initiator access.
+    memory["sram"]["regions"] = [{
+        "name": "sram", "base_bytes": 0, "size_bytes": _SRAM_BYTES,
+        "allocator": "block", "spillable": False,
+        "access": ["compute", "dte", "lsu", "legacy", "noc_rx"],
+    }]
     system = hardware["memory_system"]
     base_stack = system["hbm_stacks"][0]
     system["hbm_stacks"] = [
@@ -446,6 +452,34 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "tool_binding_sha256": tool_binding,
             "physical_hbm": physical_hbm,
             "dram_resources": dram_resources,
+            "runtime_status": "not_measured",
+        }, indent=2, sort_keys=True), encoding="utf-8",
+    )
+    hardware_preflight_path = root / "hardware.preflight.json"
+    hardware_preflight_path.write_text(hardware, encoding="utf-8")
+    if _sha(hardware_preflight_path.read_bytes()) != physical_hbm["hardware_sha256"]:
+        raise RuntimeError("TP16 hardware preflight SHA differs from physical HBM")
+    hardware_sram_preflight = _stage(
+        (
+            str(args.resolver.resolve()), "--validate-hardware-sram",
+            str(hardware_preflight_path),
+        ),
+        root / "hardware_sram_preflight.stdout.txt",
+        cwd=args.resolver.resolve().parent, timeout=min(args.timeout, 60),
+    )
+    if (
+        "[HARDWARE_SRAM_PREFLIGHT] "
+        "region=sram capacity_bytes=1048576 region_count=1"
+        not in (root / "hardware_sram_preflight.stdout.txt").read_text(
+            encoding="utf-8",
+        )
+    ):
+        raise RuntimeError("production hardware SRAM preflight lacks TP16 ABI")
+    (root / "hardware_sram_preflight.json").write_text(
+        json.dumps({
+            "hardware_sha256": physical_hbm["hardware_sha256"],
+            "resolver_sha256": tool_binding["resolver"],
+            "stage": hardware_sram_preflight,
             "runtime_status": "not_measured",
         }, indent=2, sort_keys=True), encoding="utf-8",
     )

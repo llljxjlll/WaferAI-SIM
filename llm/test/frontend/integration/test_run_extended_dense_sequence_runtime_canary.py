@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -67,11 +68,58 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
                 self.assertEqual(hardware["die"], {"x": columns, "y": rows})
                 self.assertEqual(len(hardware["memory_system"]["hbm_stacks"]), 16)
                 self.assertEqual(hardware["memory"]["sram_size"], 1 << 20)
+                self.assertEqual(
+                    hardware["memory"]["sram"]["regions"],
+                    [{
+                        "name": "sram", "base_bytes": 0,
+                        "size_bytes": 1 << 20, "allocator": "block",
+                        "spillable": False,
+                        "access": [
+                            "compute", "dte", "lsu", "legacy", "noc_rx",
+                        ],
+                    }],
+                )
                 hbm_binding = validate_physical_hbm(
                     extended_hardware(rows, columns, spaces), spaces, rows, columns,
                 )
                 self.assertEqual(hbm_binding["hbm_bytes_per_die"], [1 << 20] * 16)
                 self.assertEqual(hbm_binding["hbm_total_bytes"], 16 << 20)
+
+    def test_production_sram_parser_rejects_overlap_and_wrong_linked_name(self) -> None:
+        binary = _ROOT / "build-debug-final/npusim_program_io_selftest"
+        if not binary.is_file():
+            self.skipTest("requires built production hardware preflight CLI")
+        _, _, _, spaces = build_case(1, 16)
+        hardware = json.loads(extended_hardware(1, 16, spaces))
+        with tempfile.TemporaryDirectory(prefix="tp16-sram-parser-") as raw:
+            document = Path(raw) / "hardware.json"
+            def preflight() -> tuple[int, str]:
+                document.write_text(json.dumps(hardware, sort_keys=True))
+                result = subprocess.run(
+                    [str(binary), "--validate-hardware-sram", str(document)],
+                    cwd=binary.parent, text=True, capture_output=True,
+                    timeout=60,
+                )
+                return result.returncode, result.stdout + result.stderr
+            code, output = preflight()
+            self.assertEqual(code, 0, output)
+            self.assertIn(
+                "[HARDWARE_SRAM_PREFLIGHT] "
+                "region=sram capacity_bytes=1048576 region_count=1", output,
+            )
+            hardware["memory"]["sram"]["regions"].append({
+                "name": "double_b", "base_bytes": 2048,
+                "size_bytes": 2048, "allocator": "fixed",
+                "spillable": False, "access": ["compute", "dte", "lsu"],
+            })
+            code, output = preflight()
+            self.assertNotEqual(code, 0)
+            self.assertIn("double_b' overlaps another region", output)
+            hardware["memory"]["sram"]["regions"].pop()
+            hardware["memory"]["sram"]["regions"][0]["name"] = "dense_release"
+            code, output = preflight()
+            self.assertNotEqual(code, 0)
+            self.assertIn("requires one full 1MiB 'sram' region", output)
 
     def test_physical_hbm_capacity_or_home_range_drift_is_rejected(self) -> None:
         materialized, template, fabric, spaces = build_case(1, 16)
@@ -171,11 +219,17 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
                 simulation=_ROOT / "llm/test/program/p5_behavioral_simulation.json",
                 timeout=900, compile_timeout=2400, program_io_timeout=900,
             )
-            def stale_cli(_command, stdout, **_kw):
-                stdout.write_text(
-                    "[PROGRAM_IO_CODEC_PREFLIGHT] "
-                    "multi_request_prefill=1 unequal_context_rejected=1"
-                )
+            def stale_cli(command, stdout, **_kw):
+                if "--validate-hardware-sram" in command:
+                    stdout.write_text(
+                        "[HARDWARE_SRAM_PREFLIGHT] "
+                        "region=sram capacity_bytes=1048576 region_count=1"
+                    )
+                else:
+                    stdout.write_text(
+                        "[PROGRAM_IO_CODEC_PREFLIGHT] "
+                        "multi_request_prefill=1 unequal_context_rejected=1"
+                    )
                 return {"exit_code": 0}
             with mock.patch(
                 "llm.test.frontend.integration."
