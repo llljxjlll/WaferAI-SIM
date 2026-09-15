@@ -174,6 +174,33 @@ def extended_hardware(rows: int, columns: int, spaces) -> str:
     return json.dumps(hardware, sort_keys=True, separators=(",", ":"))
 
 
+def validate_physical_hbm(hardware: str, spaces, rows: int, columns: int) -> dict[str, object]:
+    """Bind the materialized HBM address spaces to the actual NpuSim hardware."""
+
+    document = json.loads(hardware)
+    if document["die"] != {"x": columns, "y": rows}:
+        raise RuntimeError("physical HBM mesh differs from materialized mesh")
+    stacks = document["memory_system"]["hbm_stacks"]
+    ranges = document["memory_system"]["address_policy"]["home_ranges"]
+    if len(spaces) != rows * columns or len(stacks) != len(spaces) or len(ranges) != len(spaces):
+        raise RuntimeError("physical HBM stack/home-range count differs from materialization")
+    for space, stack, home in zip(spaces, stacks, ranges):
+        if (
+            stack["stack_id"] != space.die_id
+            or stack["compute_die_id"] != space.die_id
+            or stack["capacity_bytes"] != space.size_bytes
+            or home["die_id"] != space.die_id
+            or home["base"] != space.base_address
+            or home["size_bytes"] != space.size_bytes
+        ):
+            raise RuntimeError(f"physical HBM capacity/home-range differs on die {space.die_id}")
+    return {
+        "hardware_sha256": _sha(hardware.encode("utf-8")),
+        "hbm_bytes_per_die": [space.size_bytes for space in spaces],
+        "hbm_total_bytes": sum(space.size_bytes for space in spaces),
+    }
+
+
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -319,6 +346,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     materialize_started = time.monotonic()
     manifest, template, fabric, spaces = build_case(rows, columns)
     materialize_wall = round(time.monotonic() - materialize_started, 3)
+    hardware = extended_hardware(rows, columns, spaces)
+    physical_hbm = validate_physical_hbm(hardware, spaces, rows, columns)
     (root / "preflight.json").write_text(
         json.dumps({
             "mesh": {"rows": rows, "columns": columns},
@@ -329,6 +358,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             ).ru_maxrss,
             "compile_budget_seconds": args.compile_timeout,
             "tool_binding_sha256": tool_binding,
+            "physical_hbm": physical_hbm,
             "runtime_status": "not_measured",
         }, indent=2, sort_keys=True), encoding="utf-8",
     )
@@ -362,13 +392,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     compile_wall = round(time.monotonic() - compile_started, 3)
     common = root / "compiled"
     common.mkdir(exist_ok=True)
-    hardware = extended_hardware(rows, columns, spaces)
     manifest_bytes = []
     for index, segment in enumerate(sequence.segments):
         raw = canonical_json(segment.linked_manifest).encode("utf-8")
         (common / f"segment_{index}.linked.json").write_bytes(raw)
         manifest_bytes.append(raw)
     (common / "hardware.json").write_text(hardware, encoding="utf-8")
+    if _sha((common / "hardware.json").read_bytes()) != physical_hbm["hardware_sha256"]:
+        raise RuntimeError("compiled physical HBM hardware SHA drifted")
     (common / "mapping.spec").write_text("0:0\n", encoding="utf-8")
 
     evidence = {
@@ -376,6 +407,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "published_release_matrix": False,
         "mesh": {"rows": rows, "columns": columns},
         "active_dies": list(manifest.placement.active_die_ids),
+        "physical_hbm": physical_hbm,
         "model": {
             "layers": 2, "hidden": 32, "intermediate": 64,
             "attention_heads": 16, "kv_heads": 16, "head_dim": 2,
@@ -413,6 +445,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "case_id": manifest.request.case_id,
             "request_digest": manifest.request.digest,
             "tool_binding_sha256": tool_binding,
+            "physical_hbm": physical_hbm,
             "active_dies": evidence["active_dies"],
             "sequence_digest": sequence.digest,
             "materialize_wall_seconds": materialize_wall,
@@ -536,10 +569,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             sidecars.append(sidecar)
         hardware_path = directory / "hardware.json"
         hardware_path.write_text(hardware, encoding="utf-8")
+        if _sha(hardware_path.read_bytes()) != physical_hbm["hardware_sha256"]:
+            raise RuntimeError("execution physical HBM hardware SHA drifted")
         mapping_path = directory / "mapping.spec"
         mapping_path.write_text("0:0\n", encoding="utf-8")
         runtime_stdout = directory / "npusim.stdout.txt"
         verify_tool_binding()
+        if _sha(hardware_path.read_bytes()) != physical_hbm["hardware_sha256"]:
+            raise RuntimeError("execution physical HBM hardware SHA changed before runtime")
         runtime = _stage(
             (
                 str(args.npusim.resolve()),

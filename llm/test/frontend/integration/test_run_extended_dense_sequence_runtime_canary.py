@@ -16,6 +16,7 @@ from .run_extended_dense_sequence_runtime_canary import (
     extended_hardware,
     observe_runtime,
     run,
+    validate_physical_hbm,
 )
 
 
@@ -63,6 +64,22 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
                 self.assertEqual(hardware["die"], {"x": columns, "y": rows})
                 self.assertEqual(len(hardware["memory_system"]["hbm_stacks"]), 16)
                 self.assertEqual(hardware["memory"]["sram_size"], 1 << 20)
+                hbm_binding = validate_physical_hbm(
+                    extended_hardware(rows, columns, spaces), spaces, rows, columns,
+                )
+                self.assertEqual(hbm_binding["hbm_bytes_per_die"], [1 << 20] * 16)
+                self.assertEqual(hbm_binding["hbm_total_bytes"], 16 << 20)
+
+    def test_physical_hbm_capacity_or_home_range_drift_is_rejected(self) -> None:
+        materialized, template, fabric, spaces = build_case(1, 16)
+        hardware = json.loads(extended_hardware(1, 16, spaces))
+        hardware["memory_system"]["hbm_stacks"][3]["capacity_bytes"] += 64
+        with self.assertRaisesRegex(RuntimeError, "physical HBM capacity"):
+            validate_physical_hbm(json.dumps(hardware), spaces, 1, 16)
+        hardware["memory_system"]["hbm_stacks"][3]["capacity_bytes"] -= 64
+        hardware["memory_system"]["address_policy"]["home_ranges"][5]["size_bytes"] += 64
+        with self.assertRaisesRegex(RuntimeError, "physical HBM capacity"):
+            validate_physical_hbm(json.dumps(hardware), spaces, 1, 16)
 
     def test_release_and_unmeasured_hardware_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "outside release"):
