@@ -59,6 +59,7 @@ enum class ExactAttentionMode : uint8_t {
 };
 enum class AttentionPackedLayout : uint8_t { Q_K_V = 0 };
 enum class EmbeddingPlacement : uint8_t { REPLICATED = 0 };
+enum class NormGradientMode : uint8_t { RMS = 0, LAYER = 1 };
 enum class GreedySampleMode : uint8_t { GREEDY = 0 };
 enum class GreedyRowSelection : uint8_t { LAST_PER_SEQUENCE = 0 };
 enum class CrossEntropyReduction : uint8_t { NONE = 0 };
@@ -136,6 +137,40 @@ struct EmbeddingLookupOperands {
     uint64_t rank_rows = 1;
     uint64_t tp_degree = 1;
     uint64_t vocab_size = 1;
+    uint64_t hidden_size = 1;
+};
+
+struct EmbeddingTableWGradOperands {
+    ExternalDataType index_datatype = ExternalDataType::INT32;
+    ExternalDataType table_datatype = ExternalDataType::FP16;
+    ExternalDataType upstream_datatype = ExternalDataType::FP16;
+    ExternalDataType gradient_datatype = ExternalDataType::FP32;
+    SramAddressOperand indices;
+    SramAddressOperand table;
+    SramAddressOperand upstream;
+    SramAddressOperand gradient;
+    uint64_t logical_rows = 1;
+    uint64_t rank_rows = 1;
+    uint64_t tp_degree = 1;
+    uint64_t vocab_size = 1;
+    uint64_t vocab_start = 0;
+    uint64_t vocab_rows = 1;
+    uint64_t hidden_size = 1;
+    // Every active slot is an actual INT32 token ID. Inactive slots are zero.
+    std::array<uint64_t, 16> index_trace{};
+};
+
+struct NormGammaWGradOperands {
+    ExternalDataType activation_datatype = ExternalDataType::FP16;
+    ExternalDataType upstream_datatype = ExternalDataType::FP16;
+    ExternalDataType gradient_datatype = ExternalDataType::FP32;
+    NormGradientMode mode = NormGradientMode::RMS;
+    SramAddressOperand activation;
+    SramAddressOperand upstream;
+    SramAddressOperand gradient;
+    uint64_t logical_rows = 1;
+    uint64_t rank_rows = 1;
+    uint64_t tp_degree = 1;
     uint64_t hidden_size = 1;
 };
 
@@ -383,6 +418,7 @@ struct GroupSyncOperands {
 using RecordOperands =
     std::variant<ComputeOperands, RopeQkExactOperands,
                  AttentionExactOperands, EmbeddingLookupOperands,
+                 EmbeddingTableWGradOperands, NormGammaWGradOperands,
                  GreedySampleOperands, CrossEntropyForwardOperands,
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
                  AdamwUpdateOperands,
@@ -406,6 +442,8 @@ enum class RecordOperandKind : uint8_t {
     ROPE_QK_EXACT,
     ATTENTION_EXACT,
     EMBEDDING_LOOKUP,
+    EMBEDDING_TABLE_WGRAD,
+    NORM_GAMMA_WGRAD,
     GREEDY_SAMPLE,
     CROSS_ENTROPY_FORWARD,
     CROSS_ENTROPY_BACKWARD,

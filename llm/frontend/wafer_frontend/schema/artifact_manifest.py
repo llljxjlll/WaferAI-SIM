@@ -44,6 +44,10 @@ from .ir0 import (
     SgdUpdateWorkload,
     SwiGluWorkload,
 )
+from .moe_training_ir0_workloads import (
+    EmbeddingTableWgradWorkload,
+    NormGammaWgradWorkload,
+)
 from .ir1 import IR1
 from .ir2 import (
     BufferOwnership,
@@ -121,6 +125,8 @@ class RecordOpcode(IntEnum):
     SGD_UPDATE = 0x20
     ADAMW_UPDATE = 0x21
     SWIGLU_BACKWARD_TIMING = 0x22
+    EMBEDDING_TABLE_WGRAD_TIMING = 0x23
+    NORM_GAMMA_WGRAD_TIMING = 0x24
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
@@ -767,6 +773,39 @@ _EMBEDDING_LOOKUP_OPERANDS = (
     _lit("hidden_size"),
 )
 
+_EMBEDDING_TABLE_WGRAD_OPERANDS = (
+    _lit("index_datatype"),
+    _lit("table_datatype"),
+    _lit("upstream_datatype"),
+    _lit("gradient_datatype"),
+    _addr("indices_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("table_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_AUX_ADDRESS),
+    _addr("gradient_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("logical_rows"),
+    _lit("rank_rows"),
+    _lit("tp_degree"),
+    _lit("vocab_size"),
+    _lit("vocab_start"),
+    _lit("vocab_rows"),
+    _lit("hidden_size"),
+    *(_lit(f"index{i:02d}") for i in range(16)),
+)
+
+_NORM_GAMMA_WGRAD_OPERANDS = (
+    _lit("activation_datatype"),
+    _lit("upstream_datatype"),
+    _lit("gradient_datatype"),
+    _lit("mode"),
+    _addr("activation_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("gradient_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("logical_rows"),
+    _lit("rank_rows"),
+    _lit("tp_degree"),
+    _lit("hidden_size"),
+)
+
 _GREEDY_SAMPLE_OPERANDS = (
     _lit("logits_datatype"),
     _lit("output_datatype"),
@@ -863,6 +902,8 @@ _OPERAND_SCHEMAS = {
     RecordOpcode.ROPE_QK_EXACT: _ROPE_QK_EXACT_OPERANDS,
     RecordOpcode.ATTENTION_EXACT: _ATTENTION_EXACT_OPERANDS,
     RecordOpcode.EMBEDDING_LOOKUP: _EMBEDDING_LOOKUP_OPERANDS,
+    RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING: _EMBEDDING_TABLE_WGRAD_OPERANDS,
+    RecordOpcode.NORM_GAMMA_WGRAD_TIMING: _NORM_GAMMA_WGRAD_OPERANDS,
     RecordOpcode.GREEDY_SAMPLE: _GREEDY_SAMPLE_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_FORWARD: _CROSS_ENTROPY_FORWARD_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_BACKWARD: _CROSS_ENTROPY_BACKWARD_OPERANDS,
@@ -1025,6 +1066,18 @@ for _operand_id in (
     _ALLOWED_ADDRESS_KINDS[
         (RecordOpcode.CROSS_ENTROPY_BACKWARD, _operand_id)
     ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+    _ALLOWED_ADDRESS_KINDS[
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, _operand_id)
+    ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+
+for _operand_id in (
+    SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_DATA_ADDRESS,
+    SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+):
+    _ALLOWED_ADDRESS_KINDS[
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, _operand_id)
+    ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
 
 for _operand_id in (
     SemanticOperandId.COMPUTE_INPUT_ADDRESS,
@@ -1051,6 +1104,12 @@ _COMPUTE_OPCODE_BY_IMPL_REF = {
     "attention_forward": (OpKind.ATTENTION, RecordOpcode.ATTENTION_EXACT),
     "rope_qk_exact": (OpKind.ROPE, RecordOpcode.ROPE_QK_EXACT),
     "embedding_lookup": (OpKind.EMBEDDING, RecordOpcode.EMBEDDING_LOOKUP),
+    "embedding_table_wgrad_timing": (
+        OpKind.EMBEDDING_TABLE_WGRAD, RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
+    ),
+    "norm_gamma_wgrad_timing": (
+        OpKind.NORM_GAMMA_WGRAD, RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
+    ),
     "greedy_sample": (OpKind.SAMPLING, RecordOpcode.GREEDY_SAMPLE),
     "cross_entropy_forward": (
         OpKind.CE_FORWARD,
@@ -1108,6 +1167,8 @@ _FIXED_COMPUTE_OPCODES = (
     RecordOpcode.ROPE_QK_EXACT,
     RecordOpcode.ATTENTION_EXACT,
     RecordOpcode.EMBEDDING_LOOKUP,
+    RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
+    RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
     RecordOpcode.GREEDY_SAMPLE,
     RecordOpcode.CROSS_ENTROPY_FORWARD,
     RecordOpcode.CROSS_ENTROPY_BACKWARD,
@@ -1218,6 +1279,40 @@ def _fixed_compute_literals(
             // workload.rank_index_shape[0],
             "vocab_size": workload.logical_table_shape[0],
             "hidden_size": workload.logical_table_shape[1],
+        }
+    if opcode is RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING:
+        if type(workload) is not EmbeddingTableWgradWorkload or len(compute.inputs) != 3:
+            raise SchemaError("0x23 requires three typed source inputs", path=path)
+        workload.validate(path=f"{path}.workload")
+        result = {
+            "index_datatype": 2,
+            "table_datatype": 1,
+            "upstream_datatype": 1,
+            "gradient_datatype": 3,
+            "logical_rows": workload.logical_rows,
+            "rank_rows": workload.rank_rows,
+            "tp_degree": workload.tp_degree,
+            "vocab_size": workload.vocab_size,
+            "vocab_start": workload.vocab_start,
+            "vocab_rows": workload.vocab_rows,
+            "hidden_size": workload.hidden_size,
+        }
+        result.update({f"index{i:02d}": value for i, value in
+                       enumerate(workload.index_trace)})
+        return result
+    if opcode is RecordOpcode.NORM_GAMMA_WGRAD_TIMING:
+        if type(workload) is not NormGammaWgradWorkload or len(compute.inputs) != 2:
+            raise SchemaError("0x24 requires two typed source inputs", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {
+            "activation_datatype": 1,
+            "upstream_datatype": 1,
+            "gradient_datatype": 3,
+            "mode": workload.mode,
+            "logical_rows": workload.logical_rows,
+            "rank_rows": workload.rank_rows,
+            "tp_degree": workload.tp_degree,
+            "hidden_size": workload.hidden_size,
         }
     if opcode is RecordOpcode.GREEDY_SAMPLE:
         if (
@@ -1586,6 +1681,71 @@ def _validate_fixed_compute_operands(
             raise SchemaError("EMBEDDING_LOOKUP rows do not preserve TP", path=path)
         return
 
+    if opcode is RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING:
+        if (
+            values["index_datatype"] != 2
+            or values["table_datatype"] != 1
+            or values["upstream_datatype"] != 1
+            or values["gradient_datatype"] != 3
+        ):
+            raise SchemaError(
+                "EMBEDDING_TABLE_WGRAD_TIMING requires INT32/FP16/FP16/FP32",
+                path=path,
+            )
+        positive("logical_rows", "rank_rows", "tp_degree", "vocab_size",
+                 "vocab_rows", "hidden_size")
+        if (
+            type(values["vocab_start"]) is not int
+            or values["vocab_start"] > _COMPUTE_PARAMETER_MAX
+            or any(values[name] > _COMPUTE_PARAMETER_MAX for name in (
+                "logical_rows", "rank_rows", "tp_degree", "vocab_size",
+                "vocab_rows", "hidden_size"))
+            or values["vocab_start"] < 0
+            or values["rank_rows"] > 16
+            or values["logical_rows"] != values["rank_rows"] * values["tp_degree"]
+            or values["vocab_start"] + values["vocab_rows"] > values["vocab_size"]
+        ):
+            raise SchemaError("EMBEDDING_TABLE_WGRAD_TIMING rank/tile geometry is invalid",
+                              path=path)
+        selected = 0
+        for i in range(16):
+            index = values[f"index{i:02d}"]
+            if type(index) is not int or index < 0 or index > _COMPUTE_PARAMETER_MAX:
+                raise SchemaError("Embedding source index exceeds strict 30-bit wire",
+                                  path=f"{path}.index{i:02d}")
+            if i >= values["rank_rows"]:
+                if index != 0:
+                    raise SchemaError("Embedding unused index trace slot must be zero",
+                                      path=f"{path}.index{i:02d}")
+                continue
+            if index >= values["vocab_size"]:
+                raise SchemaError("Embedding INT32 source index is out of vocabulary",
+                                  path=f"{path}.index{i:02d}")
+            selected += values["vocab_start"] <= index < (
+                values["vocab_start"] + values["vocab_rows"])
+        if selected == 0:
+            raise SchemaError("Embedding tile has no indexed FP32 updates", path=path)
+        return
+
+    if opcode is RecordOpcode.NORM_GAMMA_WGRAD_TIMING:
+        if (
+            values["activation_datatype"] != 1
+            or values["upstream_datatype"] != 1
+            or values["gradient_datatype"] != 3
+            or values["mode"] not in (0, 1)
+        ):
+            raise SchemaError("NORM_GAMMA_WGRAD_TIMING requires FP16/FP16/FP32 RMS/Layer",
+                              path=path)
+        positive("logical_rows", "rank_rows", "tp_degree", "hidden_size")
+        if (
+            any(values[name] > _COMPUTE_PARAMETER_MAX for name in (
+                "logical_rows", "rank_rows", "tp_degree", "hidden_size"))
+            or values["logical_rows"] != values["rank_rows"] * values["tp_degree"]
+        ):
+            raise SchemaError("NORM_GAMMA_WGRAD_TIMING rank geometry is invalid",
+                              path=path)
+        return
+
     if opcode is RecordOpcode.GREEDY_SAMPLE:
         if (
             values["logits_datatype"] != 1
@@ -1734,12 +1894,17 @@ def _compute_record_abi(
         _fixed_compute_literals(compute, opcode, path=path)
         has_data_input = opcode in (
             RecordOpcode.EMBEDDING_LOOKUP,
+            RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
+            RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
             RecordOpcode.CROSS_ENTROPY_FORWARD,
             RecordOpcode.CROSS_ENTROPY_BACKWARD,
             RecordOpcode.SGD_UPDATE,
             RecordOpcode.ADAMW_UPDATE,
         )
-        has_aux_input = opcode is RecordOpcode.CROSS_ENTROPY_BACKWARD
+        has_aux_input = opcode in (
+            RecordOpcode.CROSS_ENTROPY_BACKWARD,
+            RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
+        )
         bind_input_count = (
             6 if opcode is RecordOpcode.ADAMW_UPDATE
             else 3 if has_aux_input
@@ -4735,6 +4900,13 @@ def _address_operand_role(
         (RecordOpcode.EMBEDDING_LOOKUP, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.EMBEDDING_LOOKUP, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.EMBEDDING_LOOKUP, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_AUX_ADDRESS): (BufferUseRole.COMP_INPUT, 2),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
@@ -6436,6 +6608,13 @@ class LinkedProgramManifest:
             (RecordOpcode.EMBEDDING_LOOKUP, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.EMBEDDING_LOOKUP, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.EMBEDDING_LOOKUP, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_AUX_ADDRESS): (BufferUseRole.COMP_INPUT, 2),
+            (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+            (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+            (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+            (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),

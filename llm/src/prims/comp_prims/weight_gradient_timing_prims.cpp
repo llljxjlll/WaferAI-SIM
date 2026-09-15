@@ -212,10 +212,14 @@ EmbeddingTableWGradWork embedding_table_wgrad_timing::work() const {
 
 void embedding_table_wgrad_timing::initialize() {
     const auto profile = work();
-    data_size_input = {static_cast<int>(profile.indices.bytes / 2)};
+    data_size_input = {
+        static_cast<int>(profile.indices.bytes / 2),
+        static_cast<int>(profile.table.bytes / 2),
+        static_cast<int>(profile.upstream.bytes / 2),
+    };
     data_chunk = {{"table", static_cast<int>(profile.table.bytes / 2)},
                   {"upstream", static_cast<int>(profile.upstream.bytes / 2)},
-                  {"fp32_gradient", static_cast<int>(profile.gradient.bytes / 2)}};
+                  {"output", static_cast<int>(profile.gradient.bytes / 2)}};
 }
 
 void embedding_table_wgrad_timing::taskCore(TaskCoreContext &, string,
@@ -294,9 +298,12 @@ NormGammaWGradWork norm_gamma_wgrad_timing::work() const {
 
 void norm_gamma_wgrad_timing::initialize() {
     const auto profile = work();
-    data_size_input = {static_cast<int>(profile.activation.bytes / 2)};
+    data_size_input = {
+        static_cast<int>(profile.activation.bytes / 2),
+        static_cast<int>(profile.upstream.bytes / 2),
+    };
     data_chunk = {{"upstream", static_cast<int>(profile.upstream.bytes / 2)},
-                  {"fp32_gamma_gradient",
+                  {"output",
                    static_cast<int>(profile.gamma_gradient.bytes / 2)}};
 }
 

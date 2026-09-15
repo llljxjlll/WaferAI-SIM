@@ -179,6 +179,17 @@ bool ValidRelocationOperand(const ExternalRecord &record,
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
     }
+    if (std::holds_alternative<EmbeddingTableWGradOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_AUX_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
+    if (std::holds_alternative<NormGammaWGradOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
+    }
     if (std::holds_alternative<CrossEntropyForwardOperands>(record.operands)) {
         return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
@@ -362,6 +373,40 @@ void ValidateRecordReferences(const ExternalRecord &record,
                                        where + " source", source_bytes);
         ValidateAbsoluteSramRegionSpan(o->destination, artifact,
                                        where + " destination", length_bytes);
+    } else if (const auto *o =
+                   std::get_if<EmbeddingTableWGradOperands>(&record.operands)) {
+        const uint64_t index_bytes = 4 * o->rank_rows;
+        const uint64_t table_bytes = 2 * o->vocab_rows * o->hidden_size;
+        const uint64_t upstream_bytes = 2 * o->rank_rows * o->hidden_size;
+        const uint64_t gradient_bytes = 4 * o->vocab_rows * o->hidden_size;
+        const std::array<std::pair<const SramAddressOperand *, uint64_t>, 4>
+            buffers{{{&o->indices, index_bytes}, {&o->table, table_bytes},
+                     {&o->upstream, upstream_bytes},
+                     {&o->gradient, gradient_bytes}}};
+        for (std::size_t i = 0; i < buffers.size(); ++i) {
+            const std::string field = where + " Embedding WGrad buffer " +
+                                      std::to_string(i);
+            ValidateAddressReference(*buffers[i].first, artifact, field,
+                                     buffers[i].second);
+            ValidateAbsoluteSramRegionSpan(*buffers[i].first, artifact, field,
+                                           buffers[i].second);
+        }
+    } else if (const auto *o =
+                   std::get_if<NormGammaWGradOperands>(&record.operands)) {
+        const uint64_t source_bytes = 2 * o->rank_rows * o->hidden_size;
+        const uint64_t gradient_bytes = 4 * o->hidden_size;
+        const std::array<std::pair<const SramAddressOperand *, uint64_t>, 3>
+            buffers{{{&o->activation, source_bytes},
+                     {&o->upstream, source_bytes},
+                     {&o->gradient, gradient_bytes}}};
+        for (std::size_t i = 0; i < buffers.size(); ++i) {
+            const std::string field = where + " Norm gamma buffer " +
+                                      std::to_string(i);
+            ValidateAddressReference(*buffers[i].first, artifact, field,
+                                     buffers[i].second);
+            ValidateAbsoluteSramRegionSpan(*buffers[i].first, artifact, field,
+                                           buffers[i].second);
+        }
     } else if (const auto *o = std::get_if<LsuOperands>(&record.operands)) {
         ValidateAddressReference(o->sram, artifact, where + " SRAM",
                                  o->size_bytes);

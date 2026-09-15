@@ -48,6 +48,8 @@ enum class Opcode : uint8_t {
     SGD_UPDATE = 0x20,
     ADAMW_UPDATE = 0x21,
     SWIGLU_BACKWARD_TIMING = 0x22,
+    EMBEDDING_TABLE_WGRAD_TIMING = 0x23,
+    NORM_GAMMA_WGRAD_TIMING = 0x24,
 
     DTE_SEND = 0x40,
     DTE_RECV = 0x41,
@@ -192,6 +194,10 @@ constexpr OpcodeLowering OpcodeLoweringFor(Opcode opcode) noexcept {
     case Opcode::SWIGLU: return DirectPrim(PrimId::SWIGLU_FORWARD);
     case Opcode::SWIGLU_BACKWARD_TIMING:
         return DirectPrim(PrimId::SWIGLU_BACKWARD_TIMING);
+    case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
+        return DirectPrim(PrimId::EMBEDDING_TABLE_WGRAD_TIMING);
+    case Opcode::NORM_GAMMA_WGRAD_TIMING:
+        return DirectPrim(PrimId::NORM_GAMMA_WGRAD_TIMING);
     case Opcode::RELU: return DirectPrim(PrimId::RELU_F);
     case Opcode::RESIDUAL: return DirectPrim(PrimId::RESIDUAL_F);
     case Opcode::LAYERNORM: return DirectPrim(PrimId::LAYERNORM_F);
@@ -315,7 +321,7 @@ constexpr uint8_t OpcodeValue(Opcode opcode) noexcept {
 }
 
 inline constexpr uint8_t kComputeOpcodeFirst = 0x01;
-inline constexpr uint8_t kComputeOpcodeLast = 0x22;
+inline constexpr uint8_t kComputeOpcodeLast = 0x24;
 inline constexpr uint8_t kCommunicationOpcodeFirst = 0x40;
 inline constexpr uint8_t kCommunicationOpcodeLast = 0x43;
 inline constexpr uint8_t kMemoryOpcodeFirst = 0x80;
@@ -324,7 +330,7 @@ inline constexpr uint8_t kSynchronizationOpcodeFirst = 0xc0;
 inline constexpr uint8_t kSynchronizationOpcodeLast = 0xc6;
 inline constexpr uint8_t kReservedOpcodeFirst = 0xf0;
 inline constexpr uint8_t kReservedOpcodeLast = 0xff;
-inline constexpr std::size_t kOpcodeManifestSize = 58;
+inline constexpr std::size_t kOpcodeManifestSize = 60;
 
 // The returned array is sorted by numeric opcode and has static lifetime.
 const std::array<OpcodeManifestEntry, kOpcodeManifestSize> &

@@ -351,6 +351,45 @@ def _fixed_compute_operands(
                 )
             ),
         )
+    if abi.opcode is RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING:
+        if data_address is None or aux_address is None:
+            raise SchemaError("0x23 requires table and upstream source addresses",
+                              path="action.compute")
+        return (
+            *(RecordOperand.literal(name, values[name]) for name in (
+                "index_datatype", "table_datatype", "upstream_datatype",
+                "gradient_datatype")),
+            RecordOperand.address("indices_address",
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS, input_address.id),
+            RecordOperand.address("table_address",
+                SemanticOperandId.COMPUTE_DATA_ADDRESS, data_address.id),
+            RecordOperand.address("upstream_address",
+                SemanticOperandId.COMPUTE_AUX_ADDRESS, aux_address.id),
+            RecordOperand.address("gradient_address",
+                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output_address.id),
+            *(RecordOperand.literal(name, values[name]) for name in (
+                "logical_rows", "rank_rows", "tp_degree", "vocab_size",
+                "vocab_start", "vocab_rows", "hidden_size")),
+            *(RecordOperand.literal(f"index{i:02d}", values[f"index{i:02d}"])
+              for i in range(16)),
+        )
+    if abi.opcode is RecordOpcode.NORM_GAMMA_WGRAD_TIMING:
+        if data_address is None:
+            raise SchemaError("0x24 requires independent upstream source address",
+                              path="action.compute")
+        return (
+            *(RecordOperand.literal(name, values[name]) for name in (
+                "activation_datatype", "upstream_datatype", "gradient_datatype",
+                "mode")),
+            RecordOperand.address("activation_address",
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS, input_address.id),
+            RecordOperand.address("upstream_address",
+                SemanticOperandId.COMPUTE_DATA_ADDRESS, data_address.id),
+            RecordOperand.address("gradient_address",
+                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output_address.id),
+            *(RecordOperand.literal(name, values[name]) for name in (
+                "logical_rows", "rank_rows", "tp_degree", "hidden_size")),
+        )
     if abi.opcode is RecordOpcode.GREEDY_SAMPLE:
         return (
             *(

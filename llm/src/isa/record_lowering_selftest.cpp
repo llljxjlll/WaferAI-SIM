@@ -5,6 +5,7 @@
 #include "prims/collective_data_v1_prim.h"
 #include "prims/dte_endpoint_prims.h"
 #include "prims/exact_stage2_prims.h"
+#include "prims/weight_gradient_timing_prims.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -160,6 +161,37 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         operands.rank_rows = 4;
         operands.tp_degree = 2;
         operands.vocab_size = 32;
+        operands.hidden_size = 16;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_TABLE_WGRAD: {
+        EmbeddingTableWGradOperands operands;
+        operands.indices = Absolute(0);
+        operands.table = Absolute(256);
+        operands.upstream = Absolute(1024);
+        operands.gradient = Absolute(2048);
+        operands.logical_rows = 6;
+        operands.rank_rows = 3;
+        operands.tp_degree = 2;
+        operands.vocab_size = 128;
+        operands.vocab_start = 16;
+        operands.vocab_rows = 8;
+        operands.hidden_size = 8;
+        operands.index_trace[0] = 17;
+        operands.index_trace[1] = 17;
+        operands.index_trace[2] = 65;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::NORM_GAMMA_WGRAD: {
+        NormGammaWGradOperands operands;
+        operands.activation = Absolute(0);
+        operands.upstream = Absolute(256);
+        operands.gradient = Absolute(512);
+        operands.logical_rows = 8;
+        operands.rank_rows = 2;
+        operands.tp_degree = 4;
         operands.hidden_size = 16;
         record.operands = operands;
         break;
@@ -441,6 +473,8 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::SGD_UPDATE:
     case Opcode::ADAMW_UPDATE:
     case Opcode::SWIGLU_BACKWARD_TIMING:
+    case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
+    case Opcode::NORM_GAMMA_WGRAD_TIMING:
         return true;
     default:
         return false;
@@ -473,6 +507,34 @@ int ExpectedCategory(Opcode opcode) {
 
 void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                           PrimBase &base) {
+    if (record.opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING) {
+        auto *prim = dynamic_cast<embedding_table_wgrad_timing *>(&base);
+        checks.Check(prim != nullptr, "Embedding WGrad lowers to named Prim72");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(work.selected_rows == 2 && work.row_collisions == 1 &&
+                             work.selected_weight_sram_addresses ==
+                                 std::vector<uint32_t>{272, 272} &&
+                             work.selected_gradient_sram_addresses ==
+                                 std::vector<uint32_t>{2080, 2080} &&
+                             work.gradient.dtype == WeightGradBufferDType::FP32,
+                         "external nonzero INT32 trace yields real FP32 row collision");
+        }
+        return;
+    }
+    if (record.opcode == Opcode::NORM_GAMMA_WGRAD_TIMING) {
+        auto *prim = dynamic_cast<norm_gamma_wgrad_timing *>(&base);
+        checks.Check(prim != nullptr, "Norm gamma WGrad lowers to named Prim73");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(work.activation.bytes == 64 &&
+                             work.upstream.bytes == 64 &&
+                             work.gamma_gradient.bytes == 64 &&
+                             work.gamma_gradient.dtype == WeightGradBufferDType::FP32,
+                         "external Norm gamma uses distinct FP16 tape and FP32 output");
+        }
+        return;
+    }
     if (record.opcode == Opcode::ROPE_QK_EXACT ||
         record.opcode == Opcode::ATTENTION_EXACT ||
         record.opcode == Opcode::EMBEDDING_LOOKUP ||
@@ -956,7 +1018,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 48,
+    checks.Check(supported == 50,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

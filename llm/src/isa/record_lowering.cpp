@@ -5,6 +5,7 @@
 #include "prims/collective_data_v1_prim.h"
 #include "prims/dte_endpoint_prims.h"
 #include "prims/exact_stage2_prims.h"
+#include "prims/weight_gradient_timing_prims.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -201,6 +202,54 @@ LoweredPrimList LowerExactStage2(const ExternalRecord &record,
     default:
         LoweringFailure(entry, "unexpected exact Stage2 opcode");
     }
+    LoweredPrimList result;
+    result.push_back(std::move(base));
+    return result;
+}
+
+LoweredPrimList LowerWeightGradientTiming(const ExternalRecord &record,
+                                          const OpcodeManifestEntry &entry) {
+    std::unique_ptr<PrimBase> base = CreateUntracked(entry.lowering.target);
+    NpuBase *prim = dynamic_cast<NpuBase *>(base.get());
+    if (prim == nullptr)
+        LoweringFailure(entry, "target weight-gradient Prim is not NpuBase");
+    prim->datatype = FP16; // Typed FP32 output is fixed by native BufferABI.
+    if (record.opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING) {
+        if (dynamic_cast<embedding_table_wgrad_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not embedding_table_wgrad_timing");
+        const auto &o = std::get<EmbeddingTableWGradOperands>(record.operands);
+        prim->inp_offset = static_cast<int>(o.indices.absolute_address_bytes);
+        prim->data_offset = static_cast<int>(o.upstream.absolute_address_bytes);
+        prim->out_offset = static_cast<int>(o.gradient.absolute_address_bytes);
+        prim->param_value = {{"ROWS", static_cast<int>(o.rank_rows)},
+                             {"LOGICAL_ROWS", static_cast<int>(o.logical_rows)},
+                             {"TP", static_cast<int>(o.tp_degree)},
+                             {"VOCAB_SIZE", static_cast<int>(o.vocab_size)},
+                             {"VOCAB_START", static_cast<int>(o.vocab_start)},
+                             {"VOCAB_ROWS", static_cast<int>(o.vocab_rows)},
+                             {"HIDDEN", static_cast<int>(o.hidden_size)},
+                             {"TABLE_ADDR",
+                              static_cast<int>(o.table.absolute_address_bytes)}};
+        for (std::size_t i = 0; i < o.index_trace.size(); ++i)
+            prim->param_value["INDEX" + std::to_string(i / 10) +
+                              std::to_string(i % 10)] =
+                static_cast<int>(o.index_trace[i]);
+    } else if (record.opcode == Opcode::NORM_GAMMA_WGRAD_TIMING) {
+        if (dynamic_cast<norm_gamma_wgrad_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not norm_gamma_wgrad_timing");
+        const auto &o = std::get<NormGammaWGradOperands>(record.operands);
+        prim->inp_offset = static_cast<int>(o.activation.absolute_address_bytes);
+        prim->data_offset = static_cast<int>(o.upstream.absolute_address_bytes);
+        prim->out_offset = static_cast<int>(o.gradient.absolute_address_bytes);
+        prim->param_value = {{"ROWS", static_cast<int>(o.rank_rows)},
+                             {"LOGICAL_ROWS", static_cast<int>(o.logical_rows)},
+                             {"TP", static_cast<int>(o.tp_degree)},
+                             {"HIDDEN", static_cast<int>(o.hidden_size)},
+                             {"MODE", static_cast<int>(o.mode)}};
+    } else {
+        LoweringFailure(entry, "unexpected weight-gradient opcode");
+    }
+    prim->initialize();
     LoweredPrimList result;
     result.push_back(std::move(base));
     return result;
@@ -1243,6 +1292,9 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     case Opcode::SGD_UPDATE:
     case Opcode::ADAMW_UPDATE:
         return LowerExactStage2(record, *entry);
+    case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
+    case Opcode::NORM_GAMMA_WGRAD_TIMING:
+        return LowerWeightGradientTiming(record, *entry);
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:
         return LowerLsu(record, *entry, context);

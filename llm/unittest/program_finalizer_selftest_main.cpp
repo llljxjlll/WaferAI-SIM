@@ -180,6 +180,37 @@ Json Stage2Compute(const std::string &action, uint64_t opcode) {
             Literal("logical_rows", 8), Literal("rank_rows", 4),
             Literal("tp_degree", 2), Literal("vocab_size", 32),
             Literal("upstream_elements", 4)}));
+    if (opcode == 0x23) {
+        Json operands = Json::array({
+            Literal("index_datatype", 2), Literal("table_datatype", 1),
+            Literal("upstream_datatype", 1), Literal("gradient_datatype", 3),
+            Address("indices_address", 1, "p_abs_input"),
+            Address("table_address", 2, "p_abs_data"),
+            Address("upstream_address", 12, "p_abs_aux"),
+            Address("gradient_address", 3, "p_abs_output"),
+            Literal("logical_rows", 4), Literal("rank_rows", 4),
+            Literal("tp_degree", 1), Literal("vocab_size", 16),
+            Literal("vocab_start", 0), Literal("vocab_rows", 8),
+            Literal("hidden_size", 8)});
+        for (uint64_t index = 0; index < 16; ++index) {
+            const uint64_t source = index == 0 || index == 1 ? 3 :
+                                    index == 2 ? 5 : index == 3 ? 7 : 0;
+            std::ostringstream name;
+            name << "index" << std::setw(2) << std::setfill('0') << index;
+            operands.push_back(Literal(name.str(), source));
+        }
+        return Record(action, opcode, std::move(operands));
+    }
+    if (opcode == 0x24)
+        return Record(action, opcode, Json::array({
+            Literal("activation_datatype", 1),
+            Literal("upstream_datatype", 1),
+            Literal("gradient_datatype", 3), Literal("mode", 0),
+            Address("activation_address", 1, "p_abs_input"),
+            Address("upstream_address", 2, "p_abs_data"),
+            Address("gradient_address", 3, "p_abs_output"),
+            Literal("logical_rows", 2), Literal("rank_rows", 2),
+            Literal("tp_degree", 1), Literal("hidden_size", 8)}));
     if (opcode == 0x20)
         return Record(action, opcode, Json::array({
             Literal("weight_datatype", 1),
@@ -727,10 +758,12 @@ Json Stage2Manifest(uint64_t opcode) {
     Json &fragment = manifest["fragments"][0];
     const bool has_data = opcode == 0x10 || opcode == 0x1c ||
                           opcode == 0x1e || opcode == 0x1f ||
-                          opcode == 0x20;
-    const bool has_aux = opcode == 0x1f;
+                          opcode == 0x20 || opcode == 0x23 ||
+                          opcode == 0x24;
+    const bool has_aux = opcode == 0x1f || opcode == 0x23;
     const bool binds_data = opcode == 0x1c || opcode == 0x1e ||
-                            opcode == 0x1f || opcode == 0x20;
+                            opcode == 0x1f || opcode == 0x20 ||
+                            opcode == 0x23 || opcode == 0x24;
     Json input_shape = Json::array({1, 4, 2});
     Json data_shape = Json::array({1, 32});
     Json output_shape = input_shape;
@@ -771,6 +804,21 @@ Json Stage2Manifest(uint64_t opcode) {
         input_size = 256;
         data_size = 16;
         output_size = 256;
+    } else if (opcode == 0x23) {
+        input_shape = Json::array({4});
+        data_shape = Json::array({8, 8});
+        output_shape = Json::array({8, 8});
+        input_size = 16;
+        data_size = 128;
+        output_size = 256;
+        input_dtype = "int32";
+        output_dtype = "fp32";
+    } else if (opcode == 0x24) {
+        input_shape = Json::array({2, 8});
+        data_shape = input_shape;
+        output_shape = Json::array({8});
+        input_size = data_size = output_size = 32;
+        output_dtype = "fp32";
     } else if (opcode == 0x20) {
         input_shape = Json::array({32});
         data_shape = Json::array({32});
@@ -792,9 +840,10 @@ Json Stage2Manifest(uint64_t opcode) {
                  {Core(0, 0), "0"}, {Core(0, 1), "1"}}}) {
             Json aux = Buffer(item.first, item.second, "aux", 0x400);
             aux["tensor_slice"]["offset"] = Json::array({0});
-            aux["tensor_slice"]["shape"] = Json::array({4});
-            aux["size_bytes"] = 16;
-            aux["dtype"] = "fp32";
+            aux["tensor_slice"]["shape"] = opcode == 0x23 ?
+                Json::array({4, 8}) : Json::array({4});
+            aux["size_bytes"] = opcode == 0x23 ? 64 : 16;
+            aux["dtype"] = opcode == 0x23 ? "fp16" : "fp32";
             aux["ownership"] = "borrowed";
             fragment["buffer_abi"].push_back(std::move(aux));
         }
@@ -804,7 +853,7 @@ Json Stage2Manifest(uint64_t opcode) {
             ProgramSymbol("p_label_aux", 3, "label_aux"));
         manifest["program_symbol_definitions"].push_back(
             Definition("p_abs_aux", 1, "abs_aux", "abs.aux", 0x400,
-                       16, cores));
+                       opcode == 0x23 ? 64 : 16, cores));
         manifest["program_symbol_definitions"].push_back(
             Definition("p_label_aux", 3, "label_aux", "label.aux", 0,
                        0, cores));
@@ -840,9 +889,9 @@ Json Stage2Manifest(uint64_t opcode) {
             if (opcode == 0x1e || opcode == 0x1f) dtype = "int32";
             if (opcode == 0x20) dtype = "fp32";
         } else if (binding == "abs_aux") {
-            shape = Json::array({4});
-            size = 16;
-            dtype = "fp32";
+            shape = opcode == 0x23 ? Json::array({4, 8}) : Json::array({4});
+            size = opcode == 0x23 ? 64 : 16;
+            dtype = opcode == 0x23 ? "fp16" : "fp32";
         } else {
             shape = output_shape;
             size = output_size;
@@ -854,6 +903,8 @@ Json Stage2Manifest(uint64_t opcode) {
         abi["tensor_slice"]["shape"] = shape;
         abi["size_bytes"] = size;
         abi["dtype"] = dtype;
+        if (opcode == 0x23 && binding != "abs_output")
+            abi["ownership"] = "borrowed";
     }
     const std::string old_fragment_id = fragment["id"].get<std::string>();
     for (Json &stream : fragment["core_streams"]) {
@@ -1936,8 +1987,9 @@ void Run() {
     ExpectFailure([&] { finalizer.FinalizeJson(missing_local_wait.dump()); },
                   "LOCAL_NOC missing destination WAIT");
 
-    for (uint64_t opcode : std::array<uint64_t, 8>{{
-             0x10, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20}}) {
+    for (uint64_t opcode : std::array<uint64_t, 10>{{
+             0x10, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+             0x23, 0x24}}) {
         const Json stage2 = Stage2Manifest(opcode);
         const auto stage2_dto =
             ProgramArtifactFinalizer::Parse(stage2.dump());
@@ -1956,6 +2008,30 @@ void Run() {
                     EncodeProgramArtifact(stage2_artifact),
                 "Stage2 fixed record failed byte round-trip");
     }
+    Json bad_embedding_index = Stage2Manifest(0x23);
+    for (Json &stream : bad_embedding_index["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][15]["literal_value"] = 16;
+    RefreshManifestIds(bad_embedding_index);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_embedding_index.dump()); },
+                  "EMBEDDING_TABLE_WGRAD INT32 index out of vocabulary");
+    Json bad_embedding_gradient = Stage2Manifest(0x23);
+    for (Json &stream : bad_embedding_gradient["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][3]["literal_value"] = 1;
+    RefreshManifestIds(bad_embedding_gradient);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_embedding_gradient.dump()); },
+                  "EMBEDDING_TABLE_WGRAD gradient_datatype");
+    Json bad_gamma_mode = Stage2Manifest(0x24);
+    for (Json &stream : bad_gamma_mode["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][3]["literal_value"] = 2;
+    RefreshManifestIds(bad_gamma_mode);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_gamma_mode.dump()); },
+                  "NORM_GAMMA_WGRAD mode");
+    Json bad_gamma_gradient = Stage2Manifest(0x24);
+    for (Json &stream : bad_gamma_gradient["fragments"][0]["core_streams"])
+        stream["records"][4]["operands"][2]["literal_value"] = 1;
+    RefreshManifestIds(bad_gamma_gradient);
+    ExpectFailure([&] { finalizer.FinalizeJson(bad_gamma_gradient.dump()); },
+                  "NORM_GAMMA_WGRAD gradient_datatype");
     const Json adamw = AdamwManifest();
     const ProgramArtifact adamw_artifact =
         finalizer.Finalize(ProgramArtifactFinalizer::Parse(adamw.dump()));
@@ -5048,6 +5124,9 @@ int main(int argc, char **argv) {
     try {
         if (argc == 1) {
             Run();
+        } else if (argc == 2 &&
+                   std::string(argv[1]) == "--emit-wgrad-manifest") {
+            std::cout << Stage2Manifest(0x23).dump() << '\n';
         } else if (argc == 2 && std::string(argv[1]) == "--stdin") {
             RunPythonProducedManifest();
         } else if (argc == 2 &&

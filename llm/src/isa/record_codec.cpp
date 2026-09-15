@@ -18,6 +18,8 @@ constexpr uint32_t kAddressSize = 24;
 constexpr uint32_t kRopeQkExactPayloadSize = 100;
 constexpr uint32_t kAttentionExactPayloadSize = 116;
 constexpr uint32_t kEmbeddingLookupPayloadSize = 96;
+constexpr uint32_t kEmbeddingTableWGradPayloadSize = 192;
+constexpr uint32_t kNormGammaWGradPayloadSize = 92;
 constexpr uint32_t kGreedySamplePayloadSize = 76;
 constexpr uint32_t kCrossEntropyForwardPayloadSize = 92;
 constexpr uint32_t kCrossEntropyBackwardPayloadSize = 122;
@@ -717,6 +719,125 @@ void ValidateEmbeddingLookup(const EmbeddingLookupOperands &o) {
                      "EMBEDDING_LOOKUP memory read bytes");
     (void)Product({2, o.rank_rows, o.hidden_size},
                   "EMBEDDING_LOOKUP memory write bytes");
+}
+
+struct GradientSramSpan { uint64_t begin; uint64_t end; };
+
+GradientSramSpan ValidateGradientSramSpan(const SramAddressOperand &address,
+                                           uint64_t bytes,
+                                           const std::string &field) {
+    ValidateAddress(address, false, field);
+    Require(address.kind == SramAddressKind::ABSOLUTE,
+            field + " requires final physical ABSOLUTE SRAM address");
+    Require(address.absolute_address_bytes % 16 == 0,
+            field + " SRAM address must be 16-byte aligned");
+    Require(bytes != 0, field + " byte span must be positive");
+    const uint64_t end = CheckedAdd(address.absolute_address_bytes, bytes,
+                                    field + " SRAM span");
+    Require(end <= uint64_t{UINT16_MAX} + 1,
+            field + " exceeds 16-bit SRAM region");
+    return {address.absolute_address_bytes, end};
+}
+
+void RequireGradientNonOverlap(std::initializer_list<GradientSramSpan> spans,
+                               const std::string &field) {
+    for (auto first = spans.begin(); first != spans.end(); ++first)
+        for (auto second = first + 1; second != spans.end(); ++second)
+            Require(first->begin >= second->end ||
+                        second->begin >= first->end,
+                    field + " typed SRAM tensors overlap");
+}
+
+void ValidateEmbeddingTableWGrad(const EmbeddingTableWGradOperands &o) {
+    RequireExactDataType(o.index_datatype, ExternalDataType::INT32,
+                         "EMBEDDING_TABLE_WGRAD index_datatype");
+    RequireExactDataType(o.table_datatype, ExternalDataType::FP16,
+                         "EMBEDDING_TABLE_WGRAD table_datatype");
+    RequireExactDataType(o.upstream_datatype, ExternalDataType::FP16,
+                         "EMBEDDING_TABLE_WGRAD upstream_datatype");
+    RequireExactDataType(o.gradient_datatype, ExternalDataType::FP32,
+                         "EMBEDDING_TABLE_WGRAD gradient_datatype");
+    for (const auto value : {o.logical_rows, o.rank_rows, o.tp_degree,
+                             o.vocab_size, o.vocab_rows, o.hidden_size})
+        Require(value > 0 && value <= kExternalNpuParameterMax,
+                "EMBEDDING_TABLE_WGRAD rank/profile must be positive 30-bit");
+    Require(o.vocab_start <= kExternalNpuParameterMax,
+            "EMBEDDING_TABLE_WGRAD vocab_start exceeds 30-bit wire");
+    Require(o.rank_rows <= o.index_trace.size(),
+            "EMBEDDING_TABLE_WGRAD rank_rows exceeds 16-index wire tile");
+    Require(o.logical_rows == CheckedMul(o.rank_rows, o.tp_degree,
+                                          "EMBEDDING_TABLE_WGRAD logical rows"),
+            "EMBEDDING_TABLE_WGRAD logical rows must equal rank_rows*TP");
+    const uint64_t tile_end = CheckedAdd(o.vocab_start, o.vocab_rows,
+                                         "EMBEDDING_TABLE_WGRAD tile end");
+    Require(tile_end <= o.vocab_size,
+            "EMBEDDING_TABLE_WGRAD vocabulary tile exceeds full vocab");
+    uint64_t selected = 0;
+    for (std::size_t i = 0; i < o.index_trace.size(); ++i) {
+        const uint64_t index = o.index_trace[i];
+        Require(index <= kExternalNpuParameterMax,
+                "EMBEDDING_TABLE_WGRAD trace index exceeds 30-bit wire");
+        if (i >= o.rank_rows) {
+            Require(index == 0,
+                    "EMBEDDING_TABLE_WGRAD unused trace slot must be zero");
+            continue;
+        }
+        Require(index < o.vocab_size,
+                "EMBEDDING_TABLE_WGRAD INT32 index out of vocabulary");
+        selected += index >= o.vocab_start && index < tile_end;
+    }
+    Require(selected > 0,
+            "EMBEDDING_TABLE_WGRAD tile has no indexed updates");
+    const uint64_t row_elements = CheckedMul(o.rank_rows, o.hidden_size,
+                                               "EMBEDDING_TABLE_WGRAD row elements");
+    const uint64_t tile_elements = CheckedMul(o.vocab_rows, o.hidden_size,
+                                                "EMBEDDING_TABLE_WGRAD tile elements");
+    RequireGradientNonOverlap({
+        ValidateGradientSramSpan(o.indices,
+                                 CheckedMul(4, o.rank_rows, "EMBEDDING indices"),
+                                 "EMBEDDING_TABLE_WGRAD indices"),
+        ValidateGradientSramSpan(o.table,
+                                 CheckedMul(2, tile_elements, "EMBEDDING table"),
+                                 "EMBEDDING_TABLE_WGRAD table"),
+        ValidateGradientSramSpan(o.upstream,
+                                 CheckedMul(2, row_elements, "EMBEDDING upstream"),
+                                 "EMBEDDING_TABLE_WGRAD upstream"),
+        ValidateGradientSramSpan(o.gradient,
+                                 CheckedMul(4, tile_elements, "EMBEDDING gradient"),
+                                 "EMBEDDING_TABLE_WGRAD gradient")},
+        "EMBEDDING_TABLE_WGRAD");
+    (void)CheckedMul(selected, o.hidden_size,
+                     "EMBEDDING_TABLE_WGRAD FP32 accumulation work");
+}
+
+void ValidateNormGammaWGrad(const NormGammaWGradOperands &o) {
+    RequireExactDataType(o.activation_datatype, ExternalDataType::FP16,
+                         "NORM_GAMMA_WGRAD activation_datatype");
+    RequireExactDataType(o.upstream_datatype, ExternalDataType::FP16,
+                         "NORM_GAMMA_WGRAD upstream_datatype");
+    RequireExactDataType(o.gradient_datatype, ExternalDataType::FP32,
+                         "NORM_GAMMA_WGRAD gradient_datatype");
+    Require(o.mode == NormGradientMode::RMS || o.mode == NormGradientMode::LAYER,
+            "NORM_GAMMA_WGRAD mode must be RMS or Layer");
+    for (const auto value : {o.logical_rows, o.rank_rows, o.tp_degree,
+                             o.hidden_size})
+        Require(value > 0 && value <= kExternalNpuParameterMax,
+                "NORM_GAMMA_WGRAD rank/profile must be positive 30-bit");
+    Require(o.logical_rows == CheckedMul(o.rank_rows, o.tp_degree,
+                                          "NORM_GAMMA_WGRAD logical rows"),
+            "NORM_GAMMA_WGRAD logical rows must equal rank_rows*TP");
+    const uint64_t source = Product({2, o.rank_rows, o.hidden_size},
+                                    "NORM_GAMMA_WGRAD FP16 source");
+    const uint64_t gradient = CheckedMul(4, o.hidden_size,
+                                         "NORM_GAMMA_WGRAD FP32 gradient");
+    RequireGradientNonOverlap({
+        ValidateGradientSramSpan(o.activation, source,
+                                 "NORM_GAMMA_WGRAD activation"),
+        ValidateGradientSramSpan(o.upstream, source,
+                                 "NORM_GAMMA_WGRAD upstream"),
+        ValidateGradientSramSpan(o.gradient, gradient,
+                                 "NORM_GAMMA_WGRAD gradient")},
+        "NORM_GAMMA_WGRAD");
 }
 
 void ValidateGreedySample(const GreedySampleOperands &o) {
@@ -1426,6 +1547,12 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
     FixedSchema(Opcode::ADAMW_UPDATE, RecordOperandKind::ADAMW_UPDATE,
                 kAdamwUpdatePayloadSize),
     ComputeSchema(Opcode::SWIGLU_BACKWARD_TIMING, kN),
+    FixedSchema(Opcode::EMBEDDING_TABLE_WGRAD_TIMING,
+                RecordOperandKind::EMBEDDING_TABLE_WGRAD,
+                kEmbeddingTableWGradPayloadSize),
+    FixedSchema(Opcode::NORM_GAMMA_WGRAD_TIMING,
+                RecordOperandKind::NORM_GAMMA_WGRAD,
+                kNormGammaWGradPayloadSize),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,
@@ -1513,6 +1640,16 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::EMBEDDING_LOOKUP:
         ValidateEmbeddingLookup(RequireOperands<EmbeddingLookupOperands>(
             record, "EMBEDDING_LOOKUP"));
+        return;
+    case RecordOperandKind::EMBEDDING_TABLE_WGRAD:
+        ValidateEmbeddingTableWGrad(
+            RequireOperands<EmbeddingTableWGradOperands>(
+                record, "EMBEDDING_TABLE_WGRAD_TIMING"));
+        return;
+    case RecordOperandKind::NORM_GAMMA_WGRAD:
+        ValidateNormGammaWGrad(
+            RequireOperands<NormGammaWGradOperands>(
+                record, "NORM_GAMMA_WGRAD_TIMING"));
         return;
     case RecordOperandKind::GREEDY_SAMPLE:
         ValidateGreedySample(RequireOperands<GreedySampleOperands>(
@@ -1684,6 +1821,38 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         AppendLittleEndian(payload, o.tp_degree, 4);
         AppendLittleEndian(payload, o.vocab_size, 4);
         AppendLittleEndian(payload, o.hidden_size, 4);
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_TABLE_WGRAD: {
+        const auto &o = std::get<EmbeddingTableWGradOperands>(record.operands);
+        payload.push_back(EnumByte(o.index_datatype));
+        payload.push_back(EnumByte(o.table_datatype));
+        payload.push_back(EnumByte(o.upstream_datatype));
+        payload.push_back(EnumByte(o.gradient_datatype));
+        EncodeAddress(payload, o.indices);
+        EncodeAddress(payload, o.table);
+        EncodeAddress(payload, o.upstream);
+        EncodeAddress(payload, o.gradient);
+        for (const auto value : {o.logical_rows, o.rank_rows, o.tp_degree,
+                                 o.vocab_size, o.vocab_start, o.vocab_rows,
+                                 o.hidden_size})
+            AppendLittleEndian(payload, value, 4);
+        for (const auto index : o.index_trace)
+            AppendLittleEndian(payload, index, 4);
+        break;
+    }
+    case RecordOperandKind::NORM_GAMMA_WGRAD: {
+        const auto &o = std::get<NormGammaWGradOperands>(record.operands);
+        payload.push_back(EnumByte(o.activation_datatype));
+        payload.push_back(EnumByte(o.upstream_datatype));
+        payload.push_back(EnumByte(o.gradient_datatype));
+        payload.push_back(EnumByte(o.mode));
+        EncodeAddress(payload, o.activation);
+        EncodeAddress(payload, o.upstream);
+        EncodeAddress(payload, o.gradient);
+        for (const auto value : {o.logical_rows, o.rank_rows, o.tp_degree,
+                                 o.hidden_size})
+            AppendLittleEndian(payload, value, 4);
         break;
     }
     case RecordOperandKind::GREEDY_SAMPLE: {
@@ -2095,6 +2264,57 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
             ReadLittleEndian(payload, 88, 4, "vocab_size");
         o.hidden_size =
             ReadLittleEndian(payload, 92, 4, "hidden_size");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::EMBEDDING_TABLE_WGRAD: {
+        EmbeddingTableWGradOperands o;
+        o.index_datatype = DecodeEnum<ExternalDataType>(payload, 0,
+                                                         "index_datatype");
+        o.table_datatype = DecodeEnum<ExternalDataType>(payload, 1,
+                                                         "table_datatype");
+        o.upstream_datatype = DecodeEnum<ExternalDataType>(payload, 2,
+                                                            "upstream_datatype");
+        o.gradient_datatype = DecodeEnum<ExternalDataType>(payload, 3,
+                                                            "gradient_datatype");
+        o.indices = DecodeAddress(payload, 4, "EMBEDDING_TABLE_WGRAD indices");
+        o.table = DecodeAddress(payload, 28, "EMBEDDING_TABLE_WGRAD table");
+        o.upstream = DecodeAddress(payload, 52,
+                                   "EMBEDDING_TABLE_WGRAD upstream");
+        o.gradient = DecodeAddress(payload, 76,
+                                   "EMBEDDING_TABLE_WGRAD gradient");
+        o.logical_rows = ReadLittleEndian(payload, 100, 4, "logical_rows");
+        o.rank_rows = ReadLittleEndian(payload, 104, 4, "rank_rows");
+        o.tp_degree = ReadLittleEndian(payload, 108, 4, "tp_degree");
+        o.vocab_size = ReadLittleEndian(payload, 112, 4, "vocab_size");
+        o.vocab_start = ReadLittleEndian(payload, 116, 4, "vocab_start");
+        o.vocab_rows = ReadLittleEndian(payload, 120, 4, "vocab_rows");
+        o.hidden_size = ReadLittleEndian(payload, 124, 4, "hidden_size");
+        for (std::size_t i = 0; i < o.index_trace.size(); ++i)
+            o.index_trace[i] = ReadLittleEndian(payload, 128 + i * 4, 4,
+                                                "index_trace");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::NORM_GAMMA_WGRAD: {
+        NormGammaWGradOperands o;
+        o.activation_datatype = DecodeEnum<ExternalDataType>(
+            payload, 0, "activation_datatype");
+        o.upstream_datatype = DecodeEnum<ExternalDataType>(
+            payload, 1, "upstream_datatype");
+        o.gradient_datatype = DecodeEnum<ExternalDataType>(
+            payload, 2, "gradient_datatype");
+        o.mode = DecodeEnum<NormGradientMode>(payload, 3, "mode");
+        o.activation = DecodeAddress(payload, 4,
+                                     "NORM_GAMMA_WGRAD activation");
+        o.upstream = DecodeAddress(payload, 28,
+                                   "NORM_GAMMA_WGRAD upstream");
+        o.gradient = DecodeAddress(payload, 52,
+                                   "NORM_GAMMA_WGRAD gradient");
+        o.logical_rows = ReadLittleEndian(payload, 76, 4, "logical_rows");
+        o.rank_rows = ReadLittleEndian(payload, 80, 4, "rank_rows");
+        o.tp_degree = ReadLittleEndian(payload, 84, 4, "tp_degree");
+        o.hidden_size = ReadLittleEndian(payload, 88, 4, "hidden_size");
         record.operands = std::move(o);
         break;
     }

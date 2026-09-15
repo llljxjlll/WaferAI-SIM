@@ -47,6 +47,10 @@ from .ir0 import (
     SwiGluWorkload,
     SgdUpdateWorkload,
 )
+from .moe_training_ir0_workloads import (
+    EmbeddingTableWgradWorkload,
+    NormGammaWgradWorkload,
+)
 from .persistent_state import (
     StateKind,
     canonical_state_staging_value_id,
@@ -201,6 +205,8 @@ def _validate_workload_kind(
         OpKind.NORM: (NormWorkload, RmsNormWorkload),
         OpKind.P2P: (P2PByteWorkload,),
         OpKind.EMBEDDING: (EmbeddingWorkload,),
+        OpKind.EMBEDDING_TABLE_WGRAD: (EmbeddingTableWgradWorkload,),
+        OpKind.NORM_GAMMA_WGRAD: (NormGammaWgradWorkload,),
         OpKind.ROPE: (RopeQkWorkload,),
         OpKind.SAMPLING: (GreedySampleWorkload,),
         OpKind.CE_FORWARD: (CrossEntropyForwardWorkload,),
@@ -240,6 +246,10 @@ def canonical_compute_operand_roles(
         return ("lhs", "rhs"), (("partial",) if tiled else ("output",))
     if op_kind is OpKind.EMBEDDING:
         return ("indices", "table"), ("activation",)
+    if op_kind is OpKind.EMBEDDING_TABLE_WGRAD:
+        return ("indices", "table", "upstream_hidden"), ("table_gradient",)
+    if op_kind is OpKind.NORM_GAMMA_WGRAD:
+        return ("forward_activation", "upstream_hidden"), ("gamma_gradient",)
     if type(workload) is RmsNormWorkload:
         return ("activation", "weight"), ("normalized",)
     if op_kind is OpKind.ROPE:

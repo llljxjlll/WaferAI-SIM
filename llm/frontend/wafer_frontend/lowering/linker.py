@@ -266,6 +266,20 @@ def _operand_role(
             BufferUseRole.COMP_OUTPUT,
             0,
         ),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_AUX_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 2),
+        (RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.NORM_GAMMA_WGRAD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (
             BufferUseRole.COMP_INPUT,
             0,

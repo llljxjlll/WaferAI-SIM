@@ -189,6 +189,34 @@ void ApplyRelocation(ExternalRecord &record,
         return;
     }
     if (auto *value =
+            std::get_if<EmbeddingTableWGradOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "EMBEDDING_TABLE_WGRAD_TIMING address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->indices, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->table, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_AUX_ADDRESS)
+            SetAddress(value->upstream, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->gradient, relocation, symbol);
+        else
+            Fail("invalid EMBEDDING_TABLE_WGRAD_TIMING relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<NormGammaWGradOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "NORM_GAMMA_WGRAD_TIMING address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->activation, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->upstream, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->gradient, relocation, symbol);
+        else
+            Fail("invalid NORM_GAMMA_WGRAD_TIMING relocation operand_id");
+        return;
+    }
+    if (auto *value =
             std::get_if<GreedySampleOperands>(&record.operands)) {
         RequireAbsolute(relocation, "GREEDY_SAMPLE address");
         if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)

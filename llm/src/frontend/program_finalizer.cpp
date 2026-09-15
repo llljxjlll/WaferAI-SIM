@@ -357,6 +357,8 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x20:
     case 0x21:
     case 0x22:
+    case 0x23:
+    case 0x24:
     case 0x40:
     case 0x41:
     case 0x43:
@@ -1660,6 +1662,30 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
                     LiteralU64(record.operands[11], path), path), path);
         Fail(path, "EMBEDDING_LOOKUP has no such payload operand");
     }
+    case Opcode::EMBEDDING_TABLE_WGRAD_TIMING: {
+        const uint64_t rank_rows = LiteralU64(record.operands[9], path);
+        const uint64_t tile_rows = LiteralU64(record.operands[13], path);
+        const uint64_t hidden = LiteralU64(record.operands[14], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            return CheckedMultiply(4, rank_rows, path);
+        if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            return CheckedMultiply(2, CheckedMultiply(tile_rows, hidden, path), path);
+        if (operand_id == SemanticOperandId::COMPUTE_AUX_ADDRESS)
+            return CheckedMultiply(2, CheckedMultiply(rank_rows, hidden, path), path);
+        if (operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return CheckedMultiply(4, CheckedMultiply(tile_rows, hidden, path), path);
+        Fail(path, "EMBEDDING_TABLE_WGRAD_TIMING has no such payload operand");
+    }
+    case Opcode::NORM_GAMMA_WGRAD_TIMING: {
+        const uint64_t rank_rows = LiteralU64(record.operands[8], path);
+        const uint64_t hidden = LiteralU64(record.operands[10], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            return CheckedMultiply(2, CheckedMultiply(rank_rows, hidden, path), path);
+        if (operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return CheckedMultiply(4, hidden, path);
+        Fail(path, "NORM_GAMMA_WGRAD_TIMING has no such payload operand");
+    }
     case Opcode::GREEDY_SAMPLE: {
         const uint64_t samples = LiteralU64(record.operands[9], path);
         if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
@@ -1778,6 +1804,18 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
         return operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS
                    ? BufferDTypeDto::INT32
                    : BufferDTypeDto::FP16;
+    case Opcode::EMBEDDING_TABLE_WGRAD_TIMING:
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            return BufferDTypeDto::INT32;
+        if (operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return BufferDTypeDto::FP32;
+        if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_AUX_ADDRESS)
+            return BufferDTypeDto::FP16;
+        return std::nullopt;
+    case Opcode::NORM_GAMMA_WGRAD_TIMING:
+        return operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS
+                   ? BufferDTypeDto::FP32 : BufferDTypeDto::FP16;
     case Opcode::GREEDY_SAMPLE:
         return operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS
                    ? BufferDTypeDto::INT32
@@ -2232,6 +2270,97 @@ ExternalRecord FinalizeRecord(
         operands.vocab_size = LiteralU64(record.operands[10], path);
         operands.hidden_size = LiteralU64(record.operands[11], path);
         result.operands = operands;
+    } else if (record.opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING) {
+        if (record.operands.size() != 31)
+            Fail(path + ".operands",
+                 "EMBEDDING_TABLE_WGRAD_TIMING requires thirty-one operands");
+        constexpr std::array<std::string_view, 15> names{{
+            "index_datatype", "table_datatype", "upstream_datatype",
+            "gradient_datatype", "indices_address", "table_address",
+            "upstream_address", "gradient_address", "logical_rows",
+            "rank_rows", "tp_degree", "vocab_size", "vocab_start",
+            "vocab_rows", "hidden_size"}};
+        for (std::size_t index = 0; index < 15; ++index) {
+            if (index >= 4 && index <= 7) continue;
+            RequireLiteral(record.operands[index], names[index],
+                           path + ".operands[" + std::to_string(index) + "]");
+        }
+        for (std::size_t index = 0; index < 16; ++index) {
+            std::ostringstream name;
+            name << "index" << std::setw(2) << std::setfill('0') << index;
+            RequireLiteral(record.operands[15 + index], name.str(),
+                           path + ".operands[" + std::to_string(15 + index) + "]");
+        }
+        RequireAddress(record.operands[4], "indices_address",
+                       SemanticOperandId::COMPUTE_INPUT_ADDRESS,
+                       path + ".operands[4]");
+        RequireAddress(record.operands[5], "table_address",
+                       SemanticOperandId::COMPUTE_DATA_ADDRESS,
+                       path + ".operands[5]");
+        RequireAddress(record.operands[6], "upstream_address",
+                       SemanticOperandId::COMPUTE_AUX_ADDRESS,
+                       path + ".operands[6]");
+        RequireAddress(record.operands[7], "gradient_address",
+                       SemanticOperandId::COMPUTE_OUTPUT_ADDRESS,
+                       path + ".operands[7]");
+        EmbeddingTableWGradOperands operands;
+        operands.index_datatype = LiteralEnum<ExternalDataType>(record.operands[0], path);
+        operands.table_datatype = LiteralEnum<ExternalDataType>(record.operands[1], path);
+        operands.upstream_datatype = LiteralEnum<ExternalDataType>(record.operands[2], path);
+        operands.gradient_datatype = LiteralEnum<ExternalDataType>(record.operands[3], path);
+        operands.indices = absolute_address(SemanticOperandId::COMPUTE_INPUT_ADDRESS);
+        operands.table = absolute_address(SemanticOperandId::COMPUTE_DATA_ADDRESS);
+        operands.upstream = absolute_address(SemanticOperandId::COMPUTE_AUX_ADDRESS);
+        operands.gradient = absolute_address(SemanticOperandId::COMPUTE_OUTPUT_ADDRESS);
+        operands.logical_rows = LiteralU64(record.operands[8], path);
+        operands.rank_rows = LiteralU64(record.operands[9], path);
+        operands.tp_degree = LiteralU64(record.operands[10], path);
+        operands.vocab_size = LiteralU64(record.operands[11], path);
+        operands.vocab_start = LiteralU64(record.operands[12], path);
+        operands.vocab_rows = LiteralU64(record.operands[13], path);
+        operands.hidden_size = LiteralU64(record.operands[14], path);
+        for (std::size_t i = 0; i < operands.index_trace.size(); ++i)
+            operands.index_trace[i] = LiteralU64(record.operands[15 + i], path);
+        result.operands = std::move(operands);
+    } else if (record.opcode == Opcode::NORM_GAMMA_WGRAD_TIMING) {
+        if (record.operands.size() != 11)
+            Fail(path + ".operands",
+                 "NORM_GAMMA_WGRAD_TIMING requires eleven operands");
+        constexpr std::array<std::string_view, 11> names{{
+            "activation_datatype", "upstream_datatype", "gradient_datatype",
+            "mode", "activation_address", "upstream_address",
+            "gradient_address", "logical_rows", "rank_rows", "tp_degree",
+            "hidden_size"}};
+        for (std::size_t index = 0; index < record.operands.size(); ++index) {
+            if (index >= 4 && index <= 6) continue;
+            RequireLiteral(record.operands[index], names[index],
+                           path + ".operands[" + std::to_string(index) + "]");
+        }
+        RequireAddress(record.operands[4], "activation_address",
+                       SemanticOperandId::COMPUTE_INPUT_ADDRESS,
+                       path + ".operands[4]");
+        RequireAddress(record.operands[5], "upstream_address",
+                       SemanticOperandId::COMPUTE_DATA_ADDRESS,
+                       path + ".operands[5]");
+        RequireAddress(record.operands[6], "gradient_address",
+                       SemanticOperandId::COMPUTE_OUTPUT_ADDRESS,
+                       path + ".operands[6]");
+        NormGammaWGradOperands operands;
+        operands.activation_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[0], path);
+        operands.upstream_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[1], path);
+        operands.gradient_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[2], path);
+        operands.mode = LiteralEnum<NormGradientMode>(record.operands[3], path);
+        operands.activation = absolute_address(SemanticOperandId::COMPUTE_INPUT_ADDRESS);
+        operands.upstream = absolute_address(SemanticOperandId::COMPUTE_DATA_ADDRESS);
+        operands.gradient = absolute_address(SemanticOperandId::COMPUTE_OUTPUT_ADDRESS);
+        operands.logical_rows = LiteralU64(record.operands[7], path);
+        operands.rank_rows = LiteralU64(record.operands[8], path);
+        operands.tp_degree = LiteralU64(record.operands[9], path);
+        operands.hidden_size = LiteralU64(record.operands[10], path);
+        result.operands = std::move(operands);
     } else if (record.opcode == Opcode::GREEDY_SAMPLE) {
         if (record.operands.size() != 11)
             Fail(path + ".operands", "GREEDY_SAMPLE requires eleven operands");
@@ -3210,6 +3339,8 @@ std::set<std::string> ValidateActionSequence(
                    opcode == Opcode::ROPE_QK_EXACT ||
                    opcode == Opcode::ATTENTION_EXACT ||
                    opcode == Opcode::EMBEDDING_LOOKUP ||
+                   opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING ||
+                   opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
                    opcode == Opcode::GREEDY_SAMPLE ||
                    opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                    opcode == Opcode::CROSS_ENTROPY_BACKWARD ||
@@ -3237,11 +3368,13 @@ std::set<std::string> ValidateActionSequence(
             const uint64_t expected_inputs =
                 compute_opcode == Opcode::ADAMW_UPDATE ? 6 :
                 compute_opcode == Opcode::CROSS_ENTROPY_BACKWARD ? 3 :
+                compute_opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING ? 3 :
                 ((s3_lite_backward_link || moe_calibration_link ||
                   moe_swizzle_c1_matmul_bind) &&
                  compute_opcode == Opcode::MATMUL) ? 2 :
                 (compute_opcode == Opcode::RESIDUAL ||
                  compute_opcode == Opcode::EMBEDDING_LOOKUP ||
+                 compute_opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
                  compute_opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                  compute_opcode == Opcode::SGD_UPDATE) ? 2 : 1;
             if (records[cursor]->operands.empty() ||
@@ -3480,6 +3613,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             manifest.producer_pass == "swizzle_standard_linker";
         const bool moe_swizzle_link =
             manifest.producer_pass == "moe_swizzle_standard_linker";
+        const bool public_wgrad_fragment =
+            manifest.producer_pass == "public_embedding_wgrad_allocated_fragment";
         bool moe_swizzle_c1_matmul_bind = false;
         const bool moe_calibration_link =
             manifest.producer_pass ==
@@ -7699,14 +7834,18 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             core.core_id = pending[core_index].runtime_id;
             const std::set<std::string> moe_terminal_labels = [&]() {
                 std::set<std::string> result;
-                if (!moe_swizzle_link && !moe_calibration_link)
+                if (!moe_swizzle_link && !moe_calibration_link &&
+                    !public_wgrad_fragment)
                     return result;
                 std::set<std::string> terminal_storage_ids;
                 for (const auto &entry : known_buffer_abi) {
                     const BufferAbiDto &abi = *entry.second;
                     if (!abi.alias_of &&
                         abi.ownership == BufferOwnershipDto::OWNED &&
-                        ((moe_swizzle_link &&
+                        ((public_wgrad_fragment &&
+                          abi.binding_id == "abs_output" &&
+                          abi.dtype == BufferDTypeDto::FP32) ||
+                         (moe_swizzle_link &&
                           (abi.layout ==
                                "moe_swizzle_terminal_combined_root/v1" ||
                            abi.layout ==
@@ -7817,9 +7956,19 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 }
                 source_records.push_back(&record);
             }
+            if (public_wgrad_fragment) {
+                std::size_t gradient_records = 0;
+                for (const RelocatableRecordDto *record : source_records)
+                    if (record->opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING)
+                        ++gradient_records;
+                if (gradient_records != 1 || moe_terminal_labels.size() != 1)
+                    Fail("linked_program_manifest.core_streams",
+                         "public WGRAD fragment requires one 0x23 and one owned FP32 terminal root");
+            }
             const std::set<std::string> terminal_tape_labels =
                 [&]() {
-                    if (moe_swizzle_link || moe_calibration_link)
+                    if (moe_swizzle_link || moe_calibration_link ||
+                        public_wgrad_fragment)
                         for (const RelocatableRecordDto *record :
                              source_records) {
                             if (record->opcode != Opcode::SRAM_ALLOC_AT)
@@ -7830,10 +7979,11 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                 record->operands[5],
                                 "linked_program_manifest.core_streams.record.lifetime");
                             const uint64_t expected_lifetime =
+                                public_wgrad_fragment ? 0 :
                                 moe_terminal_labels.count(label) == 1 ? 2 : 0;
                             if (lifetime != expected_lifetime)
                                 Fail("linked_program_manifest.core_streams",
-                                     "MoE terminal roots must be PERSISTENT and every non-terminal root must be TASK");
+                                     "terminal root must be PERSISTENT and every non-terminal root must be TASK");
                         }
                     return ValidateActionSequence(
                         source_records,
@@ -7866,6 +8016,27 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             if (persistent_tape_allocations != terminal_tape_labels.size())
                 Fail("linked_program_manifest.core_streams",
                      "terminal tape persistence did not cover exact labels");
+            if (public_wgrad_fragment) {
+                std::size_t promoted = 0;
+                for (std::size_t index = 0; index < source_records.size(); ++index) {
+                    if (source_records[index]->opcode != Opcode::SRAM_ALLOC_AT)
+                        continue;
+                    const std::string label = AddressSymbolRef(
+                        *source_records[index], SemanticOperandId::LABEL_SYMBOL);
+                    if (moe_terminal_labels.count(label) == 0)
+                        continue;
+                    auto &operands = std::get<SramAllocAtOperands>(
+                        core.records[index].operands);
+                    if (operands.lifetime != SramLifetime::TASK)
+                        Fail("linked_program_manifest.core_streams",
+                             "public WGRAD terminal source must lower from TASK");
+                    operands.lifetime = SramLifetime::PERSISTENT;
+                    ++promoted;
+                }
+                if (promoted != 1)
+                    Fail("linked_program_manifest.core_streams",
+                         "public WGRAD physical terminal promotion lost FP32 root");
+            }
             artifact.cores.push_back(std::move(core));
         }
         std::map<uint64_t, std::vector<const LocalNocUse *>> local_noc_events;

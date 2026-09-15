@@ -209,6 +209,37 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::EMBEDDING_TABLE_WGRAD: {
+        EmbeddingTableWGradOperands operands;
+        operands.indices = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.table = {SramAddressKind::ABSOLUTE, 256, 0, 0};
+        operands.upstream = {SramAddressKind::ABSOLUTE, 1024, 0, 0};
+        operands.gradient = {SramAddressKind::ABSOLUTE, 2048, 0, 0};
+        operands.logical_rows = 6;
+        operands.rank_rows = 3;
+        operands.tp_degree = 2;
+        operands.vocab_size = 128;
+        operands.vocab_start = 16;
+        operands.vocab_rows = 8;
+        operands.hidden_size = 8;
+        operands.index_trace[0] = 17;
+        operands.index_trace[1] = 17;
+        operands.index_trace[2] = 65;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::NORM_GAMMA_WGRAD: {
+        NormGammaWGradOperands operands;
+        operands.activation = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.upstream = {SramAddressKind::ABSOLUTE, 256, 0, 0};
+        operands.gradient = {SramAddressKind::ABSOLUTE, 512, 0, 0};
+        operands.logical_rows = 8;
+        operands.rank_rows = 2;
+        operands.tp_degree = 4;
+        operands.hidden_size = 16;
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::GREEDY_SAMPLE: {
         GreedySampleOperands operands;
         operands.logits = Address(boundary);
@@ -624,7 +655,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 53, "executable opcode count");
+    checks.Check(executable_count == 55, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -1692,6 +1723,88 @@ void CheckExactStage2Rejections(Checks &checks) {
     adamw.weight_decay_f64_bits = DoubleBits(-0.01);
     checks.Reject("ADAMW_UPDATE weight decay nonnegative",
                   [&] { EncodeExternalRecord(record); });
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::EMBEDDING_TABLE_WGRAD_TIMING),
+        Boundary::TYPICAL);
+    auto &embedding_wgrad =
+        std::get<EmbeddingTableWGradOperands>(record.operands);
+    checks.Accept("EMBEDDING_TABLE_WGRAD nonzero trace public wire", [&] {
+        const auto bytes = EncodeExternalRecord(record);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        const auto &out = std::get<EmbeddingTableWGradOperands>(
+            decoded.operands);
+        checks.Check(out.index_trace[0] == 17 && out.index_trace[1] == 17 &&
+                         out.index_trace[2] == 65 &&
+                         out.gradient_datatype == ExternalDataType::FP32 &&
+                         EncodeExternalRecord(decoded) == bytes,
+                     "EMBEDDING_TABLE_WGRAD exact typed trace roundtrip");
+    });
+    embedding_wgrad.gradient_datatype = ExternalDataType::FP16;
+    checks.Reject("EMBEDDING_TABLE_WGRAD rejects FP16 table gradient", [&] {
+        EncodeExternalRecord(record);
+    });
+    embedding_wgrad.gradient_datatype = ExternalDataType::FP32;
+    embedding_wgrad.index_trace[1] = 128;
+    checks.Reject("EMBEDDING_TABLE_WGRAD rejects source OOB", [&] {
+        EncodeExternalRecord(record);
+    });
+    embedding_wgrad.index_trace[1] = 17;
+    embedding_wgrad.index_trace[3] = 17;
+    checks.Reject("EMBEDDING_TABLE_WGRAD rejects unused nonzero trace", [&] {
+        EncodeExternalRecord(record);
+    });
+    embedding_wgrad.index_trace[3] = 0;
+    embedding_wgrad.gradient.absolute_address_bytes = 272;
+    checks.Reject("EMBEDDING_TABLE_WGRAD rejects overlapping FP32 target", [&] {
+        EncodeExternalRecord(record);
+    });
+    embedding_wgrad.gradient.absolute_address_bytes = 2048;
+    embedding_wgrad.vocab_start = 125;
+    checks.Reject("EMBEDDING_TABLE_WGRAD rejects tile outside vocab", [&] {
+        EncodeExternalRecord(record);
+    });
+    embedding_wgrad.vocab_start = 16;
+    checks.Accept("EMBEDDING_TABLE_WGRAD raw index corruption setup", [&] {
+        auto bytes = EncodeExternalRecord(record);
+        // External header 8B + fixed payload index_trace[0] at byte 128.
+        bytes[136] = 128;
+        checks.Reject("EMBEDDING_TABLE_WGRAD raw wire OOB index", [&] {
+            DecodeExternalRecordExact(bytes);
+        });
+    });
+
+    record = MakeRecord(*LookupRecordSchema(Opcode::NORM_GAMMA_WGRAD_TIMING),
+                        Boundary::TYPICAL);
+    auto &gamma = std::get<NormGammaWGradOperands>(record.operands);
+    checks.Accept("NORM_GAMMA_WGRAD FP32 public wire", [&] {
+        const auto bytes = EncodeExternalRecord(record);
+        const auto decoded = DecodeExternalRecordExact(bytes);
+        const auto &out = std::get<NormGammaWGradOperands>(decoded.operands);
+        checks.Check(out.gradient_datatype == ExternalDataType::FP32 &&
+                         out.rank_rows == 2 && out.hidden_size == 16 &&
+                         EncodeExternalRecord(decoded) == bytes,
+                     "NORM_GAMMA_WGRAD typed shape roundtrip");
+    });
+    gamma.gradient_datatype = ExternalDataType::FP16;
+    checks.Reject("NORM_GAMMA_WGRAD rejects FP16 gamma gradient", [&] {
+        EncodeExternalRecord(record);
+    });
+    gamma.gradient_datatype = ExternalDataType::FP32;
+    gamma.mode = static_cast<NormGradientMode>(2);
+    checks.Reject("NORM_GAMMA_WGRAD rejects unknown norm mode", [&] {
+        EncodeExternalRecord(record);
+    });
+    gamma.mode = NormGradientMode::RMS;
+    gamma.logical_rows = 7;
+    checks.Reject("NORM_GAMMA_WGRAD rejects wrong TP rows", [&] {
+        EncodeExternalRecord(record);
+    });
+    gamma.logical_rows = 8;
+    gamma.gradient.absolute_address_bytes = 272;
+    checks.Reject("NORM_GAMMA_WGRAD rejects overlapping gamma buffer", [&] {
+        EncodeExternalRecord(record);
+    });
 }
 
 } // namespace
