@@ -46,6 +46,7 @@ from ..schema.artifact_manifest import (
 from ..schema.common import DType, stable_artifact_id
 from ..schema.flexible_moe import (
     FlexibleMoeExecutablePlan,
+    FlexibleMoeMode,
     FlexibleMoeSpec,
     MoeRectActionKind,
     MoeRectFlowStage,
@@ -215,6 +216,17 @@ def lower_link_flexible_moe_multi(
     projection_activated_bytes = max(64, 2 * max_rank_tokens * spec.intermediate_size)
     projection_concat_offset = _align(workspace_bytes)
     projection_activated_offset = _align(projection_concat_offset + projection_concat_bytes)
+    strict_training = full_model_dataflow and spec.mode is FlexibleMoeMode.TRAIN
+    empty_source_kinds = (
+        MoeRectActionKind.GATE,
+        MoeRectActionKind.PACK,
+        MoeRectActionKind.WEIGHTED_COMBINE,
+    ) + ((
+        MoeRectActionKind.EXPERT_DGRAD,
+        MoeRectActionKind.EXPERT_WGRAD,
+        MoeRectActionKind.GATE_WGRAD,
+        MoeRectActionKind.COMBINE_BACKWARD,
+    ) if strict_training else ())
     for rank, core in enumerate(cores):
         buffers.append(_buffer(
             name=f"rank{rank}.activation", core=core,
@@ -255,6 +267,16 @@ def lower_link_flexible_moe_multi(
                 action_count=len(actions_by_core[core]), region_ref=_REGION_REF,
             ))
             offset += state.size_bytes
+        if strict_training:
+            offset = _align(offset)
+            buffers.append(_buffer(
+                name=f"rank{rank}.backward_gradient", core=core,
+                offset=offset + (_REGION_BASE_BYTES if release_region else 0),
+                size_bytes=activation_bytes, dtype=DType.FP16,
+                ownership=BufferOwnership.BORROWED,
+                action_count=len(actions_by_core[core]), region_ref=_REGION_REF,
+            ))
+            offset += activation_bytes
         if (
             _align(offset) > _REGION_SIZE_BYTES
             or _align(workspace_bytes) > _COMM_REGION_SIZE_BYTES
@@ -296,6 +318,10 @@ def lower_link_flexible_moe_multi(
         rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".expert_activated"))
         for rank, core in enumerate(cores)
     } if full_model_dataflow else {}
+    backward_by_rank = {
+        rank: next(item for item in buffers_by_core[core] if item.value_id.endswith(".backward_gradient"))
+        for rank, core in enumerate(cores)
+    } if strict_training else {}
     buffer_by_state = {
         state.id: next(
             item for item in buffers_by_core[core_by_rank[state.owner_rank]]
@@ -579,11 +605,7 @@ def lower_link_flexible_moe_multi(
         activation = activation_by_rank[action.rank]
         output = output_by_rank[action.rank]
         if full_model_dataflow and (
-            action.kind in (
-                MoeRectActionKind.GATE,
-                MoeRectActionKind.PACK,
-                MoeRectActionKind.WEIGHTED_COMBINE,
-            ) and not action.assignment_refs
+            action.kind in empty_source_kinds and not action.assignment_refs
         ):
             if action.flops != 0 or action.logical_bytes != 0:
                 raise SchemaError("empty source action must declare zero logical work", path=f"actions[{action.id}]")
@@ -684,21 +706,27 @@ def lower_link_flexible_moe_multi(
                     fan_in_waits[action.id], key=lambda item: item[0].id,
                 ):
                     add_fan_in_event(action, RecordOpcode.EVENT_WAIT, fence)
-                source = absolute(
-                    output_by_rank[flow.source_rank]
-                    if full_model_dataflow and flow.stage is MoeRectFlowStage.COMBINE
-                    else activation_by_rank[flow.source_rank]
-                )
+                if strict_training and flow.stage is MoeRectFlowStage.BACKWARD_GRADIENT:
+                    source_abi = backward_by_rank[flow.source_rank]
+                elif full_model_dataflow and flow.stage is MoeRectFlowStage.COMBINE:
+                    source_abi = output_by_rank[flow.source_rank]
+                elif strict_training and flow.stage is MoeRectFlowStage.BACKWARD_DX:
+                    source_abi = output_by_rank[flow.source_rank]
+                else:
+                    source_abi = activation_by_rank[flow.source_rank]
+                source = absolute(source_abi)
                 remote = peer(flow.destination_rank)
                 add_record("compute", core, _dte_send(action.id, flow, source, fsm, remote),
                     ((SemanticOperandId.SOURCE_ADDRESS, source, 0),),
                     ((RuntimeOperandField.DTE_FSM, fsm), (RuntimeOperandField.PEER_CORE, remote)))
             elif action.kind is MoeRectActionKind.RECV:
-                destination = absolute(
-                    activation_by_rank[flow.destination_rank]
-                    if full_model_dataflow and flow.stage is MoeRectFlowStage.DISPATCH
-                    else output_by_rank[flow.destination_rank]
-                )
+                if full_model_dataflow and flow.stage is MoeRectFlowStage.DISPATCH:
+                    target_abi = activation_by_rank[flow.destination_rank]
+                elif strict_training and flow.stage is MoeRectFlowStage.BACKWARD_GRADIENT:
+                    target_abi = backward_by_rank[flow.destination_rank]
+                else:
+                    target_abi = output_by_rank[flow.destination_rank]
+                destination = absolute(target_abi)
                 remote = peer(flow.source_rank)
                 add_record("compute", core, _dte_recv(action.id, flow, destination, fsm, token, remote),
                     ((SemanticOperandId.DESTINATION_ADDRESS, destination, 0),),
@@ -733,8 +761,11 @@ def lower_link_flexible_moe_multi(
             )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(weight), 0), (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(gradient), 0), (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(weight), 0)))
         elif action.kind in (MoeRectActionKind.PACK, MoeRectActionKind.WEIGHTED_COMBINE, MoeRectActionKind.COMBINE_BACKWARD, MoeRectActionKind.GATE_GRADIENT_LOCAL_REDUCE, MoeRectActionKind.GATE_GRADIENT_ALL_REDUCE):
             reduction_source = (
-                output if full_model_dataflow and action.kind is MoeRectActionKind.WEIGHTED_COMBINE
-                else activation
+                output if (
+                    full_model_dataflow and action.kind is MoeRectActionKind.WEIGHTED_COMBINE
+                ) or (
+                    strict_training and action.kind is MoeRectActionKind.COMBINE_BACKWARD
+                ) else activation
             )
             add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.LOCAL_REDUCE, (
                 RecordOperand.literal("input_dtype", 0),
@@ -756,6 +787,11 @@ def lower_link_flexible_moe_multi(
             data = activation if wgrad else (
                 state_buffers[0] if state_buffers else activation
             )
+            input_abi = (
+                backward_by_rank[action.rank]
+                if strict_training and action.kind is MoeRectActionKind.EXPERT_DGRAD
+                else activation
+            )
             if full_model_dataflow and action.kind is MoeRectActionKind.GATE:
                 # P2 declares one H×E FP16 gate tensor and exactly one gate
                 # row per source assignment.  Empty gates were omitted above.
@@ -771,14 +807,14 @@ def lower_link_flexible_moe_multi(
                 parameters = (
                     1, 1, max(1, spec.hidden_size), max(1, spec.intermediate_size),
                 )
-            add_bind(action, (activation,), output)
+            add_bind(action, (input_abi,), output)
             add_record("compute", core, RelocatableRecord(action.id, RecordOpcode.MATMUL, (
                 RecordOperand.literal("datatype", 1),
-                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activation).id),
+                RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(input_abi).id),
                 RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data).id),
                 RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(output).id),
                 RecordOperand.literal("parameters", parameters),
-            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(activation), 0), (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data), 0), (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(output), 0)))
+            )), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, absolute(input_abi), 0), (SemanticOperandId.COMPUTE_DATA_ADDRESS, absolute(data), 0), (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(output), 0)))
 
     for core in cores:
         for abi in buffers_by_core[core]:

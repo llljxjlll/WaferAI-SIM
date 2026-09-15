@@ -162,7 +162,10 @@ class FlexibleMoeProductionArtifacts:
                 MoeRectActionKind.PACK,
                 MoeRectActionKind.WEIGHTED_COMBINE,
                 MoeRectActionKind.EXPERT_FORWARD,
-                MoeRectActionKind.EXPERT_FORWARD,
+                MoeRectActionKind.EXPERT_DGRAD,
+                MoeRectActionKind.EXPERT_WGRAD,
+                MoeRectActionKind.GATE_WGRAD,
+                MoeRectActionKind.COMBINE_BACKWARD,
             ) and not action.assignment_refs
             and action.flops == 0 and action.logical_bytes == 0
         }

@@ -8,11 +8,17 @@ from llm.frontend.wafer_frontend.errors import SchemaError, UnsupportedFeatureEr
 from llm.frontend.wafer_frontend.passes.moe_compile_sequence import (
     compile_moe_sequence,
 )
+from llm.frontend.wafer_frontend.passes.validate_moe_training_backward_handoff import (
+    validate_moe_training_backward_handoff,
+)
 from llm.frontend.wafer_frontend.passes.workload_materialization import (
     materialize_workload_preflight,
 )
 from llm.frontend.wafer_frontend.schema.common import DType
-from llm.frontend.wafer_frontend.schema.flexible_moe import MoeRectActionKind
+from llm.frontend.wafer_frontend.schema.flexible_moe import (
+    MoeRectActionKind, MoeRectFlowStage,
+)
+from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.memory_plan import (
     MemoryTier,
     MemoryTierCapacity,
@@ -128,6 +134,34 @@ def _replace_unit(
 
 
 class MoeCompileSequenceTest(unittest.TestCase):
+    def test_strict_training_backward_handoff_is_physical_and_fails_when_cut(self) -> None:
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING),
+            source_rank_policy="rank0_shared_spine",
+        )
+        self.assertIs(sequence.coverage, MoeCompileCoverage.MOE_BLOCKS_ONLY)
+        self.assertIs(sequence.runtime_status, MoeCompileRuntimeStatus.RUNTIME_NOT_MATERIALIZED)
+        for unit in sequence.units:
+            validate_moe_training_backward_handoff(unit.plan, unit.linked_manifest)
+        unit = sequence.units[0]
+        flow = next(item for item in unit.plan.flows
+                    if item.stage is MoeRectFlowStage.BACKWARD_GRADIENT)
+        recv_id = next(item.id for item in unit.plan.actions
+                       if item.kind is MoeRectActionKind.RECV and item.flow_ref == flow.id)
+        dgrad_id = next(item.id for item in unit.plan.actions
+                        if item.kind is MoeRectActionKind.EXPERT_DGRAD and item.rank == flow.destination_rank)
+        dx_flow = next(item for item in unit.plan.flows
+                       if item.stage is MoeRectFlowStage.BACKWARD_DX)
+        dx_send_id = next(item.id for item in unit.plan.actions
+                          if item.kind is MoeRectActionKind.SEND and item.flow_ref == dx_flow.id)
+        for dropped in (recv_id, dgrad_id, dx_send_id):
+            broken = replace(unit.linked_manifest, core_streams=tuple(replace(
+                stream, records=tuple(ref for ref in stream.records
+                                      if ref.source_global_action_id != dropped)
+            ) for stream in unit.linked_manifest.core_streams))
+            with self.assertRaisesRegex(SchemaError, "backward lacks one physical record"):
+                validate_moe_training_backward_handoff(unit.plan, broken)
+
     def test_inference_compiles_every_prefill_decode_layer(self) -> None:
         sequence = _sequence(WorkloadFamily.MOE_INFERENCE)
         self.assertEqual(
