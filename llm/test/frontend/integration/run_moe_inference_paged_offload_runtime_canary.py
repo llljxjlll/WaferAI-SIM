@@ -201,6 +201,19 @@ def _observe(stdout: str, contract: dict[str, object],
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:
+    # Bind both production tools before writing artifacts or launching finalizers.
+    binary_sha = hashlib.sha256(args.npusim.resolve().read_bytes()).hexdigest()
+    finalizer_sha = hashlib.sha256(args.finalizer.resolve().read_bytes()).hexdigest()
+    for tool, actual in (("npusim", binary_sha), ("finalizer", finalizer_sha)):
+        expected = getattr(args, f"expected_{tool}_sha256", None)
+        if expected is not None and actual != expected:
+            raise RuntimeError(f"replay {tool} SHA differs from requested frozen tool")
+    previous_report = args.output.resolve()/"moe-inference-paged-runtime-evidence.json"
+    if previous_report.is_file():
+        previous = json.loads(previous_report.read_text(encoding="utf-8"))
+        if (previous.get("npusim_sha256") != binary_sha or
+            previous.get("finalizer_sha256") != finalizer_sha):
+            raise RuntimeError("existing full MoE evidence binds different production tools; use a fresh output")
     request = _request(WorkloadFamily.MOE_INFERENCE)
     resident = _manifest(WorkloadFamily.MOE_INFERENCE)
     model_digest = canonical_digest(request.model)
@@ -326,9 +339,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             (paged_path, paged_artifact, paged),
         ):
             report_path = output/f"{artifact_path.stem}.finalizer.json"
+            if hashlib.sha256(args.finalizer.resolve().read_bytes()).hexdigest() != finalizer_sha:
+                raise RuntimeError("source/paged full MoE finalizers changed within one signed run")
             _run((str(args.finalizer.resolve()), "--input",str(manifest_path),
                   "--output",str(artifact_path),"--report",str(report_path)),
                  cwd=output, timeout=120)
+            if hashlib.sha256(args.finalizer.resolve().read_bytes()).hexdigest() != finalizer_sha:
+                raise RuntimeError("source/paged full MoE finalizers changed within one signed run")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             if (report["artifact_sha256"] != hashlib.sha256(
                     artifact_path.read_bytes()).hexdigest() or
@@ -384,8 +401,6 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             raise RuntimeError("resident rejection and successful runtime hardware HBM differ")
     mapping_path = output/"mapping.spec"
     mapping_path.write_text("0:0\n",encoding="utf-8")
-    binary_sha = hashlib.sha256(args.npusim.resolve().read_bytes()).hexdigest()
-    finalizer_sha = hashlib.sha256(args.finalizer.resolve().read_bytes()).hexdigest()
     hardware_sha = hashlib.sha256(hardware_path.read_bytes()).hexdigest()
     simulation_sha = hashlib.sha256(args.simulation.resolve().read_bytes()).hexdigest()
     actual = []
@@ -470,7 +485,14 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--simulation",type=Path,
                         default=_ROOT/"llm/test/program/p5_behavioral_simulation.json")
     parser.add_argument("--timeout",type=int,default=900)
+    parser.add_argument("--expected-npusim-sha256")
+    parser.add_argument("--expected-finalizer-sha256")
     args = parser.parse_args()
+    for key in ("expected_npusim_sha256", "expected_finalizer_sha256"):
+        value = getattr(args, key)
+        if value is not None and (len(value) != 64 or
+                                  any(ch not in "0123456789abcdef" for ch in value)):
+            parser.error(f"{key} must be a lowercase SHA-256 hex digest")
     if args.timeout <= 0 or not all(getattr(args,key).is_file()
                                     for key in ("npusim","finalizer","simulation")):
         parser.error("npusim/finalizer/simulation must exist and timeout >0")
