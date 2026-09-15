@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 
 from ..errors import SchemaError
 from ..schema.common import UINT64_MAX
@@ -371,6 +372,7 @@ def plan_offload_blocking(
     fabric: ExternalMemoryFabric,
     chunks: tuple[OffloadChunk, ...],
     events: tuple[OffloadTraceEvent, ...],
+    pinned_hbm_addresses: Mapping[str, int] | None = None,
 ) -> BlockingOffloadPlan:
     """Plan blocking bring-in/consume/evict operations with Belady next-use."""
 
@@ -379,6 +381,23 @@ def plan_offload_blocking(
         chunks,
         events,
     )
+    if pinned_hbm_addresses is not None:
+        if (not isinstance(pinned_hbm_addresses, Mapping) or
+                set(pinned_hbm_addresses) != set(chunk_by_id)):
+            raise SchemaError("pinned HBM addresses must exactly cover all chunks",
+                              path="pinned_hbm_addresses",
+                              code="offload_pinned_hbm_address_mismatch")
+        for chunk_ref, address in pinned_hbm_addresses.items():
+            chunk = chunk_by_id[chunk_ref]
+            capacity = _hbm_capacity(fabric, chunk)
+            alignment = max(capacity.alignment_bytes, chunk.alignment_bytes)
+            reserved = _align_up(chunk.size_bytes, chunk.alignment_bytes)
+            if (type(address) is not int or address < capacity.base_address or
+                    address % alignment != 0 or
+                    address + reserved > capacity.base_address + capacity.capacity_bytes):
+                raise SchemaError("pinned HBM address is outside aligned Die home",
+                                  path=f"pinned_hbm_addresses[{chunk_ref!r}]",
+                                  code="offload_pinned_hbm_address_mismatch")
     current_versions = {
         chunk.id: chunk.initial_version for chunk in chunks
     }
@@ -618,6 +637,8 @@ def plan_offload_blocking(
             alignment_bytes=chunk_by_id[episode.chunk_ref].alignment_bytes,
             lifetime_start=episode.start_cycle,
             lifetime_end_exclusive=episode.end_cycle or 0,
+            pinned_address=(None if pinned_hbm_addresses is None
+                            else pinned_hbm_addresses[episode.chunk_ref]),
         )
         for episode in episodes
     )
