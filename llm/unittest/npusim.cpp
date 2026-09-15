@@ -470,6 +470,12 @@ std::vector<DenseSequenceKvRange> DenseTrainingStateRanges(
             std::get_if<frontend::CommandFragmentDto>(&linked);
         if (fragment == nullptr)
             fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+        // Composite inference can include MoE expert retention STATE_STOREs.
+        // Those weights are read/write StateABIs, but they are not a Dense
+        // optimizer family; preserve them in the executable and sidecar.
+        if (manifest.producer_pass == "moe_full_model_region_linker" &&
+            fragment->producer_pass == "flexible_moe_production_lowering")
+            continue;
         for (const frontend::StateAbiDto &abi : fragment->state_abi) {
             if (abi.kind != frontend::StateKindDto::TRAINABLE_PARAMETER &&
                 abi.kind != frontend::StateKindDto::OPTIMIZER_MASTER &&
