@@ -51,6 +51,7 @@ from llm.test.frontend.unit.test_legacy_dense_backend import (
 )
 
 from .flexible_mesh_release_hardware import p5_large_hardware_template_json
+from .run_dense_sequence_runtime_canary import _bind_native_hardware_to_fabric
 
 
 _ROOT = Path(__file__).resolve().parents[4]
@@ -131,19 +132,24 @@ def build_case(rows: int, columns: int):
     return manifest, template, fabric, spaces
 
 
-def extended_hardware(rows: int, columns: int, spaces) -> str:
-    """Specialize a private runtime document without lifting release limits."""
+def extended_hardware(rows: int, columns: int, spaces, fabric=None) -> str:
+    """Specialize a private runtime document bound to the actual Fabric grid."""
 
     if (rows, columns) not in _SHAPES.values():
         raise ValueError("experimental hardware only supports measured TP16 shapes")
+    if fabric is None:
+        fabric = physical_fabric_from_data(
+            minimal_hardware(columns, rows, sram_bytes=_SRAM_BYTES)
+        )
     hardware = json.loads(p5_large_hardware_template_json())
     hardware["die"] = {"x": columns, "y": rows}
     hardware["die_ports"]["overrides"] = [
-        {"side": side, "idx": 2, "role": "c2c", "dir": side}
+        {"side": side, "idx": 0, "role": "c2c", "dir": side}
         for side in ("N", "E", "S", "W")
         if (side in ("N", "S") and rows > 1)
         or (side in ("E", "W") and columns > 1)
     ]
+    _bind_native_hardware_to_fabric(hardware, fabric)
     memory = hardware["memory"]
     memory["sram_size"] = _SRAM_BYTES
     memory["sram"]["capacity_bytes"] = _SRAM_BYTES
@@ -315,8 +321,11 @@ def _stage(command: tuple[str, ...], stdout: Path, *, cwd: Path, timeout: int):
     return result
 
 
-def observe_runtime(output: str) -> dict[str, object]:
-    """Independently require all three segments, KV boundaries and drain."""
+def observe_runtime(
+    output: str, *, rows: int = 1, columns: int = 16,
+    core_grid: tuple[int, int] = (2, 2),
+) -> dict[str, object]:
+    """Require sequence closure and all sixteen actual physical Die links."""
 
     segments = re.findall(
         r"\[DENSE_SEQUENCE_SEGMENT\] index=(\d+) status=done final=(\d+)",
@@ -350,6 +359,32 @@ def observe_runtime(output: str) -> dict[str, object]:
         raise RuntimeError(f"16 active P2P endpoint drain closure failed: {p2p}")
     if timing != ["0"]:
         raise RuntimeError(f"shared P2P timing drain failed: {timing}")
+    if (rows, columns) not in _SHAPES.values() or core_grid[0] <= 0 or core_grid[1] <= 0:
+        raise RuntimeError("TP16 physical mesh or per-Die core grid is invalid")
+    stride = core_grid[0] * core_grid[1]
+    memory = re.findall(r"\[PROGRAM_MEMORY\] core=(\d+) lsu_issued=(\d+)", output)
+    physical_dies = sorted({int(core) // stride for core, issued in memory if int(issued) > 0})
+    if physical_dies != list(range(_TP)):
+        raise RuntimeError(f"actual NpuSim physical Die coverage is incomplete: {physical_dies}")
+    link_rows = re.findall(
+        r"\[D2D_LINK\][^\n]*?die(\d+)->die(\d+) dir=([EWNS])"
+        r"[^\n]*?data_in=(\d+) data_out=(\d+)", output,
+    )
+    forward, reverse = (("E", "W") if rows == 1 else ("N", "S"))
+    expected_links = {
+        link for die in range(_TP - 1)
+        for link in ((die, die + 1, forward), (die + 1, die, reverse))
+    }
+    actual_links = {(int(source), int(target), direction)
+                    for source, target, direction, _, _ in link_rows}
+    if actual_links != expected_links or len(link_rows) != len(expected_links) or any(
+        int(data_in) <= 0 or int(data_in) != int(data_out)
+        for _, _, _, data_in, data_out in link_rows
+    ):
+        raise RuntimeError("real TP16 physical end-to-end neighbor link traffic is incomplete")
+    data = re.findall(r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", output)
+    if len(data) != 1 or int(data[0][0]) <= 0 or data[0][0] != data[0][1]:
+        raise RuntimeError("real TP16 D2D data packets are missing or unbalanced")
     for marker in (
         "[DRAIN] router_residual=0",
         "[DRAIN] d2d_link_residual=0",
@@ -363,6 +398,9 @@ def observe_runtime(output: str) -> dict[str, object]:
         "kv_digests": [digest for _, _, digest in kv],
         "one_shot_drain": drain,
         "p2p_drained_cores": sorted(int(core) for core, _ in p2p),
+        "physical_die_ids": physical_dies,
+        "nonzero_physical_link_count": len(link_rows),
+        "d2d_data_packets": [int(item) for item in data[0]],
         "makespan_cycles": int(results[0]),
     }
 
@@ -399,6 +437,7 @@ def bound_frontend_sources() -> dict[str, str]:
         (_ROOT / "llm/test/frontend/unit/_fixtures.py").resolve(),
         (_ROOT / "llm/test/frontend/unit/test_legacy_dense_backend.py").resolve(),
         (_ROOT / "llm/test/frontend/integration/flexible_mesh_release_hardware.py").resolve(),
+        (_ROOT / "llm/test/frontend/integration/run_dense_sequence_runtime_canary.py").resolve(),
     }
     paths = set(support)
     for module in tuple(sys.modules.values()):
@@ -435,7 +474,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     materialize_started = time.monotonic()
     manifest, template, fabric, spaces = build_case(rows, columns)
     materialize_wall = round(time.monotonic() - materialize_started, 3)
-    hardware = extended_hardware(rows, columns, spaces)
+    hardware = extended_hardware(rows, columns, spaces, fabric)
     physical_hbm = validate_physical_hbm(hardware, spaces, rows, columns)
     dram_resources = bind_dram_resources(
         hardware, args.simulation, args.npusim.resolve().parent,
@@ -750,7 +789,10 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             timeout=args.timeout,
         )
         verify_tool_binding()
-        observed = observe_runtime(runtime_stdout.read_text(encoding="utf-8"))
+        observed = observe_runtime(
+            runtime_stdout.read_text(encoding="utf-8"),
+            rows=rows, columns=columns, core_grid=fabric.dies[0].noc_grid,
+        )
         execution = {
             "index": execution_index,
             "stages": finalized,

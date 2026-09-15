@@ -46,6 +46,10 @@ def _valid_runtime_output() -> str:
             for rank in range(16)
         ]
         + [
+            *(f"[PROGRAM_MEMORY] core={rank * 4} lsu_issued=1" for rank in range(16)),
+            "[D2D_DATA] in_pkts=30 out_pkts=30",
+            *(f"[D2D_LINK] idx={2 * rank} die{rank}->die{rank + 1} dir=E data_in=1 data_out=1" for rank in range(15)),
+            *(f"[D2D_LINK] idx={2 * rank + 1} die{rank + 1}->die{rank} dir=W data_in=1 data_out=1" for rank in range(15)),
             "[P5 P2P TIMING DRAIN] residual=0",
             "[DRAIN] router_residual=0",
             "[DRAIN] d2d_link_residual=0",
@@ -66,6 +70,10 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
                 self.assertEqual(fabric.die_grid, (columns, rows))
                 hardware = json.loads(extended_hardware(rows, columns, spaces))
                 self.assertEqual(hardware["die"], {"x": columns, "y": rows})
+                self.assertEqual((hardware["x"], hardware["y"]), fabric.dies[0].noc_grid)
+                self.assertEqual(fabric.dies[0].noc_grid, (2, 2))
+                self.assertTrue(all(port["idx"] == 0 for port in hardware["die_ports"]["overrides"]))
+                self.assertEqual(fabric.dies[15].cores[0].runtime_core_id // 4, 15)
                 self.assertEqual(len(hardware["memory_system"]["hbm_stacks"]), 16)
                 self.assertEqual(hardware["memory"]["sram_size"], 1 << 20)
                 self.assertEqual(
@@ -105,7 +113,7 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertIn(
                 "[HARDWARE_SRAM_PREFLIGHT] "
-                "region=sram capacity_bytes=1048576 region_count=1", output,
+                "region=sram capacity_bytes=1048576 alignment_bytes=64 region_count=1", output,
             )
             hardware["memory"]["sram"]["regions"].append({
                 "name": "double_b", "base_bytes": 2048,
@@ -119,7 +127,7 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
             hardware["memory"]["sram"]["regions"][0]["name"] = "dense_release"
             code, output = preflight()
             self.assertNotEqual(code, 0)
-            self.assertIn("requires one full 1MiB 'sram' region", output)
+            self.assertIn("requires one full 'sram' region with the exact compiled capacity and allocation alignment", output)
 
     def test_physical_hbm_capacity_or_home_range_drift_is_rejected(self) -> None:
         materialized, template, fabric, spaces = build_case(1, 16)
@@ -255,11 +263,30 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
 
     def test_complete_runtime_observation(self) -> None:
         observed = observe_runtime(_valid_runtime_output())
+        self.assertEqual(observed["physical_die_ids"], list(range(16)))
+        self.assertEqual(observed["nonzero_physical_link_count"], 30)
         self.assertEqual(observed["kv_bytes"], list(_KV_BYTES))
         self.assertEqual(observed["p2p_drained_cores"], list(range(0, 64, 4)))
         self.assertEqual(observed["makespan_cycles"], 12345)
 
+    def test_vertical_tp16_native_north_south_link_orientation(self) -> None:
+        vertical = _valid_runtime_output().replace(" dir=E ", " dir=N ").replace(
+            " dir=W ", " dir=S ",
+        )
+        observed = observe_runtime(vertical, rows=16, columns=1)
+        self.assertEqual(observed["physical_die_ids"], list(range(16)))
+        with self.assertRaisesRegex(RuntimeError, "physical end-to-end neighbor link"):
+            observe_runtime(_valid_runtime_output(), rows=16, columns=1)
+
     def test_old_kv_extent_and_missing_active_die_fail(self) -> None:
+        old_stride = _valid_runtime_output()
+        with self.assertRaisesRegex(RuntimeError, "actual NpuSim physical Die coverage"):
+            observe_runtime(old_stride, core_grid=(4, 4))
+        missing_last_link = _valid_runtime_output().replace(
+            "[D2D_LINK] idx=28 die14->die15 dir=E data_in=1 data_out=1", "",
+        )
+        with self.assertRaisesRegex(RuntimeError, "physical end-to-end neighbor link"):
+            observe_runtime(missing_last_link)
         old_kv = _valid_runtime_output().replace(
             "index=2 bytes=12288", "index=2 bytes=8192",
         )
