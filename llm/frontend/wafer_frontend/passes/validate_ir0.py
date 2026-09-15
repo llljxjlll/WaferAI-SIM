@@ -14,6 +14,7 @@ from ..schema.common import (
     UINT64_MAX,
 )
 from ..schema.ir0 import (
+    AdamwUpdateWorkload,
     AttentionMode,
     AttentionWorkload,
     CollectiveKind,
@@ -316,9 +317,14 @@ class DenseIR0Validator:
                     node, values, local_shapes, profile, node_path
                 )
             elif node.kind is OpKind.OPTIMIZER_UPDATE:
-                DenseIR0Validator._validate_sgd_update(
-                    node, values, local_shapes, node_path
-                )
+                if type(node.workload) is AdamwUpdateWorkload:
+                    DenseIR0Validator._validate_adamw_update(
+                        node, values, local_shapes, node_path
+                    )
+                else:
+                    DenseIR0Validator._validate_sgd_update(
+                        node, values, local_shapes, node_path
+                    )
             elif node.kind is OpKind.P2P:
                 raise UnsupportedFeatureError(
                     "Dense naive IR-0 does not support P2P nodes", path=node_path
@@ -983,6 +989,54 @@ class DenseIR0Validator:
             or not all(_is_replicated(value) for value in (weight, gradient, updated))
         ):
             _fail("SGD weight/gradient/update boundary is not exact", path)
+
+    @staticmethod
+    def _validate_adamw_update(
+        node: LogicalNode,
+        values: dict[str, TensorValue],
+        local_shapes: dict[str, tuple[int, ...]],
+        path: str,
+    ) -> None:
+        workload = node.workload
+        assert type(workload) is AdamwUpdateWorkload
+        if (
+            node.impl_ref != "adamw_update"
+            or len(node.inputs) != 6
+            or len(node.outputs) != 5
+            or node.effects.kind is not EffectKind.INPLACE
+            or node.effects.effect_token != f"{node.id}.effect"
+        ):
+            _fail("AdamW requires a six-input, five-output in-place node", path)
+        inputs = tuple(values[ref] for ref in node.inputs)
+        outputs = tuple(values[ref] for ref in node.outputs)
+        weight, gradient, master, m, v, counter = inputs
+        if (
+            node.effects.alias_set != weight.alias_set
+            or len({inputs[index].alias_set for index in (0, 2, 3, 4, 5)}) != 5
+            or any(
+                inputs[index].alias_set is None
+                or outputs[index].alias_set != inputs[index].alias_set
+                for index in (0, 2, 3, 4, 5)
+            )
+            or any(
+                item.shape != workload.logical_weight_shape
+                or local_shapes[item.id] != workload.rank_weight_shape
+                for item in (*inputs[:5], *outputs[:4])
+            )
+            or counter.shape != (1,)
+            or outputs[4].shape != (1,)
+            or local_shapes[counter.id] != (1,)
+            or local_shapes[outputs[4].id] != (1,)
+            or tuple(item.dtype for item in inputs) != (
+                DType.FP16, DType.FP32, DType.FP32, DType.FP32,
+                DType.FP32, DType.INT32,
+            )
+            or tuple(item.dtype for item in outputs) != (
+                DType.FP16, DType.FP32, DType.FP32, DType.FP32, DType.INT32,
+            )
+            or not all(_is_replicated(item) for item in (*inputs, *outputs))
+        ):
+            _fail("AdamW weight/master/m/v/step state boundary is not exact", path)
 
     def _validate_gemm(
         node: LogicalNode,

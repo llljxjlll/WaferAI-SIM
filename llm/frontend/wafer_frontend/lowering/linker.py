@@ -306,6 +306,28 @@ def _operand_role(
             BufferUseRole.COMP_OUTPUT,
             0,
         ),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_MASTER_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 2),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 3),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 4),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_STEP_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 5),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 1),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 2),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 3),
+        (RecordOpcode.ADAMW_UPDATE, SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 4),
         (RecordOpcode.GREEDY_SAMPLE, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (
             BufferUseRole.COMP_INPUT,
             0,

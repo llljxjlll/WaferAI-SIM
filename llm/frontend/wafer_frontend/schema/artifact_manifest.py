@@ -23,6 +23,7 @@ from .global_action import (
     LogicalCoreRef,
 )
 from .ir0 import (
+    AdamwUpdateWorkload,
     AttentionMode,
     AttentionWorkload,
     CrossEntropyForwardWorkload,
@@ -1058,6 +1059,10 @@ _COMPUTE_OPCODE_BY_IMPL_REF = {
         OpKind.OPTIMIZER_UPDATE,
         RecordOpcode.SGD_UPDATE,
     ),
+    "adamw_update": (
+        OpKind.OPTIMIZER_UPDATE,
+        RecordOpcode.ADAMW_UPDATE,
+    ),
     "swiglu": (OpKind.ELEMENTWISE, RecordOpcode.SWIGLU),
     "residual": (OpKind.ELEMENTWISE, RecordOpcode.RESIDUAL),
     "rms_norm": (OpKind.NORM, RecordOpcode.RMSNORM),
@@ -1307,6 +1312,31 @@ def _fixed_compute_literals(
                 "<Q", struct.pack("<d", workload.learning_rate)
             )[0],
             "momentum_f64_bits": 0,
+        }
+    if opcode is RecordOpcode.ADAMW_UPDATE:
+        if type(workload) is not AdamwUpdateWorkload or (
+            len(compute.inputs), len(compute.outputs)
+        ) != (6, 5):
+            raise SchemaError(
+                "ADAMW_UPDATE requires six typed inputs and five typed outputs",
+                path=path,
+            )
+        return {
+            "weight_datatype": 1,
+            "gradient_datatype": 3,
+            "state_datatype": 3,
+            "output_datatype": 1,
+            "rounding": 0,
+            "element_count": workload.element_count,
+            "step": workload.step,
+            **{
+                field + "_f64_bits": struct.unpack(
+                    "<Q", struct.pack("<d", getattr(workload, field))
+                )[0]
+                for field in (
+                    "learning_rate", "beta1", "beta2", "epsilon", "weight_decay"
+                )
+            },
         }
     raise SchemaError("opcode is not a fixed compute record", path=path)
 
@@ -1685,9 +1715,11 @@ def _compute_record_abi(
             "compute op_kind disagrees with its frozen impl_ref mapping",
             path=f"{path}.op_kind",
         )
-    if len(compute.outputs) != 1:
+    if len(compute.outputs) != (
+        5 if opcode is RecordOpcode.ADAMW_UPDATE else 1
+    ):
         raise SchemaError(
-            "Dense compute ABI requires exactly one output",
+            "Dense compute ABI output arity differs from its public opcode",
             path=f"{path}.outputs",
         )
 
@@ -1699,9 +1731,15 @@ def _compute_record_abi(
             RecordOpcode.CROSS_ENTROPY_FORWARD,
             RecordOpcode.CROSS_ENTROPY_BACKWARD,
             RecordOpcode.SGD_UPDATE,
+            RecordOpcode.ADAMW_UPDATE,
         )
         has_aux_input = opcode is RecordOpcode.CROSS_ENTROPY_BACKWARD
-        bind_input_count = 3 if has_aux_input else 2 if has_data_input else 1
+        bind_input_count = (
+            6 if opcode is RecordOpcode.ADAMW_UPDATE
+            else 3 if has_aux_input
+            else 2 if has_data_input
+            else 1
+        )
         result = _ComputeRecordABI(
             opcode,
             bind_input_count,
@@ -3695,8 +3733,8 @@ class CommandFragment:
                 if (
                     tuple(use.operand_index for use in input_uses)
                     != tuple(range(len(action.compute.inputs)))
-                    or len(output_uses) != 1
-                    or output_uses[0].operand_index != 0
+                    or tuple(use.operand_index for use in output_uses)
+                    != tuple(range(len(action.compute.outputs)))
                     or len(action.buffer_uses)
                     != len(action.compute.inputs) + len(action.compute.outputs)
                 ):

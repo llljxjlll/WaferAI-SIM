@@ -152,6 +152,34 @@ def _view_addend_for_use(
     )
 
 
+def _exact_in_place_binding(
+    source: BufferBinding,
+    destination: BufferBinding,
+    source_addend: int,
+    destination_addend: int,
+) -> bool:
+    if source_addend != destination_addend:
+        return False
+    if destination.id == source.id:
+        return True
+    return (
+        destination.ownership is BufferOwnership.ALIASED
+        and destination.alias_of == source.id
+        and source.ownership is not BufferOwnership.ALIASED
+        and destination.core_id == source.core_id
+        and destination.region_ref == source.region_ref
+        and destination.region_offset_bytes == source.region_offset_bytes
+        and destination.size_bytes == source.size_bytes
+        and destination.alignment_bytes == source.alignment_bytes
+        and destination.banks == source.banks
+        and destination.storage_id == source.storage_id
+        and destination.tensor_slice.offset == source.tensor_slice.offset
+        and destination.tensor_slice.shape == source.tensor_slice.shape
+        and destination.dtype is source.dtype
+        and destination.layout == source.layout
+    )
+
+
 def _require_compute(
     action: GlobalAction,
     path: str,
@@ -179,8 +207,43 @@ def _fixed_compute_operands(
     data_address: ProgramSymbol | None,
     aux_address: ProgramSymbol | None,
     output_address: ProgramSymbol,
+    *,
+    adamw_inputs: tuple[ProgramSymbol, ...] = (),
+    adamw_outputs: tuple[ProgramSymbol, ...] = (),
 ) -> tuple[RecordOperand, ...]:
     values = _fixed_compute_literals(compute, abi.opcode, path="action.compute")
+    if abi.opcode is RecordOpcode.ADAMW_UPDATE:
+        if len(adamw_inputs) != 6 or len(adamw_outputs) != 5:
+            raise SchemaError(
+                "AdamW lowering requires six inputs and five outputs",
+                path="action.compute",
+            )
+        addresses = (
+            ("weight_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS, adamw_inputs[0]),
+            ("gradient_address", SemanticOperandId.COMPUTE_DATA_ADDRESS, adamw_inputs[1]),
+            ("master_weight_address", SemanticOperandId.COMPUTE_MASTER_ADDRESS, adamw_inputs[2]),
+            ("first_moment_address", SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS, adamw_inputs[3]),
+            ("second_moment_address", SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS, adamw_inputs[4]),
+            ("step_counter_address", SemanticOperandId.COMPUTE_STEP_ADDRESS, adamw_inputs[5]),
+            ("updated_weight_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, adamw_outputs[0]),
+            ("updated_master_weight_address", SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS, adamw_outputs[1]),
+            ("updated_first_moment_address", SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS, adamw_outputs[2]),
+            ("updated_second_moment_address", SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS, adamw_outputs[3]),
+            ("updated_step_counter_address", SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS, adamw_outputs[4]),
+        )
+        return (
+            *(RecordOperand.literal(field, values[field]) for field in (
+                "weight_datatype", "gradient_datatype", "state_datatype",
+                "output_datatype", "rounding",
+            )),
+            *(RecordOperand.address(field, operand_id, symbol.id)
+              for field, operand_id, symbol in addresses),
+            *(RecordOperand.literal(field, values[field]) for field in (
+                "element_count", "step", "learning_rate_f64_bits",
+                "beta1_f64_bits", "beta2_f64_bits", "epsilon_f64_bits",
+                "weight_decay_f64_bits",
+            )),
+        )
     if abi.opcode is RecordOpcode.ROPE_QK_EXACT:
         return (
             RecordOperand.literal("datatype", values["datatype"]),
@@ -705,13 +768,14 @@ class NaiveCoarseLowering:
             )
             for operand_index in range(len(compute.inputs))
         )
-        output = _binding_for_use(
-            action,
-            bindings,
-            BufferUseRole.COMP_OUTPUT,
-            0,
-            path="action.buffer_uses",
+        outputs = tuple(
+            _binding_for_use(
+                action, bindings, BufferUseRole.COMP_OUTPUT, operand_index,
+                path="action.buffer_uses",
+            )
+            for operand_index in range(len(compute.outputs))
         )
+        output = outputs[0]
         input_addends = tuple(
             _view_addend_for_use(
                 action,
@@ -728,6 +792,13 @@ class NaiveCoarseLowering:
             BufferUseRole.COMP_OUTPUT,
             0,
             path="action.buffer_uses",
+        )
+        output_addends = tuple(
+            _view_addend_for_use(
+                action, binding, BufferUseRole.COMP_OUTPUT, index,
+                path="action.buffer_uses",
+            )
+            for index, binding in enumerate(outputs)
         )
 
         bound_inputs = inputs[: compute_abi.bind_input_count]
@@ -772,28 +843,34 @@ class NaiveCoarseLowering:
             binding=output,
             kind=ProgramSymbolKind.ABSOLUTE_ADDRESS,
         )
-        if compute_abi.opcode is RecordOpcode.SGD_UPDATE:
-            weight = inputs[0]
-            same_binding = output.id == weight.id
-            exact_alias = (
-                output.ownership is BufferOwnership.ALIASED
-                and output.alias_of == weight.id
-                and weight.ownership is not BufferOwnership.ALIASED
-                and output.core_id == weight.core_id
-                and output.region_ref == weight.region_ref
-                and output.region_offset_bytes == weight.region_offset_bytes
-                and output.size_bytes == weight.size_bytes
-                and output.alignment_bytes == weight.alignment_bytes
-                and output.banks == weight.banks
-                and output.storage_id == weight.storage_id
-                and output.tensor_slice.offset == weight.tensor_slice.offset
-                and output.tensor_slice.shape == weight.tensor_slice.shape
-                and output.dtype is weight.dtype
-                and output.layout == weight.layout
+        adamw_input_addresses: tuple[ProgramSymbol, ...] = ()
+        adamw_output_addresses: tuple[ProgramSymbol, ...] = ()
+        if compute_abi.opcode is RecordOpcode.ADAMW_UPDATE:
+            adamw_input_addresses = tuple(
+                _program_symbol(
+                    schedule_id=schedule.id, binding=binding,
+                    kind=ProgramSymbolKind.ABSOLUTE_ADDRESS,
+                )
+                for binding in inputs
             )
-            if (
-                (not same_binding and not exact_alias)
-                or output_addend != input_addends[0]
+            state_input_indices = (0, 2, 3, 4, 5)
+            for output_index, input_index in enumerate(state_input_indices):
+                if not _exact_in_place_binding(
+                    inputs[input_index], outputs[output_index],
+                    input_addends[input_index], output_addends[output_index],
+                ):
+                    raise SchemaError(
+                        "ADAMW_UPDATE each output must be the exact input state binding or its derived alias/view",
+                        path="action.buffer_uses",
+                    )
+            adamw_output_addresses = tuple(
+                adamw_input_addresses[index] for index in state_input_indices
+            )
+            output_address = adamw_output_addresses[0]
+            output_label = input_labels[0]
+        if compute_abi.opcode is RecordOpcode.SGD_UPDATE:
+            if not _exact_in_place_binding(
+                inputs[0], output, input_addends[0], output_addend,
             ):
                 raise SchemaError(
                     "SGD_UPDATE output must be the exact weight binding or its exact derived alias/view",
@@ -838,6 +915,8 @@ class NaiveCoarseLowering:
                     data_address,
                     aux_address,
                     output_address,
+                    adamw_inputs=adamw_input_addresses,
+                    adamw_outputs=adamw_output_addresses,
                 )
                 if compute_abi.opcode in _FIXED_COMPUTE_OPCODES
                 else (
@@ -928,13 +1007,42 @@ class NaiveCoarseLowering:
                 output_addend,
             ),
         )
+        if compute_abi.opcode is RecordOpcode.ADAMW_UPDATE:
+            input_operand_ids = (
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                SemanticOperandId.COMPUTE_MASTER_ADDRESS,
+                SemanticOperandId.COMPUTE_FIRST_MOMENT_ADDRESS,
+                SemanticOperandId.COMPUTE_SECOND_MOMENT_ADDRESS,
+                SemanticOperandId.COMPUTE_STEP_ADDRESS,
+            )
+            output_operand_ids = (
+                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                SemanticOperandId.COMPUTE_UPDATED_MASTER_ADDRESS,
+                SemanticOperandId.COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS,
+                SemanticOperandId.COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS,
+                SemanticOperandId.COMPUTE_UPDATED_STEP_ADDRESS,
+            )
+            compute_relocations = tuple(sorted(
+                (
+                    AddressRelocation(
+                        1, operand_id, ProgramSymbolKind.ABSOLUTE_ADDRESS,
+                        symbol.id, addend,
+                    )
+                    for operand_id, symbol, addend in (
+                        *zip(input_operand_ids, adamw_input_addresses, input_addends),
+                        *zip(output_operand_ids, adamw_output_addresses, output_addends),
+                    )
+                ),
+                key=lambda relocation: int(relocation.operand_id),
+            ))
         stream = CoreFragmentStream(
             action.logical_core,
             (bind, compute_record),
             (),
             bind_relocations + compute_relocations,
         )
-        used_bindings = (*inputs, output)
+        used_bindings = (*inputs, *outputs)
         program_symbols = (
             *input_labels,
             output_label,
@@ -942,6 +1050,8 @@ class NaiveCoarseLowering:
             *((data_address,) if data_address is not None else ()),
             *((aux_address,) if aux_address is not None else ()),
             output_address,
+            *adamw_input_addresses,
+            *adamw_output_addresses,
         )
         fragment = CommandFragment.create(
             producer_pass=_PRODUCER_PASS,

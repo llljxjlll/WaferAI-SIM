@@ -19,6 +19,7 @@ from .common import (
     validate_unique_ids,
 )
 from .ir0 import (
+    AdamwUpdateWorkload,
     AttentionWorkload,
     CollectiveWorkload,
     CrossEntropyBackwardWorkload,
@@ -1098,7 +1099,7 @@ class PhysicalNode:
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
             OpKind.CE_BACKWARD: CrossEntropyBackwardWorkload,
-            OpKind.OPTIMIZER_UPDATE: SgdUpdateWorkload,
+            OpKind.OPTIMIZER_UPDATE: (SgdUpdateWorkload, AdamwUpdateWorkload),
         }[self.kind]
         expected_types = expected_types if type(expected_types) is tuple else (expected_types,)
         if type(self.workload) not in expected_types:

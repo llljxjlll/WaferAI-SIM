@@ -21,6 +21,7 @@ from .common import (
     validate_unique_ids,
 )
 from .ir0 import (
+    AdamwUpdateWorkload,
     AttentionWorkload,
     CollectiveKind,
     CollectiveWorkload,
@@ -204,7 +205,7 @@ def _validate_workload_kind(
         OpKind.SAMPLING: (GreedySampleWorkload,),
         OpKind.CE_FORWARD: (CrossEntropyForwardWorkload,),
         OpKind.CE_BACKWARD: (CrossEntropyBackwardWorkload,),
-        OpKind.OPTIMIZER_UPDATE: (SgdUpdateWorkload,),
+        OpKind.OPTIMIZER_UPDATE: (SgdUpdateWorkload, AdamwUpdateWorkload),
     }.get(op_kind)
     if expected_types is None:
         raise SchemaError(
@@ -260,6 +261,14 @@ def canonical_compute_operand_roles(
             "loss_gradient",
         ), ("logits_gradient",)
     if op_kind is OpKind.OPTIMIZER_UPDATE:
+        if type(workload) is AdamwUpdateWorkload:
+            return (
+                "weight", "weight_gradient", "master_weight", "first_moment",
+                "second_moment", "step_counter",
+            ), (
+                "updated_weight", "updated_master_weight", "updated_first_moment",
+                "updated_second_moment", "updated_step_counter",
+            )
         return ("weight", "weight_gradient"), ("updated_weight",)
 
     # Legacy S1 carriers retain their already-published ordered role spelling.

@@ -1240,6 +1240,79 @@ class SgdUpdateWorkload:
 
 
 @dataclass(frozen=True, slots=True)
+class AdamwUpdateWorkload:
+    logical_weight_shape: tuple[int, ...]
+    rank_weight_shape: tuple[int, ...]
+    element_count: int
+    step: int
+    learning_rate: float
+    beta1: float
+    beta2: float
+    epsilon: float
+    weight_decay: float
+    weight_dtype: DType = DType.FP16
+    gradient_dtype: DType = DType.FP32
+    state_dtype: DType = DType.FP32
+    step_counter_dtype: DType = DType.INT32
+    updated_weight_dtype: DType = DType.FP16
+
+    def validate(self, path: str) -> None:
+        _validate_shape(
+            self.logical_weight_shape,
+            f"{path}.logical_weight_shape",
+            expected_rank=2,
+        )
+        _validate_shape(
+            self.rank_weight_shape,
+            f"{path}.rank_weight_shape",
+            expected_rank=2,
+        )
+        if self.rank_weight_shape != self.logical_weight_shape:
+            raise SchemaError(
+                "AdamW rank weight must exactly replicate the logical weight",
+                path=f"{path}.rank_weight_shape",
+            )
+        validate_uint64(self.element_count, f"{path}.element_count")
+        if (
+            self.element_count != math.prod(self.logical_weight_shape)
+            or self.element_count > 0xFFFFFFFF
+        ):
+            raise SchemaError(
+                "element_count must exactly equal the weight extent and fit uint32",
+                path=f"{path}.element_count",
+            )
+        validate_uint64(self.step, f"{path}.step")
+        if self.step == 0 or self.step > 0xFFFFFFFF:
+            raise SchemaError("step must be positive uint32", path=f"{path}.step")
+        for name in ("learning_rate", "beta1", "beta2", "epsilon", "weight_decay"):
+            value = getattr(self, name)
+            if type(value) is not float or not math.isfinite(value):
+                raise SchemaError("requires finite f64", path=f"{path}.{name}")
+        if self.learning_rate <= 0 or self.epsilon <= 0:
+            raise SchemaError(
+                "learning_rate and epsilon must be positive", path=path
+            )
+        if (
+            not 0 < self.beta1 < 1
+            or not 0 < self.beta2 < 1
+            or self.weight_decay < 0
+        ):
+            raise SchemaError(
+                "beta1/beta2 must be in (0,1) and weight_decay nonnegative",
+                path=path,
+            )
+        for name, dtype in (
+            ("weight_dtype", DType.FP16),
+            ("gradient_dtype", DType.FP32),
+            ("state_dtype", DType.FP32),
+            ("step_counter_dtype", DType.INT32),
+            ("updated_weight_dtype", DType.FP16),
+        ):
+            if getattr(self, name) is not dtype:
+                raise SchemaError(f"must be {dtype.value}", path=f"{path}.{name}")
+
+
+@dataclass(frozen=True, slots=True)
 class CollectiveWorkload:
     collective: CollectiveKind
     reduce_op: ReduceOp | None
@@ -1388,6 +1461,7 @@ NodeWorkload = (
     | CrossEntropyForwardWorkload
     | CrossEntropyBackwardWorkload
     | SgdUpdateWorkload
+    | AdamwUpdateWorkload
     | CollectiveWorkload
 )
 
@@ -1465,7 +1539,7 @@ class LogicalNode:
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
             OpKind.CE_BACKWARD: CrossEntropyBackwardWorkload,
-            OpKind.OPTIMIZER_UPDATE: SgdUpdateWorkload,
+            OpKind.OPTIMIZER_UPDATE: (SgdUpdateWorkload, AdamwUpdateWorkload),
         }[self.kind]
         expected_types = expected_types if type(expected_types) is tuple else (expected_types,)
         if type(self.workload) not in expected_types:
