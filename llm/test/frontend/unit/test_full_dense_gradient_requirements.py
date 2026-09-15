@@ -13,6 +13,7 @@ from llm.frontend.wafer_frontend.schema.full_dense_gradient_requirements import 
     DenseGradientLossObjective,
     build_dense_full_train_requirements,
 )
+from llm.frontend.wafer_frontend.schema.ir0 import OpKind
 from llm.frontend.wafer_frontend.schema.rect_mesh import RectMeshSpec
 from llm.test.frontend.unit.test_flexible_dense_train import _spec
 
@@ -43,8 +44,18 @@ class FullDenseGradientRequirementsTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     len(oracle.required_backbone_backward_refs),
-                    len(plan.forward_graph.nodes) - 1,
+                    len(plan.forward_graph.nodes) - 2,
                 )
+                embedding = next(node for node in plan.forward_graph.nodes
+                                 if node.kind is OpKind.EMBEDDING)
+                self.assertIn(embedding.id, oracle.required_forward_refs)
+                self.assertNotIn(f"backward::{embedding.id}",
+                                 oracle.required_backbone_backward_refs)
+                self.assertTrue(any(
+                    embedding.id in path.forward_op_refs
+                    and path.named_wgrad_op_ref and path.gradient_bytes > 0
+                    for path in oracle.paths
+                ))
                 self.assertNotEqual(
                     oracle.loss_gradient_seed_ref, oracle.forward_loss_value_ref
                 )

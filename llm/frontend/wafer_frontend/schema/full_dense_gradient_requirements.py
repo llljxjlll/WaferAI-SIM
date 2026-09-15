@@ -219,7 +219,7 @@ def build_dense_full_train_requirements(
         required_forward_refs=tuple(node.id for node in graph.nodes),
         required_backbone_backward_refs=tuple(
             f"backward::{node.id}" for node in reversed(graph.nodes)
-            if node.kind is not OpKind.CE_FORWARD
+            if node.kind not in (OpKind.CE_FORWARD, OpKind.EMBEDDING)
         ),
         paths=tuple(paths),
     )
