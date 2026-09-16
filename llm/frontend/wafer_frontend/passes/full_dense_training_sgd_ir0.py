@@ -81,9 +81,11 @@ def build_full_dense_training_sgd_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
                 or weight.producer is not None):
             raise SchemaError("SGD source needs one exact FP16 parameter and FP32 derivative",
                               path=template.state_ref)
-        node_ref = f"sgd_update::{weight_ref}::tp0"
+        node_ref = f"sgd_update::{weight_ref}::tp{template.tp_shard_index}"
         output_ref = f"{node_ref}.updated_weight"
-        alias = f"trainable:{weight_ref}"
+        alias = (f"trainable:{weight_ref}"
+                 if plan.spec.tp_degree == 1 else
+                 f"trainable:{weight_ref}:tp{template.tp_shard_index}")
         updated = TensorValue(
             output_ref, weight.shape, DType.FP16,
             weight.logical_layout, weight.sharding, node_ref, (), alias,
@@ -94,8 +96,8 @@ def build_full_dense_training_sgd_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
             OpKind.OPTIMIZER_UPDATE, OpPhase.UPDATE, 0, weight.sharding.mesh_ref,
             (weight_ref, gradient_ref), (output_ref,),
             SgdUpdateWorkload(
-                weight.shape, weight.shape, gradient.shape, gradient.shape,
-                updated.shape, updated.shape, prod(weight.shape),
+                weight.shape, state.shape, gradient.shape, state.shape,
+                updated.shape, state.shape, prod(state.shape),
                 plan.spec.learning_rate, 0.0,
                 DType.FP16, DType.FP32, DType.FP16,
             ),
@@ -105,7 +107,8 @@ def build_full_dense_training_sgd_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
         ))
         accesses.append(StateAccess.create(
             node_ref=node_ref, state_ref=state.id,
-            mode=StateAccessMode.READ_WRITE, rank=0,
+            mode=StateAccessMode.READ_WRITE,
+            rank=template.tp_shard_index,
         ))
         edges.append(GraphEdge(
             f"{gradient_ref}.edge_to.{node_ref}", EdgeKind.DATA,

@@ -23,8 +23,10 @@ def build_full_dense_training_two_step_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
     """
     one = build_full_dense_training_sgd_ir0(plan)
     shared = {state.identity.tensor_ref for state in one.persistent_states}
-    if None in shared or len(shared) != len(one.persistent_states):
-        raise SchemaError("source parameter tensor identities must be unique",
+    shards = {(state.identity.tensor_ref, state.identity.shard_index)
+              for state in one.persistent_states}
+    if None in shared or len(shards) != len(one.persistent_states):
+        raise SchemaError("source parameter tensor/TP shard identities must be unique",
                           path="one.persistent_states")
     nodes = []
     values: dict[str, TensorValue] = {}
@@ -80,10 +82,15 @@ def build_full_dense_training_two_step_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
                     node_ref(edge.source_node), node_ref(edge.destination_node), None,
                 ))
     by_state_update = {
-        state.identity.tensor_ref: next(
+        (state.identity.tensor_ref, state.identity.shard_index): next(
             node.id for node in one.nodes
             if node.kind is OpKind.OPTIMIZER_UPDATE
-            and node.inputs[0] == state.identity.tensor_ref)
+            and node.inputs[0] == state.identity.tensor_ref
+            and node.id == (
+                f"sgd_update::{state.identity.tensor_ref}"
+                f"::tp{state.identity.shard_index}"
+            )
+        )
         for state in one.persistent_states
     }
     for node in one.nodes:
@@ -92,11 +99,13 @@ def build_full_dense_training_two_step_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
         if len(node.inputs) != 2 or node.inputs[1] not in shared:
             continue
         weight = node.inputs[1]
-        controls.append(GraphEdge(
-            f"{by_state_update[weight]}.store0_to.{node.id}.load1",
-            EdgeKind.CONTROL,
-            f"{by_state_update[weight]}::step0", f"{node.id}::step1", None,
-        ))
+        for rank in range(plan.spec.tp_degree):
+            update_ref = by_state_update[(weight, rank)]
+            controls.append(GraphEdge(
+                f"{update_ref}.store0_to.{node.id}.load1",
+                EdgeKind.CONTROL,
+                f"{update_ref}::step0", f"{node.id}::step1", None,
+            ))
     consumers = {ref: [] for ref in values}
     for node in nodes:
         for ref in node.inputs:
@@ -117,7 +126,10 @@ def build_full_dense_training_two_step_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
         state_accesses=tuple(accesses),
     )
     result.validate("full_dense_training_two_step_source")
-    return result
+    # Canonical V1 candidates survive only when the intermediate has no
+    # backward tape reader.  Discovery runs on the completed two-step graph.
+    from .discover_fusion import with_discovered_fusion_candidates
+    return with_discovered_fusion_candidates(result)
 
 
 __all__ = ["build_full_dense_training_two_step_ir0"]

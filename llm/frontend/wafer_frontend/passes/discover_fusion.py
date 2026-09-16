@@ -20,6 +20,7 @@ from ..schema.ir0 import (
     LogicalNode,
     NumericalPolicy,
     OpKind,
+    OpPhase,
     ReduceOp,
 )
 
@@ -193,6 +194,7 @@ def discover_fusion_candidates(graph: IR0) -> tuple[FusionCandidate, ...]:
         raise SchemaError("must be an IR0", path="graph")
     graph.validate("graph")
     nodes = {node.id: node for node in graph.nodes}
+    values = {value.id: value for value in graph.values}
     result: list[FusionCandidate] = []
     claimed: set[str] = set()
     for edge in graph.edges:
@@ -202,6 +204,17 @@ def discover_fusion_candidates(graph: IR0) -> tuple[FusionCandidate, ...]:
         destination = nodes[edge.destination_node]
         pattern = _pattern(source, destination)
         if pattern is None:
+            continue
+        # A real TRAIN tape/WGRAD consumer needs the intermediate as a
+        # separate native output. V1 fusion has only one boundary output;
+        # retain the original unfused forward pair in this case.
+        other_readers = tuple(
+            nodes[ref] for ref in values[edge.value_id].consumers
+            if ref != destination.id
+        )
+        if (other_readers and source.phase is OpPhase.FWD
+                and all(reader.phase in (OpPhase.DGRAD, OpPhase.WGRAD)
+                        for reader in other_readers)):
             continue
         overlap = claimed.intersection((source.id, destination.id))
         if overlap:
