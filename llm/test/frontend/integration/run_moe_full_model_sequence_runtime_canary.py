@@ -7,6 +7,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import resource
+import sys
+import time
 
 from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
     compile_moe_full_model_inference_sequence,
@@ -51,6 +54,37 @@ from .run_dense_sequence_runtime_canary import (
 
 _ROOT = Path(__file__).resolve().parents[4]
 _LINKER_SCHEMA = "wafer_frontend.moe_full_model_region_linker/v1alpha1"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _source_tool_snapshot(args: argparse.Namespace) -> dict[str, dict[str, str]]:
+    """Bind loaded repository Python and exact native tool/config bytes."""
+
+    sources: dict[str, str] = {}
+    tracked_roots = (
+        _ROOT / "llm/frontend/wafer_frontend",
+        _ROOT / "llm/test/frontend",
+    )
+    for module in tuple(sys.modules.values()):
+        module_path = getattr(module, "__file__", None)
+        if type(module_path) is not str or not module_path.endswith(".py"):
+            continue
+        path = Path(module_path).resolve()
+        if any(path.is_relative_to(root) for root in tracked_roots):
+            sources[str(path.relative_to(_ROOT))] = _sha256(path)
+    runner = Path(__file__).resolve()
+    sources[str(runner.relative_to(_ROOT))] = _sha256(runner)
+    tools = {
+        name: _sha256(getattr(args, name).resolve())
+        for name in ("finalizer", "resolver", "npusim", "simulation")
+    }
+    return {
+        "imported_python_sha256": dict(sorted(sources.items())),
+        "tool_sha256": dict(sorted(tools.items())),
+    }
 
 
 def _executable_core_bindings(sequence, rank_count: int) -> dict[int, int]:
@@ -214,9 +248,11 @@ def _audit_native_runtime(
             r"\[P5 P2P DRAIN\] core=(\d+) residual=(\d+)", stdout
         )
     )
-    if (len(p2p) != len(expected_cores) or {core for core, _ in p2p} != expected_cores
+    expected_p2p_cores = expected_cores if links_expected else set()
+    if (len(p2p) != len(expected_p2p_cores)
+            or {core for core, _ in p2p} != expected_p2p_cores
             or any(residual for _, residual in p2p)):
-        raise RuntimeError(f"P2P drain does not close every executable core: {p2p!r}")
+        raise RuntimeError(f"P2P drain does not close every transport core: {p2p!r}")
 
     for core, (expected_matmuls, expected_swiglus) in expert_records_by_core.items():
         matmuls = len(re.findall(
@@ -260,6 +296,7 @@ def _audit_native_runtime(
 def prove_full_model_dataflow(segment, units) -> None:
     """Fail when physical dispatch, expert, combine, or Dense bridges drift."""
     manifest = segment.executable_manifest
+    single_rank = len(manifest.core_bindings) == 1
     buffers = {item.id: item for fragment in manifest.fragments for item in fragment.buffer_abi}
     fragments = {item.id: item for item in manifest.fragments}
     bindings = {
@@ -325,20 +362,83 @@ def prove_full_model_dataflow(segment, units) -> None:
                 activation, gate_record = endpoint(actions[action.id], core, RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_INPUT_ADDRESS)
                 gate_weight, _ = endpoint(actions[action.id], core, RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_DATA_ADDRESS)
                 params = next(item.literal_value for item in gate_record.operands if item.name == "parameters")
-                if (activation.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.activation"
-                        or not gate_weight.value_id.startswith(f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.state.")
-                        or tuple(params[1:]) != (len(action.assignment_refs), unit.spec.hidden_size, unit.spec.expert_count)
-                        or action.flops != 2 * params[1] * params[2] * params[3]
-                        or gate_weight.size_bytes < 2 * params[2] * params[3]):
-                    raise RuntimeError("physical router GATE violates P2 operation count and H×E weight footprint")
+                value_prefix = f"moe_full_model.layer{layer}.flexible_moe.value."
+                if single_rank:
+                    gate_shape_ok = tuple(params) == (
+                        1,
+                        len(action.assignment_refs),
+                        unit.spec.hidden_size,
+                        unit.spec.expert_count,
+                    )
+                    expected_flops = 2 * params[1] * params[2] * params[3]
+                    activation_ok = activation.value_id == value_prefix + "activation"
+                    weight_ok = gate_weight.value_id.startswith(
+                        value_prefix + "state."
+                    )
+                    weight_bytes_ok = (
+                        gate_weight.size_bytes
+                        >= 2 * unit.spec.hidden_size * unit.spec.expert_count
+                    )
+                else:
+                    gate_shape_ok = tuple(params[1:]) == (
+                        len(action.assignment_refs),
+                        unit.spec.hidden_size,
+                        unit.spec.expert_count,
+                    )
+                    expected_flops = 2 * params[1] * params[2] * params[3]
+                    activation_ok = activation.value_id == (
+                        value_prefix + f"rank{action.rank}.activation"
+                    )
+                    weight_ok = gate_weight.value_id.startswith(
+                        value_prefix + f"rank{action.rank}.state."
+                    )
+                    weight_bytes_ok = (
+                        gate_weight.size_bytes >= 2 * params[2] * params[3]
+                    )
+                if (not activation_ok or not weight_ok or not gate_shape_ok
+                        or action.flops != expected_flops
+                        or not weight_bytes_ok):
+                    raise RuntimeError(
+                        "physical router GATE violates P2 operation count "
+                        "and H×E weight footprint"
+                    )
             if action.kind is MoeRectActionKind.WEIGHTED_COMBINE and action.assignment_refs:
                 combined, _ = endpoint(actions[action.id], LogicalCoreRef(action.rank, 0), RecordOpcode.LOCAL_REDUCE, SemanticOperandId.SOURCE_ADDRESS)
-                if combined.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.output":
+                expected_combined = (
+                    f"moe_full_model.layer{layer}.flexible_moe.value.activation"
+                    if single_rank else
+                    f"moe_full_model.layer{layer}.flexible_moe.value.rank{action.rank}.output"
+                )
+                if combined.value_id != expected_combined:
                     raise RuntimeError("physical weighted combine does not read returned expert workspace")
             if action.kind is not MoeRectActionKind.EXPERT_FORWARD:
                 continue
             core = LogicalCoreRef(action.rank, 0)
             m, h, intermediate = len(action.assignment_refs), unit.spec.hidden_size, unit.spec.intermediate_size
+            if single_rank:
+                matmuls = records.get(
+                    (actions[action.id], core, RecordOpcode.MATMUL), ()
+                )
+                if m == 0:
+                    if action.flops != 0 or matmuls:
+                        raise RuntimeError(
+                            "empty single-rank expert emitted phantom compute"
+                        )
+                    continue
+                if len(matmuls) != 1:
+                    raise RuntimeError(
+                        "single-rank expert lacks its exact timing MATMUL"
+                    )
+                _, expert_record = matmuls[0]
+                params = tuple(next(
+                    item.literal_value for item in expert_record.operands
+                    if item.name == "parameters"
+                ))
+                if params != (1, 1, h, intermediate) or action.flops <= 0:
+                    raise RuntimeError(
+                        "single-rank expert timing MATMUL differs from the plan"
+                    )
+                continue
             projection_ids = tuple(stable_artifact_id(
                 "moe_full_model_action",
                 {"source": source, "layer": layer, "action": stable_artifact_id(
@@ -416,7 +516,13 @@ def prove_full_model_dataflow(segment, units) -> None:
             b, _ = endpoint(bridge, LogicalCoreRef(0, 0), RecordOpcode.DTE_ISSUE, SemanticOperandId.DESTINATION_ADDRESS)
             dense = a if role == "input" else b
             moe = b if role == "input" else a
-            if not dense.value_id.endswith(f".layer{layer}{dense_suffix}") or moe.value_id != f"moe_full_model.layer{layer}.flexible_moe.value.rank0.{moe_suffix}":
+            expected_moe = (
+                f"moe_full_model.layer{layer}.flexible_moe.value.{moe_suffix}"
+                if single_rank else
+                f"moe_full_model.layer{layer}.flexible_moe.value.rank0.{moe_suffix}"
+            )
+            if (not dense.value_id.endswith(f".layer{layer}{dense_suffix}")
+                    or moe.value_id != expected_moe):
                 raise RuntimeError(f"Dense↔MoE bridge missing exact layer{layer} {role} boundary")
             if next(item.literal_value for item in record.operands if item.name == "size_bytes") != min(a.size_bytes, b.size_bytes):
                 raise RuntimeError(f"Dense↔MoE bridge layer{layer} {role} length is not exact")
@@ -604,6 +710,8 @@ def build_full_model_program_io(segment, artifact_sha256: str) -> ProgramIoContr
 
 
 def run(args: argparse.Namespace) -> None:
+    source_tool_at_entry = _source_tool_snapshot(args)
+    started = time.monotonic()
     rows, columns = (int(item) for item in args.mesh_size.split("x"))
     rank_count = rows * columns
     materialization = _manifest(
@@ -617,13 +725,31 @@ def run(args: argparse.Namespace) -> None:
         materialization, _legacy_template(), fabric,
         hbm_address_spaces=spaces,
     )
+    compile_wall_seconds = round(time.monotonic() - started, 3)
+    sequence.validate()
     core_bindings = _executable_core_bindings(sequence, rank_count)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    manifests = []
-    artifacts = []
-    sidecars = []
-    artifact_digests = []
+    compiled_core_die_ids = tuple(
+        tuple(sorted({
+            stream.logical_core.die_id
+            for stream in segment.executable_manifest.core_streams
+        }))
+        for segment in sequence.segments
+    )
+    expected_dies = tuple(range(rank_count))
+    if compiled_core_die_ids != (expected_dies,) * 3:
+        raise RuntimeError(
+            "three executable segments do not exactly cover every MoE rank"
+        )
+
+    manifests: list[Path] = []
+    artifacts: list[Path] = []
+    reports: list[Path] = []
+    sidecars: list[Path] = []
+    resolver_logs: list[Path] = []
+    artifact_digests: list[str] = []
+    segment_metrics: list[dict[str, int | float]] = []
     units_by_id = {unit.id: unit for unit in sequence.moe_blocks.units}
     expected_flows = []
     expert_records = {
@@ -644,41 +770,87 @@ def run(args: argparse.Namespace) -> None:
                     counts = expert_records[core_bindings[action.rank]]
                     counts[0] += 3
                     counts[1] += 1
+
         path = output / f"segment_{index}.linked.json"
         artifact = output / f"segment_{index}.npup"
         report = output / f"segment_{index}.finalizer.json"
+        sidecar = output / f"segment_{index}.program_io.json"
+        resolver_log = output / f"segment_{index}.resolver.stdout.txt"
+        metric: dict[str, int | float] = {"index": index}
+
+        phase_started = time.monotonic()
         path.write_text(
             canonical_json(segment.executable_manifest), encoding="utf-8"
         )
+        metric["linked_serialization_wall_seconds"] = round(
+            time.monotonic() - phase_started, 3
+        )
+        metric["linked_manifest_bytes"] = path.stat().st_size
+
+        phase_started = time.monotonic()
         _run((
             str(args.finalizer.resolve()), "--input", str(path),
             "--output", str(artifact), "--report", str(report),
         ), cwd=output, timeout=120)
+        metric["finalizer_wall_seconds"] = round(
+            time.monotonic() - phase_started, 3
+        )
+        metric["npup_bytes"] = artifact.stat().st_size
         summary = json.loads(report.read_text(encoding="utf-8"))
-        sha = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        sha = _sha256(artifact)
         if (summary.get("artifact_sha256") != sha
                 or summary.get("linked_manifest_id")
                 != segment.executable_manifest.id
                 or summary.get("linked_manifest_digest")
                 != segment.executable_manifest_digest):
             raise RuntimeError(f"segment {index} finalizer closure failed")
+
+        phase_started = time.monotonic()
         contract = build_full_model_program_io(segment, sha)
         if (len(contract.output_probes) != 1
                 or contract.output_probes[0].target.value_id != "P0.logits"):
             raise RuntimeError(
                 "each MoE full-model segment must physically probe LM logits"
             )
-        sidecar = output / f"segment_{index}.program_io.json"
         sidecar.write_text(canonical_json(contract), encoding="utf-8")
+        metric["program_io_wall_seconds"] = round(
+            time.monotonic() - phase_started, 3
+        )
+        metric["program_io_bytes"] = sidecar.stat().st_size
+
+        phase_started = time.monotonic()
+        resolved = _run((
+            str(args.resolver.resolve()), "--resolve",
+            str(path), str(artifact), str(sidecar),
+        ), cwd=args.resolver.resolve().parent, timeout=min(args.timeout, 900))
+        metric["resolver_wall_seconds"] = round(
+            time.monotonic() - phase_started, 3
+        )
+        resolver_log.write_text(resolved, encoding="utf-8")
+        if (f"initializations={len(contract.initializations)}" not in resolved
+                or f"probes={len(contract.output_probes)}" not in resolved):
+            raise RuntimeError(
+                f"segment {index} native ProgramIO resolver closure failed"
+            )
+
         manifests.append(path)
         artifacts.append(artifact)
+        reports.append(report)
         sidecars.append(sidecar)
+        resolver_logs.append(resolver_log)
         artifact_digests.append(sha)
+        metric["python_peak_rss_kib_so_far"] = resource.getrusage(
+            resource.RUSAGE_SELF
+        ).ru_maxrss
+        metric["children_max_rss_kib_so_far"] = resource.getrusage(
+            resource.RUSAGE_CHILDREN
+        ).ru_maxrss
+        segment_metrics.append(metric)
 
     hardware = json.loads(
         specialize_p5_large_release_hardware(rows, columns)
     )
-    _bind_native_hardware_to_fabric(hardware, fabric)
+    native_core_grid = _bind_native_hardware_to_fabric(hardware, fabric)
     hardware["memory"]["sram_size"] = 131072
     hardware["memory"]["sram"]["capacity_bytes"] = 131072
     access = ["compute", "dte", "lsu", "legacy", "noc_rx"]
@@ -720,6 +892,8 @@ def run(args: argparse.Namespace) -> None:
     )
     mapping_path = output / "mapping.spec"
     mapping_path.write_text("0:0\n", encoding="utf-8")
+
+    native_started = time.monotonic()
     stdout = _run((
         str(args.npusim.resolve()),
         "--program-sequence", ",".join(map(str, artifacts)),
@@ -729,8 +903,11 @@ def run(args: argparse.Namespace) -> None:
         "--simulation-config", str(args.simulation.resolve()),
         "--mapping-config", str(mapping_path),
         "--trace-window", "1000000",
-    ), cwd=output, timeout=args.timeout)
-    (output / "npusim.stdout.txt").write_text(stdout, encoding="utf-8")
+    ), cwd=args.npusim.resolve().parent, timeout=args.timeout,
+        failure_log=output / "npusim.failure.stdout.txt")
+    native_wall_seconds = round(time.monotonic() - native_started, 3)
+    stdout_path = output / "npusim.stdout.txt"
+    stdout_path.write_text(stdout, encoding="utf-8")
     kv = _audit_native_runtime(
         stdout,
         sequence=sequence,
@@ -742,6 +919,101 @@ def run(args: argparse.Namespace) -> None:
         rows=rows,
         columns=columns,
     )
+
+    source_tool_at_exit = _source_tool_snapshot(args)
+    drifted_sources = sorted(
+        path for path, digest
+        in source_tool_at_entry["imported_python_sha256"].items()
+        if source_tool_at_exit["imported_python_sha256"].get(path) != digest
+    )
+    drifted_tools = sorted(
+        name for name, digest in source_tool_at_entry["tool_sha256"].items()
+        if source_tool_at_exit["tool_sha256"].get(name) != digest
+    )
+    if drifted_sources or drifted_tools:
+        raise RuntimeError(
+            "loaded source/tool drifted while the MoE canary ran: "
+            f"python={drifted_sources}, tools={drifted_tools}"
+        )
+
+    artifact_paths = (
+        *manifests, *artifacts, *reports, *sidecars, *resolver_logs,
+        hardware_path, mapping_path,
+    )
+    link_expectations = _flow_link_expectations(
+        tuple(expected_flows), rows, columns
+    )
+    source_tool_binding_path = output / "source_tool_binding.json"
+    source_tool_binding_path.write_text(json.dumps({
+        "schema_version": "moe-full-model-source-tool-binding-v1",
+        "source_tool_at_entry": source_tool_at_entry,
+        "npusim_execution": {
+            "executable": str(args.npusim.resolve()),
+            "cwd": str(args.npusim.resolve().parent),
+        },
+        "additional_imported_python_sha256": {
+            path: digest
+            for path, digest
+            in source_tool_at_exit["imported_python_sha256"].items()
+            if path not in source_tool_at_entry["imported_python_sha256"]
+        },
+        "artifact_files_sha256": {
+            path.name: _sha256(path)
+            for path in sorted(artifact_paths, key=lambda item: item.name)
+        },
+        "sequence_digest": sequence.digest,
+        "workload_case_id": materialization.request.case_id,
+        "source_request_sha256": canonical_digest(materialization.request),
+        "kv_boundaries_bytes": [int(item[1]) for item in kv],
+        "executable_core_bindings": [
+            {"rank": rank, "runtime_core_id": core_bindings[rank]}
+            for rank in sorted(core_bindings)
+        ],
+        "expected_d2d_links": [
+            {
+                "source_die": source,
+                "destination_die": destination,
+                "direction": direction,
+                "request_hops": requests,
+                "packet_hops": packets,
+            }
+            for (source, destination, direction), (requests, packets)
+            in sorted(link_expectations.items())
+        ],
+        "runtime_status": "verified",
+    }, indent=2, sort_keys=True), encoding="utf-8")
+
+    receipt_path = output / "compiled_receipt.json"
+    receipt_path.write_text(json.dumps({
+        "schema_version": "moe-full-model-runtime-receipt-v1",
+        "mesh": args.mesh_size,
+        "active_die_ids": list(range(rank_count)),
+        "compiled_core_die_ids": compiled_core_die_ids,
+        "frontend_core_grid": fabric.dies[0].noc_grid,
+        "native_core_grid": native_core_grid,
+        "frontend_cores_per_die": (
+            fabric.dies[0].noc_grid[0] * fabric.dies[0].noc_grid[1]
+        ),
+        "native_cores_per_die": native_core_grid[0] * native_core_grid[1],
+        "workload_case_id": materialization.request.case_id,
+        "source_request_sha256": canonical_digest(materialization.request),
+        "sequence_digest": sequence.digest,
+        "source_tool_binding_sha256": _sha256(source_tool_binding_path),
+        "runtime_log_sha256": _sha256(stdout_path),
+        "runtime_status": "verified",
+        "phase_wall_seconds": {
+            "production_compile": compile_wall_seconds,
+            "native_npusim": native_wall_seconds,
+        },
+        "total_wall_seconds": round(time.monotonic() - started, 3),
+        "segment_metrics": segment_metrics,
+        "python_peak_rss_kib": resource.getrusage(
+            resource.RUSAGE_SELF
+        ).ru_maxrss,
+        "children_max_rss_kib": resource.getrusage(
+            resource.RUSAGE_CHILDREN
+        ).ru_maxrss,
+    }, indent=2, sort_keys=True), encoding="utf-8")
     print(
         f"MoE full-model runtime canary PASS mesh={args.mesh_size} "
         f"ep={rank_count} layers=2 sequence={sequence.digest} "
@@ -765,10 +1037,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--finalizer", type=Path, default=build / "npusim_program_finalizer")
     parser.add_argument("--npusim", type=Path, default=build / "npusim")
+    parser.add_argument(
+        "--resolver", type=Path, default=build / "npusim_program_io_selftest"
+    )
     parser.add_argument("--simulation", type=Path, default=_ROOT / "llm/test/program/p5_behavioral_simulation.json")
     parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
-    for name in ("finalizer", "npusim", "simulation"):
+    for name in ("finalizer", "resolver", "npusim", "simulation"):
         if not getattr(args, name).is_file():
             parser.error(f"--{name} must name an existing file")
     if args.timeout <= 0:
