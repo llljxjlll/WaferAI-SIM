@@ -9,16 +9,15 @@ from __future__ import annotations
 
 from ..errors import SchemaError
 from ..passes.moe_full_train_expert_microplan import plan_moe_expert_native_forward
-from ..policies.naive_intra_die import _banks
 from ..schema.artifact_manifest import (
     AddressRelocation, CommandFragment, CoreFragmentStream, FragmentKind,
     ProgramSymbol, ProgramSymbolKind, RecordOpcode, RecordOperand,
     RelocatableRecord, SemanticOperandId,
 )
-from ..schema.common import DType, stable_artifact_id
+from ..schema.common import stable_artifact_id
 from ..schema.global_action import GlobalAction
 from ..schema.ir1 import IR1
-from ..schema.ir2 import BufferBinding, BufferOwnership, IntraDieSchedule, TensorSlice
+from ..schema.ir2 import BufferBinding, IntraDieSchedule, MoeExpertScratchRole
 from .coarse import _buffer_abi, _program_symbol
 
 
@@ -40,40 +39,17 @@ def lower_moe_expert_record_fragment(
                    if profile.id == core.sram_profile_ref)
     region = next(region for region in profile.regions
                   if region.id == plan.scratch_region_ref)
-    m, i = action.compute.workload.owned_token_count, action.compute.workload.intermediate_size
-    first_public = next(binding for binding in schedule.buffer_bindings
-                        if binding.id == plan.operations[0].input_ref)
-    scratch_specs = (
-        (plan.operations[0].output_ref, (m, 2*i),
-         plan.concat_region_offset_bytes, plan.concat_scratch_bytes),
-        (plan.operations[2].output_ref, (m, i),
-         plan.activated_region_offset_bytes, plan.activated_scratch_bytes),
+    scratch_by_role = {item.role: item.binding
+                       for item in schedule.moe_expert_scratch_bindings
+                       if item.task_id == action.source.task_id}
+    scratch = (
+        scratch_by_role[MoeExpertScratchRole.GATE_UP_CONCAT],
+        scratch_by_role[MoeExpertScratchRole.SWIGLU_ACTIVATED],
     )
-    scratch = []
-    for value_id, shape, offset, size in scratch_specs:
-        identity = {"action": action.id, "value": value_id,
-                    "region": region.id, "offset": offset, "bytes": size}
-        scratch.append(BufferBinding(
-            id=stable_artifact_id("moe_expert_scratch_binding", identity,
-                                  schema_version="moe_expert_scratch/v1"),
-            value_id=value_id, tensor_slice=TensorSlice(
-                value_id, (0, 0), shape),
-            core_id=plan.runtime_core_id, region_ref=region.id,
-            region_offset_bytes=offset, size_bytes=size,
-            alignment_bytes=profile.allocation_alignment_bytes,
-            banks=_banks(region.base_bytes + offset, size,
-                         bank_count=profile.bank_count,
-                         interleave_bytes=profile.bank_interleave_bytes),
-            storage_id=stable_artifact_id("moe_expert_scratch_storage", identity,
-                                          schema_version="moe_expert_scratch/v1"),
-            alias_of=None, ownership=BufferOwnership.OWNED,
-            lifetime_start=plan.core_order_index,
-            lifetime_end_exclusive=plan.core_order_index + 1,
-            dtype=DType.FP16, layout=first_public.layout,
-        ))
-    bindings = {binding.id: binding for binding in schedule.buffer_bindings}
-    for binding in scratch:
-        bindings[binding.id] = binding
+    if (scratch[0].id != plan.concat_scratch_binding_ref
+            or scratch[1].id != plan.activated_scratch_binding_ref):
+        raise SchemaError("fragment scratch differs from signed schedule sidecar",
+                          path="schedule.moe_expert_scratch_bindings")
     value_to_binding = {binding.id: binding for binding in schedule.buffer_bindings}
     value_to_binding[plan.operations[0].output_ref] = scratch[0]
     value_to_binding[plan.operations[2].output_ref] = scratch[1]

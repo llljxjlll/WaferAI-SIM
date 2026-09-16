@@ -18,7 +18,9 @@ from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import NaiveProje
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.ir0 import OpKind
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
-from llm.frontend.wafer_frontend.schema.ir2 import BufferOwnership
+from llm.frontend.wafer_frontend.schema.ir2 import (
+    BufferOwnership, IntraDieSchedule, MoeExpertScratchRole,
+)
 from llm.test.frontend.unit.test_moe_full_train_ep_placement import (
     MoeFullTrainEpPlacementTest as Fixture,
     build_single_die_moe_train_physical_source,
@@ -40,6 +42,7 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
         projection = NaiveProjectToIR2().run(graph, (), (), state_transfers=())
         schedule_set = NaiveIntraDiePolicy().schedule(projection, graph)
         cls.schedule = schedule_set.schedules[0]
+        cls.projection_dag = projection.dags[0]
         cls.graph = graph
         dag = build_global_action_dag(graph, projection, schedule_set)
         cls.dag = dag
@@ -114,6 +117,31 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
             with self.assertRaisesRegex(
                     SchemaError, "lifecycle records must exactly cover"):
                 fragment.validate_against(self.dag)
+
+    def test_schedule_signs_exact_two_roots_per_expert_and_rejects_phantom(self):
+        scratch = self.schedule.moe_expert_scratch_bindings
+        self.assertEqual(len(scratch), 4)
+        for action in self.actions:
+            owned = tuple(item for item in scratch
+                          if item.task_id == action.source.task_id)
+            self.assertEqual({item.role for item in owned},
+                             {MoeExpertScratchRole.GATE_UP_CONCAT,
+                              MoeExpertScratchRole.SWIGLU_ACTIVATED})
+            self.assertTrue(all(item.binding.ownership is BufferOwnership.OWNED
+                                for item in owned))
+        for forged in (
+            scratch[:-1],
+            tuple(replace(item, binding=replace(item.binding,
+                                                region_offset_bytes=0))
+                  if item == scratch[0] else item for item in scratch),
+        ):
+            candidate = IntraDieSchedule.create(
+                producer_pass=self.schedule.producer_pass,
+                **{**self.schedule._semantic_key(),
+                   "moe_expert_scratch_bindings": forged})
+            with self.subTest(forged=forged):
+                with self.assertRaises(SchemaError):
+                    candidate.validate_against(self.projection_dag, self.graph)
 
     def test_short_weight_and_scratch_alias_fail_closed(self):
         action = self.actions[0]

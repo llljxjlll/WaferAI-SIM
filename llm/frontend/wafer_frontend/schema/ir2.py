@@ -5624,6 +5624,31 @@ class CoreOrder:
             validate_nonempty(task_id, f"{path}.task_ids[{index}]")
 
 
+class MoeExpertScratchRole(str, Enum):
+    GATE_UP_CONCAT = "gate_up_concat"
+    SWIGLU_ACTIVATED = "swiglu_activated"
+
+
+@dataclass(frozen=True, slots=True)
+class MoeExpertScratchBinding:
+    """Physical internal SRAM root for one exact expert COMP task."""
+
+    task_id: str
+    role: MoeExpertScratchRole
+    binding: BufferBinding
+
+    def validate(self, path: str) -> None:
+        validate_nonempty(self.task_id, f"{path}.task_id")
+        if type(self.role) is not MoeExpertScratchRole:
+            raise SchemaError("unknown expert scratch role", path=f"{path}.role")
+        self.binding.validate(f"{path}.binding")
+        if (self.binding.ownership is not BufferOwnership.OWNED
+                or self.binding.alias_of is not None
+                or self.binding.dtype is not DType.FP16):
+            raise SchemaError("expert scratch must be an independent OWNED FP16 root",
+                              path=f"{path}.binding")
+
+
 @dataclass(frozen=True, slots=True)
 class IntraDieSchedule:
     schema_version: str
@@ -5638,21 +5663,29 @@ class IntraDieSchedule:
     flow_routes: tuple[FlowRouteBinding, ...]
     runtime_bindings: tuple[LogicalRuntimeBinding, ...]
     core_orders: tuple[CoreOrder, ...]
+    moe_expert_scratch_bindings: tuple[MoeExpertScratchBinding, ...] = ()
 
     @classmethod
     def create(cls, *, producer_pass: str, **semantic_key: object) -> "IntraDieSchedule":
+        semantic_key.setdefault("moe_expert_scratch_bindings", ())
+        identity = dict(semantic_key)
+        if not identity["moe_expert_scratch_bindings"]:
+            identity.pop("moe_expert_scratch_bindings")
         return cls(
             schema_version=INTRA_DIE_SCHEDULE_SCHEMA_VERSION,
             producer_pass=producer_pass,
-            id=stable_artifact_id("intra_die_schedule", semantic_key, schema_version=INTRA_DIE_SCHEDULE_SCHEMA_VERSION),
+            id=stable_artifact_id("intra_die_schedule", identity, schema_version=INTRA_DIE_SCHEDULE_SCHEMA_VERSION),
             **semantic_key,
         )
 
     def _semantic_key(self) -> dict[str, object]:
-        return {name: getattr(self, name) for name in (
+        result = {name: getattr(self, name) for name in (
             "dag_id", "die_id", "placements", "buffer_bindings", "task_buffer_uses",
             "task_state_uses", "flow_routes", "runtime_bindings", "core_orders",
         )}
+        if self.moe_expert_scratch_bindings:
+            result["moe_expert_scratch_bindings"] = self.moe_expert_scratch_bindings
+        return result
 
     def validate(self, path: str = "intra_die_schedule") -> None:
         if self.schema_version != INTRA_DIE_SCHEDULE_SCHEMA_VERSION:
@@ -5669,6 +5702,16 @@ class IntraDieSchedule:
         binding_index = validate_unique_ids(self.buffer_bindings, f"{path}.buffer_bindings")
         for index, binding in enumerate(self.buffer_bindings):
             binding.validate(f"{path}.buffer_bindings[{index}]")
+        scratch_keys = tuple((item.task_id, item.role.value)
+                             for item in self.moe_expert_scratch_bindings)
+        if scratch_keys != tuple(sorted(set(scratch_keys))):
+            raise SchemaError("MoE expert scratch must be unique and canonical",
+                              path=f"{path}.moe_expert_scratch_bindings")
+        for index, item in enumerate(self.moe_expert_scratch_bindings):
+            item.validate(f"{path}.moe_expert_scratch_bindings[{index}]")
+            if item.binding.id in binding_index:
+                raise SchemaError("expert scratch aliases a public schedule binding",
+                                  path=f"{path}.moe_expert_scratch_bindings[{index}]")
         uses: set[
             tuple[str, str, BufferAccess, BufferUseRole, int, int | None]
         ] = set()
@@ -6150,6 +6193,13 @@ class IntraDieSchedule:
                 absolute_end,
             )
             resolved_regions[binding.id] = region
+        from .moe_expert_scratch import derive_moe_expert_scratch_bindings
+        expected_scratch = derive_moe_expert_scratch_bindings(
+            dag, ir1, self.placements, self.buffer_bindings,
+            self.task_buffer_uses, self.core_orders)
+        if self.moe_expert_scratch_bindings != expected_scratch:
+            raise SchemaError("expert scratch must exactly derive from source task and physical schedule",
+                              path=f"{path}.moe_expert_scratch_bindings")
         for index, use in enumerate(self.task_buffer_uses):
             task = task_index.get(use.task_id)
             if task is None:

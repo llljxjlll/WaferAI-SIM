@@ -13,7 +13,8 @@ from ..schema.artifact_manifest import RecordOpcode
 from ..schema.common import DType, stable_artifact_id
 from ..schema.global_action import GlobalAction
 from ..schema.ir0 import OpKind
-from ..schema.ir2 import BufferBinding, BufferOwnership, BufferUseRole, IntraDieSchedule, SemanticTaskKind
+from ..schema.ir2 import (BufferBinding, BufferOwnership, BufferUseRole,
+                          IntraDieSchedule, MoeExpertScratchRole, SemanticTaskKind)
 from ..schema.ir1 import IR1
 from ..schema.moe_full_training_block_workload import MoeForwardBlockKind, MoeFullTrainingBlockWorkload
 
@@ -44,6 +45,8 @@ class MoeExpertNativePlan:
     runtime_core_id: int
     concat_scratch_bytes: int
     activated_scratch_bytes: int
+    concat_scratch_binding_ref: str
+    activated_scratch_binding_ref: str
     scratch_region_ref: str
     concat_region_offset_bytes: int
     activated_region_offset_bytes: int
@@ -114,8 +117,6 @@ def plan_moe_expert_native_forward(
         raise SchemaError("expert source operands need exact FP16 projection extents", path="action.buffer_uses")
     if len({binding.storage_id for binding in selected}) != 5:
         raise SchemaError("expert activation/weights/output cannot alias", path="action.buffer_uses")
-    concat = f"{action.id}:gate_up_concat"
-    activated = f"{action.id}:swiglu_activated"
     projection_bytes = 2*m*i
     region_refs = {binding.region_ref for binding in selected}
     if len(region_refs) != 1:
@@ -151,6 +152,29 @@ def plan_moe_expert_native_forward(
             or region.base_bytes + scratch_end > (1 << 16)):
         raise SchemaError("two distinct expert scratch roots exceed physical SRAM",
                           path="ir1.fabric.sram_profiles")
+    scratch = {item.role: item.binding
+               for item in schedule.moe_expert_scratch_bindings
+               if item.task_id == action.source.task_id}
+    if set(scratch) != {MoeExpertScratchRole.GATE_UP_CONCAT,
+                        MoeExpertScratchRole.SWIGLU_ACTIVATED}:
+        raise SchemaError("expert schedule lacks two exact OWNED scratch roots",
+                          path="schedule.moe_expert_scratch_bindings")
+    concat_binding = scratch[MoeExpertScratchRole.GATE_UP_CONCAT]
+    activated_binding = scratch[MoeExpertScratchRole.SWIGLU_ACTIVATED]
+    if (concat_binding.core_id != runtime_core_id
+            or activated_binding.core_id != runtime_core_id
+            or concat_binding.region_ref != region_ref
+            or activated_binding.region_ref != region_ref
+            or concat_binding.region_offset_bytes != concat_offset
+            or activated_binding.region_offset_bytes != activated_offset
+            or concat_binding.size_bytes != 2*projection_bytes
+            or activated_binding.size_bytes != projection_bytes
+            or concat_binding.ownership is not BufferOwnership.OWNED
+            or activated_binding.ownership is not BufferOwnership.OWNED):
+        raise SchemaError("expert scratch differs from signed physical schedule",
+                          path="schedule.moe_expert_scratch_bindings")
+    concat = concat_binding.value_id
+    activated = activated_binding.value_id
     operations = (
         MoeExpertNativeOp("gate", RecordOpcode.MATMUL, (1,m,h,i), activation.id,
                           gate.id, concat, 2*m*h, 2*h*i, projection_bytes, 0),
@@ -175,6 +199,8 @@ def plan_moe_expert_native_forward(
                     runtime_core_id=runtime_core_id,
                     concat_scratch_bytes=2*projection_bytes,
                     activated_scratch_bytes=projection_bytes,
+                    concat_scratch_binding_ref=concat_binding.id,
+                    activated_scratch_binding_ref=activated_binding.id,
                     scratch_region_ref=region_ref,
                     concat_region_offset_bytes=concat_offset,
                     activated_region_offset_bytes=activated_offset,

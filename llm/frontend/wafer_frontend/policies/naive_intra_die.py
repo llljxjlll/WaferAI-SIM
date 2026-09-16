@@ -1589,8 +1589,12 @@ def _ordinary_schedule(
         )
         for task in runtime_tasks
     )
+    from ..schema.moe_expert_scratch import derive_moe_expert_scratch_bindings
+    expert_scratch = derive_moe_expert_scratch_bindings(
+        dag, ir1, placements, buffer_bindings, task_buffer_uses, core_orders)
     result = IntraDieSchedule.create(
         producer_pass="intra_die_schedule",
+        moe_expert_scratch_bindings=expert_scratch,
         dag_id=dag.id,
         die_id=dag.die_id,
         placements=placements,
