@@ -6,7 +6,7 @@ REGISTER_PRIM(swiglu_backward_timing, PrimId::SWIGLU_BACKWARD_TIMING);
 
 void swiglu_backward_timing::initialize() {
     const int n = param_value["N"];
-    data_size_input = {2 * n};
+    data_size_input = {2 * n, n};
     data_chunk = {{"upstream_activation_gradient", n},
                   {"output", 2 * n}};
 }
