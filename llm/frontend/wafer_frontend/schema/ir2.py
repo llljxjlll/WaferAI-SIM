@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import math
 
@@ -26,6 +26,7 @@ from .action import (
 )
 from .common import (
     DType,
+    MeshAxisName,
     Sharding,
     UINT64_MAX,
     stable_artifact_id,
@@ -59,6 +60,11 @@ from .state_transfer import (
     StateTransferLike,
 )
 from .swizzle_plan import FusedPlan, SwizzleFusionPlan, SwizzleValueOrigin
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .dense_dp_sync_routes import DenseDP2RoutePlan
+    from .dense_dp_sync_tasks import DenseDP2ProjectedTasks
 
 
 INTRA_DIE_DAG_SCHEMA_VERSION = "wafer_frontend.intra_die_dag/v1alpha14"
@@ -1916,6 +1922,8 @@ class IntraDieDAG:
     state_staging_values: tuple[StateStagingValue, ...] = ()
     state_transfer_ids: tuple[str, ...] = ()
     swizzle_values: tuple[SwizzleIntraDieValue, ...] = ()
+    dp_gradient_plan_id: str | None = None
+    dp_sync_refs: tuple[str, ...] = ()
 
     @classmethod
     def create(cls, *, producer_pass: str, **semantic_key: object) -> "IntraDieDAG":
@@ -1923,10 +1931,16 @@ class IntraDieDAG:
         semantic_key.setdefault("state_access_ids", ())
         semantic_key.setdefault("state_staging_values", ())
         semantic_key.setdefault("state_transfer_ids", ())
+        semantic_key.setdefault("dp_gradient_plan_id", None)
+        semantic_key.setdefault("dp_sync_refs", ())
+        identity = dict(semantic_key)
+        if identity["dp_gradient_plan_id"] is None:
+            identity.pop("dp_gradient_plan_id")
+            identity.pop("dp_sync_refs")
         return cls(
             schema_version=INTRA_DIE_DAG_SCHEMA_VERSION,
             producer_pass=producer_pass,
-            id=stable_artifact_id("intra_die_dag", semantic_key, schema_version=INTRA_DIE_DAG_SCHEMA_VERSION),
+            id=stable_artifact_id("intra_die_dag", identity, schema_version=INTRA_DIE_DAG_SCHEMA_VERSION),
             **semantic_key,
         )
 
@@ -1940,6 +1954,9 @@ class IntraDieDAG:
         # Do not perturb historical IR2 ids for the legacy empty case.
         if self.swizzle_values:
             result["swizzle_values"] = self.swizzle_values
+        if self.dp_gradient_plan_id is not None:
+            result["dp_gradient_plan_id"] = self.dp_gradient_plan_id
+            result["dp_sync_refs"] = self.dp_sync_refs
         return result
 
     def validate(self, path: str = "intra_die_dag") -> None:
@@ -1948,6 +1965,15 @@ class IntraDieDAG:
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
         validate_nonempty(self.source_ir1_id, f"{path}.source_ir1_id")
         validate_uint64(self.die_id, f"{path}.die_id")
+        if self.dp_gradient_plan_id is not None:
+            validate_nonempty(self.dp_gradient_plan_id, f"{path}.dp_gradient_plan_id")
+        if (type(self.dp_sync_refs) is not tuple
+                or (self.dp_sync_refs and self.dp_gradient_plan_id is None)
+                or len(self.dp_sync_refs) != len(set(self.dp_sync_refs))):
+            raise SchemaError("DP2 sync refs need one nonempty unique source-bound plan",
+                              path=f"{path}.dp_sync_refs")
+        for ref in self.dp_sync_refs:
+            validate_nonempty(ref, f"{path}.dp_sync_refs")
         for field_name in (
             "fusion_plan_ids",
             "standalone_collective_plan_ids",
@@ -2077,7 +2103,10 @@ class IntraDieDAG:
                 raise SchemaError("dangling fusion plan origin", path=f"{path}.tasks[{index}].origin_ref.plan_id")
             if isinstance(origin, SwizzleNodeOrigin) and origin.plan_id not in self.fusion_plan_ids:
                 raise SchemaError("dangling Swizzle fusion plan origin", path=f"{path}.tasks[{index}].origin_ref.action_ref.plan_id")
-            if isinstance(origin, StandaloneNodeOrigin) and origin.collective_plan_id not in self.standalone_collective_plan_ids:
+            if (isinstance(origin, StandaloneNodeOrigin)
+                    and origin.collective_plan_id not in self.standalone_collective_plan_ids
+                    and (origin.collective_plan_id != self.dp_gradient_plan_id
+                         or task.region_id != f"region.dp_gradient.{self.dp_gradient_plan_id}.die.{self.die_id}")):
                 raise SchemaError("dangling standalone plan origin", path=f"{path}.tasks[{index}].origin_ref.collective_plan_id")
             if isinstance(origin, OrdinaryNodeOrigin) and origin.op_id not in self.ordinary_node_ids:
                 raise SchemaError("dangling ordinary op origin", path=f"{path}.tasks[{index}].origin_ref.op_id")
@@ -2533,7 +2562,9 @@ class IntraDieDAG:
                 )
             if region.fusion_plan_id is not None and region.fusion_plan_id not in self.fusion_plan_ids:
                 raise SchemaError("dangling fusion plan", path=f"{path}.regions[{index}].fusion_plan_id")
-            if region.standalone_collective_plan_id is not None and region.standalone_collective_plan_id not in self.standalone_collective_plan_ids:
+            if (region.standalone_collective_plan_id is not None
+                    and region.standalone_collective_plan_id not in self.standalone_collective_plan_ids
+                    and region.standalone_collective_plan_id != self.dp_gradient_plan_id):
                 raise SchemaError("dangling standalone plan", path=f"{path}.regions[{index}].standalone_collective_plan_id")
             if region.lowering is RegionLowering.ISA_REGION and any(
                 not isinstance(task.origin_ref, (FusedNodeOrigin, SwizzleNodeOrigin))
@@ -2678,13 +2709,22 @@ class IntraDieDAG:
         standalone_regions = tuple(
             region.standalone_collective_plan_id
             for region in self.regions
-            if region.lowering is RegionLowering.STRICT_ACTIONS
+            if (region.lowering is RegionLowering.STRICT_ACTIONS
+                and region.standalone_collective_plan_id != self.dp_gradient_plan_id)
         )
         if standalone_regions != self.standalone_collective_plan_ids:
             raise SchemaError(
                 "each local standalone plan must have exactly one strict-actions region in plan order",
                 path=f"{path}.regions",
             )
+        if self.dp_gradient_plan_id is not None:
+            dp_regions = tuple(region for region in self.regions
+                               if region.standalone_collective_plan_id == self.dp_gradient_plan_id)
+            if (len(dp_regions) != 1
+                    or dp_regions[0].lowering is not RegionLowering.STRICT_ACTIONS
+                    or dp_regions[0].id != f"region.dp_gradient.{self.dp_gradient_plan_id}.die.{self.die_id}"):
+                raise SchemaError("DP2 gradient needs one named cross-replica strict-actions region",
+                                  path=f"{path}.regions")
         expected_id = stable_artifact_id("intra_die_dag", self._semantic_key(), schema_version=INTRA_DIE_DAG_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
@@ -2695,8 +2735,50 @@ class IntraDieDAG:
         fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
         path: str = "intra_die_dag",
+        *,
+        dp_route_plan: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+        dp_replica_index: int | None = None,
     ) -> None:
         self.validate(path)
+        dp_entries = ()
+        if self.dp_gradient_plan_id is not None:
+            if (dp_route_plan is None or dp_projected_tasks is None
+                    or type(dp_replica_index) is not int
+                    or dp_replica_index not in (0, 1)
+                    or self.dp_gradient_plan_id != dp_route_plan.id
+                    or self.source_ir1_id != ir1.id):
+                raise SchemaError("DP2 per-die tasks require the exact cross-replica source plan",
+                                  path=f"{path}.dp_gradient_plan_id")
+            dp_projected_tasks.validate_against(dp_route_plan)
+            dp_entries = tuple(item for item in dp_projected_tasks.tasks
+                               if item.die_id == self.die_id
+                               and item.replica_index == dp_replica_index)
+            expected_refs = tuple(dict.fromkeys(
+                item.source_sync_ref for item in dp_entries
+            ))
+            if len(expected_refs) != 30 or self.dp_sync_refs != expected_refs:
+                raise SchemaError("DP2 die must own exactly its 30 source gradient synchronizations",
+                                  path=f"{path}.dp_sync_refs")
+            actual_dp_tasks = tuple(task for task in self.tasks
+                                    if isinstance(task.origin_ref, StandaloneNodeOrigin)
+                                    and task.origin_ref.collective_plan_id == self.dp_gradient_plan_id)
+            if (len(actual_dp_tasks) != len(dp_entries)
+                    or {task.id for task in actual_dp_tasks}
+                    != {entry.task.id for entry in dp_entries}):
+                raise SchemaError("DP2 die tasks must exactly cover physical cross-replica actions",
+                                  path=f"{path}.tasks")
+            task_by_id = {task.id: task for task in self.tasks}
+            for entry in dp_entries:
+                actual = task_by_id[entry.task.id]
+                if (replace(actual, deps=entry.task.deps) != entry.task
+                        or not set(entry.task.deps).issubset(actual.deps)
+                        or (entry.producer_task_ref in task_by_id
+                            and entry.producer_task_ref not in actual.deps)
+                        or (entry.consumer_task_ref in task_by_id
+                            and actual.id not in task_by_id[entry.consumer_task_ref].deps)):
+                    raise SchemaError("DP2 task shape, payload, origin or WGRAD/SGD dependency is forged",
+                                      path=f"{path}.tasks[{entry.task.id}]")
         swizzle_plans = tuple(
             plan for plan in fusion_plans if type(plan) is SwizzleFusionPlan
         )
@@ -3052,6 +3134,25 @@ class IntraDieDAG:
                         if action.kind in (FusionActionKind.LOCAL_COPY, FusionActionKind.RECV):
                             for temp_id in action.writes:
                                 bind_temp_origin(temp_id, node.inputs[0])
+        if self.dp_gradient_plan_id is not None:
+            assert dp_route_plan is not None and dp_replica_index is not None
+            for gradient in dp_route_plan.gradients:
+                root_sources = tuple(
+                    action.reads[0]
+                    for action in gradient.rank_programs[0].actions
+                    if action.kind is FusionActionKind.LOCAL_COPY
+                    and len(action.reads) == 1
+                )
+                if len(root_sources) != 1 or root_sources[0] not in values:
+                    raise SchemaError("DP2 scratch must originate from a genuine FP32 WGRAD",
+                                      path=f"{path}.values")
+                for action in gradient.rank_programs[dp_replica_index].actions:
+                    if action.kind not in (FusionActionKind.LOCAL_COPY,
+                                           FusionActionKind.RECV):
+                        continue
+                    for scratch_ref in action.writes:
+                        if scratch_ref not in values:
+                            bind_temp_origin(scratch_ref, root_sources[0])
         local_origin_tasks: dict[tuple[str, int, str], SemanticTask] = {}
         for task in self.tasks:
             if task.kind is SemanticTaskKind.TRANSIT:
@@ -3070,6 +3171,8 @@ class IntraDieDAG:
         standalone_node_units = {plan.op_id: plan.id for plan in standalone_plans}
 
         def coverage_unit(node_id: str) -> tuple[str, str]:
+            if node_id in self.dp_sync_refs:
+                return ("dp_gradient", node_id)
             if node_id in fusion_node_units:
                 return ("fusion", fusion_node_units[node_id])
             if node_id in standalone_node_units:
@@ -3079,6 +3182,10 @@ class IntraDieDAG:
         def belongs_to_node(task: SemanticTask, node_id: str) -> bool:
             origin = task.origin_ref
             unit_kind, unit_id = coverage_unit(node_id)
+            if unit_kind == "dp_gradient":
+                return (isinstance(origin, StandaloneNodeOrigin)
+                        and origin.collective_plan_id == self.dp_gradient_plan_id
+                        and task.member_id == node_id)
             if unit_kind == "ordinary":
                 return (
                     isinstance(origin, OrdinaryNodeOrigin)
@@ -3099,6 +3206,10 @@ class IntraDieDAG:
         def belongs_to_unit(task: SemanticTask, node_id: str) -> bool:
             origin = task.origin_ref
             unit_kind, unit_id = coverage_unit(node_id)
+            if unit_kind == "dp_gradient":
+                return (isinstance(origin, StandaloneNodeOrigin)
+                        and origin.collective_plan_id == self.dp_gradient_plan_id
+                        and task.member_id == node_id)
             if unit_kind == "ordinary":
                 return (
                     isinstance(origin, OrdinaryNodeOrigin)
@@ -3123,6 +3234,8 @@ class IntraDieDAG:
             unit_kind, _unit_id = coverage_unit(node_id)
             expected_kinds = (
                 (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND)
+                if unit_kind == "dp_gradient"
+                else (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND)
                 if unit_kind == "standalone"
                 and ir1_node_index[node_id].workload.collective
                 is CollectiveKind.REDUCE_SCATTER
@@ -3174,15 +3287,17 @@ class IntraDieDAG:
         ) -> tuple[SemanticTask, ...]:
             unit_kind, _unit_id = coverage_unit(node_id)
             expected_kind = (
-                SemanticTaskKind.REDUCE
+                (SemanticTaskKind.REDUCE, SemanticTaskKind.WAIT)
+                if unit_kind == "dp_gradient"
+                else (SemanticTaskKind.REDUCE,)
                 if unit_kind == "standalone"
                 and ir1_node_index[node_id].workload.collective
                 is CollectiveKind.REDUCE_SCATTER
-                else {
+                else ({
                     "ordinary": SemanticTaskKind.COMP,
                     "fusion": SemanticTaskKind.REDUCE,
                     "standalone": SemanticTaskKind.BARRIER,
-                }[unit_kind]
+                }[unit_kind],)
             )
             return tuple(
                 sorted(
@@ -3194,10 +3309,17 @@ class IntraDieDAG:
                             if whole_unit
                             else belongs_to_node(task, node_id)
                         )
-                        and task.kind is expected_kind
+                        and task.kind in expected_kind
+                        and (unit_kind != "dp_gradient" or (
+                            (task.kind is SemanticTaskKind.REDUCE
+                             and (value_id is None or value_id in task.write_values))
+                            or (task.kind is SemanticTaskKind.WAIT
+                                and isinstance(task.origin_ref, StandaloneNodeOrigin)
+                                and task.origin_ref.action_id.endswith(".broadcast_wait"))
+                        ))
                         and (
                             value_id is None
-                            or unit_kind == "standalone"
+                            or unit_kind in ("standalone", "dp_gradient")
                             or value_id in task.write_values
                         )
                     ),
@@ -3288,6 +3410,10 @@ class IntraDieDAG:
                 if source_action is None:
                     raise SchemaError("fused origin references a dangling action", path=f"{path}.tasks[{index}].origin_ref")
             elif isinstance(origin, StandaloneNodeOrigin):
+                if origin.collective_plan_id == self.dp_gradient_plan_id:
+                    # The source-rebuilt per-die task and both endpoint deps
+                    # were checked above against the physical DP route plan.
+                    continue
                 source_action = standalone_actions.get((origin.collective_plan_id, origin.rank, origin.action_id))
                 source_plan = standalone_plan_index.get(origin.collective_plan_id)
                 if source_action is None:
@@ -3528,6 +3654,11 @@ class IntraDieDAG:
                     )
                 )
                 if task.deps != expected_deps:
+                    if self.dp_gradient_plan_id is not None:
+                        raise SchemaError(
+                            f"DP2 canonical graph dependencies differ: expected={expected_deps!r}; actual={task.deps!r}",
+                            path=f"{path}.tasks[{index}].deps",
+                        )
                     raise SchemaError(
                         "deps disagree with canonical graph dependencies",
                         path=f"{path}.tasks[{index}].deps",
@@ -3581,24 +3712,32 @@ class IR2ProjectionResult:
     dags: tuple[IntraDieDAG, ...]
     source_state_manifest_id: str | None = None
     state_transfers: tuple[StateTransferLike, ...] = ()
+    dp_gradient_plan_id: str | None = None
+    dp_sync_refs: tuple[str, ...] = ()
 
     @classmethod
     def create(cls, *, producer_pass: str, **semantic_key: object) -> "IR2ProjectionResult":
         semantic_key.setdefault("source_state_manifest_id", None)
         semantic_key.setdefault("state_transfers", ())
+        semantic_key.setdefault("dp_gradient_plan_id", None)
+        semantic_key.setdefault("dp_sync_refs", ())
+        identity = dict(semantic_key)
+        if identity["dp_gradient_plan_id"] is None:
+            identity.pop("dp_gradient_plan_id")
+            identity.pop("dp_sync_refs")
         return cls(
             schema_version=IR2_PROJECTION_RESULT_SCHEMA_VERSION,
             producer_pass=producer_pass,
             id=stable_artifact_id(
                 "ir2_projection_result",
-                semantic_key,
+                identity,
                 schema_version=IR2_PROJECTION_RESULT_SCHEMA_VERSION,
             ),
             **semantic_key,
         )
 
     def _semantic_key(self) -> dict[str, object]:
-        return {
+        result = {
             name: getattr(self, name)
             for name in (
                 "source_ir1_id",
@@ -3609,6 +3748,10 @@ class IR2ProjectionResult:
                 "state_transfers",
             )
         }
+        if self.dp_gradient_plan_id is not None:
+            result["dp_gradient_plan_id"] = self.dp_gradient_plan_id
+            result["dp_sync_refs"] = self.dp_sync_refs
+        return result
 
     def validate(self, path: str = "ir2_projection_result") -> None:
         if validation_seen(self, "ir2_projection_result"):
@@ -3617,6 +3760,15 @@ class IR2ProjectionResult:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
         validate_nonempty(self.source_ir1_id, f"{path}.source_ir1_id")
+        if self.dp_gradient_plan_id is not None:
+            validate_nonempty(self.dp_gradient_plan_id, f"{path}.dp_gradient_plan_id")
+        if (type(self.dp_sync_refs) is not tuple
+                or bool(self.dp_sync_refs) != (self.dp_gradient_plan_id is not None)
+                or len(self.dp_sync_refs) != len(set(self.dp_sync_refs))):
+            raise SchemaError("DP2 projection requires all unique synchronized gradients",
+                              path=f"{path}.dp_sync_refs")
+        for ref in self.dp_sync_refs:
+            validate_nonempty(ref, f"{path}.dp_sync_refs")
         if self.source_state_manifest_id is not None:
             validate_nonempty(
                 self.source_state_manifest_id,
@@ -3753,9 +3905,40 @@ class IR2ProjectionResult:
         fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
         path: str = "ir2_projection_result",
+        *,
+        dp_route_plan: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+        dp_replica_index: int | None = None,
     ) -> None:
         self.validate(path)
         ir1.validate("ir1")
+        if self.dp_gradient_plan_id is None:
+            if (dp_route_plan is not None or dp_projected_tasks is not None
+                    or dp_replica_index is not None):
+                raise SchemaError("unbound DP2 task sidecar is forbidden",
+                                  path=f"{path}.dp_gradient_plan_id")
+        else:
+            if (dp_route_plan is None or dp_projected_tasks is None
+                    or type(dp_replica_index) is not int
+                    or dp_replica_index not in (0, 1)
+                    or self.dp_gradient_plan_id != dp_route_plan.id
+                    or ir1.source_ir0_id != dp_route_plan.source_ir0_id):
+                raise SchemaError("DP2 gradient projection needs its exact source, plan and replica",
+                                  path=f"{path}.dp_gradient_plan_id")
+            dp_projected_tasks.validate_against(dp_route_plan)
+            expected_sync_refs = tuple(
+                gradient.sync_refs[dp_replica_index]
+                for gradient in dp_route_plan.gradients
+            )
+            if (len(expected_sync_refs) != 60
+                    or self.dp_sync_refs != expected_sync_refs
+                    or set(expected_sync_refs) != {
+                        node.id for node in ir1.nodes
+                        if node.kind is OpKind.COLLECTIVE
+                        and node.workload.mesh_axes == (MeshAxisName.DP,)
+                    }):
+                raise SchemaError("DP2 projection must cover exactly all 60 genuine source synchronizations",
+                                  path=f"{path}.dp_sync_refs")
         if self.producer_pass == "intra_die_refine":
             if (
                 self.source_ir1_id != ir1.id
@@ -3953,6 +4136,9 @@ class IR2ProjectionResult:
                 fusion_plans,
                 standalone_plans,
                 path=f"{path}.dags[{index}]",
+                dp_route_plan=dp_route_plan,
+                dp_projected_tasks=dp_projected_tasks,
+                dp_replica_index=dp_replica_index,
             )
 
         groups = {group.id: group for group in ir1.groups}
@@ -3974,7 +4160,9 @@ class IR2ProjectionResult:
             )
         covered_node_ids = set(fused_member_ids).union(standalone_node_ids)
         ordinary_nodes = tuple(
-            node for node in ir1.nodes if node.id not in covered_node_ids
+            node for node in ir1.nodes
+            if node.id not in covered_node_ids
+            and node.id not in self.dp_sync_refs
         )
         uncovered_collectives = tuple(
             node.id for node in ordinary_nodes if node.kind is OpKind.COLLECTIVE
@@ -4096,6 +4284,8 @@ class IR2ProjectionResult:
                 if isinstance(origin, FusedNodeOrigin):
                     key = ("fusion", origin.plan_id, origin.rank, origin.action_id)
                 elif isinstance(origin, StandaloneNodeOrigin):
+                    if origin.collective_plan_id == self.dp_gradient_plan_id:
+                        continue  # Checked exactly against the cross-replica task sidecar.
                     key = (
                         "standalone",
                         origin.collective_plan_id,
@@ -4176,6 +4366,22 @@ class IR2ProjectionResult:
                         program_index,
                         action_index,
                     )
+
+        dp_action_order: dict[
+            tuple[str, int, str], tuple[str, int, int, int]
+        ] = {}
+        if self.dp_gradient_plan_id is not None:
+            assert dp_route_plan is not None and dp_replica_index is not None
+            for gradient in dp_route_plan.gradients:
+                sync_ref = gradient.sync_refs[dp_replica_index]
+                for program_index, program in enumerate(gradient.rank_programs):
+                    for action_index, action in enumerate(program.actions):
+                        dp_action_order[(dp_route_plan.id, program.rank, action.id)] = (
+                            sync_ref,
+                            node_order[sync_ref],
+                            program_index,
+                            action_index,
+                        )
 
         state_access_index = {access.id: access for access in ir1.state_accesses}
         route_index = {
@@ -4304,6 +4510,16 @@ class IR2ProjectionResult:
                 base = fusion_action_order.get(
                     (origin.plan_id, origin.rank, origin.action_id)
                 )
+            elif origin.collective_plan_id == self.dp_gradient_plan_id:
+                dp_base = dp_action_order.get(
+                    (origin.collective_plan_id, origin.rank, origin.action_id)
+                )
+                if dp_base is None or dp_base[0] != task.member_id:
+                    raise SchemaError(
+                        "DP2 task has no source-bound gradient/action order key",
+                        path=f"{task_path}.origin_ref",
+                    )
+                base = (dp_base[1], dp_base[2], dp_base[3])
             else:
                 base = standalone_action_order.get(
                     (
@@ -5316,6 +5532,37 @@ class IR2ProjectionResult:
                 path=f"{path}.dags",
             )
 
+        if self.dp_gradient_plan_id is not None:
+            assert dp_route_plan is not None and dp_projected_tasks is not None
+            assert dp_replica_index is not None
+            # A DP collective crosses the two independent replica DAGs. The
+            # source-rebuilt sidecar proves both physical endpoints, while
+            # this result must contain exactly its own local flow replicas.
+            local_dp_flows = {
+                (entry.die_id, entry.flow.id): entry.flow
+                for entry in dp_projected_tasks.tasks
+                if entry.replica_index == dp_replica_index
+                and entry.flow is not None
+            }
+            if len(local_dp_flows) != sum(
+                entry.replica_index == dp_replica_index
+                and entry.flow is not None
+                for entry in dp_projected_tasks.tasks
+            ):
+                raise SchemaError("DP2 physical flow replicas are ambiguous",
+                                  path=f"{path}.dags")
+            dag_ids = {dag.die_id for dag in self.dags}
+            if not {die_id for die_id, _flow_id in local_dp_flows} <= dag_ids:
+                raise SchemaError("DP2 gradient flow has no local replica die",
+                                  path=f"{path}.dags")
+            for dag in self.dags:
+                for flow in dag.flows:
+                    key = (dag.die_id, flow.id)
+                    if key in local_dp_flows and flow != local_dp_flows[key]:
+                        raise SchemaError("DP2 flow replica disagrees with source-bound physical route",
+                                          path=f"{path}.dags[{dag.die_id}].flows")
+            expected_flow_replicas.update(local_dp_flows)
+
         actual_flow_replicas = {
             (dag.die_id, flow.id) for dag in self.dags for flow in dag.flows
         }
@@ -5595,6 +5842,25 @@ def _global_route_index(
     return result
 
 
+def _schedule_route_index(
+    ir1: IR1, path: str, dp_route_plan: DenseDP2RoutePlan | None = None,
+) -> dict[str, PairRoute | CrossGroupRoute]:
+    """Add only the immutable, source-bound cross-replica gradient routes."""
+    routes = _global_route_index(ir1, path)
+    if dp_route_plan is None:
+        return routes
+    if dp_route_plan.source_ir0_id != ir1.source_ir0_id:
+        raise SchemaError("DP2 route plan references another source IR0",
+                          path=f"{path}.source_ir0_id")
+    for group in dp_route_plan.dp_groups:
+        for route in group.embedding.routes:
+            if route.id in routes:
+                raise SchemaError("DP2 route aliases an ordinary IR1 route",
+                                  path=f"{path}.dp_groups")
+            routes[route.id] = route
+    return routes
+
+
 @dataclass(frozen=True, slots=True)
 class LogicalRuntimeBinding:
     task_id: str
@@ -5808,9 +6074,17 @@ class IntraDieSchedule:
         dag: IntraDieDAG,
         ir1: IR1,
         path: str = "intra_die_schedule",
+        *,
+        dp_route_plan: DenseDP2RoutePlan | None = None,
     ) -> None:
         self.validate(path)
         dag.validate("intra_die_dag")
+        if (dp_route_plan is None) != (dag.dp_gradient_plan_id is None) or (
+            dp_route_plan is not None
+            and dag.dp_gradient_plan_id != dp_route_plan.id
+        ):
+            raise SchemaError("schedule requires its exact DP2 gradient route plan",
+                              path=f"{path}.dag_id")
         ir1.validate("ir1")
         if self.dag_id != dag.id or self.die_id != dag.die_id:
             raise SchemaError("schedule does not identify the supplied DAG/die", path=path)
@@ -5822,7 +6096,7 @@ class IntraDieSchedule:
             raise SchemaError("schedule references an unknown die", path=f"{path}.die_id")
         cores = {core.runtime_core_id: core for core in die.cores}
         ports = {port.id: port for port in die.ports}
-        route_catalog = _global_route_index(ir1, "ir1")
+        route_catalog = _schedule_route_index(ir1, "ir1", dp_route_plan)
         task_index = {task.id: task for task in dag.tasks}
         value_index = {value.id: value for value in dag.values}
         ir1_values = {value.id: value for value in ir1.values}
@@ -7310,9 +7584,27 @@ class IntraDieScheduleSet:
         projection: IR2ProjectionResult,
         ir1: IR1,
         path: str = "intra_die_schedule_set",
+        *,
+        dp_route_plan: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+        dp_replica_index: int | None = None,
     ) -> None:
         self.validate(path)
         projection.validate("ir2_projection_result")
+        if projection.dp_gradient_plan_id is None:
+            if (dp_route_plan is not None or dp_projected_tasks is not None
+                    or dp_replica_index is not None):
+                raise SchemaError("ordinary schedule cannot acquire DP2 routes",
+                                  path=f"{path}.source_projection_id")
+        elif (dp_route_plan is None or dp_projected_tasks is None
+              or type(dp_replica_index) is not int
+              or dp_replica_index not in (0, 1)
+              or dp_route_plan.id != projection.dp_gradient_plan_id):
+            raise SchemaError("DP2 schedule requires the exact route plan and task sidecar",
+                              path=f"{path}.source_projection_id")
+        if dp_projected_tasks is not None:
+            assert dp_route_plan is not None
+            dp_projected_tasks.validate_against(dp_route_plan)
         ir1.validate("ir1")
         if self.source_projection_id != projection.id:
             raise SchemaError("schedule set references a different projection", path=f"{path}.source_projection_id")
@@ -7334,7 +7626,8 @@ class IntraDieScheduleSet:
         barrier_is_swizzle: dict[str, bool] = {}
         for index, schedule in enumerate(self.schedules):
             dag = dag_index[schedule.dag_id]
-            schedule.validate_against(dag, ir1, f"{path}.schedules[{index}]")
+            schedule.validate_against(dag, ir1, f"{path}.schedules[{index}]",
+                                      dp_route_plan=dp_route_plan)
             bindings = {binding.flow_id: binding for binding in schedule.flow_routes}
             for flow in dag.flows:
                 occurrences.setdefault(flow.id, []).append(
@@ -7377,7 +7670,16 @@ class IntraDieScheduleSet:
                     f"barrier {barrier_id!r} requires exactly one action per participant rank",
                     path=f"{path}.schedules",
                 )
-        route_catalog = _global_route_index(ir1, "ir1")
+        route_catalog = _schedule_route_index(ir1, "ir1", dp_route_plan)
+        dp_flow_replicas: dict[tuple[int, str], SemanticFlow] = {}
+        if dp_projected_tasks is not None:
+            assert dp_replica_index is not None
+            dp_flow_replicas = {
+                (entry.die_id, entry.flow.id): entry.flow
+                for entry in dp_projected_tasks.tasks
+                if entry.replica_index == dp_replica_index
+                and entry.flow is not None
+            }
         for flow_id, entries in occurrences.items():
             canonical = entries[0][1]
             canonical_metadata = (
@@ -7429,6 +7731,20 @@ class IntraDieScheduleSet:
                 )
                 for index, die_id in enumerate(route.die_path)
             }
+            if dp_flow_replicas and any(
+                (die_id, flow_id) in dp_flow_replicas
+                for die_id, _flow, _binding in entries
+            ):
+                expected_roles = {
+                    die_id: role for die_id, role in expected_roles.items()
+                    if (die_id, flow_id) in dp_flow_replicas
+                }
+                if any(
+                    dp_flow_replicas.get((die_id, flow_id)) != flow
+                    for die_id, flow, _binding in entries
+                ):
+                    raise SchemaError("DP2 scheduled flow disagrees with the physical source sidecar",
+                                      path=f"{path}.schedules")
             if len(roles_by_die) != len(entries) or roles_by_die != expected_roles:
                 raise SchemaError(
                     f"logical flow {flow_id!r} requires one SOURCE, one DESTINATION, and one TRANSIT per intermediate die",
