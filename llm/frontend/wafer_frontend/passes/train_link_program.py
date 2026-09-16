@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from ..errors import SchemaError
+from ..schema._validation_session import builder_validation_session
 from ..lowering.linker import NaiveManifestLinker
 from ..schema.train_n6 import TrainLinkedProgram, TrainLoweredProgram
 
 
+@builder_validation_session()
 def link_train(source: TrainLoweredProgram) -> TrainLinkedProgram:
     """Produce the one canonical ProgramArtifact quotient for Train."""
 
