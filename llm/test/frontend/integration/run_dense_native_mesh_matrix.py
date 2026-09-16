@@ -18,6 +18,7 @@ import sys
 
 
 M1_SHAPES = ("1x1", "1x4", "4x1", "2x2", "2x3", "3x2", "3x3", "10x10")
+RELEASE_SHAPES = tuple(f"{rows}x{columns}" for rows in range(1, 11) for columns in range(1, 11))
 _MESH = re.compile(r"([1-9][0-9]*)x([1-9][0-9]*)\Z")
 _KV = re.compile(r"\[DENSE_SEQUENCE_KV\] index=(\d+) bytes=(\d+) digest=([0-9a-f]{64}) pass=(\d+)")
 _MEMORY = re.compile(r"\[PROGRAM_MEMORY\] core=(\d+) lsu_issued=(\d+)")
@@ -38,6 +39,53 @@ def _shape(value: str) -> tuple[int, int]:
     if not 1 <= rows <= 10 or not 1 <= columns <= 10:
         raise ValueError(f"outside 1..10 release envelope: {value}")
     return rows, columns
+
+
+def select_shapes(
+    shapes: tuple[str, ...], *, shard_index: int, shard_count: int,
+) -> tuple[str, ...]:
+    """Return a deterministic, disjoint canonical shard without reordering."""
+    if type(shard_count) is not int or shard_count <= 0:
+        raise ValueError("shard_count must be positive")
+    if type(shard_index) is not int or not 0 <= shard_index < shard_count:
+        raise ValueError("shard_index must be in [0, shard_count)")
+    if len(shapes) != len(set(shapes)):
+        raise ValueError("shapes must be unique")
+    for shape in shapes:
+        _shape(shape)
+    return tuple(shape for index, shape in enumerate(shapes) if index % shard_count == shard_index)
+
+
+def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[str, object]:
+    """Bind a matrix shard to exact driver, native tools, simulation and order."""
+    paths = {
+        name: getattr(args, name).resolve()
+        for name in ("finalizer", "resolver", "npusim", "simulation")
+    }
+    if any(not path.is_file() for path in paths.values()):
+        raise ValueError("all native tools and simulation must be files")
+    return {
+        "schema_version": "dense-native-mesh-matrix-binding-v1",
+        "driver_sha256": _sha(Path(__file__).resolve()),
+        "shapes": shapes,
+        "shard_index": args.shard_index,
+        "shard_count": args.shard_count,
+        "tool_sha256": {name: _sha(path) for name, path in sorted(paths.items())},
+    }
+
+
+def audit_cached_case(case_root: Path, shape: str) -> dict[str, object]:
+    """Re-open every byte needed by a cached two-fresh case before resume."""
+    evidence_path = case_root / "case_evidence.json"
+    if not evidence_path.is_file():
+        raise ValueError(f"cached {shape} has no case_evidence.json")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    observed = tuple(audit_fresh(case_root / f"fresh{fresh}", shape) for fresh in (0, 1))
+    compare_fresh(*observed)
+    expected = json.loads(json.dumps({"shape": shape, "fresh": list(observed)}))
+    if evidence != expected:
+        raise ValueError(f"cached {shape} evidence bytes or semantics drifted")
+    return evidence
 
 
 def _mode(rows: int, columns: int) -> tuple[str, ...]:
@@ -147,18 +195,37 @@ def compare_fresh(first: dict[str, object], second: dict[str, object]) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    shapes = tuple(args.shapes)
-    if len(shapes) != len(set(shapes)) or any(_shape(shape) is None for shape in shapes):
-        raise ValueError("shapes must be unique canonical release meshes")
+    requested = RELEASE_SHAPES if args.all_release_shapes else tuple(args.shapes)
+    shapes = select_shapes(
+        requested, shard_index=args.shard_index, shard_count=args.shard_count,
+    )
+    if not shapes:
+        raise ValueError("selected matrix shard is empty")
     root = args.output_root.resolve()
+    binding = matrix_binding(args, shapes)
+    binding_path = root / "matrix_binding.json"
     if root.exists():
-        raise ValueError("matrix output root must be an empty new path")
-    root.mkdir(parents=True)
+        if not args.resume or not binding_path.is_file():
+            raise ValueError("matrix output root already exists; use --resume with its binding")
+        cached_binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        if cached_binding != binding:
+            raise ValueError("matrix resume binding drifted")
+    else:
+        root.mkdir(parents=True)
+        binding_path.write_text(
+            json.dumps(binding, indent=2, sort_keys=True), encoding="utf-8",
+        )
     environment = os.environ.copy()
+    completed_shapes: list[str] = []
     for shape in shapes:
         rows, columns = _shape(shape)
-        observations = []
         case_root = root / shape
+        if case_root.exists():
+            audit_cached_case(case_root, shape)
+            completed_shapes.append(shape)
+            print(f"Dense full-sequence native mesh RESUME {shape} verified", flush=True)
+            continue
+        observations = []
         case_root.mkdir()
         for fresh in (0, 1):
             directory = case_root / f"fresh{fresh}"
@@ -173,20 +240,45 @@ def run(args: argparse.Namespace) -> None:
                 "--compile-timeout", str(args.compile_timeout),
                 *_mode(rows, columns),
             )
-            completed = subprocess.run(command, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=args.process_timeout, check=False)
-            (case_root / f"fresh{fresh}.runner.stdout.txt").write_text(completed.stdout, encoding="utf-8")
+            completed = subprocess.run(
+                command, env=environment, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True,
+                timeout=args.process_timeout, check=False,
+            )
+            (case_root / f"fresh{fresh}.runner.stdout.txt").write_text(
+                completed.stdout, encoding="utf-8",
+            )
             if completed.returncode != 0:
-                raise RuntimeError(f"{shape} fresh{fresh} failed with exit {completed.returncode}; see {case_root}")
+                raise RuntimeError(
+                    f"{shape} fresh{fresh} failed with exit {completed.returncode}; "
+                    f"see {case_root}"
+                )
             observations.append(audit_fresh(directory, shape))
         compare_fresh(*observations)
-        (case_root / "case_evidence.json").write_text(json.dumps({"shape": shape, "fresh": observations}, indent=2, sort_keys=True), encoding="utf-8")
+        evidence = {"shape": shape, "fresh": observations}
+        (case_root / "case_evidence.json").write_text(
+            json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8",
+        )
+        audit_cached_case(case_root, shape)
+        completed_shapes.append(shape)
         print(f"Dense full-sequence native mesh PASS {shape} two fresh", flush=True)
-    (root / "matrix_receipt.json").write_text(json.dumps({"shapes": shapes, "status": "verified", "cases": [shape + "/case_evidence.json" for shape in shapes]}, indent=2, sort_keys=True), encoding="utf-8")
+    (root / "matrix_receipt.json").write_text(json.dumps({
+        "binding_sha256": _sha(binding_path),
+        "shapes": shapes,
+        "completed_shapes": completed_shapes,
+        "status": "verified" if tuple(completed_shapes) == shapes else "incomplete",
+        "cases": [shape + "/case_evidence.json" for shape in completed_shapes],
+    }, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--shapes", nargs="+", default=M1_SHAPES)
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--shapes", nargs="+", default=M1_SHAPES)
+    selection.add_argument("--all-release-shapes", action="store_true")
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)

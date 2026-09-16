@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
 
 from llm.test.frontend.integration.run_dense_native_mesh_matrix import (
+    RELEASE_SHAPES,
+    audit_cached_case,
     audit_fresh,
     compare_fresh,
+    select_shapes,
 )
 
 
@@ -19,7 +23,7 @@ _DIGEST = "a" * 64
 
 def _fixture(root: Path) -> Path:
     directory = root / "fresh"
-    directory.mkdir()
+    directory.mkdir(parents=True)
     binding = {
         "runtime_status": "verified",
         "sequence_digest": _DIGEST,
@@ -131,6 +135,42 @@ class NativeMatrixAuditTest(unittest.TestCase):
             (directory / "source_tool_binding.json").write_text(json.dumps(binding))
             with self.assertRaisesRegex(ValueError, "physical Die mesh"):
                 audit_fresh(directory, "1x4")
+
+    def test_all_100_shapes_partition_into_exact_disjoint_shards(self) -> None:
+        self.assertEqual(len(RELEASE_SHAPES), 100)
+        shards = tuple(
+            select_shapes(RELEASE_SHAPES, shard_index=index, shard_count=7)
+            for index in range(7)
+        )
+        self.assertEqual(set().union(*(set(shard) for shard in shards)), set(RELEASE_SHAPES))
+        self.assertEqual(sum(len(shard) for shard in shards), 100)
+        self.assertTrue(all(
+            shape in shards[index % 7]
+            for index, shape in enumerate(RELEASE_SHAPES)
+        ))
+        with self.assertRaisesRegex(ValueError, "shard_index"):
+            select_shapes(RELEASE_SHAPES, shard_index=7, shard_count=7)
+        with self.assertRaisesRegex(ValueError, "unique"):
+            select_shapes(("1x1", "1x1"), shard_index=0, shard_count=1)
+
+    def test_cached_resume_reopens_both_fresh_artifacts_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            case = root / "case"
+            case.mkdir()
+            for fresh in (0, 1):
+                source = _fixture(root / f"source{fresh}")
+                shutil.copytree(source, case / f"fresh{fresh}")
+            observed = [audit_fresh(case / f"fresh{fresh}", "1x4") for fresh in (0, 1)]
+            (case / "case_evidence.json").write_text(json.dumps({
+                "shape": "1x4", "fresh": observed,
+            }, indent=2, sort_keys=True))
+            audit_cached_case(case, "1x4")
+            report = json.loads((case / "case_evidence.json").read_text())
+            report["fresh"][1]["makespan_cycles"] = 11
+            (case / "case_evidence.json").write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "evidence bytes or semantics drifted"):
+                audit_cached_case(case, "1x4")
 
     def test_artifact_byte_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
