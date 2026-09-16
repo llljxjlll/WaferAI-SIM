@@ -8,7 +8,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ..errors import SchemaError
-from ..schema.common import DType, MeshAxisName, stable_artifact_id
+from ..schema.common import DType, MeshAxisName, RoundingMode, stable_artifact_id
+from ..schema.action import (
+    ChunkSlice, FusionActionKind, RankProgram, ReductionContract, SyncContract,
+    _validate_rank_programs,
+)
 from ..schema.flexible_dense_train import FlexibleDenseTrainPlan
 from ..schema.ir0 import CollectiveKind, OpKind, ReduceOp
 from ..schema.dense_dp_sync_routes import DenseDP2GradientRoute, DenseDP2RoutePlan
@@ -17,7 +21,82 @@ from ..schema.placement import PlacementContext
 from ..schema.serde import canonical_digest
 from .full_dense_training_two_step_ir0 import build_full_dense_training_two_step_ir0
 from .group_registry import _expected_group
+from ..policies.naive_inter_die import _fusion_action
 
+
+
+def _dp2_rank_programs(
+    *, sync_ref: str, wgrad_value_ref: str, sync_value_ref: str,
+    bytes: int, chunk: ChunkSlice, reduce_route: PairRoute,
+    broadcast_route: PairRoute,
+) -> tuple[RankProgram, RankProgram]:
+    """Two true waves: remote contribution, rank-major FP32 SUM, return."""
+    prefix = f"action.{sync_ref}"
+    root_copy_ref = f"temp.{sync_ref}.dp0.local"
+    root_remote_ref = f"temp.{sync_ref}.dp0.from.dp1"
+    reduce_channel = f"channel.{sync_ref}.dp1.to.dp0"
+    broadcast_channel = f"channel.{sync_ref}.dp0.to.dp1"
+    def action(
+        name: str, kind: FusionActionKind, *, dp: int,
+        peer: int | None = None, route: PairRoute | None = None,
+        reads: tuple[str, ...] = (), writes: tuple[str, ...] = (),
+        channel: str | None = None, deps: tuple[str, ...] = (),
+        wait: str | None = None,
+        reduction: ReductionContract | None = None,
+        step: int = 0,
+    ):
+        action_id = f"{prefix}.dp{dp}.{name}"
+        return _fusion_action(
+            action_id, kind, member_id=f"{sync_ref}__dp{dp}",
+            chunk_id=0, collective_step=step,
+            peer_rank=peer, expected_route=() if route is None else route.die_path,
+            slice_ref=None if kind is FusionActionKind.WAIT else chunk.id,
+            bytes=0 if kind is FusionActionKind.WAIT else bytes,
+            dtype=None if kind is FusionActionKind.WAIT else DType.FP32,
+            reads=reads, writes=writes, logical_channel=channel,
+            reduction=reduction, deps=deps,
+            sync=(SyncContract(f"event.{action_id}", wait, None)
+                  if wait is not None else None),
+        )
+    root_local = action("local_copy", FusionActionKind.LOCAL_COPY,
+                        dp=0, reads=(wgrad_value_ref,), writes=(root_copy_ref,))
+    child_send = action("reduce_send", FusionActionKind.SEND, dp=1,
+                        peer=0, route=reduce_route,
+                        reads=(wgrad_value_ref,), channel=reduce_channel)
+    root_recv = action("reduce_recv", FusionActionKind.RECV, dp=0,
+                        peer=1, route=reduce_route,
+                        writes=(root_remote_ref,), channel=reduce_channel)
+    root_wait = action("reduce_wait", FusionActionKind.WAIT, dp=0,
+                       deps=(root_recv.id,), wait=root_recv.sync.completion_event)
+    root_reduce = action(
+        "sum", FusionActionKind.REDUCE, dp=0, step=1,
+        reads=(root_copy_ref, root_remote_ref), writes=(sync_value_ref,),
+        deps=(root_local.id, root_wait.id),
+        reduction=ReductionContract(
+            ReduceOp.SUM, DType.FP32, DType.FP32, DType.FP32,
+            RoundingMode.RNE, (0, 1),
+        ),
+    )
+    root_send = action(
+        "broadcast_send", FusionActionKind.SEND, dp=0, step=2,
+        peer=1, route=broadcast_route, reads=(sync_value_ref,),
+        channel=broadcast_channel, deps=(root_reduce.id,),
+    )
+    child_recv = action(
+        "broadcast_recv", FusionActionKind.RECV, dp=1, step=2,
+        peer=0, route=broadcast_route,
+        writes=(sync_value_ref,), channel=broadcast_channel,
+    )
+    child_wait = action(
+        "broadcast_wait", FusionActionKind.WAIT, dp=1,
+        deps=(child_recv.id,), wait=child_recv.sync.completion_event,
+    )
+    programs = (
+        RankProgram(0, (root_local, root_recv, root_wait, root_reduce, root_send)),
+        RankProgram(1, (child_send, child_recv, child_wait)),
+    )
+    _validate_rank_programs(programs, (chunk,), path=f"dp_sync.{sync_ref}")
+    return programs
 
 
 def build_dense_dp2_route_plan(
@@ -105,12 +184,37 @@ def build_dense_dp2_route_plan(
                                       path=f"dense_dp2_route_plan.step{step}.tp{tp}.dp{dp}")
             routes = {(route.source_rank, route.destination_rank): route
                       for route in groups[tp].embedding.routes}
+            wgrad_value = graph_values[0][wgrad_output]
+            local_shape = tuple(
+                extent // 2 if axis is MeshAxisName.TP else extent
+                for extent, axis in zip(
+                    wgrad_value.shape, wgrad_value.sharding.dim_map, strict=True
+                )
+            )
+            local_offset = tuple(
+                tp * extent if axis is MeshAxisName.TP else 0
+                for extent, axis in zip(
+                    local_shape, wgrad_value.sharding.dim_map, strict=True
+                )
+            )
+            chunk = ChunkSlice(
+                f"chunk.{sync_ref}.tp{tp}", 0, sync_output,
+                local_offset, local_shape, template.gradient_bytes, 0,
+            )
+            chunk.validate("dp_sync_chunk")
+            programs = _dp2_rank_programs(
+                sync_ref=sync_ref, wgrad_value_ref=wgrad_output,
+                sync_value_ref=sync_output, bytes=template.gradient_bytes,
+                chunk=chunk, reduce_route=routes[(1, 0)],
+                broadcast_route=routes[(0, 1)],
+            )
             gradients.append(DenseDP2GradientRoute(
                 state.id, tp, step, template.gradient_bytes, groups[tp].id,
                 (refs[0][0], refs[1][0]),
                 (refs[0][1], refs[1][1]),
                 (refs[0][2], refs[1][2]),
                 routes[(1, 0)], routes[(0, 1)],
+                chunk, programs,
             ))
     payload = dict(source_ir0_id=source.id, placed_ir1_id=placed.id,
                    fabric_id=canonical_digest(context.fabric), dp_groups=groups,

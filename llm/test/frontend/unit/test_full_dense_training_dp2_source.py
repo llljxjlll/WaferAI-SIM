@@ -6,6 +6,7 @@ from dataclasses import replace
 import unittest
 
 from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.schema.action import FusionActionKind, _validate_rank_programs
 from llm.frontend.wafer_frontend.passes.flexible_dense_train import build_flexible_dense_train_plan
 from llm.frontend.wafer_frontend.passes.full_dense_training_two_step_ir0 import build_full_dense_training_two_step_ir0
 from llm.frontend.wafer_frontend.passes.full_dense_training_dp2_routes import build_dense_dp2_route_plan
@@ -153,6 +154,37 @@ class FullDenseTrainingDP2SourceTest(unittest.TestCase):
             self.assertEqual(gradient.broadcast_route.die_path[-1],
                              routes.dp_groups[gradient.tp_shard].placements[1].die_id)
         first = routes.gradients[0]
+        for gradient in routes.gradients:
+            actions = tuple(action for program in gradient.rank_programs
+                            for action in program.actions)
+            self.assertEqual(
+                Counter(action.kind for action in actions),
+                Counter({
+                    FusionActionKind.LOCAL_COPY: 1,
+                    FusionActionKind.SEND: 2,
+                    FusionActionKind.RECV: 2,
+                    FusionActionKind.WAIT: 2,
+                    FusionActionKind.REDUCE: 1,
+                }),
+            )
+            self.assertEqual(
+                next(action for action in actions
+                     if action.kind is FusionActionKind.REDUCE).reduction.input_ranks,
+                (0, 1),
+            )
+            _validate_rank_programs(
+                gradient.rank_programs, (gradient.chunk,),
+                path="dp2_true_transport",
+            )
+        missing_child_send = replace(
+            first.rank_programs[1],
+            actions=first.rank_programs[1].actions[1:],
+        )
+        with self.assertRaisesRegex(SchemaError, "one SEND and one RECV"):
+            _validate_rank_programs(
+                (first.rank_programs[0], missing_child_send),
+                (first.chunk,), path="dp2_missing_dte",
+            )
         with self.assertRaisesRegex(SchemaError, "gradient route/source/owner/bytes"):
             replace(routes, gradients=(
                 replace(first, gradient_bytes=2048), *routes.gradients[1:],

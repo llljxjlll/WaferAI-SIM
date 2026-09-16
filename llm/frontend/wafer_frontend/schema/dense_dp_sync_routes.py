@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..errors import SchemaError
+from .action import ChunkSlice, RankProgram
 from .flexible_dense_train import FlexibleDenseTrainPlan
 from .ir1 import PairRoute, PhysicalGroup
 from .placed_ir1 import TrainPlacedIR1
@@ -22,6 +23,8 @@ class DenseDP2GradientRoute:
     optimizer_refs: tuple[str, str]
     reduce_route: PairRoute
     broadcast_route: PairRoute
+    chunk: ChunkSlice
+    rank_programs: tuple[RankProgram, RankProgram]
 
 
 @dataclass(frozen=True, slots=True)
