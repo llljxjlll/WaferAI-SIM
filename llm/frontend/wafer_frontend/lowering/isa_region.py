@@ -450,7 +450,8 @@ def _reduce_record(
     dp2_fp32 = (
         reduction is not None
         and action.dtype is DType.FP32
-        and action.bytes == 2048
+        and action.bytes > 0
+        and action.bytes % 4 == 0
         and reduction.input_dtype is DType.FP32
         and reduction.accumulation_dtype is DType.FP32
         and reduction.output_dtype is DType.FP32
@@ -458,7 +459,7 @@ def _reduce_record(
     )
     if not (legacy or dp2_fp32):
         raise SchemaError(
-            "LOCAL_REDUCE requires its exact FP16 contract or DP2 2048-byte FP32 contract",
+            "LOCAL_REDUCE requires its exact FP16 contract or aligned two-rank FP32 contract",
             path="action.reduction",
         )
     dtype_literal = 1 if dp2_fp32 else 0
