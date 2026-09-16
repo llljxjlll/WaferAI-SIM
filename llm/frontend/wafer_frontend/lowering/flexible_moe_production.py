@@ -175,7 +175,7 @@ class FlexibleMoeProductionArtifacts:
             for action_id in fragment.claimed_action_ids
         }
         expected = action_ids - zero_work_source_actions if allow_zero_work_omission else action_ids
-        if allow_zero_work_omission and spec.mesh.rank_count > 1:
+        if allow_zero_work_omission:
             from .flexible_moe_multi_production import (
                 expert_projection_action_ids, expert_wgrad_action_ids,
                 gate_wgrad_cast_action_id, expert_dgrad_action_ids,
@@ -485,7 +485,8 @@ def lower_link_flexible_moe_production(
     region_name = _REGION_NAME if physical_region_name is None else physical_region_name
     if type(region_name) is not str or not region_name:
         raise SchemaError("physical SRAM region name is empty", path="physical_region_name")
-    if spec.mesh.rank_count != 1:
+    if (spec.mesh.rank_count != 1
+            or (full_model_dataflow and spec.mode is FlexibleMoeMode.TRAIN)):
         from .flexible_moe_multi_production import lower_link_flexible_moe_multi
 
         return lower_link_flexible_moe_multi(

@@ -202,8 +202,8 @@ def lower_link_flexible_moe_multi(
     if type(shared_region_name) is not str or not shared_region_name:
         raise SchemaError("physical SRAM region name is empty", path="physical_region_name")
     rank_count = spec.mesh.rank_count
-    if not 2 <= rank_count <= 100:
-        raise SchemaError("multi-die production rank count must lie in [2, 100]", path="spec.mesh")
+    if not 1 <= rank_count <= 100:
+        raise SchemaError("full-model production rank count must lie in [1, 100]", path="spec.mesh")
     if runtime_core_ids is None:
         runtime_core_ids = tuple(
             rank * _P5_RUNTIME_CORES_PER_DIE for rank in range(rank_count)

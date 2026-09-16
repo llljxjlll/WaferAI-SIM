@@ -18,6 +18,7 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_named_wgrad_operands impo
 )
 from llm.test.frontend.unit.test_moe_full_train_ep_placement import (
     MoeFullTrainEpPlacementTest as Fixture,
+    build_single_die_moe_train_physical_source,
 )
 
 
@@ -42,6 +43,45 @@ class MoeFullTrainNamedWgradOperandsTest(unittest.TestCase):
     def _check(self, evidence):
         evidence.validate_against(self.bridge, Fixture.sequence)
 
+    def test_single_die_six_native_fp32_wgrad_producers(self):
+        phase, sequence, placement, context = (
+            build_single_die_moe_train_physical_source(Fixture)
+        )
+        tiles = build_moe_full_train_named_wgrad_tiles(
+            phase, sequence, placement, original_dense=Fixture.dense,
+            dense_manifest=Fixture.manifest, context=context,
+        )
+        bridge = build_moe_full_train_gradient_source_bridge(
+            phase, tiles, sequence, placement,
+            original_dense=Fixture.dense,
+            dense_manifest=Fixture.manifest, context=context,
+        )
+        evidence = build_moe_full_train_physical_wgrad_operand_sources(
+            bridge, sequence,
+        )
+        self.assertEqual(len(evidence.entries), 6)
+        self.assertEqual({entry.k for entry in evidence.entries}, {4})
+        self.assertEqual({entry.expert for entry in evidence.entries}, {0})
+        evidence.require_gate_up_derivative_consumption(sequence)
+        evidence.require_native_fp32_producers(sequence)
+        wrong = self._fault_sequence(
+            evidence.entries[0], opcode=RecordOpcode.MATMUL, sequence=sequence,
+        )
+        with self.assertRaisesRegex(SchemaError, "MATMUL.*LOCAL_REDUCE.*native 0x25"):
+            evidence.require_native_fp32_producers(wrong)
+        for layer in (0, 1):
+            entries = [entry for entry in evidence.entries if entry.layer == layer]
+            self.assertEqual([entry.projection for entry in entries],
+                             ["gate", "up", "down"])
+            self.assertEqual([entry.fp32_gradient_output.offset_bytes
+                              for entry in entries], [0, 128, 256])
+            self.assertEqual([entry.fp32_gradient_output.size_bytes
+                              for entry in entries], [128, 128, 128])
+        with self.assertRaisesRegex(SchemaError, "forward, backward SwiGLU"):
+            replace(evidence, entries=evidence.entries[:-1]).validate_against(
+                bridge, sequence,
+            )
+
     def test_producer_real_forward_and_dgrad_three_nonoverlap_fp32_slices(self):
         self._check(self.evidence)
         self.assertEqual(len(self.evidence.entries), 12)
@@ -63,8 +103,10 @@ class MoeFullTrainNamedWgradOperandsTest(unittest.TestCase):
                     self.assertEqual([entry.fp32_gradient_output.size_bytes
                                       for entry in entries], [128, 128, 128])
 
-    def _fault_sequence(self, entry, *, opcode=None, upstream_offset=None):
-        units = list(Fixture.sequence.units)
+    def _fault_sequence(self, entry, *, opcode=None, upstream_offset=None,
+                        sequence=None):
+        source = Fixture.sequence if sequence is None else sequence
+        units = list(source.units)
         unit_index = next(index for index, unit in enumerate(units)
                           if (unit.step, unit.layer) == (0, entry.layer))
         unit = units[unit_index]
@@ -96,7 +138,7 @@ class MoeFullTrainNamedWgradOperandsTest(unittest.TestCase):
                         core_streams=tuple(streams))
                     units[unit_index] = replace(unit,
                         linked_manifest=replace(manifest, fragments=tuple(fragments)))
-                    return replace(Fixture.sequence, units=tuple(units))
+                    return replace(source, units=tuple(units))
         self.fail("actual source-backed native expert WGRAD record missing")
 
     def test_gate_up_native_wgrad_consumes_swiglu_backward_and_rejects_wrong_half(self):

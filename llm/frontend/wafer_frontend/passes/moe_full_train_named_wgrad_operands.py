@@ -127,7 +127,7 @@ class MoeFullTrainPhysicalWgradOperandSources:
 
     def _require_same_source(self, sequence: MoeCompileSequence) -> None:
         if (self.source_moe_sequence_ref != sequence.id
-                or len(self.entries) != 12):
+                or len(self.entries) != 6*sequence.materialization.request.model.num_experts):
             raise SchemaError("missing source-bound expert operand entry",
                               path="moe_full_train_physical_wgrad_operands")
 
@@ -239,8 +239,8 @@ def _producer_matches(manifest, rank, action_ref, opcode, operand_name,
 def _derive(bridge, sequence):
     if (bridge.source_moe_sequence_ref != sequence.id
             or bridge.source_physical_case_ref == ""
-            or len(bridge.paths) != 12):
-        raise SchemaError("only twelve source-bound expert tiles on one public hardware case are enabled",
+            or len(bridge.paths) != 6*sequence.materialization.request.model.num_experts):
+        raise SchemaError("all source-bound expert tiles on one public hardware case are required",
                           path="moe_wgrad.source")
     entries = []
     for path in bridge.paths:

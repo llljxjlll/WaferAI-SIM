@@ -123,6 +123,47 @@ def validate_moe_training_fp32_gradient_producers(
                 {"plan": plan.id, "wgrad": action.id, "stage": f"cast_{stage}"},
                 schema_version=LINKED_PROGRAM_MANIFEST_SCHEMA_VERSION,
             ) for stage in ("gate", "up", "down"))
+            native = bool(refs.get((action.id, core,
+                                    RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING)))
+            if native:
+                for index, native_id in enumerate(projection_ids):
+                    activation, record, activation_addend, activation_view = endpoint(
+                        native_id, rank, RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
+                        SemanticOperandId.COMPUTE_INPUT_ADDRESS)
+                    upstream, _, upstream_addend, upstream_view = endpoint(
+                        native_id, rank, RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
+                        SemanticOperandId.COMPUTE_DATA_ADDRESS)
+                    gradient, _, gradient_addend, gradient_view = endpoint(
+                        native_id, rank, RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
+                        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)
+                    literals = {item.name: item.literal_value for item in record.operands
+                                if item.kind.name == "LITERAL"}
+                    expected_activation = (
+                        f"flexible_moe.value.rank{rank}.expert_activated" if index == 2
+                        else f"flexible_moe.value.rank{rank}.activation")
+                    expected_upstream = (
+                        f"flexible_moe.value.rank{rank}.backward_gradient" if index == 2
+                        else f"flexible_moe.value.rank{rank}.dgrad_gate_up")
+                    expected_mn = (i, h) if index == 2 else (h, i)
+                    expected_input_elements = m * (i if index == 2 else h)
+                    expected_upstream_elements = m * (h if index == 2 else i)
+                    if (activation.value_id != expected_activation
+                            or upstream.value_id != expected_upstream
+                            or gradient.value_id != f"flexible_moe.value.rank{rank}.state.{grad_ref}"
+                            or (activation.dtype, upstream.dtype, gradient.dtype)
+                               != (DType.FP16, DType.FP16, DType.FP32)
+                            or (activation_addend, upstream_addend, gradient_addend)
+                               != (0, 2*m*i if index == 1 else 0, index*matrix_fp32)
+                            or activation_view.shape != (expected_input_elements,)
+                            or upstream_view.shape != (expected_upstream_elements,)
+                            or gradient_view.shape != (h*i,)
+                            or tuple(literals.get(name) for name in ("m", "n", "k"))
+                               != (*expected_mn, m)
+                            or tuple(literals.get(name) for name in (
+                                "activation_datatype", "upstream_datatype",
+                                "gradient_datatype")) != (1, 1, 3)):
+                        raise SchemaError("native 0x25 expert FP32 gradient tape, dimensions or output StateABI differs from P2", path=action.id)
+                continue
             for index, (gemm_id, cast_id) in enumerate(zip(projection_ids, cast_ids)):
                 stage, gemm, output_addend, stage_view = endpoint(
                     gemm_id, rank, RecordOpcode.MATMUL, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)

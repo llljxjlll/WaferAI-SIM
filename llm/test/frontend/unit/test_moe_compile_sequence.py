@@ -182,7 +182,7 @@ class MoeCompileSequenceTest(unittest.TestCase):
                                   and item.flow_ref in {flow.id for flow in tree_flows})
         for dropped in (
             expert.id,
-            *expert_wgrad_action_ids(unit.plan.id, expert.id),
+            *expert_wgrad_action_ids(unit.plan.id, expert.id)[:2],
             gate.id,
             gate_wgrad_cast_action_id(unit.plan.id, gate.id),
             gate_reduce.id,
@@ -197,6 +197,38 @@ class MoeCompileSequenceTest(unittest.TestCase):
             with self.assertRaisesRegex(SchemaError, "FP32 gradient lacks one physical record"):
                 validate_moe_training_fp32_gradient_producers(unit.plan,
                                                                 unit.spec, broken)
+
+    def test_single_die_full_model_training_uses_three_native_fp32_expert_gradients(self) -> None:
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING, rows=1, columns=1),
+            source_rank_policy="rank0_shared_spine",
+        )
+        self.assertEqual(len(sequence.units), 4)
+        for unit in sequence.units:
+            with self.subTest(step=unit.step, layer=unit.layer):
+                self.assertEqual(unit.plan.flows, ())
+                validate_moe_training_fp32_gradient_producers(
+                    unit.plan, unit.spec, unit.linked_manifest,
+                )
+                native = tuple(record for fragment in unit.linked_manifest.fragments
+                               for stream in fragment.core_streams
+                               for record in stream.records
+                               if record.opcode is RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING)
+                self.assertEqual(len(native), 3)
+        unit = sequence.units[0]
+        native_ref = next(record.source_global_action_id
+                          for fragment in unit.linked_manifest.fragments
+                          for stream in fragment.core_streams
+                          for record in stream.records
+                          if record.opcode is RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING)
+        broken = replace(unit.linked_manifest, core_streams=tuple(replace(
+            stream, records=tuple(ref for ref in stream.records
+                                  if ref.source_global_action_id != native_ref)
+        ) for stream in unit.linked_manifest.core_streams))
+        with self.assertRaisesRegex(SchemaError, "FP32 gradient lacks one physical record"):
+            validate_moe_training_fp32_gradient_producers(
+                unit.plan, unit.spec, broken,
+            )
 
     def test_strict_training_backward_handoff_is_physical_and_fails_when_cut(self) -> None:
         sequence = compile_moe_sequence(
