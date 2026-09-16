@@ -180,12 +180,12 @@ void CoreLsuUnit::Load(uint64_t hbm_addr, uint64_t sram_addr,
     if (adamw_pager_)
         adamw_pager_->BeforeLoad(hbm_addr, size_bytes);
     if (inference_pager_)
-        inference_pager_->BeforeLoad(hbm_addr, size_bytes);
+        inference_pager_->BeforeLoad(core_id_, hbm_addr, size_bytes);
     if (moe_inference_pager_)
         moe_inference_pager_->BeforeLoad(core_id_, hbm_addr, size_bytes);
     Wait(IssueLoad(hbm_addr, sram_addr, size_bytes));
     if (inference_pager_)
-        inference_pager_->AfterLoad(hbm_addr, size_bytes);
+        inference_pager_->AfterLoad(core_id_, hbm_addr, size_bytes);
     if (moe_inference_pager_)
         moe_inference_pager_->AfterLoad(core_id_, hbm_addr, size_bytes);
 }
@@ -198,7 +198,7 @@ void CoreLsuUnit::Store(uint64_t sram_addr, uint64_t hbm_addr,
     if (adamw_pager_)
         adamw_pager_->AfterStore(hbm_addr, size_bytes);
     if (inference_pager_)
-        inference_pager_->AfterStore(hbm_addr, size_bytes);
+        inference_pager_->AfterStore(core_id_, hbm_addr, size_bytes);
     if (moe_inference_pager_)
         moe_inference_pager_->AfterStore(core_id_, hbm_addr, size_bytes);
 }

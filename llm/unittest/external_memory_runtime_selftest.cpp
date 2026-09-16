@@ -42,8 +42,9 @@ private:
 
 em::FabricConfig DirectFabric() {
     em::FabricConfig config;
-    config.external_capacities.push_back({"external:0", "host:0", 0, 256});
-    config.hbm_capacities.push_back({"hbm:0", 0, 0, 128});
+    config.external_capacities.push_back(
+        {"external:0", "host:0", 0, 24576});
+    config.hbm_capacities.push_back({"hbm:0", 0, 0, 12288});
     config.links.push_back({"link:0", "external:0", 0, 4, 2, 1, 2});
     config.connections.push_back(
         {"connection:0", "link:0", "hbm:0", 0, {0}, 0,
@@ -145,11 +146,27 @@ struct Driver : sc_module {
             Check(runtime.Poll("store").has_value(),
                   "completed store is not pollable");
 
+            const std::vector<uint8_t> boundary_block(64, 0x5a);
+            runtime.SeedExternal("external:0", 24512, boundary_block);
+            runtime.Submit(
+                {"exact-hbm-boundary", "connection:0",
+                 em::TransferDirection::kExternalToHbm,
+                 24512, 12224, boundary_block.size(), Cycle()});
+            Check(runtime.Wait("exact-hbm-boundary").status == 0 &&
+                      HbmAccess(MemCommand::kRead, 12224,
+                                boundary_block) == boundary_block,
+                  "exact 12,288-byte HBM boundary transfer failed");
+            RejectWithoutAdmission("one-block HBM overflow", [&] {
+                runtime.Submit(
+                    {"one-block-overflow", "connection:0",
+                     em::TransferDirection::kExternalToHbm,
+                     24384, 12224, 128, Cycle()});
+            });
             RejectWithoutAdmission("capacity failure", [&] {
                 runtime.Submit(
                     {"bad-range", "connection:0",
                      em::TransferDirection::kExternalToHbm,
-                     252, 0, 8, Cycle()});
+                     24572, 0, 8, Cycle()});
             });
             RejectWithoutAdmission("connection failure", [&] {
                 runtime.Submit(
@@ -201,10 +218,10 @@ struct Driver : sc_module {
                       std::vector<uint8_t>(8, 0),
                   "rejected queue request partially wrote HBM");
             Check(runtime.Outstanding() == 0 &&
-                      runtime.Stats().completed_requests == 5 &&
+                      runtime.Stats().completed_requests == 6 &&
                       runtime.Stats().failed_requests == 1,
                   "runtime did not drain accepted requests");
-            Check(runtime.Stats().external_read_bytes == 24 &&
+            Check(runtime.Stats().external_read_bytes == 88 &&
                       runtime.Stats().external_write_bytes == dirty.size(),
                   "runtime byte statistics are incorrect");
             passed = true;

@@ -1878,6 +1878,7 @@ int sc_main(int argc, char *argv[]) {
         adamw_mid_program_pager;
     std::unique_ptr<external_memory::DenseInferenceMidProgramPager>
         inference_mid_program_pager;
+    bool inference_rect_paged = false;
     std::unique_ptr<external_memory::MoeInferenceMidProgramPager>
         moe_inference_mid_program_pager;
     std::unique_ptr<ExternalDmaStartupCoordinator>
@@ -1955,30 +1956,50 @@ int sc_main(int argc, char *argv[]) {
     }
     if (inference_paged) {
         try {
-            if (monitor->hbmRuntime == nullptr ||
-                monitor->workerCores[0] == nullptr ||
-                !monitor->workerCores[0]->lsu_memory)
+            if (monitor->hbmRuntime == nullptr)
                 throw std::runtime_error(
-                    "paged Dense inference requires real die0 HBM and core0 LSU");
-            auto *physical = monitor->hbmRuntime->Find(0, 0);
-            if (physical == nullptr || !physical->backend)
+                    "paged Dense inference requires distributed HBM runtime");
+            std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends;
+            std::vector<uint64_t> runtime_cores;
+            for (uint64_t die = 0; die < 4; ++die) {
+                auto *physical = monitor->hbmRuntime->Find(die, 0);
+                if (physical == nullptr || !physical->backend) {
+                    if (die == 0)
+                        throw std::runtime_error(
+                            "paged Dense inference requires physical die0 HBM backend");
+                    break;
+                }
+                const uint64_t core = die * 4;
+                if (monitor->workerCores[core] == nullptr ||
+                    !monitor->workerCores[core]->lsu_memory)
+                    throw std::runtime_error(
+                        "paged Dense inference lacks a physical Die-local core0 LSU");
+                backends.emplace(std::make_pair(die, 0),
+                                 physical->backend.get());
+                runtime_cores.push_back(core);
+            }
+            if (backends.size() != 1 && backends.size() != 4)
                 throw std::runtime_error(
-                    "paged Dense inference requires physical die0 HBM backend");
-            std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends{
-                {{0, 0}, physical->backend.get()}};
+                    "paged Dense inference requires exactly one or four HBM homes");
+            inference_rect_paged = backends.size() == 4;
             inference_mid_program_pager = std::make_unique<
                 external_memory::DenseInferenceMidProgramPager>(
                     "dense_inference_mid_program_pager",
                     std::filesystem::path(g_flag_dense_inference_paged_runtime),
                     sequence_manifest_texts, std::move(backends),
                     sc_time(CYCLE, SC_NS));
-            monitor->workerCores[0]->lsu_memory->SetDenseInferencePager(
-                inference_mid_program_pager.get());
+            for (const uint64_t core : runtime_cores)
+                monitor->workerCores[core]->lsu_memory->SetDenseInferencePager(
+                    inference_mid_program_pager.get());
             std::cout << "[DENSE_INFERENCE_PAGED_BINDING] source="
                       << inference_mid_program_pager->SourceRef()
-                      << " parameter_states=15 kv_pages=4 events=65"
-                      << " hbm_capacity=12288 workspace_end=1600"
-                      << " highest_state_end=10560 pass=1" << std::endl;
+                      << " parameter_states=" << (inference_rect_paged ? 60 : 15)
+                      << " kv_pages=" << (inference_rect_paged ? 16 : 4)
+                      << " events=" << (inference_rect_paged ? 260 : 65)
+                      << " hbm_capacity_per_die=12288 weight_slot_base=1600"
+                      << " highest_state_end="
+                      << (inference_rect_paged ? 11328 : 10560)
+                      << " pass=1" << std::endl;
         } catch (const std::exception &error) {
             LOG_ERROR(CONFIG) << "Dense inference paged DMA binding failed: "
                               << error.what();
@@ -2272,7 +2293,8 @@ int sc_main(int argc, char *argv[]) {
                 if (inference_paged)
                     std::cout << "[DENSE_INFERENCE_PAGED_EXTERNAL_PROGRAM_IO]"
                               << " index=" << expected
-                              << " kv_probes=4 kv_bytes="
+                              << " kv_probes=" << (inference_rect_paged ? 16 : 4)
+                              << " kv_bytes="
                               << inference_mid_program_pager->KvAuthorityBytes()
                               << " pending="
                               << inference_mid_program_pager->Pending()
@@ -2438,22 +2460,27 @@ int sc_main(int argc, char *argv[]) {
         }
         if (inference_paged) {
             const auto &stats = inference_mid_program_pager->Stats();
-            if (inference_mid_program_pager->CompletedEvents() != 65 ||
-                inference_mid_program_pager->ExternalKvProbes() != 12 ||
+            const uint64_t expected_events = inference_rect_paged ? 260 : 65;
+            const uint64_t expected_probes = inference_rect_paged ? 48 : 12;
+            const uint64_t expected_reads = inference_rect_paged ? 334592 : 162112;
+            const uint64_t expected_writes = inference_rect_paged ? 15360 : 1920;
+            if (inference_mid_program_pager->CompletedEvents() != expected_events ||
+                inference_mid_program_pager->ExternalKvProbes() != expected_probes ||
                 inference_mid_program_pager->Pending() != 0 ||
                 inference_mid_program_pager->Dirty() != 0 ||
                 inference_mid_program_pager->Pinned() != 0 ||
-                stats.submitted_requests != 65 ||
-                stats.completed_requests != 65 ||
+                stats.submitted_requests != expected_events ||
+                stats.completed_requests != expected_events ||
                 stats.failed_requests != 0 ||
-                stats.external_read_bytes != 162112 ||
-                stats.hbm_write_bytes != 162112 ||
-                stats.external_write_bytes != 1920 ||
-                stats.hbm_read_bytes != 1920)
+                stats.external_read_bytes != expected_reads ||
+                stats.hbm_write_bytes != expected_reads ||
+                stats.external_write_bytes != expected_writes ||
+                stats.hbm_read_bytes != expected_writes)
                 throw std::runtime_error(
                     "paged Dense inference real shared DMA/StateABI drain disagreed with byte oracle");
-            std::cout << "[DENSE_INFERENCE_PAGED_DMA_DRAIN] events=65"
-                      << " kv_probes=12 submitted=" << stats.submitted_requests
+            std::cout << "[DENSE_INFERENCE_PAGED_DMA_DRAIN] events="
+                      << expected_events << " kv_probes=" << expected_probes
+                      << " submitted=" << stats.submitted_requests
                       << " completed=" << stats.completed_requests
                       << " external_read_bytes=" << stats.external_read_bytes
                       << " external_write_bytes=" << stats.external_write_bytes
