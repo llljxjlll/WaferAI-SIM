@@ -18,6 +18,7 @@ from .run_extended_dense_sequence_runtime_canary import (
     bound_frontend_sources,
     build_case,
     extended_hardware,
+    finalize_runtime_receipts,
     observe_runtime,
     run,
     validate_physical_hbm,
@@ -260,6 +261,45 @@ class ExtendedDenseCanaryContractTest(unittest.TestCase):
             )
             self.assertGreater(source["file_count"], 100)
             self.assertEqual(source["files"], bound_frontend_sources())
+
+    def test_completion_receipt_is_derived_only_after_two_successes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tp16-final-receipt-") as raw:
+            root = Path(raw)
+            (root / "compiled_receipt.json").write_text(json.dumps({
+                "runtime_status": "not_measured", "case_id": "case",
+            }))
+            evidence = {
+                "executions": [
+                    {"npusim": {"exit_code": 0}, "observed": {"makespan": 1}},
+                    {"npusim": {"exit_code": 0}, "observed": {"makespan": 1}},
+                ]
+            }
+            finalize_runtime_receipts(root, evidence)
+            final = json.loads((root / "compiled_receipt.json").read_text())
+            self.assertEqual(final["runtime_status"], "verified")
+            self.assertEqual(final["execution_count"], 2)
+            self.assertEqual(len(final["evidence_sha256"]), 64)
+            self.assertEqual(json.loads((root / "evidence.json").read_text())[
+                "runtime_status"
+            ], "verified")
+
+            (root / "compiled_receipt.json").write_text(json.dumps({
+                "runtime_status": "not_measured", "case_id": "case",
+            }))
+            failed = {
+                "executions": [
+                    {"npusim": {"exit_code": 0}, "observed": {"makespan": 1}},
+                    {"npusim": {"exit_code": 1}, "observed": {}},
+                ]
+            }
+            with self.assertRaisesRegex(RuntimeError, "failed native execution"):
+                finalize_runtime_receipts(root, failed)
+            self.assertEqual(
+                json.loads((root / "compiled_receipt.json").read_text())[
+                    "runtime_status"
+                ],
+                "not_measured",
+            )
 
     def test_complete_runtime_observation(self) -> None:
         observed = observe_runtime(_valid_runtime_output())

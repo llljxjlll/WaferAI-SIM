@@ -405,6 +405,41 @@ def observe_runtime(
     }
 
 
+def finalize_runtime_receipts(
+    root: Path, evidence: dict[str, object],
+) -> None:
+    """Publish completion only after both native executions are available."""
+
+    executions = evidence.get("executions")
+    if not isinstance(executions, list) or len(executions) != 2:
+        raise RuntimeError("TP16 completion needs exactly two native executions")
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("npusim"), dict)
+        or item["npusim"].get("exit_code") != 0
+        or not item.get("observed")
+        for item in executions
+    ):
+        raise RuntimeError("TP16 completion cannot publish a failed native execution")
+    receipt_path = root / "compiled_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if receipt.get("runtime_status") != "not_measured":
+        raise RuntimeError("TP16 preflight receipt status changed before completion")
+    evidence["runtime_status"] = "verified"
+    evidence_path = root / "evidence.json"
+    evidence_path.write_text(
+        json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8",
+    )
+    receipt.update({
+        "runtime_status": "verified",
+        "execution_count": 2,
+        "evidence_sha256": _sha(evidence_path.read_bytes()),
+    })
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8",
+    )
+
+
 def _seeds(profile) -> dict[str, bytes]:
     abi_by_binding = {
         abi.hbm_binding_ref: abi
@@ -816,9 +851,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     evidence["frontend_peak_rss_kib"] = resource.getrusage(
         resource.RUSAGE_SELF,
     ).ru_maxrss
-    (root / "evidence.json").write_text(
-        json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8",
-    )
+    finalize_runtime_receipts(root, evidence)
     print(
         f"Extended Dense TP16 PASS shape={args.mesh_size} "
         f"active_dies={len(evidence['active_dies'])} "
