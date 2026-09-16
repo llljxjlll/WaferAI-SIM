@@ -8,7 +8,7 @@ closed while the Dense native reverse source/physical chain is incomplete.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Mapping
 
 from ..errors import SchemaError
@@ -23,7 +23,8 @@ from ..schema.full_dense_gradient_requirements import (
     DenseGradientDPReduction, DenseGradientLossObjective,
 )
 from ..schema.full_training_physical_dag import FullTrainingPhysicalDAG
-from ..schema.ir0 import OpKind, ResidualWorkload, SwiGluWorkload
+from ..schema.ir0 import CollectiveKind, OpKind, ResidualWorkload, SwiGluWorkload
+from ..schema.n6 import _leaf_fragments
 from ..schema.persistent_state import (
     PersistentStateAccess, PersistentStateDecl, PersistentStateIdentity,
     PersistentStateLifetime, StateKind,
@@ -52,6 +53,9 @@ _DENSE_DX_UPSTREAM_OUTPUTS = {
     RecordOpcode.RESIDUAL_BACKWARD_TIMING: (
         SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
         SemanticOperandId.COMPUTE_AUX_ADDRESS,
+    ),
+    RecordOpcode.LOCAL_REDUCE: (
+        SemanticOperandId.DESTINATION_ADDRESS,
     ),
 }
 
@@ -104,7 +108,7 @@ def require_exact_dense_parameter_state_inventory(
         )
         trainable_to_source[trainable.id] = source_id
     actual = {}
-    for fragment in manifest.fragments:
+    for fragment in _leaf_fragments(manifest.fragments):
         for abi in fragment.state_abi:
             source_id = trainable_to_source.get(abi.state_ref, abi.state_ref)
             if source_id not in templates:
@@ -239,11 +243,11 @@ def require_named_gemm_dx_state_load(
     allowed_load_records: frozenset[tuple[str, int]] | None = None,
 ) -> tuple[str, int]:
     """Require one earlier blocking HBM READ loading the exact weight SRAM value."""
-    states = {abi.id: abi for fragment in manifest.fragments
+    states = {abi.id: abi for fragment in _leaf_fragments(manifest.fragments)
               for abi in fragment.state_abi}
-    buffers = {abi.id: abi for fragment in manifest.fragments
+    buffers = {abi.id: abi for fragment in _leaf_fragments(manifest.fragments)
                for abi in fragment.buffer_abi}
-    by_fragment = {fragment.id: fragment for fragment in manifest.fragments}
+    by_fragment = {fragment.id: fragment for fragment in _leaf_fragments(manifest.fragments)}
     load_candidates: list[tuple[str, int]] = []
     for binding in manifest.state_operand_bindings:
         if binding.operand_id is not SemanticOperandId.HBM_ADDRESS:
@@ -338,15 +342,23 @@ def require_full_dense_physical_gradient_paths(
             or requirements.optimizer_gradient_normalization):
         raise SchemaError("loss seed, physical DP SUM and unscaled SGD math contract differ",
                           path="full_dense_gradient_math_contract")
-    if set(required_backward_opcodes) != set(
-            requirements.required_backbone_backward_refs):
-        raise SchemaError("all named backbone reverse operations need native physical opcode contract",
+    source_nodes = {node.id: node for node in plan.forward_graph.nodes}
+    inverse_collectives = {
+        f"backward::{node.id}": (
+            CollectiveKind.REDUCE_SCATTER if node.workload.collective is
+            CollectiveKind.ALL_GATHER else CollectiveKind.ALL_GATHER
+        )
+        for node in source_nodes.values() if node.kind is OpKind.COLLECTIVE
+    }
+    if (set(inverse_collectives) - set(requirements.required_backbone_backward_refs)
+            or set(required_backward_opcodes) !=
+            set(requirements.required_backbone_backward_refs) - set(inverse_collectives)):
+        raise SchemaError("every native reverse opcode or typed TP inverse collective must have an exact source",
                           path="required_backward_opcodes")
     if set(required_wgrad_opcodes) != {
             path.named_wgrad_op_ref for path in requirements.paths}:
         raise SchemaError("all named parameter derivatives need independent native opcode contract",
                           path="required_wgrad_opcodes")
-    source_nodes = {node.id: node for node in plan.forward_graph.nodes}
     reverse_native = {
         OpKind.GEMM: getattr(RecordOpcode, "GEMM_DX_TIMING", None),
         OpKind.NORM: getattr(RecordOpcode, "RMSNORM_BACKWARD_TIMING", None),
@@ -361,6 +373,11 @@ def require_full_dense_physical_gradient_paths(
             raise SchemaError("reverse source identity is not one validated forward node",
                               path=f"required_backward_opcodes[{reverse_ref}]")
         source = source_nodes[reverse_ref[len("backward::"):]]
+        if reverse_ref in inverse_collectives:
+            if source.kind is not OpKind.COLLECTIVE:
+                raise SchemaError("typed inverse must originate in one TP collective",
+                                  path=reverse_ref)
+            continue
         if source.kind is OpKind.ELEMENTWISE:
             expected_opcode = (
                 RecordOpcode.SWIGLU_BACKWARD_TIMING
@@ -387,7 +404,7 @@ def require_full_dense_physical_gradient_paths(
             raise SchemaError("WGRAD opcode must implement the actual source derivative family",
                               path=f"required_wgrad_opcodes[{template.state_ref}]")
     dag.validate_against(
-        manifest.fragments, manifest.core_streams,
+        _leaf_fragments(manifest.fragments), manifest.core_streams,
         required_operation_ids=tuple(sorted({
             *(path.named_wgrad_op_ref for path in requirements.paths),
             *(path.named_sync_op_ref for path in requirements.paths
@@ -397,10 +414,10 @@ def require_full_dense_physical_gradient_paths(
             *requirements.required_backbone_backward_refs,
         })),
     )
-    fragments = {fragment.id: fragment for fragment in manifest.fragments}
-    buffers = {abi.id: abi for fragment in manifest.fragments
+    fragments = {fragment.id: fragment for fragment in _leaf_fragments(manifest.fragments)}
+    buffers = {abi.id: abi for fragment in _leaf_fragments(manifest.fragments)
                for abi in fragment.buffer_abi}
-    states = {abi.id: abi for fragment in manifest.fragments
+    states = {abi.id: abi for fragment in _leaf_fragments(manifest.fragments)
               for abi in fragment.state_abi}
     closures = {
         (entry.fragment_id, entry.logical_core, entry.fragment_record_index,
@@ -458,6 +475,51 @@ def require_full_dense_physical_gradient_paths(
             pending.extend(by_action[current].depends_on)
         return False
 
+    # Native inverse collectives are explicit rank-local DTE/SUM programs,
+    # not a fictional single derivative COMPUTE opcode.  The earlier source
+    # DAG gate binds their IR1/N4/N5 origin, while this independent gradient
+    # gate demands their physical executable records and exact peer edges.
+    tp = plan.spec.tp_degree
+    if inverse_collectives and tp < 2:
+        raise SchemaError("singleton TP cannot satisfy a cross-die inverse collective",
+                          path="inverse_collectives")
+    for inverse_ref, inverse_kind in inverse_collectives.items():
+        for step in range(requirements.steps):
+            matched_edges = tuple((send, recv) for send, recv in dag.transport_edges
+                                  if by_action[send].step == step
+                                  and by_action[recv].step == step
+                                  and by_action[send].operation_ref == inverse_ref
+                                  and by_action[recv].operation_ref == inverse_ref)
+            if len(matched_edges) != tp * (tp - 1):
+                raise SchemaError("inverse collective misses exact peer physical D2D edges",
+                                  path=f"{inverse_ref}.step{step}")
+            for rank in range(tp):
+                group = named[(step, rank, inverse_ref)]
+                functional = Counter(
+                    opcode for action in group
+                    for _, _, opcode in action.executable_records
+                    if opcode not in (RecordOpcode.SRAM_ALLOC_AT, RecordOpcode.SRAM_FREE)
+                )
+                if inverse_kind is CollectiveKind.REDUCE_SCATTER:
+                    expected = Counter({RecordOpcode.DTE_ISSUE: 1,
+                                        RecordOpcode.DTE_WAIT: tp,
+                                        RecordOpcode.DTE_SEND: tp - 1,
+                                        RecordOpcode.DTE_RECV: tp - 1,
+                                        RecordOpcode.LOCAL_REDUCE: 1})
+                else:
+                    expected = Counter({RecordOpcode.DTE_ISSUE: 1,
+                                        RecordOpcode.DTE_WAIT: 1,
+                                        RecordOpcode.DTE_SEND: tp - 1,
+                                        RecordOpcode.DTE_RECV: tp - 1,
+                                        RecordOpcode.EVENT_SET: tp - 1 if rank == 0 else 1,
+                                        RecordOpcode.EVENT_WAIT: tp - 1 if rank == 0 else 1})
+                if functional != expected:
+                    raise SchemaError(
+                        "inverse collective lacks rank-local executable DTE/SUM records: "
+                        f"actual={dict(functional)} expected={dict(expected)}",
+                        path=f"{inverse_ref}.step{step}.rank{rank}",
+                    )
+
     for path in requirements.paths:
         step, rank = path.step, path.rank
         for reverse_ref in path.backward_producer_refs:
@@ -471,6 +533,13 @@ def require_full_dense_physical_gradient_paths(
                 opcode = required_wgrad_opcodes.get(physical_ref)
             else:
                 opcode = required_backward_opcodes.get(physical_ref)
+            if physical_ref in inverse_collectives:
+                if opcode is not None:
+                    raise SchemaError("TP inverse collective cannot substitute a compute opcode",
+                                      path=f"gradient_path.step{step}.rank{rank}.{reverse_ref}")
+                # The complete physical rank-local peer program was checked
+                # above; the source gradient path keeps this named producer.
+                continue
             if opcode is None:
                 raise SchemaError("parameter reverse source lacks independent native opcode",
                                   path=f"gradient_path.step{step}.rank{rank}.{reverse_ref}")
@@ -480,7 +549,9 @@ def require_full_dense_physical_gradient_paths(
                 source_ref = physical_ref.removeprefix("backward::")
                 owners = [template.state_ref for template in
                           plan.parameter_templates if
-                          source_ref in template.forward_consumer_refs]
+                          source_ref in template.forward_consumer_refs
+                          and template.tp_shard_index == rank % plan.spec.tp_degree
+                          and rank in template.owner_ranks]
                 if len(owners) != 1:
                     raise SchemaError("named dX source GEMM lacks one real weight StateDecl",
                                       path=f"gradient_path[{reverse_ref}].state")
@@ -552,8 +623,51 @@ def require_full_dense_physical_gradient_paths(
                         ) and depends_on(reverse, earlier):
                             upstream_producers.append(earlier)
                 if len(upstream_producers) != 1:
-                    raise SchemaError("named dX upstream dY lacks one real earlier derivative producer",
-                                      path=f"gradient_path[{reverse_ref}].dY")
+                    # Inverse TP AllGather produces the full dY by one local
+                    # copy and exactly one receive from each peer. All these
+                    # writes bind the *same* physical output BufferABI and a
+                    # subsequent owner/peer barrier gates the GEMM dX.
+                    source_ref = upstream.value_id.removesuffix(
+                        f".input_gradient::step{step}"
+                    )
+                    collective_ref = source_ref if source_ref in inverse_collectives else None
+                    if (collective_ref is None
+                            or inverse_collectives[collective_ref] is not
+                            CollectiveKind.ALL_GATHER
+                            or upstream.value_id !=
+                                f"{collective_ref}.input_gradient::step{step}"
+                            or upstream_producers):
+                        raise SchemaError(
+                            "named dX upstream dY lacks one real earlier derivative producer",
+                            path=f"gradient_path[{reverse_ref}].dY",
+                        )
+                    collective_actions = named[(step, rank, collective_ref)]
+                    writers = []
+                    barriers = []
+                    for candidate in collective_actions:
+                        if any(op in (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT)
+                               for _, _, op in candidate.executable_records):
+                            barriers.append(candidate)
+                        for candidate_fid, candidate_idx, candidate_op in candidate.executable_records:
+                            if candidate_op not in (
+                                RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_RECV,
+                            ):
+                                continue
+                            dest = buffer(candidate, candidate_fid, candidate_idx,
+                                          SemanticOperandId.DESTINATION_ADDRESS)
+                            if same_physical_value(dest, upstream):
+                                writers.append((candidate, candidate_op))
+                    counts = Counter(op for _, op in writers)
+                    if (counts != Counter({RecordOpcode.DTE_ISSUE: 1,
+                                          RecordOpcode.DTE_RECV: tp - 1})
+                            or len(barriers) != 1
+                            or not depends_on(reverse, barriers[0])
+                            or any(not depends_on(barriers[0], writer)
+                                   for writer, _ in writers)):
+                        raise SchemaError(
+                            "TP inverse AllGather did not assemble source dY before named dX",
+                            path=f"gradient_path[{reverse_ref}].dY",
+                        )
         derivative_opcode = required_wgrad_opcodes[path.named_wgrad_op_ref]
         wgrad, native, fid, idx = one(step, rank, path.named_wgrad_op_ref,
                                        derivative_opcode)

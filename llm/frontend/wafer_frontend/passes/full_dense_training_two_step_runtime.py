@@ -23,6 +23,7 @@ from ..schema.full_dense_gradient_requirements import (
 )
 from ..schema.full_training_physical_dag import FullTrainingPhysicalDAG
 from ..schema.ir0 import OpKind
+from ..schema.n6 import _leaf_fragments
 from ..schema.train_n6 import TrainLinkedProgram
 from .full_dense_training_two_step_ir0 import build_full_dense_training_two_step_ir0
 from .fusion_partition import partition_train_forward
@@ -45,7 +46,7 @@ class FullDenseTwoStepNative:
     program: TrainLinkedProgram
     physical_dag: FullTrainingPhysicalDAG
     requirements: DenseFullTrainRequirements
-    loss_gradient_seed_abi_by_step: Mapping[int, str]
+    loss_gradient_seed_abi_by_step: Mapping[int | tuple[int, int], str]
 
 
 def compile_full_dense_two_step_native(
@@ -54,9 +55,9 @@ def compile_full_dense_two_step_native(
 ) -> FullDenseTwoStepNative:
     """Require exact IR0→IR1→IR2→schedule→actions→native gradient closure."""
     plan.validate("dense_two_step_plan")
-    if plan.spec.mesh.rank_count != 1:
+    if plan.spec.dp_degree != 1:
         raise UnsupportedFeatureError(
-            "complete two-step native Dense backward currently requires TP1/DP1",
+            "complete two-step native Dense backward currently requires DP1",
             path="plan.mesh",
         )
     producer = "full_dense_training_two_step_native"
@@ -88,6 +89,18 @@ def compile_full_dense_two_step_native(
                                     "naive").selection,
     ))
     program = link_train(lower_train(build_train_global_action(scheduled)))
+    return verify_full_dense_two_step_linked_native(program, plan)
+
+
+def verify_full_dense_two_step_linked_native(
+    program: TrainLinkedProgram, plan: FlexibleDenseTrainPlan,
+) -> FullDenseTwoStepNative:
+    """Close the physical gradient contract on this exact linked timeline."""
+    plan.validate("dense_two_step_plan")
+    program.validate("dense_two_step_linked_program")
+    if plan.spec.dp_degree != 1:
+        raise UnsupportedFeatureError("physical Dense two-step requires DP1",
+                                      path="plan.mesh")
     requirements = build_dense_full_train_requirements(plan, steps=2)
     physical = build_full_dense_two_step_physical_dag(program, plan, requirements)
     backward, wgrad = dense_two_step_native_opcode_contract(plan)
@@ -103,24 +116,41 @@ def compile_full_dense_two_step_native(
     if len(gradients) != 2:
         raise SchemaError("two native CE backward nodes require distinct dLoss inputs",
                           path="program.source")
-    abis = {abi.value_id: abi.id for fragment in program.manifest.fragments
-            for abi in fragment.buffer_abi
-            if abi.value_id in gradients.values()}
+    rank_abis = {}
+    for fragment in _leaf_fragments(program.manifest.fragments):
+        for abi in fragment.buffer_abi:
+            if abi.value_id not in gradients.values():
+                continue
+            key = (abi.value_id, abi.logical_core.die_id)
+            prior = rank_abis.setdefault(key, abi.id)
+            if prior != abi.id:
+                raise SchemaError("CE dLoss changes physical BufferABI within a rank",
+                                  path=f"program.manifest.{key}")
     seeds = {}
     for node_ref, gradient_ref in gradients.items():
         for step in (0, 1):
             if node_ref.endswith(f"::step{step}_backward__dp0"):
-                if gradient_ref not in abis or step in seeds:
-                    raise SchemaError("independent CE dLoss BufferABI is missing",
-                                      path=node_ref)
-                seeds[step] = abis[gradient_ref]
+                for rank in range(plan.spec.tp_degree):
+                    key = step if plan.spec.tp_degree == 1 else (step, rank)
+                    abi_id = rank_abis.get((gradient_ref, rank))
+                    if abi_id is None or key in seeds:
+                        raise SchemaError("independent CE dLoss per-step/rank BufferABI is missing",
+                                          path=node_ref)
+                    seeds[key] = abi_id
                 break
         else:
             raise SchemaError("CE backward lacks exact step identity", path=node_ref)
+    expected_keys = ({0, 1} if plan.spec.tp_degree == 1 else
+                     {(step, rank) for step in (0, 1)
+                      for rank in range(plan.spec.tp_degree)})
+    if set(seeds) != expected_keys or len(set(seeds.values())) != len(seeds):
+        raise SchemaError("each physical CE backward requires its own FP32 seed",
+                          path="program.source")
     require_independent_ce_loss_gradient_seed(
         program.manifest, physical, seed_abi_by_step=seeds,
     )
     return FullDenseTwoStepNative(program, physical, requirements, seeds)
 
 
-__all__ = ["FullDenseTwoStepNative", "compile_full_dense_two_step_native"]
+__all__ = ["FullDenseTwoStepNative", "compile_full_dense_two_step_native",
+           "verify_full_dense_two_step_linked_native"]

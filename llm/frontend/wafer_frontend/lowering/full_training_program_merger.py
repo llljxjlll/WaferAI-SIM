@@ -31,6 +31,7 @@ from ..schema.moe_compile_sequence import MoeCompileSequence
 from ..schema.action import FusionPlan, StandaloneCollectivePlan
 from ..schema.global_action import GlobalActionDAG, LogicalCoreRef
 from ..schema.ir1 import IR1
+from ..schema.n6 import _leaf_fragments
 from ..schema.ir2 import IR2ProjectionResult, IntraDieScheduleSet
 from ..schema.serde import canonical_digest
 from .full_training_timeline_linker import require_physical_operation_coverage
@@ -113,7 +114,7 @@ def require_independent_ce_loss_gradient_seed(
     manifest: LinkedProgramManifest,
     dag: FullTrainingPhysicalDAG,
     *,
-    seed_abi_by_step: Mapping[int, str],
+    seed_abi_by_step: Mapping[int | tuple[int, int], str],
 ) -> None:
     """Reject using forward loss value as backward dLoss.
 
@@ -124,37 +125,53 @@ def require_independent_ce_loss_gradient_seed(
     """
     manifest.validate("training_independent_loss_seed_source")
     dag.validate()
-    if set(seed_abi_by_step) != {0, 1}:
-        raise SchemaError("every step requires its own typed dLoss input",
+    if not seed_abi_by_step or any(
+        (type(key) is not int or key not in (0, 1))
+        and (type(key) is not tuple or len(key) != 2
+             or any(type(value) is not int for value in key)
+             or key[0] not in (0, 1) or key[1] < 0)
+        for key in seed_abi_by_step
+    ):
+        raise SchemaError("every step/rank requires its own typed dLoss input",
                           path="seed_abi_by_step")
-    fragments = {fragment.id: fragment for fragment in manifest.fragments}
-    abis = {abi.id: abi for fragment in manifest.fragments for abi
+    fragments = {fragment.id: fragment for fragment in _leaf_fragments(manifest.fragments)}
+    abis = {abi.id: abi for fragment in _leaf_fragments(manifest.fragments) for abi
             in fragment.buffer_abi}
     closures = {(binding.fragment_id, binding.logical_core,
                  binding.fragment_record_index, binding.operand_id): binding
                 for binding in manifest.address_operand_bindings}
-    for step in (0, 1):
-        matches = defaultdict(list)
-        for action in dag.actions:
-            if action.step != step:
-                continue
-            for fragment_id, index, opcode in action.executable_records:
-                if opcode in (RecordOpcode.CROSS_ENTROPY_FORWARD,
-                              RecordOpcode.CROSS_ENTROPY_BACKWARD):
-                    matches[opcode].append((action.logical_core, fragment_id, index))
+    by_step_rank = defaultdict(lambda: defaultdict(list))
+    for action in dag.actions:
+        for fragment_id, index, opcode in action.executable_records:
+            if opcode in (RecordOpcode.CROSS_ENTROPY_FORWARD,
+                          RecordOpcode.CROSS_ENTROPY_BACKWARD):
+                by_step_rank[action.step, action.logical_core.die_id][opcode].append(
+                    (action.logical_core, fragment_id, index))
+    expected = ({(step, 0): seed_abi_by_step[step] for step in (0, 1)}
+                if set(seed_abi_by_step) == {0, 1} else seed_abi_by_step)
+    if (set(by_step_rank) != set(expected)
+            or {step for step, _ in expected} != {0, 1}
+            or any({rank for present_step, rank in expected if present_step == step}
+                   != {rank for present_step, rank in expected if present_step == 0}
+                   for step in (0, 1))
+            or len(set(expected.values())) != len(expected)):
+        raise SchemaError("every step/rank requires its own independent dLoss BufferABI",
+                          path="seed_abi_by_step")
+    for step, rank in sorted(by_step_rank):
+        matches = by_step_rank[step, rank]
         if any(len(matches[opcode]) != 1 for opcode in (
             RecordOpcode.CROSS_ENTROPY_FORWARD,
             RecordOpcode.CROSS_ENTROPY_BACKWARD,
         )):
-            raise SchemaError("native CE forward/backward must each be physical once per step",
-                              path=f"seed_abi_by_step[{step}]")
+            raise SchemaError("native CE forward/backward must each be physical once per step/rank",
+                              path=f"seed_abi_by_step[{step},{rank}]")
 
         def bound(executable, operand):
             core, fragment_id, index = executable
             closure = closures.get((fragment_id, core, index, operand))
             if closure is None or len(closure.buffer_abi_ids) != 1:
                 raise SchemaError("CE loss/gradient lacks one actual SRAM closure",
-                                  path=f"seed_abi_by_step[{step}]")
+                                  path=f"seed_abi_by_step[{step},{rank}]")
             return abis[closure.buffer_abi_ids[0]]
 
         loss = bound(matches[RecordOpcode.CROSS_ENTROPY_FORWARD][0],
@@ -169,7 +186,7 @@ def require_independent_ce_loss_gradient_seed(
                     if item.literal_value is not None}
         rows = operands.get("rank_rows")
         if (type(rows) is not int or rows < 1 or
-                gradient.id != seed_abi_by_step[step]
+                gradient.id != expected[step, rank]
                 or gradient.dtype is not DType.FP32
                 or gradient.tensor_slice.shape != (rows,)
                 or gradient.size_bytes < rows * 4 or
@@ -177,7 +194,7 @@ def require_independent_ce_loss_gradient_seed(
                 or gradient.binding_id == loss.binding_id
                 or gradient.value_id == loss.value_id):
             raise SchemaError("CE backward dLoss must be an independent per-row FP32 seed, not forward loss",
-                              path=f"seed_abi_by_step[{step}]")
+                              path=f"seed_abi_by_step[{step},{rank}]")
 
 
 def link_source_backed_full_training_timeline(

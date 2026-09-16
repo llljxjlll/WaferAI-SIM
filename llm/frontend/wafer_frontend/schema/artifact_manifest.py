@@ -4991,9 +4991,14 @@ class CommandFragment:
                         "LOCAL_REDUCE requires positive even FP16 bytes or exact 4-byte-aligned DP2 FP32 bytes and exact non-zero element_count",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
-                if operands["input_stride_bytes"].literal_value != action.bytes:
+                physical_stride = operands["input_stride_bytes"].literal_value
+                if (
+                    type(physical_stride) is not int
+                    or physical_stride < action.bytes
+                    or physical_stride % element_bytes
+                ):
                     raise SchemaError(
-                        "LOCAL_REDUCE input_stride_bytes must exactly equal action bytes",
+                        "LOCAL_REDUCE physical input stride must cover its exact logical elements",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
             if action.task_kind in (SemanticTaskKind.SEND, SemanticTaskKind.RECV):
@@ -5866,28 +5871,30 @@ def _validate_address_operand_closure(
         )
     if role is BufferUseRole.REDUCE_INPUT:
         first = expected[0]
-        if any(
-            (abi.schedule_id, abi.logical_core, abi.region_ref, abi.size_bytes)
-            != (first.schedule_id, first.logical_core, first.region_ref, first.size_bytes)
-            for abi in expected
-        ) or any(
-            right.region_offset_bytes + right_addend
-            != left.region_offset_bytes + left_addend + left_length
-            for left, right, left_addend, right_addend, left_length in zip(
-                expected, expected[1:], addends, addends[1:], lengths
-            )
-        ):
-            raise SchemaError(
-                "REDUCE_INPUT BufferABIs must form one contiguous rank-major span",
-                path=path,
-            )
         operands = {operand.name: operand for operand in record.operands}
+        stride = operands["input_stride_bytes"].literal_value
+        physical_alignment = first.alignment_bytes
+        expected_stride = (
+            (first.size_bytes + physical_alignment - 1)
+            // physical_alignment * physical_alignment
+        )
         if (
             operands["input_count"].literal_value != len(expected)
-            or operands["input_stride_bytes"].literal_value != first.size_bytes
+            or stride != expected_stride
+            or any(
+                (abi.schedule_id, abi.logical_core, abi.region_ref,
+                 abi.size_bytes, abi.alignment_bytes)
+                != (first.schedule_id, first.logical_core, first.region_ref,
+                    first.size_bytes, first.alignment_bytes)
+                or length != first.size_bytes
+                or abi.region_offset_bytes + addend !=
+                    first.region_offset_bytes + addends[0] + index * stride
+                for index, (abi, addend, length)
+                in enumerate(zip(expected, addends, lengths))
+            )
         ):
             raise SchemaError(
-                "LOCAL_REDUCE input count/stride must match the rank-major BufferABI span",
+                "LOCAL_REDUCE source BufferABIs must have exact hardware-aligned rank-major physical stride",
                 path=path,
             )
     if any(abi.id not in abi_by_id for abi in expected):

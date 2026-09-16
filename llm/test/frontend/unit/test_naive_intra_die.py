@@ -410,7 +410,7 @@ class NaiveIntraDieTransportTest(unittest.TestCase):
 
 
 class NaiveIntraDieReduceTest(unittest.TestCase):
-    def test_local_reduce_inputs_are_rank_major_tight_stride(self) -> None:
+    def test_local_reduce_inputs_are_rank_major_hardware_stride(self) -> None:
         ir1, dag, _fixture_schedule = valid_reduce_case()
         projection = IR2ProjectionResult.create(
             producer_pass="project_to_ir2",
@@ -436,9 +436,9 @@ class NaiveIntraDieReduceTest(unittest.TestCase):
         self.assertEqual(tuple(rank for rank, _binding in inputs), (0, 1))
         self.assertEqual(
             tuple(binding.region_offset_bytes for _rank, binding in inputs),
-            (0, 32),
+            (0, 64),
         )
-        self.assertEqual(output.region_offset_bytes, 64)
+        self.assertEqual(output.region_offset_bytes, 128)
         self.assertEqual(
             {binding.core_id for _rank, binding in inputs} | {output.core_id},
             {0},
@@ -449,9 +449,9 @@ class NaiveIntraDieReduceTest(unittest.TestCase):
             {"sram_main"},
         )
         self.assertTrue(
-            all(binding.alignment_bytes == 2 for _rank, binding in inputs)
+            all(binding.alignment_bytes == 64 for _rank, binding in inputs)
         )
-        self.assertEqual(output.alignment_bytes, 2)
+        self.assertEqual(output.alignment_bytes, 64)
 
     def test_complete_tp2_l1_preserves_tiles_and_reduce_staging(self) -> None:
         graph, projection = _complete_tp2_projection(large_sram=True)

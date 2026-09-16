@@ -6836,14 +6836,22 @@ class IntraDieSchedule:
                     path=f"{path}.task_buffer_uses",
                 )
             chunk_bytes = task.bytes
+            allocation_alignment = profile_index[
+                cores[inputs[0].core_id].sram_profile_ref
+            ].allocation_alignment_bytes
+            physical_stride = (
+                (chunk_bytes + allocation_alignment - 1)
+                // allocation_alignment * allocation_alignment
+            )
             source_base = inputs[0].region_offset_bytes
             if any(
-                binding.region_offset_bytes != source_base + index * chunk_bytes
+                binding.region_offset_bytes != source_base + index * physical_stride
                 or binding.size_bytes != chunk_bytes
+                or binding.alignment_bytes != allocation_alignment
                 for index, binding in enumerate(inputs)
             ):
                 raise SchemaError(
-                    "LOCAL_REDUCE inputs must be rank-ordered tight-stride chunks",
+                    "LOCAL_REDUCE inputs must be rank-ordered physical-alignment-stride chunks",
                     path=f"{path}.task_buffer_uses",
                 )
             output_uses = tuple(
@@ -6867,7 +6875,7 @@ class IntraDieSchedule:
                     path=f"{path}.task_buffer_uses",
                 )
             region = resolved_regions[inputs[0].id]
-            source_end = source_base + len(inputs) * chunk_bytes
+            source_end = source_base + (len(inputs) - 1) * physical_stride + chunk_bytes
             if source_end > region.size_bytes:
                 raise SchemaError(
                     "LOCAL_REDUCE source span exceeds named region",

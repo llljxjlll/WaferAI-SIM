@@ -1092,15 +1092,11 @@ def _ordinary_schedule(
             role in (BufferUseRole.REDUCE_INPUT, BufferUseRole.REDUCE_OUTPUT)
             for _task_id, _access, role, _view in uses_by_key[key]
         )
-        # Preserve the legacy tight-stride contract for sub-line reduce chunks.
-        # Line-sized chunks use the native fixed-allocation alignment so their
-        # lifecycle records are executable without changing LOCAL_REDUCE ABI.
-        alignment_bytes = (
-            profile.allocation_alignment_bytes
-            if is_reduce_staging
-            and size_bytes % profile.allocation_alignment_bytes == 0
-            else 2 if is_reduce_staging else profile.allocation_alignment_bytes
-        )
+        # Every owned SRAM buffer has its own native fixed allocation. Even
+        # sub-line rank-major reduction contributions must begin at a real
+        # hardware-aligned address; the LOCAL_REDUCE source stride carries
+        # any physical padding between their logical element spans.
+        alignment_bytes = profile.allocation_alignment_bytes
         accesses = uses_by_key[key]
         lifetime_start = min(
             position_by_task[task_id]

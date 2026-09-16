@@ -414,7 +414,7 @@ def _reduce_fragment_case() -> tuple[GlobalActionDAG, GlobalAction, CommandFragm
             RecordOperand.literal("order", 0),
             RecordOperand.literal("input_count", 2),
             RecordOperand.literal("element_count", 16),
-            RecordOperand.literal("input_stride_bytes", 32),
+            RecordOperand.literal("input_stride_bytes", 64),
             RecordOperand.address(
                 "source_address", SemanticOperandId.SOURCE_ADDRESS, source.id
             ),
@@ -1102,7 +1102,7 @@ class ArtifactManifestSchemaTest(unittest.TestCase):
 
         with self.assertRaisesRegex(SchemaError, "exact non-zero element_count"):
             with_literal("element_count", 15).validate_against(dag)
-        with self.assertRaisesRegex(SchemaError, "exactly equal action bytes"):
+        with self.assertRaisesRegex(SchemaError, "must cover its exact logical elements"):
             with_literal("input_stride_bytes", 16).validate_against(dag)
 
         odd_action = replace(action, bytes=31)

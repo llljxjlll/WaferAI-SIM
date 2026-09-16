@@ -277,19 +277,19 @@ def valid_reduce_case(
         BufferBinding(
             "b_reduce_in_0", "reduce_in_0",
             TensorSlice("reduce_in_0", (0,), (16,)),
-            0, "sram_main", 0, 32, 2, (0,), "storage_reduce_in_0",
+            0, "sram_main", 0, 32, 64, (0,), "storage_reduce_in_0",
             None, BufferOwnership.BORROWED, 0, 1, DType.FP16, "flat",
         ),
         BufferBinding(
             "b_reduce_in_1", "reduce_in_1",
             TensorSlice("reduce_in_1", (0,), (16,)),
-            0, "sram_main", 32, 32, 2, (0,), "storage_reduce_in_1",
+            0, "sram_main", 64, 32, 64, (1,), "storage_reduce_in_1",
             None, BufferOwnership.BORROWED, 0, 1, DType.FP16, "flat",
         ),
         BufferBinding(
             "b_reduce_out", "reduce_out",
             TensorSlice("reduce_out", (0,), (16,)),
-            0, "sram_main", 64, 32, 2, (1,), "storage_reduce_out",
+            0, "sram_main", 128, 32, 64, (2,), "storage_reduce_out",
             None, BufferOwnership.OWNED, 0, 1, DType.FP16, "flat",
         ),
     )
@@ -1877,12 +1877,12 @@ class IR2SchemaTest(unittest.TestCase):
                     "buffer_bindings": (
                         input_zero,
                         replace(
-                            input_one, region_offset_bytes=96, banks=(1,)
+                            input_one, region_offset_bytes=192, banks=(3,)
                         ),
                         output,
                     )
                 },
-                "rank-ordered tight-stride",
+                "rank-ordered physical-alignment-stride",
             ),
             (
                 {
@@ -1890,7 +1890,7 @@ class IR2SchemaTest(unittest.TestCase):
                         input_zero,
                         input_one,
                         replace(
-                            output, region_offset_bytes=32, banks=(0,)
+                            output, region_offset_bytes=64, banks=(1,)
                         ),
                     )
                 },
@@ -1903,9 +1903,9 @@ class IR2SchemaTest(unittest.TestCase):
                         input_one,
                         replace(
                             output,
-                            region_offset_bytes=65,
+                            region_offset_bytes=193,
                             alignment_bytes=1,
-                            banks=(1,),
+                            banks=(3,),
                         ),
                     )
                 },

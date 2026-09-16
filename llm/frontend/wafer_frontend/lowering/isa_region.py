@@ -485,6 +485,19 @@ def _reduce_record(
             path="action.buffer_uses",
         )
     input_bindings = tuple(bindings[use.binding_id] for use in input_uses)
+    alignment = input_bindings[0].alignment_bytes
+    stride = ((action.bytes + alignment - 1) // alignment) * alignment
+    if any(
+        item.size_bytes != action.bytes
+        or item.alignment_bytes != alignment
+        or item.region_offset_bytes !=
+            input_bindings[0].region_offset_bytes + index * stride
+        for index, item in enumerate(input_bindings)
+    ):
+        raise SchemaError(
+            "LOCAL_REDUCE native stride must follow exact aligned rank-major source bindings",
+            path="action.buffer_uses",
+        )
     output = _binding_for_use(
         action,
         bindings,
@@ -527,7 +540,7 @@ def _reduce_record(
             RecordOperand.literal("order", 0),
             RecordOperand.literal("input_count", len(input_bindings)),
             RecordOperand.literal("element_count", action.bytes // element_bytes),
-            RecordOperand.literal("input_stride_bytes", action.bytes),
+            RecordOperand.literal("input_stride_bytes", stride),
             RecordOperand.address(
                 "source_address", SemanticOperandId.SOURCE_ADDRESS, source.id
             ),
