@@ -1533,6 +1533,8 @@ def _ordinary_schedule(
             SemanticTaskKind.WAIT,
             SemanticTaskKind.BARRIER,
         )
+        or (task.kind is SemanticTaskKind.COMP
+            and task.op_kind is OpKind.MOE_ROUTE_FREEZE)
     )
     runtime_token_by_task = {
         task.id: stable_artifact_id(

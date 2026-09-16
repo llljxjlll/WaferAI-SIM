@@ -6,8 +6,10 @@ import unittest
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.lowering.context import LoweringContext
 from llm.frontend.wafer_frontend.lowering.state import NaiveStateDmaLowering
+from llm.frontend.wafer_frontend.lowering.moe_full_train_route_freeze import lower_moe_route_freeze
 from llm.frontend.wafer_frontend.passes.fusion_partition import partition_ir1
 from llm.frontend.wafer_frontend.passes.global_action import build_global_action_dag
+from llm.frontend.wafer_frontend.passes.lower_program import _decorate_fragment
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -16,7 +18,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_route_table_source import
 )
 from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePolicy
 from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import NaiveProjectToIR2
-from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.artifact_manifest import (
+    CommandFragment, RecordOpcode,
+)
 from llm.frontend.wafer_frontend.schema.ir0 import OpKind
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
 from llm.frontend.wafer_frontend.schema.ir2 import SemanticTaskKind
@@ -87,6 +91,46 @@ class MoeFullTrainRouteStateNativeTest(unittest.TestCase):
             self.assertEqual(tuple(operand.value_id for operand in
                                    freeze.compute.inputs)[1], staging)
             self.assertIn(dma[0].id, freeze.deps)
+
+    def test_two_route_freezes_have_real_native_local_copy_and_lifecycle(self):
+        for layer in range(2):
+            action = next(action for action in self.dag.actions
+                          if action.op_kind is OpKind.MOE_ROUTE_FREEZE
+                          and action.compute.workload.layer == layer)
+            fragment = lower_moe_route_freeze(action, self.lowering)
+            fragment.validate_against(self.dag)
+            records = fragment.core_streams[0].records
+            self.assertEqual([record.opcode for record in records],
+                             [RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_WAIT])
+            self.assertEqual(records[0].operands[3].literal_value, 80)
+            self.assertEqual(records[0].operands[1].symbol_ref,
+                             records[1].operands[0].symbol_ref)
+            self.assertEqual(fragment.runtime_symbols[0].source_ref,
+                             action.runtime_binding.token_symbol)
+            decorated = _decorate_fragment(fragment, self.lowering,
+                                           path="test.route_freeze", validate=True)
+            decorated.validate_against(self.dag)
+            self.assertEqual(sum(record.opcode is RecordOpcode.DTE_ISSUE
+                                 for record in decorated.core_streams[0].records), 1)
+
+            tampered = replace(records[0], operands=tuple(
+                replace(operand, literal_value=40)
+                if index == 3 else operand
+                for index, operand in enumerate(records[0].operands)))
+            stream = replace(fragment.core_streams[0],
+                             records=(tampered, records[1]))
+            forged = CommandFragment.create(
+                producer_pass=fragment.producer_pass,
+                **{**fragment._semantic_key(), "core_streams": (stream,)})
+            with self.assertRaisesRegex(SchemaError, "payload/token"):
+                forged.validate_against(self.dag)
+            missing_score = CommandFragment.create(
+                producer_pass=fragment.producer_pass,
+                **{**fragment._semantic_key(), "buffer_abi": tuple(
+                    abi for abi in fragment.buffer_abi
+                    if abi.binding_id != action.buffer_uses[0].binding_id)})
+            with self.assertRaisesRegex(SchemaError, "lacks exact BufferABI"):
+                missing_score.validate_against(self.dag)
 
     def test_route_hbm_collision_and_missing_source_read_fail_closed(self):
         homes = self.placement.hbm_layout.routes

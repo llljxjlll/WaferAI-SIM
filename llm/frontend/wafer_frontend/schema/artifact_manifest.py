@@ -57,6 +57,9 @@ from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
 )
+from .moe_full_training_block_workload import (
+    MoeForwardBlockKind, MoeFullTrainingBlockWorkload,
+)
 from .ir1 import IR1
 from .ir2 import (
     BufferOwnership,
@@ -4315,7 +4318,73 @@ class CommandFragment:
                         "wave EVENT cannot replace the transfer payload",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
-            if action.task_kind is SemanticTaskKind.COMP:
+            if (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_ROUTE_FREEZE):
+                compute = action.compute
+                if (compute is None
+                        or compute.impl_ref != "moe_route_freeze"
+                        or type(compute.workload) is not MoeFullTrainingBlockWorkload
+                        or compute.workload.kind is not MoeForwardBlockKind.ROUTE_FREEZE
+                        or len(indices) != 2
+                        or tuple(records[index].opcode for index in indices)
+                           != (RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_WAIT)
+                        or action.runtime_binding is None
+                        or action.runtime_binding.token_symbol is None):
+                    raise SchemaError(
+                        "MoE route-freeze requires exact two-record local DTE copy",
+                        path=f"{path}.core_streams[{stream_index}].records",
+                    )
+                issue, wait = (records[index] for index in indices)
+                payload = compute.workload.token_count * 20
+                token = issue.operands[1].symbol_ref
+                token_symbol = runtime_symbols.get(token)
+                if (issue.operands[0].literal_value != 0
+                        or issue.operands[2].literal_value != payload * 8
+                        or issue.operands[3].literal_value != payload
+                        or issue.operands[4].literal_value != 0
+                        or wait.operands[0].symbol_ref != token
+                        or token_symbol is None
+                        or token_symbol.kind is not RuntimeSymbolKind.DTE_TOKEN
+                        or token_symbol.source_ref
+                           != action.runtime_binding.token_symbol):
+                    raise SchemaError(
+                        "MoE route-freeze DTE payload/token differs from signed state source",
+                        path=f"{path}.core_streams[{stream_index}].records",
+                    )
+                by_use = {(use.role, use.operand_index): use
+                          for use in action.buffer_uses}
+                if (len(by_use) != 3
+                        or set(by_use) != {
+                            (BufferUseRole.COMP_INPUT, 0),
+                            (BufferUseRole.COMP_INPUT, 1),
+                            (BufferUseRole.COMP_OUTPUT, 0),
+                        }):
+                    raise SchemaError("route-freeze buffer roles are incomplete",
+                                      path=f"{path}.buffer_abi")
+                local_abis = {}
+                for key, use in by_use.items():
+                    matches = tuple(abi for abi in self.buffer_abi
+                                    if (abi.schedule_id, abi.binding_id)
+                                    == (action.source.schedule_id, use.binding_id))
+                    if len(matches) != 1:
+                        raise SchemaError("route-freeze lacks exact BufferABI",
+                                          path=f"{path}.buffer_abi")
+                    local_abis[key] = matches[0]
+                score = local_abis[(BufferUseRole.COMP_INPUT, 0)]
+                source = local_abis[(BufferUseRole.COMP_INPUT, 1)]
+                output = local_abis[(BufferUseRole.COMP_OUTPUT, 0)]
+                if (score.dtype is not DType.FP16
+                        or source.dtype is not DType.INT32
+                        or output.dtype is not DType.INT32
+                        or source.tensor_slice.shape != (compute.workload.token_count, 5)
+                        or output.tensor_slice.shape != source.tensor_slice.shape
+                        or source.size_bytes != payload
+                        or output.size_bytes != payload
+                        or source.logical_core != output.logical_core
+                        or source.region_ref != output.region_ref):
+                    raise SchemaError("route-freeze must copy exact INT32 five-field table",
+                                      path=f"{path}.buffer_abi")
+            elif action.task_kind is SemanticTaskKind.COMP:
                 assert action.compute is not None
                 abi = _compute_record_abi(
                     action.compute,
@@ -4795,7 +4864,7 @@ class CommandFragment:
                         )
                     continue
                 role, operand_index = _address_operand_role(
-                    record.opcode, relocation.operand_id, path
+                    record.opcode, relocation.operand_id, path, action=action
                 )
                 _uses, abis, addends, _lengths = _expected_operand_views(
                     action,
@@ -5291,7 +5360,16 @@ def _address_operand_role(
     opcode: RecordOpcode,
     operand_id: SemanticOperandId,
     path: str,
+    *, action: GlobalAction | None = None,
 ) -> tuple[BufferUseRole, int]:
+    if (action is not None
+            and action.task_kind is SemanticTaskKind.COMP
+            and action.op_kind is OpKind.MOE_ROUTE_FREEZE
+            and opcode is RecordOpcode.DTE_ISSUE):
+        if operand_id is SemanticOperandId.SOURCE_ADDRESS:
+            return BufferUseRole.COMP_INPUT, 1
+        if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
+            return BufferUseRole.COMP_OUTPUT, 0
     if opcode is RecordOpcode.SRAM_BIND:
         if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
             return BufferUseRole.COMP_OUTPUT, 0
@@ -7118,7 +7196,15 @@ class LinkedProgramManifest:
         def role_for_operand(
             opcode: RecordOpcode,
             operand_id: SemanticOperandId,
+            action: GlobalAction,
         ) -> tuple[BufferUseRole, int]:
+            if (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_ROUTE_FREEZE
+                    and opcode is RecordOpcode.DTE_ISSUE):
+                if operand_id is SemanticOperandId.SOURCE_ADDRESS:
+                    return BufferUseRole.COMP_INPUT, 1
+                if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
+                    return BufferUseRole.COMP_OUTPUT, 0
             if opcode is RecordOpcode.SRAM_BIND:
                 if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
                     return (BufferUseRole.COMP_OUTPUT, 0)
@@ -7312,7 +7398,7 @@ class LinkedProgramManifest:
                         roles[role] = occurrence
                     else:
                         role, operand_index = role_for_operand(
-                            record.opcode, relocation.operand_id
+                            record.opcode, relocation.operand_id, action
                         )
                         closure_abis, view_addends, view_lengths = _validate_address_operand_closure(
                             closure,

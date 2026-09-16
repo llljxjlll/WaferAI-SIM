@@ -18,6 +18,7 @@ from ..schema.artifact_manifest import (
     CommandFragment,
     RegionManifest,
 )
+from ..schema.ir0 import OpKind
 from ..schema.ir2 import (
     FusedNodeOrigin,
     SwizzleNodeOrigin,
@@ -181,7 +182,11 @@ def _lower_fragments(
                 "TRANSIT is only legal inside a standalone plan action tuple",
                 path=f"source.global_dag.actions[{action_index}]",
             )
-        fragment = dependencies.coarse.lower(action, context)
+        if action.op_kind is OpKind.MOE_ROUTE_FREEZE:
+            from ..lowering.moe_full_train_route_freeze import lower_moe_route_freeze
+            fragment = lower_moe_route_freeze(action, context)
+        else:
+            fragment = dependencies.coarse.lower(action, context)
         fragments.append(
             _decorate_fragment(
                 fragment,
