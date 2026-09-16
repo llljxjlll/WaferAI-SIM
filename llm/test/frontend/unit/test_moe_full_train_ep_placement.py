@@ -38,6 +38,40 @@ from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
 )
 
 
+def build_single_die_moe_train_physical_source(fixture):
+    request = _request(WorkloadFamily.MOE_TRAINING, rows=1, columns=1)
+    semantic = request._semantic_key()
+    semantic["memory"] = replace(request.memory, allow_sram_spill=False)
+    request = WorkloadRunRequest.create(**semantic)
+    capacity = MemoryTierCapacity.create(
+        tier=MemoryTier.HBM, location_ref="die:0",
+        base_address=0, capacity_bytes=1 << 25, alignment_bytes=16,
+    )
+    sequence = compile_moe_sequence(
+        materialize_workload_preflight(
+            request, _capability(supported=True), capacities=(capacity,),
+        ),
+        source_rank_policy="rank0_shared_spine",
+    )
+    phase = build_moe_full_train_forward_ir0(fixture.dense, sequence)
+    fabric = physical_fabric_from_data(
+        minimal_hardware(1, 1, sram_bytes=131072),
+    )
+    context = PlacementContext.create(
+        producer_pass="moe_ep1_train_resident_32MiB_128KiB",
+        fabric=fabric,
+        placement=fixture.forward.plan.source_experiment.placement,
+        hbm_address_spaces=(fixture.context.hbm_address_spaces[0],),
+    )
+    placement = build_moe_full_train_ep_placement(
+        phase, original_dense=fixture.dense, dense_manifest=fixture.manifest,
+        sequence=sequence, context=context,
+    )
+    return phase, sequence, placement, context
+
+
+
+
 class MoeFullTrainEpPlacementTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -128,34 +162,7 @@ class MoeFullTrainEpPlacementTest(unittest.TestCase):
         )
 
     def test_single_die_two_layer_physical_ep1_forward_ir1(self):
-        request = _request(WorkloadFamily.MOE_TRAINING, rows=1, columns=1)
-        semantic = request._semantic_key()
-        semantic["memory"] = replace(request.memory, allow_sram_spill=False)
-        request = WorkloadRunRequest.create(**semantic)
-        capacity = MemoryTierCapacity.create(
-            tier=MemoryTier.HBM, location_ref="die:0",
-            base_address=0, capacity_bytes=1 << 25, alignment_bytes=16,
-        )
-        sequence = compile_moe_sequence(
-            materialize_workload_preflight(
-                request, _capability(supported=True), capacities=(capacity,),
-            ),
-            source_rank_policy="rank0_shared_spine",
-        )
-        phase = build_moe_full_train_forward_ir0(self.dense, sequence)
-        fabric = physical_fabric_from_data(
-            minimal_hardware(1, 1, sram_bytes=131072),
-        )
-        context = PlacementContext.create(
-            producer_pass="moe_ep1_train_resident_32MiB_128KiB",
-            fabric=fabric,
-            placement=self.forward.plan.source_experiment.placement,
-            hbm_address_spaces=(self.context.hbm_address_spaces[0],),
-        )
-        placement = build_moe_full_train_ep_placement(
-            phase, original_dense=self.dense, dense_manifest=self.manifest,
-            sequence=sequence, context=context,
-        )
+        phase, sequence, placement, context = build_single_die_moe_train_physical_source(self)
         self.assertEqual(placement.physical_group.logical_shape, (1, 1))
         self.assertEqual(placement.physical_group.embedding.routes, ())
         self.assertEqual(len(placement.hbm_layout.shared), 11)

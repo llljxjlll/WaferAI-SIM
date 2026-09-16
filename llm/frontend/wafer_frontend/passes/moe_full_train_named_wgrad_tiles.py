@@ -74,10 +74,12 @@ def _derive(
 ) -> tuple[tuple[MoeNamedExpertWgradTile,...],tuple[tuple[int,int],...]]:
     request=sequence.materialization.request
     model=request.model
-    if (phase.step!=0 or model.num_layers!=2 or model.num_experts!=2
+    if (phase.step!=0 or model.num_layers!=2
+            or model.num_experts not in (1,2)
             or model.hidden_size!=4 or model.intermediate_size!=8
-            or request.parallel.tp!=1 or request.parallel.ep!=2):
-        raise SchemaError("only true two-layer TP1×EP2 V16/H4/I8 step0 source is enabled",
+            or request.parallel.tp!=1
+            or request.parallel.ep!=model.num_experts):
+        raise SchemaError("only true two-layer TP1×EP1/EP2 V16/H4/I8 step0 source is enabled",
                           path="moe_full_train_named_wgrad_tiles.source")
     owners={owner.source_state_decl_ref:owner for owner in phase.ep_state_owners}
     states={state.id:state for state in phase.graph.persistent_states}
@@ -89,14 +91,15 @@ def _derive(
                   if (unit.step,unit.layer)==(0,layer))
         gate={action.rank:action for action in unit.plan.actions
               if action.kind is MoeRectActionKind.GATE_WGRAD}
-        if (set(gate)!={0,1} or gate[0].flops!=64
-                or gate[1].flops!=0):
+        if (set(gate)!=set(range(model.num_experts))
+                or gate[0].flops!=2*model.hidden_size*model.num_experts*unit.spec.trace.token_count
+                or any(gate[rank].flops!=0 for rank in range(1,model.num_experts))):
             raise SchemaError("router rank1 zero local work and rank0 gate gradient must follow true P2",
                               path=f"moe_full_train_named_wgrad_tiles.layer{layer}.router")
-        router.append((gate[0].flops,gate[1].flops))
+        router.append(tuple(gate[rank].flops for rank in range(model.num_experts)))
         wgrad={action.rank:action for action in unit.plan.actions
                if action.kind is MoeRectActionKind.EXPERT_WGRAD}
-        if set(wgrad)!={0,1}:
+        if set(wgrad)!=set(range(model.num_experts)):
             raise SchemaError("source expert FP32 WGRAD action per EP rank missing",
                               path=f"moe_full_train_named_wgrad_tiles.layer{layer}.expert")
         trace=next(trace for trace in
@@ -152,7 +155,8 @@ def _derive(
                 )
                 tiles.append(tile)
                 total+=tile.logical_flops
-            if (total!=action.flops or total!=384
+            if (total!=action.flops
+                    or total!=6*k*model.hidden_size*model.intermediate_size
                     or sum(tile.gradient_bytes for tile in tiles[-3:])!=384):
                 raise SchemaError("three real projection WGRAD records fail P2 exact FLOPs/FP32 bytes",
                                   path=f"moe_full_train_named_wgrad_tiles.layer{layer}.expert{expert}")

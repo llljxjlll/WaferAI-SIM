@@ -84,7 +84,8 @@ def _derive(
     sequence: MoeCompileSequence,
     placement: MoeFullTrainEpPlacement,
 ) -> tuple[MoeExpertParameterGradientSource, ...]:
-    if phase.step != 0 or len(tiles.tiles) != 12:
+    if (phase.step != 0
+            or len(tiles.tiles) != 6*sequence.materialization.request.model.num_experts):
         raise SchemaError("requires the true complete two-layer step0 source",
                           path="moe_full_train_gradient_source_bridge.source")
     nodes = {node.id: node for node in phase.graph.nodes}
