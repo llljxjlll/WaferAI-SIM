@@ -65,8 +65,9 @@ def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[st
     if any(not path.is_file() for path in paths.values()):
         raise ValueError("all native tools and simulation must be files")
     return {
-        "schema_version": "dense-native-mesh-matrix-binding-v1",
+        "schema_version": "dense-native-mesh-matrix-binding-v2",
         "driver_sha256": _sha(Path(__file__).resolve()),
+        "runner_sha256": _sha(Path(__file__).resolve().parent / "run_dense_sequence_runtime_canary.py"),
         "shapes": shapes,
         "shard_index": args.shard_index,
         "shard_count": args.shard_count,
@@ -86,6 +87,24 @@ def audit_cached_case(case_root: Path, shape: str) -> dict[str, object]:
     if evidence != expected:
         raise ValueError(f"cached {shape} evidence bytes or semantics drifted")
     return evidence
+
+
+def audit_partial_case(case_root: Path, shape: str) -> list[dict[str, object]]:
+    """Resume only a contiguous prefix of complete, reopened native fresh runs."""
+    if (case_root / "case_evidence.json").exists():
+        audit_cached_case(case_root, shape)
+        return [audit_fresh(case_root / f"fresh{index}", shape) for index in (0, 1)]
+    if (case_root / "fresh1").exists() and not (case_root / "fresh0").exists():
+        raise ValueError(f"partial {shape} has fresh1 without fresh0")
+    observations = []
+    for index in (0, 1):
+        directory = case_root / f"fresh{index}"
+        if not directory.exists():
+            break
+        observations.append(audit_fresh(directory, shape))
+    if len(observations) == 2:
+        compare_fresh(*observations)
+    return observations
 
 
 def _mode(rows: int, columns: int) -> tuple[str, ...]:
@@ -221,13 +240,16 @@ def run(args: argparse.Namespace) -> None:
         rows, columns = _shape(shape)
         case_root = root / shape
         if case_root.exists():
-            audit_cached_case(case_root, shape)
-            completed_shapes.append(shape)
-            print(f"Dense full-sequence native mesh RESUME {shape} verified", flush=True)
-            continue
-        observations = []
-        case_root.mkdir()
-        for fresh in (0, 1):
+            if (case_root / "case_evidence.json").exists():
+                audit_cached_case(case_root, shape)
+                completed_shapes.append(shape)
+                print(f"Dense full-sequence native mesh RESUME {shape} verified", flush=True)
+                continue
+            observations = audit_partial_case(case_root, shape)
+        else:
+            case_root.mkdir()
+            observations = []
+        for fresh in range(len(observations), 2):
             directory = case_root / f"fresh{fresh}"
             command = (
                 sys.executable, "-m", "llm.test.frontend.integration.run_dense_sequence_runtime_canary",

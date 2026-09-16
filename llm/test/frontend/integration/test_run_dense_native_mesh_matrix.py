@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import shutil
@@ -12,8 +13,10 @@ import unittest
 from llm.test.frontend.integration.run_dense_native_mesh_matrix import (
     RELEASE_SHAPES,
     audit_cached_case,
+    audit_partial_case,
     audit_fresh,
     compare_fresh,
+    matrix_binding,
     select_shapes,
 )
 
@@ -178,6 +181,44 @@ class NativeMatrixAuditTest(unittest.TestCase):
             (directory / "segment_2.npup").write_bytes(b"changed")
             with self.assertRaisesRegex(ValueError, "npup_sha256 bytes drifted"):
                 audit_fresh(directory, "1x4")
+
+    def test_partial_resume_reopens_complete_fresh_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            case = root / "case"
+            case.mkdir()
+            self.assertEqual(audit_partial_case(case, "1x4"), [])
+            shutil.copytree(_fixture(root / "source0"), case / "fresh0")
+            self.assertEqual(len(audit_partial_case(case, "1x4")), 1)
+            (case / "fresh1").mkdir()
+            with self.assertRaises((OSError, ValueError)):
+                audit_partial_case(case, "1x4")
+            shutil.rmtree(case / "fresh1")
+            shutil.copytree(_fixture(root / "source1"), case / "fresh1")
+            self.assertEqual(len(audit_partial_case(case, "1x4")), 2)
+            (case / "fresh0" / "segment_0.npup").write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "bytes drifted"):
+                audit_partial_case(case, "1x4")
+
+    def test_partial_resume_rejects_hole(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            case = Path(raw) / "case"
+            case.mkdir()
+            (case / "fresh1").mkdir()
+            with self.assertRaisesRegex(ValueError, "fresh1 without fresh0"):
+                audit_partial_case(case, "1x4")
+
+    def test_matrix_binding_includes_exact_sequence_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tool = Path(raw) / "tool"
+            tool.write_bytes(b"fixture")
+            args = argparse.Namespace(finalizer=tool, resolver=tool, npusim=tool,
+                                      simulation=tool, shard_index=0, shard_count=1)
+            binding = matrix_binding(args, ("1x4",))
+            from llm.test.frontend.integration import run_dense_native_mesh_matrix as driver
+            runner = Path(driver.__file__).parent / "run_dense_sequence_runtime_canary.py"
+            self.assertEqual(binding["runner_sha256"], hashlib.sha256(runner.read_bytes()).hexdigest())
+            self.assertEqual(binding["schema_version"], "dense-native-mesh-matrix-binding-v2")
 
 
 if __name__ == "__main__":
