@@ -33,6 +33,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_combine_backward_ir0 impo
 from llm.frontend.wafer_frontend.passes.moe_full_train_router_wgrad_ir0 import (
     append_moe_full_train_router_wgrad_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_router_sgd_ir0 import (
+    append_moe_full_train_router_sgd_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -53,7 +56,7 @@ from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.common import DType
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
 from llm.frontend.wafer_frontend.schema.ir2 import BufferOwnership, StateUseAccess
-from llm.frontend.wafer_frontend.schema.persistent_state import StateKind
+from llm.frontend.wafer_frontend.schema.persistent_state import StateKind, PersistentStateAccess
 from llm.frontend.wafer_frontend.schema.serde import canonical_json
 from llm.test.frontend.integration.run_moe_full_train_two_step_forward_canary import (
     _run, _sha,
@@ -80,6 +83,7 @@ def main() -> None:
     parser.add_argument("--shared-reverse", action="store_true")
     parser.add_argument("--combine-backward", action="store_true")
     parser.add_argument("--router-wgrad", action="store_true")
+    parser.add_argument("--router-sgd", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -94,14 +98,16 @@ def main() -> None:
         )
         native_context = physical
         source = append_moe_full_train_ce_backward_ir0(phase)
-        if args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad:
+        if args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd:
             source = append_moe_full_train_head_backward_ir0(source)
-        if args.shared_reverse or args.combine_backward or args.router_wgrad:
+        if args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd:
             source = append_moe_full_train_shared_reverse_ir0(source)
-        if args.combine_backward or args.router_wgrad:
+        if args.combine_backward or args.router_wgrad or args.router_sgd:
             source = append_moe_full_train_combine_backward_ir0(source)
-        if args.router_wgrad:
+        if args.router_wgrad or args.router_sgd:
             source = append_moe_full_train_router_wgrad_ir0(source)
+        if args.router_sgd:
+            source = append_moe_full_train_router_sgd_ir0(source, sequence)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
@@ -133,11 +139,11 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != (60 if args.router_wgrad else
+        if len(leaves) != (63 if args.router_sgd else 60 if args.router_wgrad else
                            59 if args.combine_backward else
                            58 if args.shared_reverse else
                            55 if args.head_backward else 52):
-            raise RuntimeError("reverse path physical leaf count drifted")
+            raise RuntimeError(f"reverse path physical leaf count drifted: {len(leaves)}")
         manifest = NaiveManifestLinker().link(context, leaves)
         manifest.validate_against(
             context.ir1, context.fusion_plans, context.standalone_plans,
@@ -147,12 +153,13 @@ def main() -> None:
         opcodes = [record.opcode for fragment in manifest.fragments
                    for stream in fragment.core_streams for record in stream.records]
         if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
-                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (2 if args.router_wgrad else int(args.head_backward or args.shared_reverse or args.combine_backward))
-                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad)
-                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad)
-                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad)
-                or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad)
-                or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad)):
+                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (2 if args.router_wgrad or args.router_sgd else int(args.head_backward or args.shared_reverse or args.combine_backward))
+                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd)
+                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd)
+                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd)
+                or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd)
+                or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad or args.router_sgd)
+                or opcodes.count(RecordOpcode.SGD_UPDATE) != int(args.router_sgd)):
             raise RuntimeError(f"linked program reverse opcode counts: {[(item.name, opcodes.count(item)) for item in set(opcodes)]}")
         linked = output / f"step{step}.linked.json"
         artifact = output / f"step{step}.npup"
@@ -163,6 +170,20 @@ def main() -> None:
              cwd=output, log=output / f"step{step}.finalizer.log")
         carrier = MoeFullTrainForwardLinkedSource(manifest, context)
         carrier.validate()
+        state_write = None
+        if args.router_sgd:
+            gate_state_ref = source.nodes[-2].workload.source_parameter_state_ref
+            matches = [item for item in _resolved_state_abis(carrier)
+                       if item.abi.state_ref == gate_state_ref]
+            if (len(matches) != 1
+                    or matches[0].abi.access is not PersistentStateAccess.READ_WRITE
+                    or matches[0].first_access is not StateUseAccess.READ
+                    or sum(access is StateUseAccess.WRITE
+                           for _index, access in matches[0].uses) != 1
+                    or matches[0].abi.size_bytes != 8
+                    or opcodes.count(RecordOpcode.LSU_STORE) != 1):
+                raise RuntimeError("router SGD lacks exact real gate HBM write")
+            state_write = matches[0]
         routes = build_moe_full_train_route_table_source(phase, sequence)
         route_by_state = {phase.route_state_refs[seed.layer]: seed.payload
                           for seed in routes.seeds}
@@ -211,6 +232,11 @@ def main() -> None:
             final_norm_dx_records=opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING),
             dcombined_records=opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING),
             combine_backward_records=opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD),
+            sgd_records=opcodes.count(RecordOpcode.SGD_UPDATE),
+            gate_hbm_write_state_ref=(state_write.abi.state_ref
+                                      if state_write else None),
+            gate_hbm_write_bytes=(state_write.abi.size_bytes
+                                  if state_write else 0),
             dloss_seed_abi=dloss[0].id,
         ))
     assert native_context is not None
@@ -245,6 +271,10 @@ def main() -> None:
               "--mapping-config", str(mapping), "--trace-window", "1000000"],
              cwd=npusim.parent, log=log)
         content = log.read_text()
+        if (args.router_sgd
+                and (content.count("[TRAIN_SGD]") != 1
+                     or "lsu_hbm_write_bytes=8" not in content)):
+            raise RuntimeError(f"step{step} router SGD/state write did not execute")
         if (content.count("[PROGRAM_IO] phase=verify") != 1
                 or content.count("[PROGRAM_MEMORY] core=0") != 1
                 or "[CREDIT] data_balanced=1 ctrl_balanced=1" not in content
@@ -258,6 +288,7 @@ def main() -> None:
         "llm/frontend/wafer_frontend/passes/moe_full_train_shared_reverse_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_combine_backward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_router_wgrad_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_router_sgd_ir0.py",
         "llm/frontend/wafer_frontend/schema/moe_combine_backward_workload.py",
         "llm/frontend/wafer_frontend/schema/ir0.py",
         "llm/frontend/wafer_frontend/schema/ir1.py",
@@ -277,7 +308,8 @@ def main() -> None:
     source_sha256 = {name: _sha(repo / name) for name in source_files}
     (output / "receipt.json").write_text(json.dumps(dict(
         source_file_sha256=source_sha256,
-        status=("router_wgrad_physical_partial" if args.router_wgrad else
+        status=("router_sgd_physical_partial" if args.router_sgd else
+                "router_wgrad_physical_partial" if args.router_wgrad else
                 "combine_backward_physical_partial" if args.combine_backward else
                 "shared_dcombined_physical_partial" if args.shared_reverse else
                 "head_backward_physical_partial" if args.head_backward else

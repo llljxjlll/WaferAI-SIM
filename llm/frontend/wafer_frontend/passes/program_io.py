@@ -1148,7 +1148,8 @@ def _semantic_uses(
             if (
                 ownership is BufferOwnership.ALIASED
                 and type(source) in (*_LITE_TRAIN_SOURCE_TYPES,
-                                     TrainLinkedProgram)
+                                     TrainLinkedProgram,
+                                     MoeFullTrainForwardLinkedSource)
             )
             else None
         )
@@ -1511,7 +1512,7 @@ def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
         for value in context.ir1.values
         if not value.consumers
     }
-    if type(source) is TrainLinkedProgram:
+    if type(source) in (TrainLinkedProgram, MoeFullTrainForwardLinkedSource):
         updates = tuple(node for _index, context in _lowering_contexts(source)
                         for node in context.ir1.nodes
                         if node.kind is OpKind.OPTIMIZER_UPDATE)
