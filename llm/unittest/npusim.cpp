@@ -2122,11 +2122,19 @@ int sc_main(int argc, char *argv[]) {
             nlohmann::json sidecar_json;
             sidecar_stream >> sidecar_json;
             const auto schema = sidecar_json.at("schema_version").get<std::string>();
-            const uint64_t die_count = schema ==
-                "wafer_frontend.moe_inference_paged_runtime/v5alpha1" ? 100 :
+            const bool sparse_v6 = schema ==
+                "wafer_frontend.moe_inference_paged_runtime/v6alpha1";
+            const uint64_t active_die_count = sparse_v6 ? 100 :
+                schema == "wafer_frontend.moe_inference_paged_runtime/v5alpha1" ? 100 :
                 schema == "wafer_frontend.moe_inference_paged_runtime/v4alpha1" ? 9 :
                 schema == "wafer_frontend.moe_inference_paged_runtime/v3alpha1" ? 6 :
                 schema == "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
+            const uint64_t die_count = sparse_v6
+                ? sidecar_json.at("physical_die_count").get<uint64_t>()
+                : active_die_count;
+            if (sparse_v6 && !((DIE_X == 11 && DIE_Y == 11 && die_count == 121) ||
+                               (DIE_X == 12 && DIE_Y == 12 && die_count == 144)))
+                throw std::runtime_error("v6 sparse physical Die geometry changed");
             if (DIE_X <= 0 || DIE_Y <= 0 || DIE_COUNT != static_cast<int>(die_count) ||
                 DIE_X * DIE_Y != static_cast<int>(die_count))
                 throw std::runtime_error("paged MoE inference physical Die mesh differs from EP");
@@ -2137,7 +2145,8 @@ int sc_main(int argc, char *argv[]) {
                 const uint64_t core_id = die * 4;
                 if (core_id >= TOTAL_CORES ||
                     monitor->workerCores[core_id] == nullptr ||
-                    !monitor->workerCores[core_id]->lsu_memory)
+                    (die < active_die_count &&
+                     !monitor->workerCores[core_id]->lsu_memory))
                     throw std::runtime_error(
                         "paged MoE inference requires each physical EP core LSU");
                 auto *home = monitor->hbmRuntime->Find(die, 0);
@@ -2151,20 +2160,21 @@ int sc_main(int argc, char *argv[]) {
                     "moe_inference_mid_program_pager", sidecar_path,
                     sequence_manifest_texts, std::move(backends),
                     sc_time(CYCLE, SC_NS));
-            if (moe_inference_mid_program_pager->ActiveDieCount() != die_count)
+            if (moe_inference_mid_program_pager->ActiveDieCount() != active_die_count)
                 throw std::runtime_error("MoE pager version/active Die count differs");
-            for (uint64_t die = 0; die < die_count; ++die)
+            for (uint64_t die = 0; die < active_die_count; ++die)
                 monitor->workerCores[die * 4]->lsu_memory->SetMoeInferencePager(
                     moe_inference_mid_program_pager.get());
             std::cout << "[MOE_INFERENCE_PAGED_BINDING] source="
                       << moe_inference_mid_program_pager->SourceRef()
-                      << " mesh=" << DIE_Y << "x" << DIE_X << " ep=" << die_count
+                      << " mesh=" << DIE_Y << "x" << DIE_X << " ep=" << active_die_count
                       << " physical_weights="
                       << moe_inference_mid_program_pager->WeightPageCount()
                       << " kv_pages=4 lsu_gates="
                       << moe_inference_mid_program_pager->ExpectedEvents()
-                      << " hbm_capacity_per_die=" << (die_count == 100 ? 2048 : 1024)
-                      << " workspace_end=464 highest_relative_state_end=960"
+                      << " hbm_capacity_per_die=" << (active_die_count == 100 ? 2048 : 1024)
+                      << " workspace_end=464 highest_relative_state_end="
+                      << (active_die_count == 100 ? 1600 : 960)
                       << " pass=1" << std::endl;
         } catch (const std::exception &error) {
             LOG_ERROR(CONFIG) << "MoE inference paged DMA binding failed: "
@@ -2651,6 +2661,21 @@ int sc_main(int argc, char *argv[]) {
                           << " wait_cycles="
                           << moe_inference_mid_program_pager->AdmissionWaitCycles()
                           << " capacity=2 pass=1" << std::endl;
+            }
+            if (DIE_COUNT > static_cast<int>(moe_inference_mid_program_pager->ActiveDieCount())) {
+                for (uint64_t die = moe_inference_mid_program_pager->ActiveDieCount();
+                     die < static_cast<uint64_t>(DIE_COUNT); ++die) {
+                    auto *home = monitor->hbmRuntime->Find(die, 0);
+                    if (!home || !home->backend)
+                        throw std::runtime_error("sparse idle physical HBM backend missing");
+                    const auto &idle = home->backend->Stats();
+                    if (idle.requests || idle.reads || idle.writes || idle.bytes ||
+                        idle.completed || idle.failed)
+                        throw std::runtime_error("sparse idle physical HBM saw DMA traffic");
+                    std::cout << "[MOE_INFERENCE_PAGED_IDLE_DIE] die=" << die
+                              << " hbm_requests=0 reads=0 writes=0 bytes=0"
+                              << " completed=0 failed=0 pass=1" << std::endl;
+                }
             }
             std::cout << "[MOE_INFERENCE_PAGED_DMA_DRAIN] events=" << events
                       << " kv_probes=12 submitted=" << stats.submitted_requests
