@@ -7,6 +7,7 @@ from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.lowering.context import LoweringContext
 from llm.frontend.wafer_frontend.lowering.state import NaiveStateDmaLowering
 from llm.frontend.wafer_frontend.lowering.moe_full_train_route_freeze import lower_moe_route_freeze
+from llm.frontend.wafer_frontend.lowering.linker import _operand_role
 from llm.frontend.wafer_frontend.passes.fusion_partition import partition_ir1
 from llm.frontend.wafer_frontend.passes.global_action import build_global_action_dag
 from llm.frontend.wafer_frontend.passes.lower_program import _decorate_fragment
@@ -19,11 +20,11 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_route_table_source import
 from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePolicy
 from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import NaiveProjectToIR2
 from llm.frontend.wafer_frontend.schema.artifact_manifest import (
-    CommandFragment, RecordOpcode,
+    CommandFragment, RecordOpcode, SemanticOperandId,
 )
 from llm.frontend.wafer_frontend.schema.ir0 import OpKind
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
-from llm.frontend.wafer_frontend.schema.ir2 import SemanticTaskKind
+from llm.frontend.wafer_frontend.schema.ir2 import BufferUseRole, SemanticTaskKind
 from llm.frontend.wafer_frontend.schema.persistent_state import (
     PersistentStateAccess, PersistentStateLifetime, StateKind,
 )
@@ -99,6 +100,18 @@ class MoeFullTrainRouteStateNativeTest(unittest.TestCase):
                           and action.compute.workload.layer == layer)
             fragment = lower_moe_route_freeze(action, self.lowering)
             fragment.validate_against(self.dag)
+            self.assertEqual(
+                _operand_role(RecordOpcode.DTE_ISSUE,
+                              SemanticOperandId.SOURCE_ADDRESS, action=action),
+                (BufferUseRole.COMP_INPUT, 1))
+            self.assertEqual(
+                _operand_role(RecordOpcode.DTE_ISSUE,
+                              SemanticOperandId.DESTINATION_ADDRESS, action=action),
+                (BufferUseRole.COMP_OUTPUT, 0))
+            self.assertEqual(
+                _operand_role(RecordOpcode.DTE_ISSUE,
+                              SemanticOperandId.SOURCE_ADDRESS),
+                (BufferUseRole.LOCAL_COPY_SOURCE, 0))
             records = fragment.core_streams[0].records
             self.assertEqual([record.opcode for record in records],
                              [RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_WAIT])

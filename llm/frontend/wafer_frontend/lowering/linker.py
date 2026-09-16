@@ -40,6 +40,7 @@ from ..schema.artifact_manifest import (
 )
 from ..schema.common import stable_artifact_id
 from ..schema.global_action import GlobalAction, LogicalCoreRef
+from ..schema.ir0 import OpKind
 from ..schema.ir2 import BufferUseRole, SemanticTaskKind
 from ..schema.serde import canonical_digest
 from .context import LoweringContext
@@ -180,7 +181,16 @@ def _action_operand_slices(
 def _operand_role(
     opcode: RecordOpcode,
     operand_id: SemanticOperandId,
+    *, action: GlobalAction | None = None,
 ) -> tuple[BufferUseRole, int]:
+    if (action is not None
+            and action.task_kind is SemanticTaskKind.COMP
+            and action.op_kind is OpKind.MOE_ROUTE_FREEZE
+            and opcode is RecordOpcode.DTE_ISSUE):
+        if operand_id is SemanticOperandId.SOURCE_ADDRESS:
+            return BufferUseRole.COMP_INPUT, 1
+        if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
+            return BufferUseRole.COMP_OUTPUT, 0
     if opcode is RecordOpcode.SRAM_BIND:
         if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
             return (BufferUseRole.COMP_OUTPUT, 0)
@@ -778,10 +788,14 @@ class NaiveManifestLinker:
             if action.task_kind is not SemanticTaskKind.TRANSIT
         }
         claimed: dict[str, CommandFragment] = {}
+        # context.validate() above has already validated this exact immutable
+        # DAG. Keep full fragment and DAG-relative checks without revalidating
+        # the entire DAG for every independent fragment.
         for index, linked in enumerate(ordered_fragments):
-            linked.validate_against(
-                context.global_dag,
-                f"fragments[{index}]",
+            fragment_path = f"fragments[{index}]"
+            linked.validate(fragment_path)
+            linked._validate_against_validated_dag(
+                context.global_dag, fragment_path,
             )
             fragment = (
                 linked.fragment if isinstance(linked, RegionManifest) else linked
@@ -895,6 +909,7 @@ class NaiveManifestLinker:
                         role, operand_index = _operand_role(
                             record.opcode,
                             relocation.operand_id,
+                            action=action,
                         )
                         abis = _action_use_abi(
                             action,
