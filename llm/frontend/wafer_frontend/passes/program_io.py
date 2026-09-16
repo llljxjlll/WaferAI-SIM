@@ -10,6 +10,7 @@ import hashlib
 from typing import Iterator
 
 from ..errors import SchemaError
+from ..lowering.context import LoweringContext
 from ..schema.artifact_manifest import (
     BufferABI,
     CommandFragment,
@@ -258,8 +259,36 @@ def _leaf(fragment: CommandFragment | RegionManifest) -> CommandFragment:
     return fragment.fragment if type(fragment) is RegionManifest else fragment
 
 
+@dataclass(frozen=True, slots=True)
+class MoeFullTrainForwardLinkedSource:
+    """Exact single-rank two-layer forward manifest for source-bound host IO."""
+
+    manifest: LinkedProgramManifest
+    lowering_context: LoweringContext
+
+    def validate(self, path: str = "moe_full_train_forward_linked_source") -> None:
+        self.lowering_context.validate(f"{path}.lowering_context")
+        context = self.lowering_context
+        experts = tuple(action for action in context.global_dag.actions
+                        if action.op_kind is OpKind.MOE_EXPERT_FORWARD)
+        combines = tuple(action for action in context.global_dag.actions
+                         if action.op_kind is OpKind.MOE_COMBINE)
+        if (len(experts) != 2 or len(combines) != 2
+                or {action.compute.workload.layer for action in experts} != {0, 1}
+                or {action.compute.workload.layer for action in combines} != {0, 1}
+                or any(action.compute.workload.expert_count != 1
+                       for action in (*experts, *combines))):
+            raise SchemaError("ProgramIO source requires actual EP1 two-layer MoE forward",
+                              path=path)
+        self.manifest.validate_against(
+            context.ir1, context.fusion_plans, context.standalone_plans,
+            context.projection, context.schedule_set, context.global_dag,
+            self.manifest.fragments, f"{path}.manifest")
+
+
 LinkedProgramSource = (
-    LinkedProgramProfile
+    MoeFullTrainForwardLinkedSource
+    | LinkedProgramProfile
     | Stage4LinkedProgram
     | TrainLinkedProgram
     | S2LiteTrainLinkedProgram
@@ -278,6 +307,7 @@ LinkedProgramSource = (
 
 
 _LINKED_PROGRAM_SOURCE_TYPES = (
+    MoeFullTrainForwardLinkedSource,
     LinkedProgramProfile,
     Stage4LinkedProgram,
     TrainLinkedProgram,
@@ -1067,6 +1097,33 @@ def _semantic_uses(
                         replica_index,
                     )
                 )
+            if action.op_kind is OpKind.MOE_EXPERT_FORWARD:
+                schedule = next((item for item in context.schedule_set.schedules
+                                 if item.id == action.source.schedule_id), None)
+                scratch = (tuple(item.binding for item in
+                                 schedule.moe_expert_scratch_bindings
+                                 if item.task_id == action.source.task_id)
+                           if schedule is not None else ())
+                if len(scratch) != 2:
+                    raise SchemaError("expert ProgramIO needs two signed scratch roots",
+                                      path=action_path)
+                for scratch_index, binding in enumerate(scratch):
+                    abi = by_binding.get((action.source.schedule_id, binding.id))
+                    if (abi is None or abi.value_id != binding.value_id
+                            or abi.storage_id != binding.storage_id
+                            or abi.tensor_slice != binding.tensor_slice
+                            or abi.ownership is not BufferOwnership.OWNED
+                            or abi.logical_core != action.logical_core):
+                        raise SchemaError("expert ProgramIO scratch differs from signed ScheduleSet",
+                                          path=action_path)
+                    synthetic_use = ActionBufferUse(
+                        binding.id, BufferAccess.WRITE,
+                        BufferUseRole.COMP_OUTPUT, scratch_index + 1,
+                        None, binding.tensor_slice)
+                    collected[abi.id].append(_SemanticUse(
+                        flattened_action_index,
+                        len(action.buffer_uses) + scratch_index,
+                        action, synthetic_use, replica_index))
             flattened_action_index += 1
 
     result: dict[str, tuple[_SemanticUse, ...]] = {}
