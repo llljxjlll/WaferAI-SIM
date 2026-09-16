@@ -867,7 +867,7 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
         if (record.opcode == Opcode::SWIGLU_BACKWARD_TIMING) {
             prim->initialize();
             checks.Check(
-                prim->data_size_input == std::vector<int>{4} &&
+                prim->data_size_input == std::vector<int>{4, 2} &&
                     prim->data_chunk ==
                         std::vector<std::pair<std::string, int>>{
                             {"upstream_activation_gradient", 2},
