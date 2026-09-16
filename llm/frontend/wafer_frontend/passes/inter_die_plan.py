@@ -9,7 +9,7 @@ from ..schema.action import FusionPlan, StandaloneCollectivePlan
 from ..schema.swizzle_plan import FusedPlan
 from ..policies.swizzle_defaults import production_swizzle_policy
 from ..policies.swizzle_topo import SwizzlePlanner
-from ..schema.ir0 import CollectiveKind, CollectiveWorkload, OpKind
+from ..schema.ir0 import CollectiveKind, CollectiveWorkload, OpKind, ReduceOp
 from ..schema.common import ProfileKey
 from ..schema.ir1 import IR1, PhysicalNode
 from ..schema.n4 import (
@@ -27,7 +27,7 @@ from ..schema.n4 import (
 )
 
 
-def _unfused_all_gathers(graph: IR1) -> tuple[PhysicalNode, ...]:
+def _unfused_collectives(graph: IR1) -> tuple[PhysicalNode, ...]:
     fused_members = {
         node_id
         for skeleton in graph.fused_op_skeletons
@@ -39,12 +39,16 @@ def _unfused_all_gathers(graph: IR1) -> tuple[PhysicalNode, ...]:
             continue
         if (
             type(node.workload) is not CollectiveWorkload
-            or node.workload.collective is not CollectiveKind.ALL_GATHER
+            or node.workload.collective not in (CollectiveKind.ALL_GATHER, CollectiveKind.REDUCE_SCATTER)
         ):
             raise SchemaError(
-                "inter_die_plan supports only AllGather as an unfused collective",
+                "inter_die_plan supports only AllGather or SUM ReduceScatter as unfused collectives",
                 path=f"ir1.nodes[{index}].workload.collective",
             )
+        if (node.workload.collective is CollectiveKind.REDUCE_SCATTER
+                and node.workload.reduce_op is not ReduceOp.SUM):
+            raise SchemaError("standalone ReduceScatter requires SUM",
+                              path=f"ir1.nodes[{index}].workload.reduce_op")
         result.append(node)
     return tuple(result)
 
@@ -90,7 +94,7 @@ def plan_ir1(
             "must be produced by fusion_partition",
             path="ir1.producer_pass",
         )
-    standalone_nodes = _unfused_all_gathers(graph)
+    standalone_nodes = _unfused_collectives(graph)
 
     if fused_policy is None:
         selected_fused_policy: InterDiePolicy = (

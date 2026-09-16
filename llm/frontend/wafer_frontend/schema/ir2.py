@@ -3049,7 +3049,7 @@ class IntraDieDAG:
             if node.workload.collective is CollectiveKind.REDUCE_SCATTER:
                 for program in plan.rank_programs:
                     for action in program.actions:
-                        if action.kind is FusionActionKind.RECV:
+                        if action.kind in (FusionActionKind.LOCAL_COPY, FusionActionKind.RECV):
                             for temp_id in action.writes:
                                 bind_temp_origin(temp_id, node.inputs[0])
         local_origin_tasks: dict[tuple[str, int, str], SemanticTask] = {}
@@ -3122,7 +3122,7 @@ class IntraDieDAG:
         ) -> tuple[SemanticTask, ...]:
             unit_kind, _unit_id = coverage_unit(node_id)
             expected_kinds = (
-                (SemanticTaskKind.SEND, SemanticTaskKind.REDUCE)
+                (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND)
                 if unit_kind == "standalone"
                 and ir1_node_index[node_id].workload.collective
                 is CollectiveKind.REDUCE_SCATTER
@@ -6951,7 +6951,13 @@ class IntraDieSchedule:
                 or optimizer.compute is None
                 or optimizer.compute.effects.alias_set != alias_value.alias_set
                 or alias_value.alias_set
-                != f"trainable:{declaration.identity.tensor_ref}"
+                != (
+                    f"trainable:{declaration.identity.tensor_ref}"
+                    + (f":tp{declaration.identity.shard_index}"
+                       if sum(state.identity.tensor_ref == declaration.identity.tensor_ref
+                              for state in ir1.persistent_state_manifest.declarations) > 1
+                       else "")
+                )
                 or tuple(operand.value_id for operand in optimizer.compute.inputs)
                 != (root.value_id, optimizer.read_values[1])
                 or tuple(operand.value_id for operand in optimizer.compute.outputs)

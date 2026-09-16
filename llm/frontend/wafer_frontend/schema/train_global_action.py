@@ -319,7 +319,8 @@ class TrainGlobalActionReplica:
         compute = {action.member_id for action in self.global_dag.actions
                    if action.task_kind is SemanticTaskKind.COMP}
         required = {node.id for node in graph.nodes if node.phase in (
-            OpPhase.DGRAD, OpPhase.WGRAD, OpPhase.UPDATE)}
+            OpPhase.DGRAD, OpPhase.WGRAD, OpPhase.UPDATE)
+            and node.kind is not OpKind.COLLECTIVE}
         if not required <= compute:
             raise SchemaError("Dense SGD action DAG omits gradient or update compute",
                               path=f"{path}.global_dag.actions")

@@ -162,11 +162,6 @@ def build_full_dense_training_backward_ir0(
                 forward.stage, forward.mesh_ref, inputs, (output_id,), workload,
                 forward.math, _pure(), impl,
             ))
-            if plan.spec.tp_degree > 1:
-                new_accesses.append(StateAccess.create(
-                    node_ref=template.wgrad_ref, state_ref=state.id,
-                    mode=StateAccessMode.READ, rank=template.tp_shard_index,
-                ))
 
     leaves = {leaf.backward_ref: leaf for leaf in admission.leaves}
     for reverse_ref in admission.source_gap_gate.required:

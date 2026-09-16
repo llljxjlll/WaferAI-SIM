@@ -19,7 +19,7 @@ from ..schema.action import (
     SyncContract,
 )
 from ..schema.common import DType, RoundingMode, Sharding
-from ..schema.ir0 import EdgeKind, FusionPattern, OpKind, ReduceOp, StateAccessMode
+from ..schema.ir0 import CollectiveKind, EdgeKind, FusionPattern, OpKind, ReduceOp, StateAccessMode
 from ..schema.ir1 import IR1, PhysicalNode
 from ..schema.persistent_state import StateKind
 from ..schema.ir2 import (
@@ -118,7 +118,7 @@ def _ordinary_compute(node: PhysicalNode) -> ComputeContract:
 
 
 _DENSE_TP_PARAMETER_NODE = re.compile(
-    r"^(?:wgrad::|sgd_update::).+::tp(?P<shard>[0-9]+)(?:::step[01])?(?:__dp[0-9]+)?$"
+    r"^(?:wgrad::|sgd_update::)(?P<tensor>.+)::tp(?P<shard>[0-9]+)(?:::step[01])?(?:__dp[0-9]+)?$"
 )
 
 
@@ -142,6 +142,33 @@ def _dense_train_tp_owner_placements(ir1: IR1, node: PhysicalNode, group):
                      if item.node_ref == node.id)
     states = {item.id: item for item in manifest.declarations}
     bindings = {item.state_ref: item for item in manifest.bindings}
+    if (node.kind in (OpKind.GEMM_WEIGHT_WGRAD, OpKind.NORM_GAMMA_WGRAD)
+            and not accesses):
+        rank = int(match["shard"])
+        matching = tuple(state for state in states.values()
+                         if state.identity.kind is StateKind.TRAINABLE_PARAMETER
+                         and state.identity.tensor_ref == match["tensor"]
+                         and state.identity.shard_index == rank)
+        forward_reads = tuple(access for access in ir1.state_accesses
+                              if access.rank == rank
+                              and "::step" in node.id
+                              and access.node_ref.endswith("::step" + node.id.rsplit("::step", 1)[1])
+                              and len(matching) == 1
+                              and access.state_ref == matching[0].id
+                              and any(forward.id == access.node_ref
+                                      and forward.kind in (OpKind.GEMM, OpKind.NORM)
+                                      and len(forward.inputs) > 1
+                                      and forward.inputs[1] == match["tensor"]
+                                      for forward in ir1.nodes))
+        owner = tuple(item for item in group.placements if item.rank == rank)
+        if (len(matching) != 1 or len(forward_reads) != 1
+                or len(owner) != 1 or matching[0].id not in bindings
+                or bindings[matching[0].id].die_id != owner[0].die_id
+                or (node.kind is OpKind.GEMM_WEIGHT_WGRAD
+                    and node.workload.source_parameter_state_ref != matching[0].id)):
+            _fail("shard WGRAD requires exactly one real forward parameter READ and owner",
+                  node.id)
+        return owner
     shards = {item.state_ref for item in accesses}
     ranks = {item.rank for item in accesses}
     if len(accesses) != 1 or len(shards) != 1 or len(ranks) != 1:
@@ -1593,18 +1620,24 @@ class NaiveProjectToIR2:
                     continue
                 whole = edge.kind is EdgeKind.CONTROL
                 destination_kind = coverage(edge.destination_node)[0]
-                expected_entry_kind = {
-                    "ordinary": SemanticTaskKind.COMP,
-                    "fusion": SemanticTaskKind.COMP,
-                    "standalone": SemanticTaskKind.LOCAL_COPY,
-                }[destination_kind]
+                destination_entry_kinds = (
+                    (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND)
+                    if destination_kind == "standalone"
+                    and node_index[edge.destination_node].workload.collective
+                    is CollectiveKind.REDUCE_SCATTER
+                    else ({
+                        "ordinary": (SemanticTaskKind.COMP,),
+                        "fusion": (SemanticTaskKind.COMP,),
+                        "standalone": (SemanticTaskKind.LOCAL_COPY,),
+                    }[destination_kind])
+                )
                 entries = tuple(
                     sorted(
                         (
                             task
                             for task in tasks
                             if belongs(task, edge.destination_node, whole)
-                            and task.kind is expected_entry_kind
+                            and task.kind in destination_entry_kinds
                             and (
                                 whole
                                 or reads_source(task, edge.value_id)
@@ -1613,12 +1646,27 @@ class NaiveProjectToIR2:
                         key=lambda item: item.id,
                     )
                 )
+                if (edge.kind is EdgeKind.CONTROL
+                    and node_index[edge.source_node].kind is OpKind.OPTIMIZER_UPDATE):
+                    owner_accesses = tuple(access for access in ir1.state_accesses
+                                           if access.node_ref == edge.source_node
+                                           and access.mode is StateAccessMode.READ_WRITE)
+                    if len(owner_accesses) == 1:
+                        entries = tuple(task for task in entries
+                                        if getattr(task.origin_ref, "rank", None)
+                                        == owner_accesses[0].rank)
                 source_kind = coverage(edge.source_node)[0]
-                expected_completion_kind = {
-                    "ordinary": SemanticTaskKind.COMP,
-                    "fusion": SemanticTaskKind.REDUCE,
-                    "standalone": SemanticTaskKind.BARRIER,
-                }[source_kind]
+                expected_completion_kind = (
+                    SemanticTaskKind.REDUCE
+                    if source_kind == "standalone"
+                    and node_index[edge.source_node].workload.collective
+                    is CollectiveKind.REDUCE_SCATTER
+                    else {
+                        "ordinary": SemanticTaskKind.COMP,
+                        "fusion": SemanticTaskKind.REDUCE,
+                        "standalone": SemanticTaskKind.BARRIER,
+                    }[source_kind]
+                )
                 completions = tuple(
                     sorted(
                         (
@@ -1740,6 +1788,16 @@ class NaiveProjectToIR2:
                     if action.kind is FusionActionKind.RECV:
                         for temp_id in action.writes:
                             bind_temp(temp_id, partial_id)
+
+        for plan in standalone_plans:
+            source_node = node_index[plan.op_id]
+            if (source_node.kind is OpKind.COLLECTIVE
+                    and source_node.workload.collective is CollectiveKind.REDUCE_SCATTER):
+                for program in plan.rank_programs:
+                    for action in program.actions:
+                        if action.kind in (FusionActionKind.LOCAL_COPY, FusionActionKind.RECV):
+                            for temp_id in action.writes:
+                                bind_temp(temp_id, source_node.inputs[0])
 
         dags: list[IntraDieDAG] = []
         for die in ir1.fabric.dies:

@@ -1720,13 +1720,18 @@ def _validate_direct_reduce_scatter_execution(
     """Exactly one complete owner reduction of every incoming rank contribution."""
     index = _actions_by_rank_and_chunk(programs)
     ranks = tuple(program.rank for program in programs)
-    allowed = {FusionActionKind.SEND, FusionActionKind.RECV,
-               FusionActionKind.WAIT, FusionActionKind.REDUCE}
+    allowed = {FusionActionKind.LOCAL_COPY, FusionActionKind.SEND,
+               FusionActionKind.RECV, FusionActionKind.WAIT, FusionActionKind.REDUCE}
     if any(action.kind not in allowed for program in programs for action in program.actions):
         raise SchemaError("DIRECT ReduceScatter contains unsupported action", path=f"{path}.rank_programs")
     expected: dict[int, list[FusionAction]] = {rank: [] for rank in ranks}
     for chunk in chunks:
         owner = chunk.owner_rank
+        local = _require_one(index, owner, chunk.chunk_id, FusionActionKind.LOCAL_COPY, path=path)
+        if local.collective_step != 0 or local.deps or len(local.writes) != 1:
+            raise SchemaError("RS owner requires an independent local partial staging copy",
+                              path=f"{path}.rank_programs")
+        expected[owner].append(local)
         remote: dict[int, FusionAction] = {}
         waits: dict[int, FusionAction] = {}
         reduce = _require_one(index, owner, chunk.chunk_id, FusionActionKind.REDUCE, path=path)
@@ -1752,15 +1757,17 @@ def _validate_direct_reduce_scatter_execution(
                 or wait[0].collective_step != 0 or send.deps or recv[0].deps
                 or wait[0].deps != (recv[0].id,)):
                 raise SchemaError("each RS contribution requires exact SEND/RECV/WAIT lineage", path=f"{path}.rank_programs")
-            if (index.get((rank, chunk.chunk_id, FusionActionKind.RECV), ())
+            if (index.get((rank, chunk.chunk_id, FusionActionKind.LOCAL_COPY), ())
+                or index.get((rank, chunk.chunk_id, FusionActionKind.RECV), ())
                 or index.get((rank, chunk.chunk_id, FusionActionKind.WAIT), ())
                 or index.get((rank, chunk.chunk_id, FusionActionKind.REDUCE), ())):
                 raise SchemaError("non-owner cannot RECV, WAIT or REDUCE owner chunk", path=f"{path}.rank_programs")
             expected[rank].append(send)
             expected[owner].extend((recv[0], wait[0]))
             remote[rank], waits[rank] = recv[0], wait[0]
-        if (tuple(reduce.deps) != tuple(waits[r].id for r in ranks if r != owner)
+        if (tuple(reduce.deps) != (local.id, *(waits[r].id for r in ranks if r != owner))
             or len(reduce.reads) != len(ranks) or len(reduce.writes) != 1
+            or reduce.reads[owner] != local.writes[0]
             or any(reduce.reads[rank] != remote[rank].writes[0]
                    for rank in ranks if rank != owner)):
             raise SchemaError("REDUCE must consume precisely every received contribution after WAIT", path=f"{path}.rank_programs")
@@ -2037,6 +2044,9 @@ def _validate_standalone_rs_against(
                     raise SchemaError("RS transport route must bind execution group", path=f"{path}.rank_programs")
             if action.slice_ref is not None and action.dtype is not input_value.dtype:
                 raise SchemaError("RS chunk dtype must match physical tensor", path=f"{path}.rank_programs")
+            if action.kind is FusionActionKind.LOCAL_COPY and action.reads != op.inputs:
+                raise SchemaError("RS local staging copy must read actual source partial",
+                                  path=f"{path}.rank_programs")
             if action.kind is FusionActionKind.SEND and action.reads != op.inputs:
                 raise SchemaError("RS SEND must read actual source partial tensor", path=f"{path}.rank_programs")
             if action.kind is FusionActionKind.REDUCE:
@@ -2046,7 +2056,11 @@ def _validate_standalone_rs_against(
                     output_dtype=output.dtype, rounding=RoundingMode.RNE,
                     input_ranks=ranks,
                 )
+                local = tuple(other for other in program.actions
+                              if other.kind is FusionActionKind.LOCAL_COPY
+                              and other.chunk_id == action.chunk_id)
                 if (action.reduction != expected_reduction
-                    or action.reads[program.rank] != input_value.id
+                    or len(local) != 1
+                    or action.reads[program.rank] != local[0].writes[0]
                     or action.writes != op.outputs):
                     raise SchemaError("RS owner SUM must consume local source and write output shard", path=f"{path}.rank_programs")

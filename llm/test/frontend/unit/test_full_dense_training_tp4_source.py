@@ -27,7 +27,7 @@ class FullDenseTP4SourceTest(unittest.TestCase):
         FusionSemanticValidator.validate(graph, "tp4")
         self.assertEqual(len(graph.persistent_states), 60)
         self.assertEqual(len(graph.nodes), 382)
-        self.assertEqual(len(graph.state_accesses), 432)
+        self.assertEqual(len(graph.state_accesses), 320)
         by_node = {node.id: node for node in graph.nodes}
         state_by_shard = {(s.identity.tensor_ref, s.identity.shard_index): s.id
                           for s in graph.persistent_states}
@@ -44,8 +44,12 @@ class FullDenseTP4SourceTest(unittest.TestCase):
                 sgd = f"sgd_update::{t.tensor_ref}::tp{t.tp_shard_index}::step{step}"
                 self.assertIn(wgrad, by_node)
                 self.assertIn(sgd, by_node)
-                self.assertIn((wgrad, state_by_shard[(t.tensor_ref, t.tp_shard_index)],
-                               t.tp_shard_index), reads)
+                if t.tensor_ref.endswith("tok_embeddings.weight"):
+                    self.assertIn((wgrad, state_by_shard[(t.tensor_ref, t.tp_shard_index)],
+                                   t.tp_shard_index), reads)
+                else:
+                    self.assertNotIn((wgrad, state_by_shard[(t.tensor_ref, t.tp_shard_index)],
+                                      t.tp_shard_index), reads)
         edges = tuple(e for e in graph.edges if e.kind is EdgeKind.CONTROL and
                       e.source_node.startswith("sgd_update::") and
                       e.source_node.endswith("::step0"))

@@ -582,7 +582,12 @@ def _ordinary_schedule(
             or declaration.access is not PersistentStateAccess.READ_WRITE
             or declaration.identity.tensor_ref is None
             or value.alias_set
-            != f"trainable:{declaration.identity.tensor_ref}"
+            != (
+                f"trainable:{declaration.identity.tensor_ref}"
+                + (f":tp{declaration.identity.shard_index}"
+                   if sum(state.identity.tensor_ref == declaration.identity.tensor_ref
+                          for state in manifest.declarations) > 1 else "")
+            )
             or access.state_ref != declaration.id
             or access.node_ref != producer.member_id
             or value.shape != staging.shape

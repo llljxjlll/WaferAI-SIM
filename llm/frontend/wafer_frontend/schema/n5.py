@@ -899,7 +899,8 @@ def _validate_full_dense_sgd_projection_state(
                        for task in dag.tasks
                        if task.kind is SemanticTaskKind.COMP}
     required = {node.id for node in graph.nodes if node.phase in (
-        OpPhase.DGRAD, OpPhase.WGRAD, OpPhase.UPDATE)}
+        OpPhase.DGRAD, OpPhase.WGRAD, OpPhase.UPDATE)
+        and node.kind is not OpKind.COLLECTIVE}
     if not required <= compute_origins:
         raise SchemaError("Dense SGD projection omits gradient or optimizer compute",
                           path=f"{path}.projection.dags")

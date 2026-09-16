@@ -137,7 +137,7 @@ def _rhs_operand_id(
         for access in ir1.state_accesses
         if access.node_ref == gemm.id
         and access.rank == rank
-        and declarations[access.state_ref].identity.kind is StateKind.PARAMETER
+        and declarations[access.state_ref].identity.kind in (StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
         and declarations[access.state_ref].identity.tensor_ref == gemm.inputs[1]
     )
     if len(matching) != 1:
@@ -605,6 +605,98 @@ class NaiveInterDiePolicy:
 class DirectAllGatherPolicy:
     """Plan canonical owner fan-out DIRECT AllGather actions."""
 
+    def _plan_reduce_scatter(
+        self, ir1: IR1, node: PhysicalNode, profile: ProfileKey,
+    ) -> StandaloneCollectivePlan:
+        """Direct owner reduction for each true rank-local partial dX shard."""
+        group = next((g for g in ir1.groups if g.id == node.execution_group_ref), None)
+        if group is None or group.axis is not MeshAxisName.TP:
+            _fail("SUM ReduceScatter requires one TP execution group", "collective_op")
+        ranks = _canonical_ranks(group, path="collective_op.group")
+        routes = _route_index(group, path="collective_op.group.embedding.routes")
+        values = {value.id: value for value in ir1.values}
+        if len(node.inputs) != 1 or len(node.outputs) != 1:
+            _fail("SUM ReduceScatter requires one input and one output", "collective_op")
+        input_value, output = values[node.inputs[0]], values[node.outputs[0]]
+        axis = node.workload.scatter_tensor_axis
+        if axis not in (0, 1) or input_value.shape != output.shape:
+            _fail("SUM ReduceScatter requires matching M/N tensor extents", "collective_op")
+        chunks = _chunk_slices(
+            region_id=node.id, value=output, rank_count=len(ranks),
+            axis=axis, path="collective_op.outputs",
+        )
+        actions: dict[int, list[FusionAction]] = {rank: [] for rank in ranks}
+        for chunk in chunks:
+            owner = chunk.owner_rank
+            local_ref = f"temp.{node.id}.chunk.{chunk.chunk_id}.rank.{owner}.local_partial"
+            local_id = f"action.{node.id}.chunk.{chunk.chunk_id}.rank.{owner}.local_copy"
+            local = _fusion_action(
+                local_id, FusionActionKind.LOCAL_COPY, member_id=node.id,
+                chunk_id=chunk.chunk_id, collective_step=0, slice_ref=chunk.id,
+                bytes=chunk.bytes, dtype=input_value.dtype,
+                reads=node.inputs, writes=(local_ref,),
+            )
+            actions[owner].append(local)
+            waits: dict[int, FusionAction] = {}
+            remote_values: dict[int, str] = {}
+            for rank in ranks:
+                if rank == owner:
+                    continue
+                channel = f"channel.{node.id}.chunk.{chunk.chunk_id}.rank.{rank}.to.rank.{owner}"
+                send_id = f"action.{node.id}.chunk.{chunk.chunk_id}.rank.{rank}.send.to.{owner}"
+                recv_id = f"action.{node.id}.chunk.{chunk.chunk_id}.rank.{owner}.recv.from.{rank}"
+                remote_ref = f"temp.{node.id}.chunk.{chunk.chunk_id}.rank.{owner}.recv.from.{rank}"
+                send = _fusion_action(
+                    send_id, FusionActionKind.SEND, member_id=node.id,
+                    chunk_id=chunk.chunk_id, collective_step=0, peer_rank=owner,
+                    expected_route=routes[(rank, owner)], slice_ref=chunk.id,
+                    bytes=chunk.bytes, dtype=input_value.dtype,
+                    reads=node.inputs, logical_channel=channel,
+                )
+                recv = _fusion_action(
+                    recv_id, FusionActionKind.RECV, member_id=node.id,
+                    chunk_id=chunk.chunk_id, collective_step=0, peer_rank=rank,
+                    expected_route=routes[(rank, owner)], slice_ref=chunk.id,
+                    bytes=chunk.bytes, dtype=input_value.dtype,
+                    writes=(remote_ref,), logical_channel=channel,
+                )
+                wait_id = f"action.{node.id}.chunk.{chunk.chunk_id}.rank.{owner}.wait.from.{rank}"
+                wait = _fusion_action(
+                    wait_id, FusionActionKind.WAIT, member_id=node.id,
+                    chunk_id=chunk.chunk_id, collective_step=0,
+                    sync=SyncContract(
+                        completion_event=f"event.{wait_id}",
+                        wait_event=recv.sync.completion_event, barrier=None,
+                    ), deps=(recv.id,),
+                )
+                actions[rank].append(send)
+                actions[owner].extend((recv, wait))
+                waits[rank] = wait
+                remote_values[rank] = remote_ref
+            reduce_id = f"action.{node.id}.chunk.{chunk.chunk_id}.rank.{owner}.reduce"
+            actions[owner].append(_fusion_action(
+                reduce_id, FusionActionKind.REDUCE, member_id=node.id,
+                chunk_id=chunk.chunk_id, collective_step=1, slice_ref=chunk.id,
+                bytes=chunk.bytes, dtype=input_value.dtype,
+                reads=tuple(local_ref if rank == owner else remote_values[rank]
+                            for rank in ranks), writes=node.outputs,
+                reduction=ReductionContract(
+                    reduce_op=ReduceOp.SUM, input_dtype=input_value.dtype,
+                    accumulation_dtype=node.math.accumulation_dtype,
+                    output_dtype=output.dtype, rounding=RoundingMode.RNE,
+                    input_ranks=ranks,
+                ), deps=(local.id, *(waits[rank].id for rank in ranks if rank != owner)),
+            ))
+        plan = StandaloneCollectivePlan.create(
+            producer_pass="inter_die_plan", source_ir1_id=ir1.id, op_id=node.id,
+            algorithm=CollectiveAlgorithm.DIRECT, group_ref=group.id,
+            profile_key=profile, chunk_dim=ChunkDim.M if axis == 0 else ChunkDim.N,
+            chunk_slices=chunks,
+            rank_programs=tuple(RankProgram(rank, tuple(actions[rank])) for rank in ranks),
+        )
+        plan.validate_against(ir1)
+        return plan
+
     def plan(
         self,
         ir1: IR1,
@@ -620,6 +712,11 @@ class DirectAllGatherPolicy:
         )
         if bound != collective_op:
             _fail("must exactly reference a node in IR1", "collective_op")
+        if (collective_op.kind is OpKind.COLLECTIVE
+                and type(collective_op.workload) is CollectiveWorkload
+                and collective_op.workload.collective is CollectiveKind.REDUCE_SCATTER
+                and collective_op.workload.reduce_op is ReduceOp.SUM):
+            return self._plan_reduce_scatter(ir1, collective_op, profile)
         if (
             collective_op.kind is not OpKind.COLLECTIVE
             or type(collective_op.workload) is not CollectiveWorkload
