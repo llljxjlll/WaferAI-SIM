@@ -5346,6 +5346,7 @@ class ManifestInputKind(str, Enum):
     IR1 = "ir1"
     FUSION_PLAN = "fusion_plan"
     STANDALONE_PLAN = "standalone_plan"
+    DENSE_DP2_ROUTE_PLAN = "dense_dp2_route_plan"
     IR2_PROJECTION = "ir2_projection"
     SCHEDULE_SET = "schedule_set"
     GLOBAL_ACTION_DAG = "global_action_dag"
@@ -6760,6 +6761,43 @@ class LinkedProgramManifest:
             elif leaf.source_global_dag_id != self.source_global_dag_id:
                 raise SchemaError("fragment references a different global DAG", path=f"{linked_path}.source_global_dag_id")
             leaf_fragments[leaf.id] = leaf
+        dp_route_digests = tuple(
+            digest for digest in self.input_digests
+            if digest.kind is ManifestInputKind.DENSE_DP2_ROUTE_PLAN
+        )
+        dp_gradient_leaves = tuple(
+            leaf for leaf in leaf_fragments.values()
+            if leaf.producer_pass == "dense_dp_gradient_lowering"
+        )
+        if dp_route_digests or dp_gradient_leaves:
+            dp_dag_ids = train_lineage_ids[ManifestInputKind.GLOBAL_ACTION_DAG]
+            counts = tuple(
+                sum(leaf.source_global_dag_id == dag_id for leaf in dp_gradient_leaves)
+                for dag_id in sorted(dp_dag_ids)
+            )
+            is_local_train_intermediate = (
+                self.producer_pass == "manifest_linker"
+                and not train_inputs and not dp_route_digests
+                and bool(dp_gradient_leaves)
+                and len({leaf.source_global_dag_id for leaf in dp_gradient_leaves}) == 1
+                and all(leaf.source_global_dag_id == self.source_global_dag_id
+                        for leaf in dp_gradient_leaves)
+            )
+            if (
+                any(leaf.kind is not FragmentKind.STANDALONE_COLLECTIVE
+                    for leaf in dp_gradient_leaves)
+                or not is_local_train_intermediate and (
+                    not train_inputs or len(dp_route_digests) != 1
+                    or dp_route_digests[0].schema_version
+                       != "wafer_frontend.dense_dp2_route_plan/v1alpha1"
+                    or len(dp_dag_ids) != 2 or len(counts) != 2
+                    or counts[0] == 0 or counts[0] != counts[1]
+                )
+            ):
+                raise SchemaError(
+                    "physical DP2 route trust anchor requires two replicas with equal nonzero native gradient fragments",
+                    path=f"{path}.input_digests",
+                )
         swizzle_leaves = tuple(
             leaf for leaf in leaf_fragments.values() if leaf.kind is FragmentKind.SWIZZLE
         )

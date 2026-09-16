@@ -39,6 +39,11 @@ class DenseDP2RoutePlan:
     dp_groups: tuple[PhysicalGroup, PhysicalGroup]
     gradients: tuple[DenseDP2GradientRoute, ...]
 
+    @property
+    def schema_version(self) -> str:
+        """Immutable source identity for the linked ProgramArtifact trust anchor."""
+        return "wafer_frontend.dense_dp2_route_plan/v1alpha1"
+
     def validate_against(
         self, plan: FlexibleDenseTrainPlan, placed: TrainPlacedIR1,
         context: PlacementContext,

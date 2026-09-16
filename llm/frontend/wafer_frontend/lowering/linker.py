@@ -97,6 +97,8 @@ def _train_input_digests(
                 (ManifestInputKind.IR1, context.ir1),
                 *((ManifestInputKind.FUSION_PLAN, plan) for plan in context.fusion_plans),
                 *((ManifestInputKind.STANDALONE_PLAN, plan) for plan in context.standalone_plans),
+                *(((ManifestInputKind.DENSE_DP2_ROUTE_PLAN, context.dp_route_plan),)
+                  if context.dp_route_plan is not None else ()),
                 (ManifestInputKind.IR2_PROJECTION, context.projection),
                 (ManifestInputKind.SCHEDULE_SET, context.schedule_set),
                 (ManifestInputKind.GLOBAL_ACTION_DAG, context.global_dag),
@@ -629,6 +631,11 @@ def _runtime_definitions(
             for record_index, fields in by_record.items():
                 record = stream.records[record_index]
                 action = actions[record.source_global_action_id]
+                if action.logical_core != stream.logical_core:
+                    raise SchemaError(
+                        "runtime symbol record must preserve the source action's exact physical core",
+                        path="fragments",
+                    )
                 event_ref = fields.get(RuntimeOperandField.EVENT_TAG)
                 if event_ref is not None:
                     event_records[event_ref].append((record.opcode, action))
@@ -792,9 +799,16 @@ class NaiveManifestLinker:
         self,
         context: LoweringContext,
         fragments: tuple[LinkedFragment, ...],
+        *,
+        dp_global_runtime_definitions: tuple[RuntimeSymbolDefinition, ...] | None = None,
     ) -> LinkedProgramManifest:
         if type(context) is not LoweringContext:
             raise SchemaError("must be a LoweringContext", path="context")
+        if (dp_global_runtime_definitions is None) != (context.dp_route_plan is None):
+            raise SchemaError(
+                "only physical DP gradients may share globally source-bound runtime definitions",
+                path="context.dp_route_plan",
+            )
         if type(fragments) is not tuple or not fragments:
             raise SchemaError(
                 "must contain lowering fragments",
@@ -1236,7 +1250,22 @@ class NaiveManifestLinker:
                 LinkedCoreStream(logical_core, core.runtime_core_id, tuple(refs))
             )
 
-        runtime_definitions = list(_runtime_definitions(actions, leaf_fragments))
+        if dp_global_runtime_definitions is None:
+            runtime_definitions = list(_runtime_definitions(actions, leaf_fragments))
+        else:
+            declared = {
+                symbol.id for fragment in leaf_fragments
+                for symbol in fragment.runtime_symbols
+            }
+            runtime_definitions = [
+                definition for definition in dp_global_runtime_definitions
+                if definition.symbol.id in declared
+            ]
+            if {item.symbol.id for item in runtime_definitions} != declared:
+                raise SchemaError(
+                    "DP local runtime declarations lack exact global source definitions",
+                    path="fragments",
+                )
         starts = []
         first_action_by_core = {
             logical_core: min(
@@ -1319,15 +1348,22 @@ class NaiveManifestLinker:
             core_groups=(),
             envelope=envelope,
         )
-        manifest.validate_against(
-            context.ir1,
-            context.fusion_plans,
-            context.standalone_plans,
-            context.projection,
-            context.schedule_set,
-            context.global_dag,
-            manifest.fragments,
-        )
+        if dp_global_runtime_definitions is None:
+            manifest.validate_against(
+                context.ir1,
+                context.fusion_plans,
+                context.standalone_plans,
+                context.projection,
+                context.schedule_set,
+                context.global_dag,
+                manifest.fragments,
+            )
+        else:
+            # The local manifest cannot see a real DTE peer on the other DP
+            # replica. Every local action/fragment was validated above; its
+            # remote FSM and PEER_CORE definitions are strictly reconstructed
+            # from all source-bound Train fragments before entering this call.
+            manifest.validate()
         return manifest
 
     def link_train(
@@ -1344,8 +1380,43 @@ class NaiveManifestLinker:
                 path="source",
             )
         source.validate("source")
+        dp_plans = tuple(
+            replica.lowering_context.dp_route_plan for replica in source.replicas
+        )
+        dp_global_definitions: tuple[RuntimeSymbolDefinition, ...] | None = None
+        if any(plan is not None for plan in dp_plans):
+            if (len(source.replicas) != 2 or any(plan is None for plan in dp_plans)
+                    or dp_plans[0] != dp_plans[1]
+                    or tuple(replica.lowering_context.dp_replica_index
+                             for replica in source.replicas) != (0, 1)):
+                raise SchemaError(
+                    "DP2 unified runtime needs the same exact two-replica physical route plan",
+                    path="source.replicas",
+                )
+            all_actions: dict[str, GlobalAction] = {}
+            all_fragments: list[CommandFragment] = []
+            for replica in source.replicas:
+                for action in replica.lowering_context.global_dag.actions:
+                    if action.task_kind is SemanticTaskKind.TRANSIT:
+                        continue
+                    if action.id in all_actions:
+                        raise SchemaError(
+                            "DP replicas must have distinct physical action ids",
+                            path="source.replicas",
+                        )
+                    all_actions[action.id] = action
+                all_fragments.extend(
+                    linked.fragment if isinstance(linked, RegionManifest) else linked
+                    for linked in replica.fragments
+                )
+            dp_global_definitions = _runtime_definitions(
+                all_actions, tuple(all_fragments),
+            )
         replica_manifests = tuple(
-            self.link(replica.lowering_context, replica.fragments)
+            self.link(
+                replica.lowering_context, replica.fragments,
+                dp_global_runtime_definitions=dp_global_definitions,
+            )
             for replica in source.replicas
         )
 
@@ -1362,13 +1433,15 @@ class NaiveManifestLinker:
                     binding.runtime_core_id for binding in manifest.core_bindings
                 },
             ),
-            (
-                "runtime symbols",
-                lambda manifest: {
-                    definition.symbol.id
-                    for definition in manifest.runtime_symbol_definitions
-                },
-            ),
+            *((
+                (
+                    "runtime symbols",
+                    lambda manifest: {
+                        definition.symbol.id
+                        for definition in manifest.runtime_symbol_definitions
+                    },
+                ),
+            ) if dp_global_definitions is None else ()),
         )
         for label, values in namespace_specs:
             seen: set[object] = set()
@@ -1478,12 +1551,49 @@ class NaiveManifestLinker:
                 ),
             )
         )
-        runtime_definitions = tuple(
-            sorted(
+        if dp_global_definitions is None:
+            runtime_definitions = tuple(sorted(
                 flatten("runtime_symbol_definitions"),
                 key=lambda item: item.symbol.id,
+            ))
+        else:
+            dp_symbol_ids = tuple(
+                {
+                    symbol.id for linked in replica.fragments
+                    for fragment in (linked.fragment if isinstance(linked, RegionManifest)
+                                     else linked,)
+                    if fragment.producer_pass == "dense_dp_gradient_lowering"
+                    for symbol in fragment.runtime_symbols
+                    if symbol.kind is RuntimeSymbolKind.DTE_FSM
+                } for replica in source.replicas
             )
-        )
+            shared = {
+                definition.symbol.id for definition in replica_manifests[0].runtime_symbol_definitions
+            }.intersection(
+                definition.symbol.id for definition in replica_manifests[1].runtime_symbol_definitions
+            )
+            if not shared or shared != dp_symbol_ids[0].intersection(dp_symbol_ids[1]):
+                raise SchemaError(
+                    "only source-bound cross-DP DTE FSM symbols may be shared",
+                    path="source.replicas",
+                )
+            globally_defined = {item.symbol.id: item for item in dp_global_definitions}
+            for definition in flatten("runtime_symbol_definitions"):
+                expected = globally_defined.get(definition.symbol.id)
+                if expected is None:
+                    if definition.symbol.kind is not RuntimeSymbolKind.START_TAG:
+                        raise SchemaError("DP runtime declaration has no global source", path="source.replicas")
+                elif definition != expected:
+                    raise SchemaError(
+                        "cross-DP runtime symbol definition differs from the source-bound global peer",
+                        path="source.replicas",
+                    )
+            runtime_definitions = tuple(sorted(
+                (*dp_global_definitions, *(
+                    definition for definition in flatten("runtime_symbol_definitions")
+                    if definition.symbol.kind is RuntimeSymbolKind.START_TAG
+                )), key=lambda item: item.symbol.id,
+            ))
         program_definition_by_id: dict[str, ProgramSymbolDefinition] = {}
         program_name_to_id: dict[str, str] = {}
         for definition in flatten("program_symbol_definitions"):
