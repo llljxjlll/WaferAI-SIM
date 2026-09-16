@@ -12,7 +12,15 @@ from llm.frontend.wafer_frontend.schema.persistent_state import (
 )
 from llm.test.frontend.unit.test_moe_full_train_ep_placement import (
     MoeFullTrainEpPlacementTest as Fixture,
+    build_single_die_moe_train_physical_source,
 )
+from llm.frontend.wafer_frontend.passes.fusion_partition import partition_ir1
+from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import NaiveProjectToIR2
+from llm.frontend.wafer_frontend.policies.naive_intra_die import (
+    NaiveIntraDiePolicy, _ordinary_rank_local_view,
+)
+from llm.frontend.wafer_frontend.schema.ir1 import IR1, RankPlacement
+from llm.frontend.wafer_frontend.schema.ir0 import OpKind
 
 
 class MoeFullTrainEpIr1SourceTest(unittest.TestCase):
@@ -36,6 +44,61 @@ class MoeFullTrainEpIr1SourceTest(unittest.TestCase):
             self.phase,self.original_dense,self.sequence,
             self.placement,self.context,self.dense_manifest,
         )
+
+    def test_ep1_exact_moe_compute_carriers_enter_official_ir2(self):
+        phase, sequence, placement, context = (
+            build_single_die_moe_train_physical_source(Fixture)
+        )
+        candidate = build_moe_ep_placed_ir1_candidate(
+            phase, original_dense=Fixture.dense, sequence=sequence,
+            placement=placement, context=context, dense_manifest=Fixture.manifest,
+        )
+        placed = IR1.create(
+            producer_pass="placement", **candidate.physical_ir1._semantic_key(),
+        )
+        partitioned = partition_ir1(placed)
+        projected = NaiveProjectToIR2().run(
+            partitioned, (), (), state_transfers=(),
+        )
+        projected.validate_against(partitioned, (), (), ())
+        moe = [task for dag in projected.dags for task in dag.tasks
+               if task.compute is not None
+               and task.compute.op_kind in {
+                   OpKind.MOE_ROUTER, OpKind.MOE_ROUTE_FREEZE,
+                   OpKind.MOE_DISPATCH, OpKind.MOE_EXPERT_FORWARD,
+                   OpKind.MOE_COMBINE,
+               }]
+        schedule = NaiveIntraDiePolicy().schedule(projected, partitioned)
+        self.assertEqual(len(schedule.schedules), 1)
+        self.assertEqual(len(moe), 10)
+        self.assertEqual({kind: sum(task.compute.op_kind is kind for task in moe)
+                          for kind in {task.compute.op_kind for task in moe}},
+                         {kind: 2 for kind in {
+                             OpKind.MOE_ROUTER, OpKind.MOE_ROUTE_FREEZE,
+                             OpKind.MOE_DISPATCH, OpKind.MOE_EXPERT_FORWARD,
+                             OpKind.MOE_COMBINE,
+                         }})
+        expert = next(task.compute for task in moe
+                      if task.compute.op_kind is OpKind.MOE_EXPERT_FORWARD)
+        self.assertEqual(tuple(operand.role for operand in expert.inputs),
+                         ("expert_activation", "gate_weight", "up_weight", "down_weight"))
+        with self.assertRaisesRegex(SchemaError, "operand roles/arity"):
+            replace(expert, inputs=(replace(expert.inputs[0], role="forged"),
+                                    *expert.inputs[1:])).validate("forged_moe_compute")
+        with self.assertRaisesRegex(SchemaError, "MoE compute kind differs"):
+            replace(expert, op_kind=OpKind.MOE_ROUTER).validate("forged_moe_compute")
+        expert_task = next(task for task in moe if task.compute is expert)
+        input_value = next(value for value in partitioned.values
+                           if value.id == expert.inputs[0].value_id)
+        group = partitioned.groups[0]
+        forged_group = replace(group, logical_shape=(1, 2),
+                               placements=(*group.placements,
+                                           RankPlacement(1, 1, (0, 1))))
+        with self.assertRaisesRegex(SchemaError, "one-axis physical group"):
+            _ordinary_rank_local_view(
+                expert_task, input_value,
+                replace(partitioned, groups=(forged_group,)),
+            )
 
     def test_all_32_shared_moe_physical_candidates_and_16_ep_owners(self):
         self._check(self.candidate)

@@ -271,9 +271,16 @@ def _ordinary_rank_local_view(
             "ordinary rank has no exact group placement",
             f"projection.dags.tasks.{task.id}.origin_ref.rank",
         )
-    if len(group.logical_shape) != 1 or len(placement.logical_coord) != 1:
+    singleton_ep = (
+        group.axis.value == "ep"
+        and group.logical_shape == (1, 1)
+        and placement.rank == 0
+        and placement.logical_coord == (0, 0)
+    )
+    if not singleton_ep and (len(group.logical_shape) != 1
+                             or len(placement.logical_coord) != 1):
         _fail(
-            "naive ordinary sharding requires a one-axis physical group",
+            "naive ordinary sharding requires a one-axis physical group or exact TP1/EP1 singleton",
             f"ir1.groups.{group.id}.logical_shape",
         )
     mapped_dimensions = tuple(
@@ -295,14 +302,14 @@ def _ordinary_rank_local_view(
                 f"projection.dags.values.{value.id}.sharding.mesh_ref",
             )
         tensor_axis = mapped_dimensions[0]
-        degree = group.logical_shape[0]
+        degree = group.logical_shape[-1]
         if value.shape[tensor_axis] % degree:
             _fail(
                 "rank-local tensor extent must divide its physical group degree",
                 f"projection.dags.values.{value.id}.shape[{tensor_axis}]",
             )
         extent = value.shape[tensor_axis] // degree
-        coordinate = placement.logical_coord[0]
+        coordinate = placement.logical_coord[-1]
         offset[tensor_axis] = coordinate * extent
         shape[tensor_axis] = extent
     return TensorSlice(value.id, tuple(offset), tuple(shape))

@@ -57,6 +57,9 @@ from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
 )
+from .moe_full_training_block_workload import (
+    MoeForwardBlockKind, MoeFullTrainingBlockWorkload,
+)
 from .persistent_state import (
     StateKind,
     canonical_state_staging_value_id,
@@ -225,6 +228,11 @@ def _validate_workload_kind(
         OpKind.CE_FORWARD: (CrossEntropyForwardWorkload,),
         OpKind.CE_BACKWARD: (CrossEntropyBackwardWorkload,),
         OpKind.OPTIMIZER_UPDATE: (SgdUpdateWorkload, AdamwUpdateWorkload),
+        OpKind.MOE_ROUTER: (MoeFullTrainingBlockWorkload,),
+        OpKind.MOE_ROUTE_FREEZE: (MoeFullTrainingBlockWorkload,),
+        OpKind.MOE_DISPATCH: (MoeFullTrainingBlockWorkload,),
+        OpKind.MOE_EXPERT_FORWARD: (MoeFullTrainingBlockWorkload,),
+        OpKind.MOE_COMBINE: (MoeFullTrainingBlockWorkload,),
     }.get(op_kind)
     if expected_types is None:
         raise SchemaError(
@@ -236,6 +244,16 @@ def _validate_workload_kind(
             f"workload type must match op_kind {op_kind.value!r}",
             path=f"{path}.workload",
         )
+    moe_kinds = {
+        OpKind.MOE_ROUTER: MoeForwardBlockKind.ROUTER,
+        OpKind.MOE_ROUTE_FREEZE: MoeForwardBlockKind.ROUTE_FREEZE,
+        OpKind.MOE_DISPATCH: MoeForwardBlockKind.DISPATCH,
+        OpKind.MOE_EXPERT_FORWARD: MoeForwardBlockKind.EXPERT,
+        OpKind.MOE_COMBINE: MoeForwardBlockKind.COMBINE,
+    }
+    if op_kind in moe_kinds and workload.kind is not moe_kinds[op_kind]:
+        raise SchemaError("MoE compute kind differs from source operation",
+                          path=f"{path}.workload.kind")
 
 
 def canonical_compute_operand_roles(
@@ -255,6 +273,21 @@ def canonical_compute_operand_roles(
             "compute tile binding is supported only for GEMM",
             path=f"{path}.tile",
         )
+    if op_kind is OpKind.MOE_ROUTER:
+        return (("activation", *(
+            f"gate_weight_ep{rank}" for rank in range(workload.expert_count))),
+            ("route_scores",))
+    if op_kind is OpKind.MOE_ROUTE_FREEZE:
+        return ("route_scores",), ("route_ids",)
+    if op_kind is OpKind.MOE_DISPATCH:
+        return (("activation", "route_ids"),
+                tuple(f"expert{rank}_activation" for rank in range(workload.expert_count)))
+    if op_kind is OpKind.MOE_EXPERT_FORWARD:
+        return (("expert_activation", "gate_weight", "up_weight", "down_weight"),
+                ("expert_output",))
+    if op_kind is OpKind.MOE_COMBINE:
+        return ((*tuple(f"expert{rank}_output" for rank in range(workload.expert_count)),
+                 "route_ids"), ("combined_output",))
     if op_kind is OpKind.GEMM:
         return ("lhs", "rhs"), (("partial",) if tiled else ("output",))
     if op_kind is OpKind.EMBEDDING:
