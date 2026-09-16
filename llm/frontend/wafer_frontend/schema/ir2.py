@@ -7626,8 +7626,11 @@ class IntraDieScheduleSet:
         barrier_is_swizzle: dict[str, bool] = {}
         for index, schedule in enumerate(self.schedules):
             dag = dag_index[schedule.dag_id]
-            schedule.validate_against(dag, ir1, f"{path}.schedules[{index}]",
-                                      dp_route_plan=dp_route_plan)
+            schedule.validate_against(
+                dag, ir1, f"{path}.schedules[{index}]",
+                dp_route_plan=(dp_route_plan if dag.dp_gradient_plan_id is not None
+                               else None),
+            )
             bindings = {binding.flow_id: binding for binding in schedule.flow_routes}
             for flow in dag.flows:
                 occurrences.setdefault(flow.id, []).append(
