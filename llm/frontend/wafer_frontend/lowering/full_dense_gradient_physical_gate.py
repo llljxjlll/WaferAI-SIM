@@ -24,7 +24,10 @@ from ..schema.full_dense_gradient_requirements import (
 )
 from ..schema.full_training_physical_dag import FullTrainingPhysicalDAG
 from ..schema.ir0 import OpKind, ResidualWorkload, SwiGluWorkload
-from ..schema.persistent_state import PersistentStateAccess, StateKind
+from ..schema.persistent_state import (
+    PersistentStateAccess, PersistentStateDecl, PersistentStateIdentity,
+    PersistentStateLifetime, StateKind,
+)
 
 
 _DENSE_DX_UPSTREAM_OUTPUTS = {
@@ -82,12 +85,31 @@ def require_exact_dense_parameter_state_inventory(
                 for path in requirements.paths}
     declarations = {decl.id: decl for decl in
                     plan.forward_graph.persistent_states}
+    trainable_to_source = {}
+    for source_id, declaration in declarations.items():
+        identity = PersistentStateIdentity.create(
+            kind=StateKind.TRAINABLE_PARAMETER,
+            instance_ref=declaration.identity.instance_ref,
+            mesh_ref=declaration.identity.mesh_ref,
+            request_ref=None, layer_index=None,
+            tensor_ref=declaration.identity.tensor_ref,
+            shard_index=declaration.identity.shard_index,
+            generation=declaration.identity.generation,
+        )
+        trainable = PersistentStateDecl.create(
+            identity=identity, shape=declaration.shape, dtype=declaration.dtype,
+            layout=declaration.layout,
+            lifetime=PersistentStateLifetime.PERSISTENT,
+            access=PersistentStateAccess.READ_WRITE,
+        )
+        trainable_to_source[trainable.id] = source_id
     actual = {}
     for fragment in manifest.fragments:
         for abi in fragment.state_abi:
-            if abi.state_ref not in templates:
+            source_id = trainable_to_source.get(abi.state_ref, abi.state_ref)
+            if source_id not in templates:
                 continue
-            key = (abi.state_ref, abi.die_id)
+            key = (source_id, abi.die_id)
             previous = actual.setdefault(key, abi)
             if previous != abi:
                 raise SchemaError("source StateDecl shard changes physical HBM ABI across phases",
@@ -257,8 +279,11 @@ def require_named_gemm_dx_state_load(
                   and len(local.buffer_abi_ids) == 1 else None)
         size = next((item.literal_value for item in record.operands
                      if item.name == "size_bytes"), None)
-        if (loaded is None or loaded.id != weight.id
-                or loaded.storage_id != weight.storage_id
+        if loaded is None or loaded.id != weight.id:
+            # One StateABI may have several independent forward/dX READs in
+            # this step. Only the READ bound to this dX input is relevant.
+            continue
+        if (loaded.storage_id != weight.storage_id
                 or loaded.value_id != weight.value_id
                 or loaded.logical_core.die_id != rank
                 or size != weight.size_bytes):
@@ -365,7 +390,8 @@ def require_full_dense_physical_gradient_paths(
         manifest.fragments, manifest.core_streams,
         required_operation_ids=tuple(sorted({
             *(path.named_wgrad_op_ref for path in requirements.paths),
-            *(path.named_sync_op_ref for path in requirements.paths),
+            *(path.named_sync_op_ref for path in requirements.paths
+              if len(path.dp_group_ranks) > 1),
             *(path.named_optimizer_op_ref for path in requirements.paths),
             *(path.named_store_op_ref for path in requirements.paths),
             *requirements.required_backbone_backward_refs,
@@ -435,14 +461,23 @@ def require_full_dense_physical_gradient_paths(
     for path in requirements.paths:
         step, rank = path.step, path.rank
         for reverse_ref in path.backward_producer_refs:
-            opcode = required_backward_opcodes.get(reverse_ref)
+            suffix = f"::{path.parameter_state_ref}"
+            if not reverse_ref.endswith(suffix):
+                raise SchemaError("parameter reverse reference must retain exact source StateDecl",
+                                  path=f"gradient_path.step{step}.rank{rank}.{reverse_ref}")
+            physical_ref = reverse_ref.removesuffix(suffix)
+            if physical_ref == f"backward::T0.embedding":
+                physical_ref = path.named_wgrad_op_ref
+                opcode = required_wgrad_opcodes.get(physical_ref)
+            else:
+                opcode = required_backward_opcodes.get(physical_ref)
             if opcode is None:
                 raise SchemaError("parameter reverse source lacks independent native opcode",
                                   path=f"gradient_path.step{step}.rank{rank}.{reverse_ref}")
             reverse, reverse_record, reverse_fid, reverse_idx = one(
-                step, rank, reverse_ref, opcode)
+                step, rank, physical_ref, opcode)
             if opcode is RecordOpcode.GEMM_DX_TIMING:
-                source_ref = reverse_ref.removeprefix("backward::")
+                source_ref = physical_ref.removeprefix("backward::")
                 owners = [template.state_ref for template in
                           plan.parameter_templates if
                           source_ref in template.forward_consumer_refs]
@@ -480,7 +515,8 @@ def require_full_dense_physical_gradient_paths(
                     if op is RecordOpcode.LSU_LOAD
                 )
                 load_fid, load_idx = require_named_gemm_dx_state_load(
-                    manifest, state_ref=owners[0], rank=rank,
+                    manifest, state_ref=homes[(owners[0], rank)].state_ref,
+                    rank=rank,
                     compute_fragment_id=reverse_fid,
                     compute_record_index=reverse_idx, weight=weight,
                     required_state=homes[(owners[0], rank)],
@@ -712,26 +748,10 @@ def require_full_dense_physical_gradient_paths(
                     raise SchemaError("DP broadcast destination lacks same FP32 extent",
                                       path=f"gradient_path[{path.parameter_state_ref}].dp_broadcast")
         else:
-            sync, copy, sync_fid, sync_idx = one(
-                step, rank, path.named_sync_op_ref, RecordOpcode.DTE_ISSUE,
-            )
-            wait, _, _, _ = one(
-                step, rank, path.named_sync_op_ref, RecordOpcode.DTE_WAIT,
-            )
-            if sync.id != wait.id or not depends_on(sync, wgrad):
-                raise SchemaError("local gradient sync lacks same-action blocking producer dependency",
-                                  path=f"gradient_path[{path.parameter_state_ref}].local_sync")
-            sync_source = buffer(sync, sync_fid, sync_idx, SemanticOperandId.SOURCE_ADDRESS)
-            sync_result = buffer(sync, sync_fid, sync_idx,
-                                 SemanticOperandId.DESTINATION_ADDRESS)
-            size = next((item.literal_value for item in copy.operands
-                         if item.name == "size_bytes"), None)
-            if (not same_physical_value(produced, sync_source)
-                    or sync_result.dtype is not DType.FP32
-                    or sync_result.size_bytes != path.gradient_bytes
-                    or size != path.gradient_bytes):
-                raise SchemaError("local gradient sync does not copy source FP32 bytes",
-                                  path=f"gradient_path[{path.parameter_state_ref}].local_sync")
+            # A singleton DP group has a rank-major SUM of one FP32 term.
+            # The source WGRAD BufferABI itself is the exact synchronized
+            # value; issuing a DTE copy here would manufacture extra work.
+            sync_result, sync = produced, wgrad
         update, sgd, update_fid, update_idx = one(
             step, rank, path.named_optimizer_op_ref, RecordOpcode.SGD_UPDATE,
         )
@@ -761,7 +781,15 @@ def require_full_dense_physical_gradient_paths(
         if (closure is None or states[closure.state_abi_id] !=
             homes[(path.parameter_state_ref, rank)]
                 or literals.get("size_bytes") != path.weight_bytes
-                or not same_physical_value(updated_weight, store_source)
+                or updated_weight.storage_id != store_source.storage_id
+                or updated_weight.logical_core != store_source.logical_core
+                or updated_weight.region_ref != store_source.region_ref
+                or updated_weight.region_offset_bytes !=
+                   store_source.region_offset_bytes
+                or updated_weight.size_bytes != store_source.size_bytes
+                or updated_weight.dtype is not store_source.dtype
+                or updated_weight.tensor_slice.shape !=
+                   store_source.tensor_slice.shape
                 or not depends_on(store, update)):
             raise SchemaError("SGD must physically store same source StateDecl parameter",
                               path=f"gradient_path[{path.parameter_state_ref}].store")

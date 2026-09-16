@@ -1090,7 +1090,8 @@ def _semantic_uses(
             else BufferAccess.WRITE
             if (
                 ownership is BufferOwnership.ALIASED
-                and type(source) in _LITE_TRAIN_SOURCE_TYPES
+                and type(source) in (*_LITE_TRAIN_SOURCE_TYPES,
+                                     TrainLinkedProgram)
             )
             else None
         )
@@ -1182,29 +1183,31 @@ def _train_ce_nodes(
             for node in context.ir1.nodes
             if node.kind is OpKind.CE_FORWARD
         )
-        if len(nodes) != 1:
-            raise SchemaError(
-                "Train replica requires exactly one CE_FORWARD terminal",
-                path="source.source.replicas",
-            )
-        node = nodes[0]
-        if (
-            type(node.workload) is not CrossEntropyForwardWorkload
-            or len(node.inputs) != 2
-            or len(node.outputs) != 1
+        two_step = type(source) is TrainLinkedProgram and len(nodes) == 2
+        if two_step and not all(
+            any(node.id.endswith(f"::step{step}__dp{replica_index}")
+                for node in nodes) for step in (0, 1)
         ):
+            raise SchemaError("two-step CE source identities are not exact",
+                              path="source.source.replicas")
+        if not (len(nodes) == 1 or two_step):
             raise SchemaError(
-                "Train CE_FORWARD terminal contract is not exact",
+                "Train replica requires one CE, or two exact step-scoped CE nodes",
                 path="source.source.replicas",
             )
-        result.append(
-            (
-                replica_index,
-                node.workload,
-                node.inputs[1],
-                node.outputs[0],
-            )
-        )
+        for node in nodes:
+            if (
+                type(node.workload) is not CrossEntropyForwardWorkload
+                or len(node.inputs) != 2
+                or len(node.outputs) != 1
+            ):
+                raise SchemaError(
+                    "Train CE_FORWARD terminal contract is not exact",
+                    path="source.source.replicas",
+                )
+            result.append((
+                replica_index, node.workload, node.inputs[1], node.outputs[0],
+            ))
     return tuple(result)
 
 
@@ -1282,16 +1285,20 @@ def _train_label_seed_overrides(
                     }
                 )
             else:
-                valid_uses = all(
-                    use.action.op_kind is OpKind.CE_FORWARD
+                allowed_ce = (OpKind.CE_FORWARD, OpKind.CE_BACKWARD)
+                valid_uses = (len(item.uses) in (1, 2) and all(
+                    use.action.op_kind in allowed_ce
                     and use.use.role is BufferUseRole.COMP_INPUT
                     and use.use.operand_index == 1
                     and use.use.access is BufferAccess.READ
                     and use.action.compute is not None
-                    and type(use.action.compute.workload)
-                    is CrossEntropyForwardWorkload
+                    and type(use.action.compute.workload) is (
+                        CrossEntropyForwardWorkload
+                        if use.action.op_kind is OpKind.CE_FORWARD
+                        else CrossEntropyBackwardWorkload)
                     for use in item.uses
-                )
+                ) and {use.action.op_kind for use in item.uses}
+                in ({OpKind.CE_FORWARD}, set(allowed_ce)))
             if (
                 abi.ownership is not BufferOwnership.BORROWED
                 or abi.dtype is not DType.INT32
@@ -1447,6 +1454,17 @@ def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
         for value in context.ir1.values
         if not value.consumers
     }
+    if type(source) is TrainLinkedProgram:
+        updates = tuple(node for _index, context in _lowering_contexts(source)
+                        for node in context.ir1.nodes
+                        if node.kind is OpKind.OPTIMIZER_UPDATE)
+        if updates:
+            persisted = {node.outputs[0] for node in updates
+                         if len(node.outputs) == 1}
+            if len(persisted) != len(updates):
+                raise SchemaError("each SGD needs an independent persisted output",
+                                  path="source.source.lowering_context.ir1.nodes")
+            return actual - persisted
     if type(source) not in _LITE_TRAIN_SOURCE_TYPES:
         return actual
     expected: set[str] = set()

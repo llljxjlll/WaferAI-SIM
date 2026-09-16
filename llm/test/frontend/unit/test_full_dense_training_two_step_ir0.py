@@ -67,55 +67,22 @@ class FullDenseTrainingTwoStepSourceTest(unittest.TestCase):
                                            if edge != state_edge)), "missing_version")
 
     def test_real_projection_global_dag_native_optimizer_and_state_io(self) -> None:
-        from llm.frontend.wafer_frontend.passes.fusion_partition import partition_train_forward
-        from llm.frontend.wafer_frontend.passes.inter_die_plan import plan_train_forward
-        from llm.frontend.wafer_frontend.passes.intra_die_schedule import schedule_train_forward
-        from llm.frontend.wafer_frontend.passes.load_fabric import (
-            hbm_address_spaces_from_data, physical_fabric_from_data,
+        from llm.frontend.wafer_frontend.lowering.full_dense_gradient_physical_gate import (
+            require_full_dense_physical_gradient_paths,
         )
-        from llm.frontend.wafer_frontend.passes.placement import place_train_forward_ir0
-        from llm.frontend.wafer_frontend.passes.project_to_ir2 import project_train_forward
-        from llm.frontend.wafer_frontend.passes.train_global_action import build_train_global_action
-        from llm.frontend.wafer_frontend.passes.train_link_program import link_train
-        from llm.frontend.wafer_frontend.passes.train_lower_program import lower_train
-        from llm.frontend.wafer_frontend.policies.registry import RegistryKind, production_registry
-        from llm.frontend.wafer_frontend.schema.n4 import (
-            FusionPartitionContext, InterDiePlanningContext,
+        from llm.frontend.wafer_frontend.lowering.full_dense_two_step_physical_dag import (
+            dense_two_step_native_opcode_contract,
         )
-        from llm.frontend.wafer_frontend.schema.n5 import (
-            IntraDieSchedulingContext, ProjectToIR2Context,
+        from llm.frontend.wafer_frontend.lowering.full_training_program_merger import (
+            require_independent_ce_loss_gradient_seed,
         )
-        from llm.frontend.wafer_frontend.schema.placement import PlacementContext
+        from llm.frontend.wafer_frontend.passes.full_dense_training_two_step_runtime import (
+            compile_full_dense_two_step_native,
+        )
 
-        plan, graph = self._build()
-        hardware = _hardware(1, 1)
-        producer = "test_full_dense_two_step_native"
-        placed = place_train_forward_ir0(graph, PlacementContext.create(
-            producer_pass=producer, fabric=physical_fabric_from_data(hardware),
-            placement=plan.source_experiment.placement,
-            hbm_address_spaces=hbm_address_spaces_from_data(hardware),
-        ))
-        partitioned = partition_train_forward(placed,
-            FusionPartitionContext.create(producer_pass=producer))
-        registry = production_registry()
-        planned = plan_train_forward(partitioned, InterDiePlanningContext.create(
-            producer_pass=producer,
-            fused_policy=registry.instantiate(RegistryKind.INTER_DIE,
-                                               "naive").selection,
-            standalone_policy=registry.instantiate(
-                RegistryKind.STANDALONE_COLLECTIVE,
-                "direct_all_gather").selection,
-        ))
-        projected = project_train_forward(planned, ProjectToIR2Context.create(
-            producer_pass=producer, state_transfers=()))
-        scheduled = schedule_train_forward(projected,
-            IntraDieSchedulingContext.create(
-                producer_pass=producer,
-                policy=registry.instantiate(RegistryKind.INTRA_DIE,
-                                            "naive").selection,
-            ))
-        source_dag = build_train_global_action(scheduled)
-        linked = link_train(lower_train(source_dag))
+        plan, _ = self._build()
+        compilation = compile_full_dense_two_step_native(plan, _hardware(1, 1))
+        linked = compilation.program
         physical = Counter(
             record.opcode for fragment in linked.manifest.fragments
             for stream in fragment.core_streams for record in stream.records
@@ -125,6 +92,28 @@ class FullDenseTrainingTwoStepSourceTest(unittest.TestCase):
         self.assertEqual(physical[RecordOpcode.LSU_STORE], 30)
         self.assertEqual(physical[RecordOpcode.LSU_LOAD], 80)
         self.assertEqual(len(linked.manifest.fragments), 280)
+        self.assertEqual(len(compilation.physical_dag.actions), 280)
+        self.assertEqual(len(compilation.physical_dag.state_version_edges), 15)
+        self.assertEqual(len(set(compilation.loss_gradient_seed_abi_by_step.values())), 2)
+
+        seeds = compilation.loss_gradient_seed_abi_by_step
+        with self.assertRaisesRegex(SchemaError, "independent per-row FP32 seed"):
+            require_independent_ce_loss_gradient_seed(
+                linked.manifest, compilation.physical_dag,
+                seed_abi_by_step={0: seeds[1], 1: seeds[0]},
+            )
+        missing_version = replace(
+            compilation.physical_dag,
+            state_version_edges=compilation.physical_dag.state_version_edges[1:],
+        )
+        backward, wgrad = dense_two_step_native_opcode_contract(plan)
+        with self.assertRaisesRegex(
+                SchemaError, "exact next-step HBM LOAD version"):
+            require_full_dense_physical_gradient_paths(
+                linked.manifest, plan, compilation.requirements, missing_version,
+                required_backward_opcodes=backward,
+                required_wgrad_opcodes=wgrad,
+            )
 
 
 if __name__ == "__main__":
