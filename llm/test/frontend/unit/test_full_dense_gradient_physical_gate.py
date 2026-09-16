@@ -134,7 +134,7 @@ class FullDenseGradientPhysicalGateTest(unittest.TestCase):
                 m=m, n=n, k=k + 1,
             )
 
-    def test_named_gemm_dx_rejects_fp16_sized_fp32_output_and_untyped_weight(self) -> None:
+    def test_named_gemm_dx_requires_fp16_output_and_untyped_weight(self) -> None:
         nodes = {node.id: node for node in self.plan.forward_graph.nodes}
         states = {decl.id: decl for decl in self.plan.forward_graph.persistent_states}
         path = next(path for path in self.requirements.paths
@@ -150,11 +150,11 @@ class FullDenseGradientPhysicalGateTest(unittest.TestCase):
                          size_bytes=2 * m * n, storage_id="native_dx_weight")
         upstream = replace(originals[1], dtype=DType.FP16,
                            size_bytes=2 * k * n, storage_id="native_dx_upstream")
-        dx = replace(originals[2], dtype=DType.FP32,
-                     size_bytes=4 * k * m, storage_id="native_dx_output")
+        dx = replace(originals[2], dtype=DType.FP16,
+                     size_bytes=2 * k * m, storage_id="native_dx_output")
         literals = {"m": m, "n": n, "k": k,
                     "weight_datatype": 1, "upstream_datatype": 1,
-                    "dx_datatype": 3}
+                    "dx_datatype": 1}
         require_named_gemm_dx_typed_buffers(
             rank=rank, m=m, n=n, k=k, weight=weight, upstream=upstream,
             dx=dx, literals=literals, path="native_dx_test",
@@ -162,7 +162,8 @@ class FullDenseGradientPhysicalGateTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "dx physical footprint/dtype"):
             require_named_gemm_dx_typed_buffers(
                 rank=rank, m=m, n=n, k=k, weight=weight, upstream=upstream,
-                dx=replace(dx, size_bytes=2 * k * m), literals=literals,
+                dx=replace(dx, dtype=DType.FP32,
+                           size_bytes=4 * k * m), literals=literals,
                 path="native_dx_test",
             )
         with self.assertRaisesRegex(SchemaError, "weight physical footprint/dtype"):

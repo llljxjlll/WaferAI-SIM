@@ -184,29 +184,29 @@ def require_named_gemm_dx_typed_buffers(
     weight: BufferABI, upstream: BufferABI, dx: BufferABI,
     literals: Mapping[str, int], path: str,
 ) -> None:
-    """Reject legacy MATMUL or FP16-sized storage masquerading as FP32 dX."""
+    """Require the public FP16 activation-gradient GEMM dX contract."""
     if (type(m) is not int or type(n) is not int or type(k) is not int
             or min(m, n, k) < 1
             or any(literals.get(field) != value for field, value in (
                 ("m", m), ("n", n), ("k", k),
                 ("weight_datatype", 1), ("upstream_datatype", 1),
-                ("dx_datatype", 3),
+                ("dx_datatype", 1),
             ))):
-        raise SchemaError("native GEMM FP32 dX dimensions or datatypes differ",
+        raise SchemaError("native GEMM FP16 dX dimensions or datatypes differ",
                           path=path)
     for role, abi, dtype, size in (
         ("weight", weight, DType.FP16, 2 * m * n),
         ("upstream", upstream, DType.FP16, 2 * k * n),
-        ("dx", dx, DType.FP32, 4 * k * m),
+        ("dx", dx, DType.FP16, 2 * k * m),
     ):
         if (abi.dtype is not dtype or abi.size_bytes != size
                 or abi.logical_core.die_id != rank):
             raise SchemaError(
-                f"native {role} physical footprint/dtype differs from GEMM FP32 dX",
+                f"native {role} physical footprint/dtype differs from GEMM FP16 dX",
                 path=f"{path}.{role}",
             )
     if len({weight.storage_id, upstream.storage_id, dx.storage_id}) != 3:
-        raise SchemaError("GEMM FP32 dX operands require independent SRAM storage",
+        raise SchemaError("GEMM FP16 dX operands require independent SRAM storage",
                           path=path)
 
 
