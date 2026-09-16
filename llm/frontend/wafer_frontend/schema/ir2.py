@@ -35,6 +35,7 @@ from .common import (
     validate_unique_ids,
 )
 from .ir0 import (
+    CollectiveKind,
     EdgeKind,
     FusionPattern,
     GemmWorkload,
@@ -972,7 +973,7 @@ class SemanticTask:
                     "DMA local value and shape must equal tensor_slice",
                     path=f"{path}.tensor_slice",
                 )
-            element_bytes = {DType.FP16: 2, DType.FP32: 4}.get(self.dtype)
+            element_bytes = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}.get(self.dtype)
             if element_bytes is None or math.prod(self.shape) * element_bytes != self.bytes:
                 raise SchemaError(
                     "DMA bytes must equal the tight tensor payload",
@@ -2788,6 +2789,18 @@ class IntraDieDAG:
             }
             for access_index, access in enumerate(expected_local_accesses):
                 declaration = declarations[access.state_ref]
+                if declaration.dtype is DType.INT32:
+                    source_node = next((node for node in ir1.nodes
+                                        if node.id == access.node_ref), None)
+                    if (declaration.identity.kind is not StateKind.MOE_STATIC_ROUTE
+                            or access.mode is not StateAccessMode.READ
+                            or source_node is None
+                            or source_node.kind is not OpKind.MOE_ROUTE_FREEZE
+                            or declaration.shape != (source_node.workload.token_count, 5)):
+                        raise SchemaError(
+                            "INT32 state DMA is reserved for the exact static MoE route read",
+                            path=f"{path}.state_access_ids[{access_index}]",
+                        )
                 expected_kinds = expected_kinds_by_mode[access.mode]
                 (
                     staging_shape,
@@ -3031,6 +3044,14 @@ class IntraDieDAG:
                     if action.kind is FusionActionKind.RECV:
                         for temp_id in action.writes:
                             bind_temp_origin(temp_id, partial_value_id)
+        for plan in standalone_plans:
+            node = ir1_node_index[plan.op_id]
+            if node.workload.collective is CollectiveKind.REDUCE_SCATTER:
+                for program in plan.rank_programs:
+                    for action in program.actions:
+                        if action.kind is FusionActionKind.RECV:
+                            for temp_id in action.writes:
+                                bind_temp_origin(temp_id, node.inputs[0])
         local_origin_tasks: dict[tuple[str, int, str], SemanticTask] = {}
         for task in self.tasks:
             if task.kind is SemanticTaskKind.TRANSIT:
@@ -3100,11 +3121,17 @@ class IntraDieDAG:
             whole_unit: bool,
         ) -> tuple[SemanticTask, ...]:
             unit_kind, _unit_id = coverage_unit(node_id)
-            expected_kind = {
-                "ordinary": SemanticTaskKind.COMP,
-                "fusion": SemanticTaskKind.COMP,
-                "standalone": SemanticTaskKind.LOCAL_COPY,
-            }[unit_kind]
+            expected_kinds = (
+                (SemanticTaskKind.SEND, SemanticTaskKind.REDUCE)
+                if unit_kind == "standalone"
+                and ir1_node_index[node_id].workload.collective
+                is CollectiveKind.REDUCE_SCATTER
+                else {
+                    "ordinary": (SemanticTaskKind.COMP,),
+                    "fusion": (SemanticTaskKind.COMP,),
+                    "standalone": (SemanticTaskKind.LOCAL_COPY,),
+                }[unit_kind]
+            )
 
             def reads_origin_value(task: SemanticTask) -> bool:
                 if value_id is None or value_id in task.read_values:
@@ -3132,7 +3159,7 @@ class IntraDieDAG:
                             if whole_unit
                             else belongs_to_node(task, node_id)
                         )
-                        and task.kind is expected_kind
+                        and task.kind in expected_kinds
                         and reads_origin_value(task)
                     ),
                     key=lambda task: task.id,
@@ -3146,11 +3173,17 @@ class IntraDieDAG:
             whole_unit: bool,
         ) -> tuple[SemanticTask, ...]:
             unit_kind, _unit_id = coverage_unit(node_id)
-            expected_kind = {
-                "ordinary": SemanticTaskKind.COMP,
-                "fusion": SemanticTaskKind.REDUCE,
-                "standalone": SemanticTaskKind.BARRIER,
-            }[unit_kind]
+            expected_kind = (
+                SemanticTaskKind.REDUCE
+                if unit_kind == "standalone"
+                and ir1_node_index[node_id].workload.collective
+                is CollectiveKind.REDUCE_SCATTER
+                else {
+                    "ordinary": SemanticTaskKind.COMP,
+                    "fusion": SemanticTaskKind.REDUCE,
+                    "standalone": SemanticTaskKind.BARRIER,
+                }[unit_kind]
+            )
             return tuple(
                 sorted(
                     (
@@ -3193,6 +3226,15 @@ class IntraDieDAG:
                 value_id,
                 whole_unit=whole_unit,
             )
+            if (edge.kind is EdgeKind.CONTROL
+                and ir1_node_index[edge.source_node].kind is OpKind.OPTIMIZER_UPDATE):
+                owner_accesses = tuple(access for access in ir1.state_accesses
+                                       if access.node_ref == edge.source_node
+                                       and access.mode is StateAccessMode.READ_WRITE)
+                if len(owner_accesses) == 1:
+                    entries = tuple(task for task in entries
+                                    if getattr(task.origin_ref, "rank", None)
+                                    == owner_accesses[0].rank)
             if not entries:
                 continue
             completions = completion_tasks(
@@ -3966,12 +4008,16 @@ class IR2ProjectionResult:
                 for plan in standalone_plans
                 if dag.die_id in plan_die_ids(plan)
             )
+            # Shard-specific Dense WGRAD/SGD has one exact owner in its TP
+            # group, derived from the real parameter StateABI/forward READ.
+            from ..policies.naive_project_to_ir2 import _dense_train_tp_owner_placements
             expected_local_ordinary_ids = tuple(
                 node.id
                 for node in ordinary_nodes
                 if any(
                     placement.die_id == dag.die_id
-                    for placement in groups[node.execution_group_ref].placements
+                    for placement in _dense_train_tp_owner_placements(
+                        ir1, node, groups[node.execution_group_ref])
                 )
             )
             if dag.fusion_plan_ids != expected_local_fusion_ids:
@@ -3998,7 +4044,7 @@ class IR2ProjectionResult:
         expected_ordinary: dict[tuple[str, int], int] = {}
         for node in ordinary_nodes:
             group = groups[node.execution_group_ref]
-            for placement in group.placements:
+            for placement in _dense_train_tp_owner_placements(ir1, node, group):
                 expected_ordinary[(node.id, placement.rank)] = placement.die_id
         projected_ordinary: dict[
             tuple[str, int], list[tuple[IntraDieDAG, SemanticTask]]

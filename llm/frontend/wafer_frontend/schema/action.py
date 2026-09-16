@@ -278,7 +278,7 @@ def canonical_compute_operand_roles(
             f"gate_weight_ep{rank}" for rank in range(workload.expert_count))),
             ("route_scores",))
     if op_kind is OpKind.MOE_ROUTE_FREEZE:
-        return ("route_scores",), ("route_ids",)
+        return ("route_scores", "frozen_route_table"), ("route_ids",)
     if op_kind is OpKind.MOE_DISPATCH:
         return (("activation", "route_ids"),
                 tuple(f"expert{rank}_activation" for rank in range(workload.expert_count)))
@@ -1593,7 +1593,7 @@ class FusionPlan:
                             if access.node_ref == member.id
                             and access.rank == program.rank
                             and state_declarations[access.state_ref].identity.kind
-                            is StateKind.PARAMETER
+                            in (StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
                             and state_declarations[
                                 access.state_ref
                             ].identity.tensor_ref
@@ -1714,6 +1714,62 @@ class FusionPlan:
                 )
 
 
+def _validate_direct_reduce_scatter_execution(
+    programs: tuple[RankProgram, ...], chunks: tuple[ChunkSlice, ...], *, path: str
+) -> None:
+    """Exactly one complete owner reduction of every incoming rank contribution."""
+    index = _actions_by_rank_and_chunk(programs)
+    ranks = tuple(program.rank for program in programs)
+    allowed = {FusionActionKind.SEND, FusionActionKind.RECV,
+               FusionActionKind.WAIT, FusionActionKind.REDUCE}
+    if any(action.kind not in allowed for program in programs for action in program.actions):
+        raise SchemaError("DIRECT ReduceScatter contains unsupported action", path=f"{path}.rank_programs")
+    expected: dict[int, list[FusionAction]] = {rank: [] for rank in ranks}
+    for chunk in chunks:
+        owner = chunk.owner_rank
+        remote: dict[int, FusionAction] = {}
+        waits: dict[int, FusionAction] = {}
+        reduce = _require_one(index, owner, chunk.chunk_id, FusionActionKind.REDUCE, path=path)
+        if reduce.collective_step != 1 or reduce.reduction is None or (
+            reduce.reduction.reduce_op is not ReduceOp.SUM
+            or reduce.reduction.input_ranks != ranks
+        ):
+            raise SchemaError("owner REDUCE requires one SUM contribution per rank", path=f"{path}.rank_programs")
+        for rank in ranks:
+            if rank == owner:
+                if index.get((rank, chunk.chunk_id, FusionActionKind.SEND), ()):
+                    raise SchemaError("owner cannot SEND its local contribution", path=f"{path}.rank_programs")
+                continue
+            send = _require_one(index, rank, chunk.chunk_id, FusionActionKind.SEND, path=path)
+            recv = tuple(a for a in index.get((owner, chunk.chunk_id, FusionActionKind.RECV), ())
+                         if a.peer_rank == rank)
+            wait = tuple(a for a in index.get((owner, chunk.chunk_id, FusionActionKind.WAIT), ())
+                         if a.sync.wait_event == recv[0].sync.completion_event) if len(recv) == 1 else ()
+            if (len(recv) != 1 or len(wait) != 1 or send.peer_rank != owner
+                or recv[0].peer_rank != rank or send.logical_channel != recv[0].logical_channel
+                or send.expected_route != recv[0].expected_route
+                or send.collective_step != 0 or recv[0].collective_step != 0
+                or wait[0].collective_step != 0 or send.deps or recv[0].deps
+                or wait[0].deps != (recv[0].id,)):
+                raise SchemaError("each RS contribution requires exact SEND/RECV/WAIT lineage", path=f"{path}.rank_programs")
+            if (index.get((rank, chunk.chunk_id, FusionActionKind.RECV), ())
+                or index.get((rank, chunk.chunk_id, FusionActionKind.WAIT), ())
+                or index.get((rank, chunk.chunk_id, FusionActionKind.REDUCE), ())):
+                raise SchemaError("non-owner cannot RECV, WAIT or REDUCE owner chunk", path=f"{path}.rank_programs")
+            expected[rank].append(send)
+            expected[owner].extend((recv[0], wait[0]))
+            remote[rank], waits[rank] = recv[0], wait[0]
+        if (tuple(reduce.deps) != tuple(waits[r].id for r in ranks if r != owner)
+            or len(reduce.reads) != len(ranks) or len(reduce.writes) != 1
+            or any(reduce.reads[rank] != remote[rank].writes[0]
+                   for rank in ranks if rank != owner)):
+            raise SchemaError("REDUCE must consume precisely every received contribution after WAIT", path=f"{path}.rank_programs")
+        expected[owner].append(reduce)
+    for program in programs:
+        if program.actions != tuple(expected[program.rank]):
+            raise SchemaError("DIRECT ReduceScatter actions must follow canonical chunk/rank order", path=f"{path}.rank_programs[{program.rank}]")
+
+
 @dataclass(frozen=True, slots=True)
 class StandaloneCollectivePlan:
     schema_version: str
@@ -1769,7 +1825,11 @@ class StandaloneCollectivePlan:
                 "structural validator is implemented only for DIRECT AllGather",
                 path=f"{path}.algorithm",
             )
-        _validate_direct_all_gather_execution(self.rank_programs, self.chunk_slices, path=path)
+        if any(action.kind is FusionActionKind.REDUCE
+               for program in self.rank_programs for action in program.actions):
+            _validate_direct_reduce_scatter_execution(self.rank_programs, self.chunk_slices, path=path)
+        else:
+            _validate_direct_all_gather_execution(self.rank_programs, self.chunk_slices, path=path)
         expected_id = stable_artifact_id("standalone_collective_plan", self._semantic_key(), schema_version=STANDALONE_COLLECTIVE_PLAN_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
@@ -1806,6 +1866,9 @@ class StandaloneCollectivePlan:
             )
         if op.kind is not OpKind.COLLECTIVE or not isinstance(op.workload, CollectiveWorkload):
             raise SchemaError("standalone plan requires a collective node", path=f"{path}.op_id")
+        if op.workload.collective is CollectiveKind.REDUCE_SCATTER:
+            _validate_standalone_rs_against(self, ir1, op, group, path=path)
+            return
         if op.workload.collective is not CollectiveKind.ALL_GATHER:
             raise SchemaError(
                 "standalone DIRECT v1 supports only AllGather",
@@ -1922,3 +1985,68 @@ class StandaloneCollectivePlan:
                     )
                     if (*route_ranks, action.expected_route) not in route_keys:
                         raise SchemaError("action route disagrees with group embedding", path=f"{path}.rank_programs")
+
+
+def _validate_standalone_rs_against(
+    plan: StandaloneCollectivePlan, ir1: "IR1", op: object, group: object,
+    *, path: str,
+) -> None:
+    """Bind every RS action to the exact SUM TP collective tensor and route."""
+    from ..schema.common import MeshAxisName
+    if (op.workload.reduce_op is not ReduceOp.SUM or group.axis is not MeshAxisName.TP
+        or len(op.inputs) != 1 or len(op.outputs) != 1):
+        raise SchemaError("standalone RS requires one SUM TP input/output", path=f"{path}.op_id")
+    values = {value.id: value for value in ir1.values}
+    input_value, output = values[op.inputs[0]], values[op.outputs[0]]
+    axis = 0 if plan.chunk_dim is ChunkDim.M else 1
+    if (op.workload.scatter_tensor_axis != axis
+        or input_value.shape != output.shape or input_value.dtype is not output.dtype
+        or op.workload.dtype is not input_value.dtype
+        or op.workload.input_layout != input_value.logical_layout
+        or op.workload.output_layout != output.logical_layout
+        or input_value.sharding.dim_map[axis] is not None
+        or input_value.sharding.partial != (group.axis,)
+        or output.sharding.dim_map[axis] is not group.axis
+        or output.sharding.partial):
+        raise SchemaError("SUM RS source/output shape, dtype, layout and sharding must match", path=f"{path}.op_id")
+    ranks = tuple(program.rank for program in plan.rank_programs)
+    if ranks != tuple(p.rank for p in group.placements):
+        raise SchemaError("RS rank programs must match physical group", path=f"{path}.rank_programs")
+    _validate_chunk_cover(plan.chunk_slices, output, plan.chunk_dim, path=path)
+    if output.shape[axis] % len(ranks):
+        raise SchemaError("RS shard extent must divide participant count", path=f"{path}.chunk_dim")
+    extent = output.shape[axis] // len(ranks)
+    for chunk in plan.chunk_slices:
+        expected_offset = tuple(chunk.owner_rank * extent if dim == axis else 0
+                                for dim in range(len(output.shape)))
+        expected_shape = tuple(extent if dim == axis else e
+                               for dim, e in enumerate(output.shape))
+        if (chunk.offset != expected_offset or chunk.shape != expected_shape
+            or chunk.bytes != op.workload.rank_output_bytes):
+            raise SchemaError("RS chunks must be exact canonical local shards", path=f"{path}.chunk_slices")
+    route_keys = {(r.source_rank, r.destination_rank, r.die_path)
+                  for r in group.embedding.routes}
+    for program in plan.rank_programs:
+        for action in program.actions:
+            if action.member_id != op.id:
+                raise SchemaError("RS action must bind source collective", path=f"{path}.rank_programs")
+            if action.kind in (FusionActionKind.SEND, FusionActionKind.RECV):
+                pair = ((program.rank, action.peer_rank) if action.kind is FusionActionKind.SEND
+                        else (action.peer_rank, program.rank))
+                if (*pair, action.expected_route) not in route_keys:
+                    raise SchemaError("RS transport route must bind execution group", path=f"{path}.rank_programs")
+            if action.slice_ref is not None and action.dtype is not input_value.dtype:
+                raise SchemaError("RS chunk dtype must match physical tensor", path=f"{path}.rank_programs")
+            if action.kind is FusionActionKind.SEND and action.reads != op.inputs:
+                raise SchemaError("RS SEND must read actual source partial tensor", path=f"{path}.rank_programs")
+            if action.kind is FusionActionKind.REDUCE:
+                expected_reduction = ReductionContract(
+                    reduce_op=ReduceOp.SUM, input_dtype=input_value.dtype,
+                    accumulation_dtype=op.math.accumulation_dtype,
+                    output_dtype=output.dtype, rounding=RoundingMode.RNE,
+                    input_ranks=ranks,
+                )
+                if (action.reduction != expected_reduction
+                    or action.reads[program.rank] != input_value.id
+                    or action.writes != op.outputs):
+                    raise SchemaError("RS owner SUM must consume local source and write output shard", path=f"{path}.rank_programs")
