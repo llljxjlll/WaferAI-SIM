@@ -1,8 +1,15 @@
 #include "prims/dense_rope_residual_backward_physical_work.h"
 
+#include "isa/prim_id.h"
+#include "utils/prim_utils.h"
+
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
+
+REGISTER_PRIM(rope_backward_timing, PrimId::ROPE_BACKWARD_TIMING);
+REGISTER_PRIM(residual_backward_timing, PrimId::RESIDUAL_BACKWARD_TIMING);
 
 namespace {
 constexpr uint64_t kMaxProfile = (uint64_t{1} << 30) - 1;
@@ -170,4 +177,201 @@ ResidualDualDxTimingWork BuildResidualDualDxTimingWork(
     work.right_write_bytes = bytes;
     work.vec_ops = CheckedMul(2, elements, "Residual dual-copy vector work");
     return work;
+}
+namespace {
+uint64_t PrimParameter(const NpuBase &prim, const char *name) {
+    const auto it = prim.param_value.find(name);
+    if (it == prim.param_value.end() || it->second < 0)
+        throw std::invalid_argument(prim.name + " missing/nonnegative " + name);
+    return static_cast<uint64_t>(it->second);
+}
+
+void RequireExactPrimParameters(const NpuBase &prim) {
+    if (prim.param_value.size() != prim.param_name.size())
+        throw std::invalid_argument(prim.name + " parameter set is incomplete");
+    for (const auto &name : prim.param_name)
+        if (prim.param_value.count(name) != 1)
+            throw std::invalid_argument(prim.name + " parameter set differs");
+}
+
+void RequireStrictBackwardWire(const NpuBase &prim) {
+    if (prim_wire::LegacyCompatibilityEnabled())
+        throw std::invalid_argument(prim.name + " requires strict Prim wire");
+}
+} // namespace
+
+rope_backward_timing::rope_backward_timing() {
+    name = "rope_backward_timing";
+    datatype = FP16;
+    skip_input = true;
+    skip_output = true;
+    param_name = {"LOGICAL_TOKENS", "RANK_TOKENS", "LOGICAL_Q_HEADS",
+                  "LOGICAL_KV_HEADS", "RANK_Q_HEADS", "RANK_KV_HEADS",
+                  "TP", "HEAD_DIM", "ROTARY_DIM", "MAX_POSITIONS",
+                  "POSITION_TRACE_TAG"};
+}
+
+RopeQkBackwardTimingWork rope_backward_timing::work() const {
+    RequireExactPrimParameters(*this);
+    if (datatype != FP16)
+        throw std::invalid_argument(name + " requires FP16 upstream/output");
+    RopeQkBackwardSourceWitness source;
+    source.forward_op_ref = "public::rope_forward";
+    source.upstream_gradient_producer_ref = "public::rope_upstream";
+    source.logical_tokens = PrimParameter(*this, "LOGICAL_TOKENS");
+    source.rank_tokens = PrimParameter(*this, "RANK_TOKENS");
+    source.logical_query_heads = PrimParameter(*this, "LOGICAL_Q_HEADS");
+    source.logical_kv_heads = PrimParameter(*this, "LOGICAL_KV_HEADS");
+    source.rank_query_heads = PrimParameter(*this, "RANK_Q_HEADS");
+    source.rank_kv_heads = PrimParameter(*this, "RANK_KV_HEADS");
+    source.tp_degree = PrimParameter(*this, "TP");
+    source.head_dim = PrimParameter(*this, "HEAD_DIM");
+    source.rotary_dim = PrimParameter(*this, "ROTARY_DIM");
+    source.max_position_embeddings = PrimParameter(*this, "MAX_POSITIONS");
+    source.position_trace.reserve(source.rank_tokens);
+    for (uint64_t token = 0; token < source.rank_tokens; ++token) {
+        if (token >= source.max_position_embeddings || token > UINT32_MAX)
+            throw std::invalid_argument(name + " canonical position trace exceeds table");
+        source.position_trace.push_back(static_cast<uint32_t>(token));
+    }
+    const uint64_t packed_heads = CheckedAdd(
+        source.rank_query_heads, CheckedMul(2, source.rank_kv_heads,
+                                            "rope Prim packed KV"),
+        "rope Prim packed heads");
+    const uint64_t packed_bytes = CheckedMul(
+        2, CheckedMul(source.rank_tokens,
+                      CheckedMul(packed_heads, source.head_dim,
+                                 "rope Prim packed width"),
+                      "rope Prim packed elements"),
+        "rope Prim packed bytes");
+    RopeQkBackwardPhysicalTile tile;
+    tile.position_ids = {static_cast<uint32_t>(inp_offset),
+                         CheckedMul(4, source.rank_tokens,
+                                    "rope Prim position bytes"),
+                         DenseReverseDType::INT32};
+    tile.rotated_upstream = {static_cast<uint32_t>(data_offset), packed_bytes,
+                             DenseReverseDType::FP16};
+    tile.packed_output = {static_cast<uint32_t>(out_offset), packed_bytes,
+                          DenseReverseDType::FP16};
+    const auto result = BuildRopeQkBackwardTimingWork(source, tile);
+    if ((result.position_trace_digest & ((uint64_t{1} << 30) - 1)) !=
+        PrimParameter(*this, "POSITION_TRACE_TAG"))
+        throw std::invalid_argument(name + " position trace tag differs");
+    return result;
+}
+
+void rope_backward_timing::initialize() {
+    const auto profile = work();
+    data_size_input = {static_cast<int>(profile.position_read_bytes / 4),
+                       static_cast<int>(profile.upstream_read_bytes / 2)};
+    data_chunk = {{"upstream", static_cast<int>(profile.upstream_read_bytes / 2)},
+                  {"output", static_cast<int>(profile.output_write_bytes / 2)}};
+}
+
+void rope_backward_timing::taskCore(TaskCoreContext &, string, u_int64_t &,
+                                    u_int64_t &exu, u_int64_t &sfu,
+                                    u_int64_t &vec) {
+    const auto profile = work();
+    exu = 0;
+    sfu = profile.sfu_ops;
+    vec = profile.vec_ops;
+    std::cout << "[DENSE_BACKWARD_PUBLIC] stage=rope"
+              << " position_read_bytes=" << profile.position_read_bytes
+              << " upstream_read_bytes=" << profile.upstream_read_bytes
+              << " output_write_bytes=" << profile.output_write_bytes
+              << " sfu_ops=" << profile.sfu_ops
+              << " vec_ops=" << profile.vec_ops << " pass=1\n";
+}
+
+vector<sc_bv<128>> rope_backward_timing::serialize() {
+    RequireStrictBackwardWire(*this);
+    work();
+    return NpuBase::serialize();
+}
+
+void rope_backward_timing::deserialize(vector<sc_bv<128>> wire) {
+    RequireStrictBackwardWire(*this);
+    NpuBase::deserialize(std::move(wire));
+    work();
+}
+
+residual_backward_timing::residual_backward_timing() {
+    name = "residual_backward_timing";
+    datatype = FP16;
+    skip_input = true;
+    skip_output = true;
+    param_name = {"LOGICAL_ROWS", "RANK_ROWS", "TP", "HIDDEN",
+                  "RIGHT_OUTPUT_OFFSET"};
+}
+
+ResidualDualDxTimingWork residual_backward_timing::work() const {
+    RequireExactPrimParameters(*this);
+    if (datatype != FP16)
+        throw std::invalid_argument(name + " requires FP16 tensors");
+    ResidualDualDxSourceWitness source;
+    source.forward_op_ref = "public::residual_forward";
+    source.left_forward_value_ref = "public::residual_left";
+    source.right_forward_value_ref = "public::residual_right";
+    source.upstream_gradient_producer_ref = "public::residual_upstream";
+    source.logical_rows = PrimParameter(*this, "LOGICAL_ROWS");
+    source.rank_rows = PrimParameter(*this, "RANK_ROWS");
+    source.tp_degree = PrimParameter(*this, "TP");
+    source.hidden_size = PrimParameter(*this, "HIDDEN");
+    const uint64_t bytes = CheckedMul(
+        2, CheckedMul(source.rank_rows, source.hidden_size,
+                      "residual Prim elements"),
+        "residual Prim bytes");
+    const uint64_t right = PrimParameter(*this, "RIGHT_OUTPUT_OFFSET");
+    if (inp_offset < 0 || data_offset < 0 || out_offset < 0 ||
+        static_cast<uint64_t>(inp_offset) + bytes > kSramExtent ||
+        right > UINT32_MAX)
+        throw std::invalid_argument(name + " forward witness SRAM extent/address differs");
+    ResidualDualDxPhysicalTile tile;
+    tile.upstream = {static_cast<uint32_t>(data_offset), bytes,
+                     DenseReverseDType::FP16};
+    tile.left_output = {static_cast<uint32_t>(out_offset), bytes,
+                        DenseReverseDType::FP16};
+    tile.right_output = {static_cast<uint32_t>(right), bytes,
+                         DenseReverseDType::FP16};
+    const auto result = BuildResidualDualDxTimingWork(source, tile);
+    DenseReverseSramSpan forward{static_cast<uint32_t>(inp_offset), bytes,
+                                 DenseReverseDType::FP16};
+    if (forward.byte_address % 16 != 0 || Overlap(forward, tile.upstream) ||
+        Overlap(forward, tile.left_output) || Overlap(forward, tile.right_output))
+        throw std::invalid_argument(name + " forward/upstream/dual outputs overlap");
+    return result;
+}
+
+void residual_backward_timing::initialize() {
+    const auto profile = work();
+    data_size_input = {static_cast<int>(profile.upstream_read_bytes / 2),
+                       static_cast<int>(profile.upstream_read_bytes / 2)};
+    data_chunk = {{"upstream", static_cast<int>(profile.upstream_read_bytes / 2)},
+                  {"output", static_cast<int>(profile.left_write_bytes / 2)},
+                  {"right_output", static_cast<int>(profile.right_write_bytes / 2)}};
+}
+
+void residual_backward_timing::taskCore(TaskCoreContext &, string, u_int64_t &,
+                                        u_int64_t &exu, u_int64_t &sfu,
+                                        u_int64_t &vec) {
+    const auto profile = work();
+    exu = 0; sfu = 0; vec = profile.vec_ops;
+    std::cout << "[DENSE_BACKWARD_PUBLIC] stage=residual"
+              << " forward_witness_bytes=" << profile.upstream_read_bytes
+              << " upstream_read_bytes=" << profile.upstream_read_bytes
+              << " left_write_bytes=" << profile.left_write_bytes
+              << " right_write_bytes=" << profile.right_write_bytes
+              << " vec_ops=" << profile.vec_ops << " pass=1\n";
+}
+
+vector<sc_bv<128>> residual_backward_timing::serialize() {
+    RequireStrictBackwardWire(*this);
+    work();
+    return NpuBase::serialize();
+}
+
+void residual_backward_timing::deserialize(vector<sc_bv<128>> wire) {
+    RequireStrictBackwardWire(*this);
+    NpuBase::deserialize(std::move(wire));
+    work();
 }

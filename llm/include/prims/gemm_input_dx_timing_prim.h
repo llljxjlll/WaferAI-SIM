@@ -35,17 +35,17 @@ struct GemmInputDxTimingTile {
     uint64_t n = 0; // source weight output width
     GemmInputDxSramSpan weight;   // FP16 W[M,N], explicit StateABI LOAD result
     GemmInputDxSramSpan upstream; // FP16 dY[K,N]
-    GemmInputDxSramSpan output;   // FP32 dX[K,M]
+    GemmInputDxSramSpan output;   // FP16 dX[K,M]
 };
 
 struct GemmInputDxTimingWork {
     GemmInputDxTimingTile tile;
     uint64_t fp16_weight_read_bytes = 0;
     uint64_t fp16_upstream_read_bytes = 0;
-    uint64_t fp32_dx_read_modify_write_bytes = 0;
+    uint64_t fp16_dx_write_bytes = 0;
     uint64_t fma_ops = 0;
     uint64_t exu_flops = 0;
-    uint64_t fp32_output_vec_ops = 0;
+    uint64_t fp16_output_vec_ops = 0;
 };
 
 // Stage R7 NEW-only source/physical timing contract. Public PrimId, opcode,

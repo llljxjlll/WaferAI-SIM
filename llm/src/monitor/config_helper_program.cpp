@@ -229,6 +229,20 @@ void ApplyRelocation(ExternalRecord &record,
             Fail("invalid GEMM_WEIGHT_WGRAD_TIMING relocation operand_id");
         return;
     }
+    if (auto *value = std::get_if<DenseBackwardOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "Dense backward address");
+        if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->input, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->data, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->output, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_AUX_ADDRESS &&
+                 value->has_aux)
+            SetAddress(value->aux, relocation, symbol);
+        else Fail("invalid Dense backward relocation operand_id");
+        return;
+    }
     if (auto *value =
             std::get_if<MoeScoreWeightedForwardOperands>(&record.operands)) {
         RequireAbsolute(relocation, "MOE_SCORE_WEIGHTED_FORWARD address");

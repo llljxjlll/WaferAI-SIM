@@ -1,4 +1,4 @@
-"""Source-bound one-core HBM→LSU_LOAD→named GEMM FP32 dX timing canary."""
+"""Source-bound one-core HBM→LSU_LOAD→named GEMM FP16 dX timing canary."""
 from __future__ import annotations
 
 import argparse

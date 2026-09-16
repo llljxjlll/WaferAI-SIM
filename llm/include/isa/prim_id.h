@@ -105,6 +105,8 @@ enum class PrimId : uint8_t {
     GEMM_INPUT_DX_TIMING = 75,
     MOE_SCORE_WEIGHTED_FORWARD = 76,
     MOE_SCORE_WEIGHT_BACKWARD = 77,
+    ROPE_BACKWARD_TIMING = 78,
+    RESIDUAL_BACKWARD_TIMING = 79,
 };
 
 constexpr uint8_t PrimIdValue(PrimId id) {
@@ -112,4 +114,4 @@ constexpr uint8_t PrimIdValue(PrimId id) {
 }
 
 constexpr uint8_t kMaxAssignedPrimId =
-    PrimIdValue(PrimId::MOE_SCORE_WEIGHT_BACKWARD);
+    PrimIdValue(PrimId::RESIDUAL_BACKWARD_TIMING);

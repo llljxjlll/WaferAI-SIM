@@ -54,6 +54,10 @@ enum class Opcode : uint8_t {
     GEMM_DX_TIMING = 0x26,
     MOE_SCORE_WEIGHTED_FORWARD = 0x27,
     MOE_SCORE_WEIGHT_BACKWARD = 0x28,
+    RMSNORM_BACKWARD_TIMING = 0x29,
+    ATTENTION_BACKWARD_TIMING = 0x2a,
+    ROPE_BACKWARD_TIMING = 0x2b,
+    RESIDUAL_BACKWARD_TIMING = 0x2c,
 
     DTE_SEND = 0x40,
     DTE_RECV = 0x41,
@@ -210,6 +214,14 @@ constexpr OpcodeLowering OpcodeLoweringFor(Opcode opcode) noexcept {
         return DirectPrim(PrimId::MOE_SCORE_WEIGHTED_FORWARD);
     case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
         return DirectPrim(PrimId::MOE_SCORE_WEIGHT_BACKWARD);
+    case Opcode::RMSNORM_BACKWARD_TIMING:
+        return DirectPrim(PrimId::NORM_BACKWARD_TIMING);
+    case Opcode::ATTENTION_BACKWARD_TIMING:
+        return DirectPrim(PrimId::ATTENTION_BACKWARD_TIMING);
+    case Opcode::ROPE_BACKWARD_TIMING:
+        return DirectPrim(PrimId::ROPE_BACKWARD_TIMING);
+    case Opcode::RESIDUAL_BACKWARD_TIMING:
+        return DirectPrim(PrimId::RESIDUAL_BACKWARD_TIMING);
     case Opcode::RELU: return DirectPrim(PrimId::RELU_F);
     case Opcode::RESIDUAL: return DirectPrim(PrimId::RESIDUAL_F);
     case Opcode::LAYERNORM: return DirectPrim(PrimId::LAYERNORM_F);
@@ -333,7 +345,7 @@ constexpr uint8_t OpcodeValue(Opcode opcode) noexcept {
 }
 
 inline constexpr uint8_t kComputeOpcodeFirst = 0x01;
-inline constexpr uint8_t kComputeOpcodeLast = 0x28;
+inline constexpr uint8_t kComputeOpcodeLast = 0x2c;
 inline constexpr uint8_t kCommunicationOpcodeFirst = 0x40;
 inline constexpr uint8_t kCommunicationOpcodeLast = 0x43;
 inline constexpr uint8_t kMemoryOpcodeFirst = 0x80;
@@ -342,7 +354,7 @@ inline constexpr uint8_t kSynchronizationOpcodeFirst = 0xc0;
 inline constexpr uint8_t kSynchronizationOpcodeLast = 0xc6;
 inline constexpr uint8_t kReservedOpcodeFirst = 0xf0;
 inline constexpr uint8_t kReservedOpcodeLast = 0xff;
-inline constexpr std::size_t kOpcodeManifestSize = 64;
+inline constexpr std::size_t kOpcodeManifestSize = 68;
 
 // The returned array is sorted by numeric opcode and has static lifetime.
 const std::array<OpcodeManifestEntry, kOpcodeManifestSize> &

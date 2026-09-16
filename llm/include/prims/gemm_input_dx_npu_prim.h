@@ -5,7 +5,7 @@
 
 // Public runtime adapter. Source/StateABI provenance is checked by the
 // producer and finalizer; strict Prim wire carries only physical W/dY/dX
-// addresses and M/N/K. No numerical FP32 dX is claimed.
+// addresses and M/N/K. No numerical FP16 dX is claimed.
 class gemm_input_dx_timing final : public NpuBase {
 public:
     gemm_input_dx_timing();

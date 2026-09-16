@@ -3,6 +3,8 @@
 #include "isa/record_lowering.h"
 #include "common/memory.h"
 #include "prims/collective_data_v1_prim.h"
+#include "prims/backward_timing_prims.h"
+#include "prims/dense_rope_residual_backward_physical_work.h"
 #include "prims/dte_endpoint_prims.h"
 #include "prims/exact_stage2_prims.h"
 #include "prims/weight_gradient_timing_prims.h"
@@ -219,6 +221,33 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         operands.m = 8;
         operands.n = 16;
         operands.k = 4;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::DENSE_BACKWARD: {
+        DenseBackwardOperands operands;
+        operands.input = Absolute(0);
+        operands.data = Absolute(128);
+        operands.output = Absolute(256);
+        if (schema.opcode == Opcode::RMSNORM_BACKWARD_TIMING) {
+            operands.parameter_count = 4;
+            operands.parameters = {2, 4, 1, 0};
+        } else if (schema.opcode == Opcode::ATTENTION_BACKWARD_TIMING) {
+            operands.parameter_count = 7;
+            operands.parameters = {2, 2, 1, 2, 1, 1, 3};
+        } else if (schema.opcode == Opcode::ROPE_BACKWARD_TIMING) {
+            operands.input_datatype = ExternalDataType::INT32;
+            operands.parameter_count = 11;
+            operands.parameters =
+                {2, 2, 2, 1, 2, 1, 1, 2, 2, 8, 300186932};
+        } else if (schema.opcode == Opcode::RESIDUAL_BACKWARD_TIMING) {
+            operands.has_aux = true;
+            operands.aux = Absolute(384);
+            operands.parameter_count = 4;
+            operands.parameters = {2, 2, 1, 4};
+        } else {
+            throw std::logic_error("unexpected Dense backward schema");
+        }
         record.operands = operands;
         break;
     }
@@ -531,6 +560,10 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
     case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
     case Opcode::GEMM_DX_TIMING:
+    case Opcode::RMSNORM_BACKWARD_TIMING:
+    case Opcode::ATTENTION_BACKWARD_TIMING:
+    case Opcode::ROPE_BACKWARD_TIMING:
+    case Opcode::RESIDUAL_BACKWARD_TIMING:
     case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
     case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
         return true;
@@ -566,6 +599,72 @@ int ExpectedCategory(Opcode opcode) {
 
 void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                           PrimBase &base) {
+    if (record.opcode == Opcode::RMSNORM_BACKWARD_TIMING) {
+        auto *prim = dynamic_cast<norm_backward_timing *>(&base);
+        checks.Check(prim != nullptr,
+                     "RMSNorm backward lowers to existing timing Prim70");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(
+                prim->inp_offset == 0 && prim->data_offset == 128 &&
+                    prim->out_offset == 256 &&
+                    work.forward_input_bytes == 16 &&
+                    work.upstream_bytes == 16 && work.output_bytes == 16,
+                "RMSNorm backward preserves three physical FP16 spans");
+        }
+        return;
+    }
+    if (record.opcode == Opcode::ATTENTION_BACKWARD_TIMING) {
+        auto *prim = dynamic_cast<attention_backward_timing *>(&base);
+        checks.Check(prim != nullptr,
+                     "Attention backward lowers to existing timing Prim71");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(
+                prim->inp_offset == 0 && prim->data_offset == 128 &&
+                    prim->out_offset == 256 &&
+                    work.forward_input_bytes == 32 &&
+                    work.upstream_bytes == 16 && work.output_bytes == 32,
+                "Attention backward preserves packed forward/dQKV spans");
+        }
+        return;
+    }
+    if (record.opcode == Opcode::ROPE_BACKWARD_TIMING) {
+        auto *prim = dynamic_cast<rope_backward_timing *>(&base);
+        checks.Check(prim != nullptr,
+                     "RoPE backward lowers to public timing Prim78");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(
+                prim->inp_offset == 0 && prim->data_offset == 128 &&
+                    prim->out_offset == 256 &&
+                    work.position_read_bytes == 8 &&
+                    work.upstream_read_bytes == 32 &&
+                    work.output_write_bytes == 32 &&
+                    work.inverse_rotary_pairs == 6 &&
+                    work.position_trace_digest % (uint64_t{1} << 30) ==
+                        300186932,
+                "RoPE backward preserves canonical trace and typed spans");
+        }
+        return;
+    }
+    if (record.opcode == Opcode::RESIDUAL_BACKWARD_TIMING) {
+        auto *prim = dynamic_cast<residual_backward_timing *>(&base);
+        checks.Check(prim != nullptr,
+                     "Residual backward lowers to public timing Prim79");
+        if (prim != nullptr) {
+            const auto work = prim->work();
+            checks.Check(
+                prim->inp_offset == 0 && prim->data_offset == 128 &&
+                    prim->out_offset == 256 &&
+                    prim->param_value.at("RIGHT_OUTPUT_OFFSET") == 384 &&
+                    work.upstream_read_bytes == 16 &&
+                    work.left_write_bytes == 16 &&
+                    work.right_write_bytes == 16 && work.vec_ops == 16,
+                "Residual backward preserves forward witness and dual outputs");
+        }
+        return;
+    }
     if (record.opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING) {
         auto *prim = dynamic_cast<embedding_table_wgrad_timing *>(&base);
         checks.Check(prim != nullptr, "Embedding WGrad lowers to named Prim72");
@@ -601,10 +700,10 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
             const auto work = prim->work();
             checks.Check(work.tile.weight.bytes == 256 &&
                              work.tile.upstream.bytes == 128 &&
-                             work.tile.output.bytes == 128 &&
-                             work.tile.output.dtype == GemmInputDxDType::FP32 &&
+                             work.tile.output.bytes == 64 &&
+                             work.tile.output.dtype == GemmInputDxDType::FP16 &&
                              work.fma_ops == 512 && work.exu_flops == 1024,
-                         "GEMM dX preserves FP16 W/dY, FP32 output and work");
+                         "GEMM dX preserves FP16 W/dY/dX and work");
         }
         return;
     }
@@ -1159,7 +1258,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 54,
+    checks.Check(supported == 58,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

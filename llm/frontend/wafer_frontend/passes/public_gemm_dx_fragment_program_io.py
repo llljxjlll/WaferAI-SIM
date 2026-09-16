@@ -1,4 +1,4 @@
-"""Signed HBM weight and SRAM upstream seeds for a scoped FP32 GEMM dX timing record."""
+"""Signed HBM weight and SRAM upstream seeds for a scoped FP16 GEMM dX timing record."""
 from __future__ import annotations
 
 import struct
@@ -104,7 +104,7 @@ def build_public_gemm_dx_fragment_program_io(
     for binding_id, dtype, ownership, size in (
         ("abs_input", DType.FP16, BufferOwnership.OWNED, 256),
         ("abs_data", DType.FP16, BufferOwnership.BORROWED, 128),
-        ("abs_output", DType.FP32, BufferOwnership.OWNED, 128),
+        ("abs_output", DType.FP16, BufferOwnership.OWNED, 64),
     ):
         abi = roots.get(binding_id)
         if (abi is None or abi.dtype is not dtype or
@@ -129,7 +129,7 @@ def build_public_gemm_dx_fragment_program_io(
     ))
     for binding_id, payload, purpose in (
         ("abs_data", upstream, ProgramIoPurpose.ACTIVATION),
-        ("abs_output", bytes(128), ProgramIoPurpose.TIMING_PARTIAL),
+        ("abs_output", bytes(64), ProgramIoPurpose.TIMING_PARTIAL),
     ):
         abi = roots[binding_id]
         matches = [(symbol_id, index, definition)

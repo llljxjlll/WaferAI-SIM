@@ -1,4 +1,4 @@
-"""Public FP32 input-gradient source and loss-upstream fault injection."""
+"""Public FP16 input-gradient source and loss-upstream fault injection."""
 
 from dataclasses import replace
 import unittest
@@ -37,7 +37,7 @@ class PublicGemmDxSourceIR0Test(unittest.TestCase):
         )
 
     def _resign(self, *, workload=None, weight_ref=None, upstream_ref=None,
-                output_dtype=DType.FP32):
+                output_dtype=DType.FP16):
         old = self.dgrad
         node = replace(old, kind=OpKind.GEMM_INPUT_DX,
                        impl_ref="gemm_input_dx_timing",
@@ -45,7 +45,7 @@ class PublicGemmDxSourceIR0Test(unittest.TestCase):
                        workload=self.workload if workload is None else workload,
                        inputs=(self.head.inputs[1] if weight_ref is None
                                else weight_ref,
-                               old.inputs[0] if upstream_ref is None
+                               old.inputs[1] if upstream_ref is None
                                else upstream_ref),
                        math=replace(old.math, accumulation_dtype=DType.FP32))
         return IR0.create(
@@ -57,13 +57,13 @@ class PublicGemmDxSourceIR0Test(unittest.TestCase):
                                for value in self.original.values)},
         )
 
-    def test_real_lm_head_weight_read_and_ce_backward_fp16_dy_to_fp32_dx(self):
+    def test_real_lm_head_weight_read_and_ce_backward_fp16_dy_to_fp16_dx(self):
         graph = self._resign()
         graph.validate()
         self.assertEqual(graph.nodes[-1].kind, OpKind.GEMM_INPUT_DX)
         self.assertEqual(graph.nodes[-1].impl_ref, "gemm_input_dx_timing")
         self.assertEqual(graph.nodes[-1].workload.output_bytes,
-                         4 * self.workload.k * self.workload.m)
+                         2 * self.workload.k * self.workload.m)
 
     def test_forward_state_ref_cannot_name_a_different_real_parameter(self):
         other = next(item.id for item in self.original.persistent_states
@@ -79,11 +79,11 @@ class PublicGemmDxSourceIR0Test(unittest.TestCase):
             self._resign(workload=replace(
                 self.workload, source_forward_op_ref=other)).validate()
 
-    def test_upstream_and_fp32_output_are_real_physical_operands(self):
+    def test_upstream_and_fp16_output_are_real_physical_operands(self):
         with self.assertRaisesRegex(SchemaError, "consumer node|true upstream"):
             self._resign(upstream_ref=self.head.outputs[0]).validate()
-        with self.assertRaisesRegex(SchemaError, "owned FP32 dX"):
-            self._resign(output_dtype=DType.FP16).validate()
+        with self.assertRaisesRegex(SchemaError, "owned FP16 dX"):
+            self._resign(output_dtype=DType.FP32).validate()
 
 
 if __name__ == "__main__":

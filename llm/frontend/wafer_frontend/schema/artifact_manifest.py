@@ -133,6 +133,10 @@ class RecordOpcode(IntEnum):
     GEMM_DX_TIMING = 0x26
     MOE_SCORE_WEIGHTED_FORWARD = 0x27
     MOE_SCORE_WEIGHT_BACKWARD = 0x28
+    RMSNORM_BACKWARD_TIMING = 0x29
+    ATTENTION_BACKWARD_TIMING = 0x2A
+    ROPE_BACKWARD_TIMING = 0x2B
+    RESIDUAL_BACKWARD_TIMING = 0x2C
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
@@ -832,6 +836,42 @@ _GEMM_INPUT_DX_OPERANDS = (
     _lit("m"), _lit("n"), _lit("k"),
 )
 
+_RMSNORM_BACKWARD_OPERANDS = (
+    _lit("input_datatype"), _lit("upstream_datatype"), _lit("output_datatype"),
+    _addr("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("rows"), _lit("hidden_size"), _lit("tp_degree"), _lit("mode"),
+)
+_ATTENTION_BACKWARD_OPERANDS = (
+    _lit("input_datatype"), _lit("upstream_datatype"), _lit("output_datatype"),
+    _addr("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("tokens"), _lit("rank_heads"), _lit("rank_kv_heads"),
+    _lit("head_dim"), _lit("tp_degree"), _lit("sequences"), _lit("pairs"),
+)
+_ROPE_BACKWARD_OPERANDS = (
+    _lit("position_datatype"), _lit("upstream_datatype"), _lit("output_datatype"),
+    _addr("position_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("logical_tokens"), _lit("rank_tokens"), _lit("logical_query_heads"),
+    _lit("logical_kv_heads"), _lit("rank_query_heads"), _lit("rank_kv_heads"),
+    _lit("tp_degree"), _lit("head_dim"), _lit("rotary_dim"),
+    _lit("max_position_embeddings"), _lit("position_trace_tag"),
+)
+_RESIDUAL_BACKWARD_OPERANDS = (
+    _lit("forward_datatype"), _lit("upstream_datatype"),
+    _lit("left_output_datatype"), _lit("right_output_datatype"),
+    _addr("forward_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("upstream_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("left_output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _addr("right_output_address", SemanticOperandId.COMPUTE_AUX_ADDRESS),
+    _lit("logical_rows"), _lit("rank_rows"), _lit("tp_degree"),
+    _lit("hidden_size"),
+)
+
 _MOE_ROUTER_FORWARD_OPERANDS = (
     _lit("route_datatype"), _lit("score_datatype"),
     _lit("expert_datatype"), _lit("combined_datatype"),
@@ -957,6 +997,10 @@ _OPERAND_SCHEMAS = {
     RecordOpcode.NORM_GAMMA_WGRAD_TIMING: _NORM_GAMMA_WGRAD_OPERANDS,
     RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING: _GEMM_WEIGHT_WGRAD_OPERANDS,
     RecordOpcode.GEMM_DX_TIMING: _GEMM_INPUT_DX_OPERANDS,
+    RecordOpcode.RMSNORM_BACKWARD_TIMING: _RMSNORM_BACKWARD_OPERANDS,
+    RecordOpcode.ATTENTION_BACKWARD_TIMING: _ATTENTION_BACKWARD_OPERANDS,
+    RecordOpcode.ROPE_BACKWARD_TIMING: _ROPE_BACKWARD_OPERANDS,
+    RecordOpcode.RESIDUAL_BACKWARD_TIMING: _RESIDUAL_BACKWARD_OPERANDS,
     RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD: _MOE_ROUTER_FORWARD_OPERANDS,
     RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD: _MOE_ROUTER_BACKWARD_OPERANDS,
     RecordOpcode.GREEDY_SAMPLE: _GREEDY_SAMPLE_OPERANDS,
@@ -1140,6 +1184,19 @@ for _operand_id in (
         ProgramSymbolKind.ABSOLUTE_ADDRESS,
     )
 
+for _opcode in (RecordOpcode.RMSNORM_BACKWARD_TIMING,
+                RecordOpcode.ATTENTION_BACKWARD_TIMING,
+                RecordOpcode.ROPE_BACKWARD_TIMING,
+                RecordOpcode.RESIDUAL_BACKWARD_TIMING):
+    for _operand_id in (SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                        SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+        _ALLOWED_ADDRESS_KINDS[(_opcode, _operand_id)] = (
+            ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+_ALLOWED_ADDRESS_KINDS[(RecordOpcode.RESIDUAL_BACKWARD_TIMING,
+                        SemanticOperandId.COMPUTE_AUX_ADDRESS)] = (
+    ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+
 for _operand_id in (
     SemanticOperandId.COMPUTE_INPUT_ADDRESS,
     SemanticOperandId.COMPUTE_DATA_ADDRESS,
@@ -1262,6 +1319,10 @@ _FIXED_COMPUTE_OPCODES = (
     RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
     RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
     RecordOpcode.GEMM_DX_TIMING,
+    RecordOpcode.RMSNORM_BACKWARD_TIMING,
+    RecordOpcode.ATTENTION_BACKWARD_TIMING,
+    RecordOpcode.ROPE_BACKWARD_TIMING,
+    RecordOpcode.RESIDUAL_BACKWARD_TIMING,
     RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD,
     RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD,
     RecordOpcode.GREEDY_SAMPLE,
@@ -1421,7 +1482,7 @@ def _fixed_compute_literals(
             raise SchemaError("0x26 requires real FP16 forward W and upstream dY", path=path)
         workload.validate(path=f"{path}.workload")
         return {"weight_datatype": 1, "upstream_datatype": 1,
-                "dx_datatype": 3, "m": workload.m,
+                "dx_datatype": 1, "m": workload.m,
                 "n": workload.n, "k": workload.k}
     if opcode is RecordOpcode.GREEDY_SAMPLE:
         if (
@@ -1872,15 +1933,90 @@ def _validate_fixed_compute_operands(
     if opcode is RecordOpcode.GEMM_DX_TIMING:
         if (values["weight_datatype"] != 1 or
             values["upstream_datatype"] != 1 or
-            values["dx_datatype"] != 3):
-            raise SchemaError("0x26 requires FP16 W/dY and FP32 dX", path=path)
+            values["dx_datatype"] != 1):
+            raise SchemaError("0x26 requires FP16 W/dY/dX", path=path)
         positive("m", "n", "k")
         if any(values[name] > _COMPUTE_PARAMETER_MAX for name in ("m", "n", "k")):
             raise SchemaError("0x26 profile exceeds 30-bit ABI", path=path)
         if max(2 * values["m"] * values["n"],
                2 * values["k"] * values["n"],
-               4 * values["k"] * values["m"]) > 65536:
+               2 * values["k"] * values["m"]) > 65536:
             raise SchemaError("0x26 tile exceeds typed 16-bit SRAM span", path=path)
+        return
+
+    if opcode is RecordOpcode.RMSNORM_BACKWARD_TIMING:
+        if any(values[name] != 1 for name in (
+                "input_datatype", "upstream_datatype", "output_datatype")):
+            raise SchemaError("0x29 requires three FP16 tensors", path=path)
+        positive("rows", "hidden_size", "tp_degree")
+        if (values["mode"] != 0 or
+                any(values[name] > _COMPUTE_PARAMETER_MAX for name in (
+                    "rows", "hidden_size", "tp_degree")) or
+                2 * values["rows"] * values["hidden_size"] > 65536):
+            raise SchemaError("0x29 RMSNorm profile/extent is invalid", path=path)
+        return
+
+    if opcode is RecordOpcode.ATTENTION_BACKWARD_TIMING:
+        if any(values[name] != 1 for name in (
+                "input_datatype", "upstream_datatype", "output_datatype")):
+            raise SchemaError("0x2A requires three FP16 tensors", path=path)
+        positive("tokens", "rank_heads", "rank_kv_heads", "head_dim",
+                 "tp_degree", "sequences", "pairs")
+        tokens, heads, kv, dim, seq = (values[name] for name in (
+            "tokens", "rank_heads", "rank_kv_heads", "head_dim", "sequences"))
+        per = tokens // seq if seq and tokens % seq == 0 else 0
+        exact_pairs = seq * per * (per + 1) // 2
+        if (kv > heads or heads % kv or dim % 2 or not per or
+                values["pairs"] != exact_pairs or
+                any(values[name] > _COMPUTE_PARAMETER_MAX for name in (
+                    "tokens", "rank_heads", "rank_kv_heads", "head_dim",
+                    "tp_degree", "sequences", "pairs")) or
+                max(2 * tokens * (heads + 2 * kv) * dim,
+                    2 * tokens * heads * dim) > 65536):
+            raise SchemaError("0x2A attention profile/extent is invalid", path=path)
+        return
+
+    if opcode is RecordOpcode.ROPE_BACKWARD_TIMING:
+        if (values["position_datatype"] != 2 or
+                values["upstream_datatype"] != 1 or
+                values["output_datatype"] != 1):
+            raise SchemaError("0x2B requires INT32 positions and FP16 dQKV", path=path)
+        names = ("logical_tokens", "rank_tokens", "logical_query_heads",
+                 "logical_kv_heads", "rank_query_heads", "rank_kv_heads",
+                 "tp_degree", "head_dim", "rotary_dim",
+                 "max_position_embeddings", "position_trace_tag")
+        positive(*names)
+        lt, rt, lq, lkv, rq, rkv, tp, dim, rotary, maxpos, _ = (
+            values[name] for name in names)
+        if (any(values[name] > _COMPUTE_PARAMETER_MAX for name in names) or
+                lt != rt or lq != rq * tp or lkv != rkv * tp or
+                rq < rkv or rq % rkv or dim != rotary or dim % 2 or
+                rt > maxpos or
+                max(4 * rt, 2 * rt * (rq + 2 * rkv) * dim) > 65536):
+            raise SchemaError("0x2B RoPE source profile/extent is invalid", path=path)
+        digest = 14695981039346656037
+        for position in range(rt):
+            for shift in range(0, 32, 8):
+                digest ^= (position >> shift) & 0xFF
+                digest = (digest * 1099511628211) & ((1 << 64) - 1)
+        if values["position_trace_tag"] != digest & _COMPUTE_PARAMETER_MAX:
+            raise SchemaError(
+                "0x2B position_trace_tag differs from canonical source trace",
+                path=path,
+            )
+        return
+
+    if opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING:
+        if any(values[name] != 1 for name in (
+                "forward_datatype", "upstream_datatype",
+                "left_output_datatype", "right_output_datatype")):
+            raise SchemaError("0x2C requires four FP16 tensor views", path=path)
+        positive("logical_rows", "rank_rows", "tp_degree", "hidden_size")
+        if (values["logical_rows"] != values["rank_rows"] * values["tp_degree"] or
+                any(values[name] > _COMPUTE_PARAMETER_MAX for name in (
+                    "logical_rows", "rank_rows", "tp_degree", "hidden_size")) or
+                2 * values["rank_rows"] * values["hidden_size"] > 65536):
+            raise SchemaError("0x2C residual profile/extent is invalid", path=path)
         return
 
     if opcode in (RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD,
@@ -5084,6 +5220,19 @@ def _address_operand_role(
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_AUX_ADDRESS): (BufferUseRole.COMP_OUTPUT, 1),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
@@ -6798,6 +6947,19 @@ class LinkedProgramManifest:
             (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_AUX_ADDRESS): (BufferUseRole.COMP_OUTPUT, 1),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),

@@ -224,7 +224,7 @@ Json Stage2Compute(const std::string &action, uint64_t opcode) {
         return Record(action, opcode, Json::array({
             Literal("weight_datatype", 1),
             Literal("upstream_datatype", 1),
-            Literal("dx_datatype", 3),
+            Literal("dx_datatype", 1),
             Address("weight_address", 1, "p_abs_input"),
             Address("upstream_address", 2, "p_abs_data"),
             Address("dx_address", 3, "p_abs_output"),
@@ -853,8 +853,8 @@ Json Stage2Manifest(uint64_t opcode) {
         output_shape = Json::array({4, 8});
         input_size = 256;
         data_size = 128;
-        output_size = 128;
-        output_dtype = "fp32";
+        output_size = 64;
+        output_dtype = "fp16";
     } else if (opcode == 0x20) {
         input_shape = Json::array({32});
         data_shape = Json::array({32});
@@ -2259,16 +2259,16 @@ void Run() {
                   "GEMM_WEIGHT_WGRAD rejects FP16-sized FP32 buffer extent");
     Json bad_dx_dtype = Stage2Manifest(0x26);
     for (Json &stream : bad_dx_dtype["fragments"][0]["core_streams"])
-        stream["records"][4]["operands"][2]["literal_value"] = 1;
+        stream["records"][4]["operands"][2]["literal_value"] = 3;
     RefreshManifestIds(bad_dx_dtype);
     ExpectFailure([&] { finalizer.FinalizeJson(bad_dx_dtype.dump()); },
-                  "GEMM_DX rejects FP16 output ABI");
+                  "GEMM_DX rejects legacy FP32 output ABI");
     Json bad_dx_extent = Stage2Manifest(0x26);
     for (Json &abi : bad_dx_extent["fragments"][0]["buffer_abi"])
-        if (abi["binding_id"] == "abs_output") abi["size_bytes"] = 64;
+        if (abi["binding_id"] == "abs_output") abi["size_bytes"] = 128;
     RefreshManifestIds(bad_dx_extent);
     ExpectFailure([&] { finalizer.FinalizeJson(bad_dx_extent.dump()); },
-                  "GEMM_DX rejects FP16-sized FP32 output buffer");
+                  "GEMM_DX rejects legacy FP32-sized output buffer");
     Json bad_dx_rows = Stage2Manifest(0x26);
     for (Json &stream : bad_dx_rows["fragments"][0]["core_streams"])
         stream["records"][4]["operands"][8]["literal_value"] = 0;

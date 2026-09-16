@@ -22,6 +22,7 @@ constexpr uint32_t kEmbeddingTableWGradPayloadSize = 192;
 constexpr uint32_t kNormGammaWGradPayloadSize = 92;
 constexpr uint32_t kGemmWeightWGradPayloadSize = 88;
 constexpr uint32_t kGemmInputDxPayloadSize = 88;
+constexpr uint32_t kDenseBackwardPayloadSize = 200;
 constexpr uint32_t kMoeScoreWeightedForwardPayloadSize = 116;
 constexpr uint32_t kMoeScoreWeightBackwardPayloadSize = 168;
 constexpr uint32_t kGreedySamplePayloadSize = 76;
@@ -942,7 +943,7 @@ void ValidateGemmInputDx(const GemmInputDxOperands &o) {
                          "GEMM_INPUT_DX weight_datatype");
     RequireExactDataType(o.upstream_datatype, ExternalDataType::FP16,
                          "GEMM_INPUT_DX upstream_datatype");
-    RequireExactDataType(o.dx_datatype, ExternalDataType::FP32,
+    RequireExactDataType(o.dx_datatype, ExternalDataType::FP16,
                          "GEMM_INPUT_DX dx_datatype");
     for (const auto value : {o.m, o.n, o.k})
         Require(value > 0 && value <= kExternalNpuParameterMax,
@@ -958,9 +959,190 @@ void ValidateGemmInputDx(const GemmInputDxOperands &o) {
             CheckedMul(2, kn, "GEMM_INPUT_DX upstream bytes"),
             "GEMM_INPUT_DX upstream"),
         ValidateGradientSramSpan(o.dx,
-            CheckedMul(4, km, "GEMM_INPUT_DX FP32 dX bytes"),
-            "GEMM_INPUT_DX FP32 dX")}, "GEMM_INPUT_DX");
+            CheckedMul(2, km, "GEMM_INPUT_DX FP16 dX bytes"),
+            "GEMM_INPUT_DX FP16 dX")}, "GEMM_INPUT_DX");
     (void)CheckedMul(o.k, mn, "GEMM_INPUT_DX FMA work");
+}
+
+uint64_t CanonicalPositionTraceTag(uint64_t rank_tokens) {
+    uint64_t digest = 14695981039346656037ULL;
+    for (uint64_t token = 0; token < rank_tokens; ++token) {
+        const uint32_t position = static_cast<uint32_t>(token);
+        for (unsigned shift = 0; shift < 32; shift += 8) {
+            digest ^= (position >> shift) & 0xffU;
+            digest *= 1099511628211ULL;
+        }
+    }
+    return digest & kExternalNpuParameterMax;
+}
+
+void ValidateDenseBackward(Opcode opcode, const DenseBackwardOperands &o) {
+    const bool residual = opcode == Opcode::RESIDUAL_BACKWARD_TIMING;
+    Require(o.has_aux == residual,
+            "Dense backward aux presence differs from opcode contract");
+    auto fp16 = [&](ExternalDataType dtype, const char *field) {
+        RequireExactDataType(dtype, ExternalDataType::FP16, field);
+    };
+    fp16(o.data_datatype, "Dense backward data_datatype");
+    fp16(o.output_datatype, "Dense backward output_datatype");
+    fp16(o.aux_datatype, "Dense backward aux_datatype");
+    if (opcode == Opcode::ROPE_BACKWARD_TIMING)
+        RequireExactDataType(o.input_datatype, ExternalDataType::INT32,
+                             "ROPE_BACKWARD position datatype");
+    else
+        fp16(o.input_datatype, "Dense backward input_datatype");
+    if (!residual) {
+        ValidateAddress(o.aux, true, "Dense backward unused aux");
+        Require(IsNone(o.aux),
+                "Dense backward unused aux address must be canonical NONE");
+    }
+
+    const uint64_t expected =
+        opcode == Opcode::ATTENTION_BACKWARD_TIMING ? 7 :
+        opcode == Opcode::ROPE_BACKWARD_TIMING ? 11 : 4;
+    Require(o.parameter_count == expected,
+            "Dense backward parameter count differs from opcode contract");
+    for (uint64_t i = 0; i < o.parameter_count; ++i)
+        Require(o.parameters[i] <= kExternalNpuParameterMax,
+                "Dense backward parameter exceeds 30-bit Prim wire");
+    for (uint64_t i = o.parameter_count; i < o.parameters.size(); ++i)
+        Require(o.parameters[i] == 0,
+                "Dense backward unused parameter must be zero");
+
+    std::vector<GradientSramSpan> spans;
+    if (opcode == Opcode::RMSNORM_BACKWARD_TIMING) {
+        const auto rows = o.parameters[0];
+        const auto hidden = o.parameters[1];
+        const auto tp = o.parameters[2];
+        Require(rows && hidden && tp && o.parameters[3] == 0,
+                "RMSNORM_BACKWARD parameters are invalid");
+        const uint64_t bytes = CheckedMul(
+            2, CheckedMul(rows, hidden, "RMSNORM_BACKWARD elements"),
+            "RMSNORM_BACKWARD bytes");
+        spans = {
+            ValidateGradientSramSpan(o.input, bytes,
+                                     "RMSNORM_BACKWARD forward"),
+            ValidateGradientSramSpan(o.data, bytes,
+                                     "RMSNORM_BACKWARD upstream"),
+            ValidateGradientSramSpan(o.output, bytes,
+                                     "RMSNORM_BACKWARD output")};
+    } else if (opcode == Opcode::ATTENTION_BACKWARD_TIMING) {
+        const auto tokens = o.parameters[0];
+        const auto heads = o.parameters[1];
+        const auto kv = o.parameters[2];
+        const auto dim = o.parameters[3];
+        const auto tp = o.parameters[4];
+        const auto seq = o.parameters[5];
+        const auto pairs = o.parameters[6];
+        Require(tokens && heads && kv && dim && tp && seq && pairs &&
+                    kv <= heads && heads % kv == 0 && dim % 2 == 0 &&
+                    tokens % seq == 0,
+                "ATTENTION_BACKWARD parameters are invalid");
+        const uint64_t per = tokens / seq;
+        const uint64_t causal = CheckedMul(
+            per, CheckedAdd(per, 1,
+                            "ATTENTION_BACKWARD causal increment"),
+            "ATTENTION_BACKWARD causal");
+        Require(pairs == CheckedMul(seq, causal / 2,
+                                   "ATTENTION_BACKWARD pairs"),
+                "ATTENTION_BACKWARD pairs are not exact");
+        const uint64_t packed_heads = CheckedAdd(
+            heads, CheckedMul(2, kv,
+                              "ATTENTION_BACKWARD packed KV heads"),
+            "ATTENTION_BACKWARD packed heads");
+        const uint64_t packed = CheckedMul(
+            2, CheckedMul(
+                   tokens, CheckedMul(packed_heads, dim,
+                                      "ATTENTION_BACKWARD width"),
+                   "ATTENTION_BACKWARD packed"),
+            "ATTENTION_BACKWARD packed bytes");
+        const uint64_t upstream = CheckedMul(
+            2, CheckedMul(
+                   tokens, CheckedMul(heads, dim,
+                                      "ATTENTION_BACKWARD upstream width"),
+                   "ATTENTION_BACKWARD upstream"),
+            "ATTENTION_BACKWARD upstream bytes");
+        spans = {
+            ValidateGradientSramSpan(o.input, packed,
+                                     "ATTENTION_BACKWARD forward"),
+            ValidateGradientSramSpan(o.data, upstream,
+                                     "ATTENTION_BACKWARD upstream"),
+            ValidateGradientSramSpan(o.output, packed,
+                                     "ATTENTION_BACKWARD output")};
+    } else if (opcode == Opcode::ROPE_BACKWARD_TIMING) {
+        const auto logical_tokens = o.parameters[0];
+        const auto rank_tokens = o.parameters[1];
+        const auto logical_q = o.parameters[2];
+        const auto logical_kv = o.parameters[3];
+        const auto rank_q = o.parameters[4];
+        const auto rank_kv = o.parameters[5];
+        const auto tp = o.parameters[6];
+        const auto dim = o.parameters[7];
+        const auto rotary = o.parameters[8];
+        const auto maxpos = o.parameters[9];
+        const auto tag = o.parameters[10];
+        Require(logical_tokens && rank_tokens && logical_q && logical_kv &&
+                    rank_q && rank_kv && tp && dim && rotary && maxpos && tag &&
+                    logical_tokens == rank_tokens &&
+                    logical_q == CheckedMul(rank_q, tp,
+                                            "ROPE_BACKWARD query TP") &&
+                    logical_kv == CheckedMul(rank_kv, tp,
+                                             "ROPE_BACKWARD KV TP") &&
+                    rank_q >= rank_kv && rank_q % rank_kv == 0 &&
+                    dim == rotary && dim % 2 == 0 &&
+                    rank_tokens <= maxpos,
+                "ROPE_BACKWARD parameters are invalid");
+        const uint64_t position_bytes =
+            CheckedMul(4, rank_tokens, "ROPE_BACKWARD position bytes");
+        const uint64_t packed_heads = CheckedAdd(
+            rank_q, CheckedMul(2, rank_kv,
+                               "ROPE_BACKWARD packed KV heads"),
+            "ROPE_BACKWARD packed heads");
+        const uint64_t packed = CheckedMul(
+            2, CheckedMul(
+                   rank_tokens, CheckedMul(packed_heads, dim,
+                                           "ROPE_BACKWARD width"),
+                   "ROPE_BACKWARD packed"),
+            "ROPE_BACKWARD packed bytes");
+        spans = {
+            ValidateGradientSramSpan(o.input, position_bytes,
+                                     "ROPE_BACKWARD positions"),
+            ValidateGradientSramSpan(o.data, packed,
+                                     "ROPE_BACKWARD upstream"),
+            ValidateGradientSramSpan(o.output, packed,
+                                     "ROPE_BACKWARD output")};
+        Require(tag == CanonicalPositionTraceTag(rank_tokens),
+                "ROPE_BACKWARD position trace tag differs from canonical source");
+    } else if (residual) {
+        const auto logical = o.parameters[0];
+        const auto rank = o.parameters[1];
+        const auto tp = o.parameters[2];
+        const auto hidden = o.parameters[3];
+        Require(logical && rank && tp && hidden &&
+                    logical == CheckedMul(rank, tp,
+                                          "RESIDUAL_BACKWARD row TP"),
+                "RESIDUAL_BACKWARD parameters are invalid");
+        const uint64_t bytes = CheckedMul(
+            2, CheckedMul(rank, hidden, "RESIDUAL_BACKWARD elements"),
+            "RESIDUAL_BACKWARD bytes");
+        spans = {
+            ValidateGradientSramSpan(o.input, bytes,
+                                     "RESIDUAL_BACKWARD forward witness"),
+            ValidateGradientSramSpan(o.data, bytes,
+                                     "RESIDUAL_BACKWARD upstream"),
+            ValidateGradientSramSpan(o.output, bytes,
+                                     "RESIDUAL_BACKWARD left output"),
+            ValidateGradientSramSpan(o.aux, bytes,
+                                     "RESIDUAL_BACKWARD right output")};
+    } else {
+        Require(false, "unexpected Dense backward opcode");
+    }
+
+    for (std::size_t i = 0; i < spans.size(); ++i)
+        for (std::size_t j = i + 1; j < spans.size(); ++j)
+            Require(spans[i].end <= spans[j].begin ||
+                        spans[j].end <= spans[i].begin,
+                    "Dense backward SRAM tensors overlap");
 }
 
 void ValidateGreedySample(const GreedySampleOperands &o) {
@@ -1688,6 +1870,14 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
     FixedSchema(Opcode::MOE_SCORE_WEIGHT_BACKWARD,
                 RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD,
                 kMoeScoreWeightBackwardPayloadSize),
+    FixedSchema(Opcode::RMSNORM_BACKWARD_TIMING, RecordOperandKind::DENSE_BACKWARD,
+                kDenseBackwardPayloadSize),
+    FixedSchema(Opcode::ATTENTION_BACKWARD_TIMING, RecordOperandKind::DENSE_BACKWARD,
+                kDenseBackwardPayloadSize),
+    FixedSchema(Opcode::ROPE_BACKWARD_TIMING, RecordOperandKind::DENSE_BACKWARD,
+                kDenseBackwardPayloadSize),
+    FixedSchema(Opcode::RESIDUAL_BACKWARD_TIMING, RecordOperandKind::DENSE_BACKWARD,
+                kDenseBackwardPayloadSize),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,
@@ -1793,6 +1983,10 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::GEMM_INPUT_DX:
         ValidateGemmInputDx(RequireOperands<GemmInputDxOperands>(
             record, "GEMM_DX_TIMING"));
+        return;
+    case RecordOperandKind::DENSE_BACKWARD:
+        ValidateDenseBackward(record.opcode, RequireOperands<DenseBackwardOperands>(
+            record, "Dense backward timing"));
         return;
     case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD:
         ValidateMoeScoreWeightedForward(
@@ -2060,6 +2254,22 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         EncodeAddress(payload, o.dx);
         for (const auto value : {o.m, o.n, o.k})
             AppendLittleEndian(payload, value, 4);
+        break;
+    }
+    case RecordOperandKind::DENSE_BACKWARD: {
+        const auto &o = std::get<DenseBackwardOperands>(record.operands);
+        payload.push_back(EnumByte(o.input_datatype));
+        payload.push_back(EnumByte(o.data_datatype));
+        payload.push_back(EnumByte(o.output_datatype));
+        payload.push_back(EnumByte(o.aux_datatype));
+        payload.push_back(o.has_aux ? 1 : 0);
+        payload.insert(payload.end(), 3, 0);
+        for (const auto &address : {o.input, o.data, o.output, o.aux})
+            EncodeAddress(payload, address);
+        AppendLittleEndian(payload, o.parameter_count, 4);
+        AppendLittleEndian(payload, 0, 4);
+        for (uint64_t value : o.parameters)
+            AppendLittleEndian(payload, value, 8);
         break;
     }
     case RecordOperandKind::GREEDY_SAMPLE: {
@@ -2606,6 +2816,27 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         o.m = ReadLittleEndian(payload, 76, 4, "M");
         o.n = ReadLittleEndian(payload, 80, 4, "N");
         o.k = ReadLittleEndian(payload, 84, 4, "K");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::DENSE_BACKWARD: {
+        DenseBackwardOperands o;
+        o.input_datatype = DecodeEnum<ExternalDataType>(payload, 0, "input_datatype");
+        o.data_datatype = DecodeEnum<ExternalDataType>(payload, 1, "data_datatype");
+        o.output_datatype = DecodeEnum<ExternalDataType>(payload, 2, "output_datatype");
+        o.aux_datatype = DecodeEnum<ExternalDataType>(payload, 3, "aux_datatype");
+        Require(payload[4] <= 1 && payload[5] == 0 && payload[6] == 0 && payload[7] == 0,
+                "Dense backward aux/reserved header is noncanonical");
+        o.has_aux = payload[4] != 0;
+        o.input = DecodeAddress(payload, 8, "Dense backward input");
+        o.data = DecodeAddress(payload, 32, "Dense backward data");
+        o.output = DecodeAddress(payload, 56, "Dense backward output");
+        o.aux = DecodeAddress(payload, 80, "Dense backward aux");
+        o.parameter_count = ReadLittleEndian(payload, 104, 4, "parameter_count");
+        Require(ReadLittleEndian(payload, 108, 4, "reserved") == 0,
+                "Dense backward reserved word must be zero");
+        for (std::size_t i = 0; i < o.parameters.size(); ++i)
+            o.parameters[i] = ReadLittleEndian(payload, 112 + i * 8, 8, "parameter");
         record.operands = std::move(o);
         break;
     }

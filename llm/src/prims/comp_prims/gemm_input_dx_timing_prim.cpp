@@ -39,10 +39,10 @@ GemmInputDxTimingWork BuildGemmInputDxPhysicalWork(
     const uint64_t kn = CheckedMul(tile.k, tile.n, "GEMM dX KxN");
     const uint64_t wbytes = CheckedMul(2, mn, "GEMM dX source W bytes");
     const uint64_t dybytes = CheckedMul(2, kn, "GEMM dX dY bytes");
-    const uint64_t dxbytes = CheckedMul(4, km, "GEMM dX output bytes");
+    const uint64_t dxbytes = CheckedMul(2, km, "GEMM dX output bytes");
     CheckSpan(tile.weight, wbytes, GemmInputDxDType::FP16, "GEMM dX W");
     CheckSpan(tile.upstream, dybytes, GemmInputDxDType::FP16, "GEMM dX dY");
-    CheckSpan(tile.output, dxbytes, GemmInputDxDType::FP32, "GEMM dX dX");
+    CheckSpan(tile.output, dxbytes, GemmInputDxDType::FP16, "GEMM dX dX");
     if (Overlap(tile.weight, tile.upstream) ||
         Overlap(tile.weight, tile.output) ||
         Overlap(tile.upstream, tile.output))
@@ -51,10 +51,10 @@ GemmInputDxTimingWork BuildGemmInputDxPhysicalWork(
     work.tile = tile;
     work.fp16_weight_read_bytes = wbytes;
     work.fp16_upstream_read_bytes = dybytes;
-    work.fp32_dx_read_modify_write_bytes = CheckedMul(2, dxbytes, "GEMM dX FP32 RMW");
+    work.fp16_dx_write_bytes = dxbytes;
     work.fma_ops = CheckedMul(tile.k, mn, "GEMM dX FMA");
     work.exu_flops = CheckedMul(2, work.fma_ops, "GEMM dX EXU");
-    work.fp32_output_vec_ops = km;
+    work.fp16_output_vec_ops = km;
     return work;
 }
 
@@ -69,7 +69,7 @@ GemmInputDxTimingWork BuildGemmInputDxTimingWork(
     if (source.activation_dtype != GemmInputDxDType::FP16 ||
         source.activation_rows != tile.k ||
         source.activation_hidden != tile.m ||
-        source.activation_bytes != CheckedMul(2, work.fp32_output_vec_ops,
+        source.activation_bytes != CheckedMul(2, work.fp16_output_vec_ops,
                                               "GEMM dX source X bytes") ||
         source.state_weight_dtype != GemmInputDxDType::FP16 ||
         source.state_weight_hidden != tile.m ||

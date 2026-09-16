@@ -205,6 +205,13 @@ bool ValidRelocationOperand(const ExternalRecord &record,
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
     }
+    if (std::holds_alternative<DenseBackwardOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS ||
+               (record.opcode == Opcode::RESIDUAL_BACKWARD_TIMING &&
+                id == SemanticOperandId::COMPUTE_AUX_ADDRESS);
+    }
     if (std::holds_alternative<NormGammaWGradOperands>(record.operands)) {
         return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
                id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
@@ -412,6 +419,36 @@ void ValidateRecordReferences(const ExternalRecord &record,
                                            buffers[i].second);
         }
     } else if (const auto *o =
+                   std::get_if<DenseBackwardOperands>(&record.operands)) {
+        uint64_t input_bytes = 0, data_bytes = 0, output_bytes = 0;
+        if (record.opcode == Opcode::RMSNORM_BACKWARD_TIMING) {
+            input_bytes = data_bytes = output_bytes =
+                2 * o->parameters[0] * o->parameters[1];
+        } else if (record.opcode == Opcode::ATTENTION_BACKWARD_TIMING) {
+            input_bytes = output_bytes = 2 * o->parameters[0] *
+                (o->parameters[1] + 2 * o->parameters[2]) * o->parameters[3];
+            data_bytes = 2 * o->parameters[0] * o->parameters[1] * o->parameters[3];
+        } else if (record.opcode == Opcode::ROPE_BACKWARD_TIMING) {
+            input_bytes = 4 * o->parameters[1];
+            data_bytes = output_bytes = 2 * o->parameters[1] *
+                (o->parameters[4] + 2 * o->parameters[5]) * o->parameters[7];
+        } else {
+            input_bytes = data_bytes = output_bytes =
+                2 * o->parameters[1] * o->parameters[3];
+        }
+        std::vector<std::pair<const SramAddressOperand *, uint64_t>> buffers{
+            {&o->input, input_bytes}, {&o->data, data_bytes},
+            {&o->output, output_bytes}};
+        if (o->has_aux) buffers.push_back({&o->aux, output_bytes});
+        for (std::size_t i = 0; i < buffers.size(); ++i) {
+            const std::string field = where + " Dense backward buffer " +
+                                      std::to_string(i);
+            ValidateAddressReference(*buffers[i].first, artifact, field,
+                                     buffers[i].second);
+            ValidateAbsoluteSramRegionSpan(*buffers[i].first, artifact, field,
+                                           buffers[i].second);
+        }
+    } else if (const auto *o =
                    std::get_if<NormGammaWGradOperands>(&record.operands)) {
         const uint64_t source_bytes = 2 * o->rank_rows * o->hidden_size;
         const uint64_t gradient_bytes = 4 * o->hidden_size;
@@ -472,7 +509,7 @@ void ValidateRecordReferences(const ExternalRecord &record,
         const std::array<std::pair<const SramAddressOperand *, uint64_t>, 3>
             buffers{{{&o->weight, 2 * o->m * o->n},
                      {&o->upstream, 2 * o->k * o->n},
-                     {&o->dx, 4 * o->k * o->m}}};
+                     {&o->dx, 2 * o->k * o->m}}};
         for (std::size_t i = 0; i < buffers.size(); ++i) {
             const std::string field = where + " GEMM dX buffer " +
                                       std::to_string(i);

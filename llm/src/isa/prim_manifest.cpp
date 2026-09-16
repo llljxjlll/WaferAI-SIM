@@ -176,6 +176,12 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
     {PrimId::MOE_SCORE_WEIGHT_BACKWARD,
      "moe_score_weight_backward", C::COMPUTE, V::INTERNAL,
      L::STABLE, S::AVAILABLE},
+    {PrimId::ROPE_BACKWARD_TIMING,
+     "rope_backward_timing", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
+    {PrimId::RESIDUAL_BACKWARD_TIMING,
+     "residual_backward_timing", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

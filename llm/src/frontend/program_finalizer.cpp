@@ -363,6 +363,10 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x26:
     case 0x27:
     case 0x28:
+    case 0x29:
+    case 0x2a:
+    case 0x2b:
+    case 0x2c:
     case 0x40:
     case 0x41:
     case 0x43:
@@ -1728,6 +1732,61 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
             return CheckedMultiply(2,CheckedMultiply(rows,hidden,path),path);
         Fail(path,"MoE router address has no independent typed BufferABI extent");
     }
+    case Opcode::RMSNORM_BACKWARD_TIMING: {
+        const uint64_t rows = LiteralU64(record.operands[6], path);
+        const uint64_t hidden = LiteralU64(record.operands[7], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return CheckedMultiply(
+                2, CheckedMultiply(rows, hidden, path), path);
+        Fail(path, "RMSNORM_BACKWARD_TIMING has no such payload operand");
+    }
+    case Opcode::ATTENTION_BACKWARD_TIMING: {
+        const uint64_t tokens = LiteralU64(record.operands[6], path);
+        const uint64_t heads = LiteralU64(record.operands[7], path);
+        const uint64_t kv_heads = LiteralU64(record.operands[8], path);
+        const uint64_t head_dim = LiteralU64(record.operands[9], path);
+        uint64_t packed_heads = heads;
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            packed_heads = CheckedAdd(
+                heads, CheckedMultiply(2, kv_heads, path), path);
+        else if (operand_id != SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            Fail(path,
+                 "ATTENTION_BACKWARD_TIMING has no such payload operand");
+        return CheckedMultiply(
+            2, CheckedMultiply(tokens,
+                CheckedMultiply(packed_heads, head_dim, path), path), path);
+    }
+    case Opcode::ROPE_BACKWARD_TIMING: {
+        const uint64_t rank_tokens = LiteralU64(record.operands[7], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            return CheckedMultiply(4, rank_tokens, path);
+        if (operand_id != SemanticOperandId::COMPUTE_DATA_ADDRESS &&
+            operand_id != SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            Fail(path, "ROPE_BACKWARD_TIMING has no such payload operand");
+        const uint64_t packed_heads = CheckedAdd(
+            LiteralU64(record.operands[10], path),
+            CheckedMultiply(2, LiteralU64(record.operands[11], path), path),
+            path);
+        return CheckedMultiply(
+            2, CheckedMultiply(rank_tokens,
+                CheckedMultiply(
+                    packed_heads, LiteralU64(record.operands[13], path), path),
+                path), path);
+    }
+    case Opcode::RESIDUAL_BACKWARD_TIMING: {
+        const uint64_t rank_rows = LiteralU64(record.operands[9], path);
+        const uint64_t hidden = LiteralU64(record.operands[11], path);
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_AUX_ADDRESS)
+            return CheckedMultiply(
+                2, CheckedMultiply(rank_rows, hidden, path), path);
+        Fail(path, "RESIDUAL_BACKWARD_TIMING has no such payload operand");
+    }
     case Opcode::GEMM_DX_TIMING: {
         const uint64_t m = LiteralU64(record.operands[6], path);
         const uint64_t n = LiteralU64(record.operands[7], path);
@@ -1737,7 +1796,7 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
         if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS)
             return CheckedMultiply(2, CheckedMultiply(k, n, path), path);
         if (operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
-            return CheckedMultiply(4, CheckedMultiply(k, m, path), path);
+            return CheckedMultiply(2, CheckedMultiply(k, m, path), path);
         Fail(path, "GEMM_DX_TIMING has no such payload operand");
     }
     case Opcode::GREEDY_SAMPLE: {
@@ -1869,9 +1928,21 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
         return std::nullopt;
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
     case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
-    case Opcode::GEMM_DX_TIMING:
         return operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS
                    ? BufferDTypeDto::FP32 : BufferDTypeDto::FP16;
+    case Opcode::GEMM_DX_TIMING:
+        return BufferDTypeDto::FP16;
+    case Opcode::RMSNORM_BACKWARD_TIMING:
+    case Opcode::ATTENTION_BACKWARD_TIMING:
+    case Opcode::RESIDUAL_BACKWARD_TIMING:
+        return BufferDTypeDto::FP16;
+    case Opcode::ROPE_BACKWARD_TIMING:
+        if (operand_id == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            return BufferDTypeDto::INT32;
+        if (operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            return BufferDTypeDto::FP16;
+        return std::nullopt;
     case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
     case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
         return operand_id == SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS
@@ -2562,6 +2633,90 @@ ExternalRecord FinalizeRecord(
         operands.m = LiteralU64(record.operands[6], path);
         operands.n = LiteralU64(record.operands[7], path);
         operands.k = LiteralU64(record.operands[8], path);
+        result.operands = std::move(operands);
+    } else if (record.opcode == Opcode::RMSNORM_BACKWARD_TIMING ||
+               record.opcode == Opcode::ATTENTION_BACKWARD_TIMING ||
+               record.opcode == Opcode::ROPE_BACKWARD_TIMING ||
+               record.opcode == Opcode::RESIDUAL_BACKWARD_TIMING) {
+        const bool residual =
+            record.opcode == Opcode::RESIDUAL_BACKWARD_TIMING;
+        const std::vector<std::string_view> names =
+            record.opcode == Opcode::RMSNORM_BACKWARD_TIMING
+                ? std::vector<std::string_view>{
+                      "input_datatype", "upstream_datatype",
+                      "output_datatype", "input_address",
+                      "upstream_address", "output_address", "rows",
+                      "hidden_size", "tp_degree", "mode"}
+            : record.opcode == Opcode::ATTENTION_BACKWARD_TIMING
+                ? std::vector<std::string_view>{
+                      "input_datatype", "upstream_datatype",
+                      "output_datatype", "input_address",
+                      "upstream_address", "output_address", "tokens",
+                      "rank_heads", "rank_kv_heads", "head_dim",
+                      "tp_degree", "sequences", "pairs"}
+            : record.opcode == Opcode::ROPE_BACKWARD_TIMING
+                ? std::vector<std::string_view>{
+                      "position_datatype", "upstream_datatype",
+                      "output_datatype", "position_address",
+                      "upstream_address", "output_address",
+                      "logical_tokens", "rank_tokens",
+                      "logical_query_heads", "logical_kv_heads",
+                      "rank_query_heads", "rank_kv_heads", "tp_degree",
+                      "head_dim", "rotary_dim",
+                      "max_position_embeddings", "position_trace_tag"}
+                : std::vector<std::string_view>{
+                      "forward_datatype", "upstream_datatype",
+                      "left_output_datatype", "right_output_datatype",
+                      "forward_address", "upstream_address",
+                      "left_output_address", "right_output_address",
+                      "logical_rows", "rank_rows", "tp_degree",
+                      "hidden_size"};
+        if (record.operands.size() != names.size())
+            Fail(path + ".operands",
+                 "Dense backward record arity differs from opcode contract");
+        const std::size_t address_first = residual ? 4 : 3;
+        const std::size_t address_count = residual ? 4 : 3;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (i >= address_first && i < address_first + address_count)
+                continue;
+            RequireLiteral(record.operands[i], names[i],
+                           path + ".operands[" + std::to_string(i) + "]");
+        }
+        const std::array<SemanticOperandId, 4> ids{{
+            SemanticOperandId::COMPUTE_INPUT_ADDRESS,
+            SemanticOperandId::COMPUTE_DATA_ADDRESS,
+            SemanticOperandId::COMPUTE_OUTPUT_ADDRESS,
+            SemanticOperandId::COMPUTE_AUX_ADDRESS}};
+        for (std::size_t i = 0; i < address_count; ++i)
+            RequireAddress(
+                record.operands[address_first + i],
+                names[address_first + i], ids[i],
+                path + ".operands[" +
+                    std::to_string(address_first + i) + "]");
+
+        DenseBackwardOperands operands;
+        operands.input_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[0], path);
+        operands.data_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[1], path);
+        operands.output_datatype = LiteralEnum<ExternalDataType>(
+            record.operands[2], path);
+        operands.has_aux = residual;
+        operands.input = absolute_address(ids[0]);
+        operands.data = absolute_address(ids[1]);
+        operands.output = absolute_address(ids[2]);
+        if (residual) {
+            operands.aux_datatype = LiteralEnum<ExternalDataType>(
+                record.operands[3], path);
+            operands.aux = absolute_address(ids[3]);
+        }
+        const std::size_t parameter_first =
+            address_first + address_count;
+        operands.parameter_count =
+            record.operands.size() - parameter_first;
+        for (std::size_t i = 0; i < operands.parameter_count; ++i)
+            operands.parameters[i] = LiteralU64(
+                record.operands[parameter_first + i], path);
         result.operands = std::move(operands);
     } else if (record.opcode == Opcode::GREEDY_SAMPLE) {
         if (record.operands.size() != 11)
@@ -3545,6 +3700,10 @@ std::set<std::string> ValidateActionSequence(
                    opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
                    opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
                    opcode == Opcode::GEMM_DX_TIMING ||
+                   opcode == Opcode::RMSNORM_BACKWARD_TIMING ||
+                   opcode == Opcode::ATTENTION_BACKWARD_TIMING ||
+                   opcode == Opcode::ROPE_BACKWARD_TIMING ||
+                   opcode == Opcode::RESIDUAL_BACKWARD_TIMING ||
                    opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD ||
                    opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD ||
                    opcode == Opcode::GREEDY_SAMPLE ||
@@ -3585,6 +3744,10 @@ std::set<std::string> ValidateActionSequence(
                  compute_opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
                  compute_opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
                  compute_opcode == Opcode::GEMM_DX_TIMING ||
+                 compute_opcode == Opcode::RMSNORM_BACKWARD_TIMING ||
+                 compute_opcode == Opcode::ATTENTION_BACKWARD_TIMING ||
+                 compute_opcode == Opcode::ROPE_BACKWARD_TIMING ||
+                 compute_opcode == Opcode::RESIDUAL_BACKWARD_TIMING ||
                  compute_opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                  compute_opcode == Opcode::SGD_UPDATE) ? 2 : 1;
             if (records[cursor]->operands.empty() ||
@@ -3830,6 +3993,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         const bool public_moe_router_fragment =
             manifest.producer_pass ==
             "public_moe_signed_router_scoped_fragment";
+        const bool public_dense_backward_fragment =
+            manifest.producer_pass ==
+            "public_dense_backward_scoped_fragment";
         const Opcode public_wgrad_expected_opcode =
             manifest.producer_pass == "public_gemm_wgrad_allocated_fragment"
                 ? Opcode::GEMM_WEIGHT_WGRAD_TIMING
@@ -8056,7 +8222,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             const std::set<std::string> moe_terminal_labels = [&]() {
                 std::set<std::string> result;
                 if (!moe_swizzle_link && !moe_calibration_link &&
-                    !public_wgrad_fragment && !public_moe_router_fragment)
+                    !public_wgrad_fragment && !public_moe_router_fragment &&
+                    !public_dense_backward_fragment)
                     return result;
                 std::set<std::string> terminal_storage_ids;
                 for (const auto &entry : known_buffer_abi) {
@@ -8065,11 +8232,18 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         abi.ownership == BufferOwnershipDto::OWNED &&
                         ((public_wgrad_fragment &&
                           abi.binding_id == "abs_output" &&
-                          abi.dtype == BufferDTypeDto::FP32) ||
+                          abi.dtype ==
+                              (public_wgrad_expected_opcode ==
+                                       Opcode::GEMM_DX_TIMING
+                                   ? BufferDTypeDto::FP16
+                                   : BufferDTypeDto::FP32)) ||
                          (public_moe_router_fragment &&
                           (abi.binding_id == "abs_combined" ||
                            abi.binding_id == "abs_dscore" ||
                            abi.binding_id == "abs_dexpert") &&
+                          abi.dtype == BufferDTypeDto::FP16) ||
+                         (public_dense_backward_fragment &&
+                          abi.ownership == BufferOwnershipDto::OWNED &&
                           abi.dtype == BufferDTypeDto::FP16) ||
                          (moe_swizzle_link &&
                           (abi.layout ==
@@ -8189,7 +8363,23 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         ++gradient_records;
                 if (gradient_records != 1 || moe_terminal_labels.size() != 1)
                     Fail("linked_program_manifest.core_streams",
-                         "public WGRAD fragment requires one exact typed gradient record and one owned FP32 terminal root");
+                         "public gradient fragment requires one exact typed record and one owned typed terminal root");
+            }
+            if (public_dense_backward_fragment) {
+                std::map<Opcode, std::size_t> dense_records;
+                for (const RelocatableRecordDto *record : source_records)
+                    if (record->opcode == Opcode::RMSNORM_BACKWARD_TIMING ||
+                        record->opcode == Opcode::ATTENTION_BACKWARD_TIMING ||
+                        record->opcode == Opcode::ROPE_BACKWARD_TIMING ||
+                        record->opcode == Opcode::RESIDUAL_BACKWARD_TIMING)
+                        ++dense_records[record->opcode];
+                if (dense_records.size() != 4 ||
+                    std::any_of(
+                        dense_records.begin(), dense_records.end(),
+                        [](const auto &entry) { return entry.second != 1; }) ||
+                    moe_terminal_labels.size() != 5)
+                    Fail("linked_program_manifest.core_streams",
+                         "scoped Dense backward requires exact 0x29-0x2C records and five FP16 terminal roots");
             }
             if (public_moe_router_fragment) {
                 std::size_t forward_records = 0;
@@ -8208,7 +8398,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             const std::set<std::string> terminal_tape_labels =
                 [&]() {
                     if (moe_swizzle_link || moe_calibration_link ||
-                        public_wgrad_fragment || public_moe_router_fragment)
+                        public_wgrad_fragment || public_moe_router_fragment ||
+                        public_dense_backward_fragment)
                         for (const RelocatableRecordDto *record :
                              source_records) {
                             if (record->opcode != Opcode::SRAM_ALLOC_AT)
@@ -8220,7 +8411,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                 "linked_program_manifest.core_streams.record.lifetime");
                             const uint64_t expected_lifetime =
                                 (public_wgrad_fragment ||
-                                 public_moe_router_fragment) ? 0 :
+                                 public_moe_router_fragment ||
+                                 public_dense_backward_fragment) ? 0 :
                                 moe_terminal_labels.count(label) == 1 ? 2 : 0;
                             if (lifetime != expected_lifetime)
                                 Fail("linked_program_manifest.core_streams",
@@ -8277,6 +8469,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 if (promoted != 1)
                     Fail("linked_program_manifest.core_streams",
                          "public WGRAD physical terminal promotion lost FP32 root");
+            }
+            if (public_dense_backward_fragment) {
+                std::size_t promoted = 0;
+                for (std::size_t index = 0; index < source_records.size();
+                     ++index) {
+                    if (source_records[index]->opcode != Opcode::SRAM_ALLOC_AT)
+                        continue;
+                    const std::string label = AddressSymbolRef(
+                        *source_records[index],
+                        SemanticOperandId::LABEL_SYMBOL);
+                    if (moe_terminal_labels.count(label) == 0)
+                        continue;
+                    auto &operands = std::get<SramAllocAtOperands>(
+                        core.records[index].operands);
+                    if (operands.lifetime != SramLifetime::TASK)
+                        Fail("linked_program_manifest.core_streams",
+                             "scoped Dense backward terminal source must lower from TASK");
+                    operands.lifetime = SramLifetime::PERSISTENT;
+                    ++promoted;
+                }
+                if (promoted != 5)
+                    Fail("linked_program_manifest.core_streams",
+                         "scoped Dense backward terminal promotion lost a physical output");
             }
             if (public_moe_router_fragment) {
                 std::size_t promoted = 0;

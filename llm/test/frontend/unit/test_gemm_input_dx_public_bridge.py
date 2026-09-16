@@ -1,4 +1,4 @@
-"""Public 0x26 maps source W/dY to independent FP32 dX fixed record."""
+"""Public 0x26 maps source W/dY to independent FP16 dX fixed record."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from llm.frontend.wafer_frontend.schema.ir0 import (
 
 
 class GemmInputDxPublicBridgeTest(unittest.TestCase):
-    def test_named_record_preserves_real_weight_upstream_and_fp32_output(self) -> None:
+    def test_named_record_preserves_real_weight_upstream_and_fp16_output(self) -> None:
         workload = GemmInputDxWorkload(4, 8, 16, "T0.layer0.gate_up", "weight.state0")
         reads, writes = canonical_compute_operand_roles(
             OpKind.GEMM_INPUT_DX, workload, tiled=False,
@@ -58,8 +58,8 @@ class GemmInputDxPublicBridgeTest(unittest.TestCase):
                           SemanticOperandId.COMPUTE_DATA_ADDRESS,
                           SemanticOperandId.COMPUTE_OUTPUT_ADDRESS))
         self.assertEqual((workload.weight_bytes, workload.upstream_bytes,
-                          workload.output_bytes), (256, 128, 128))
-        for name, value in (("dx_datatype", 1), ("k", 0), ("n", 10000)):
+                          workload.output_bytes), (256, 128, 64))
+        for name, value in (("dx_datatype", 3), ("k", 0), ("n", 10000)):
             operands = list(record.operands)
             index = next(i for i, item in enumerate(operands) if item.name == name)
             operands[index] = RecordOperand.literal(name, value)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "prims/base.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -78,3 +80,25 @@ struct ResidualDualDxTimingWork {
 ResidualDualDxTimingWork BuildResidualDualDxTimingWork(
     const ResidualDualDxSourceWitness &source,
     const ResidualDualDxPhysicalTile &tile);
+
+class rope_backward_timing final : public NpuBase {
+public:
+    rope_backward_timing();
+    void initialize() override;
+    void taskCore(TaskCoreContext &, string, u_int64_t &, u_int64_t &,
+                  u_int64_t &, u_int64_t &) override;
+    vector<sc_bv<128>> serialize() override;
+    void deserialize(vector<sc_bv<128>>) override;
+    RopeQkBackwardTimingWork work() const;
+};
+
+class residual_backward_timing final : public NpuBase {
+public:
+    residual_backward_timing();
+    void initialize() override;
+    void taskCore(TaskCoreContext &, string, u_int64_t &, u_int64_t &,
+                  u_int64_t &, u_int64_t &) override;
+    vector<sc_bv<128>> serialize() override;
+    void deserialize(vector<sc_bv<128>>) override;
+    ResidualDualDxTimingWork work() const;
+};

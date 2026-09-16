@@ -262,6 +262,34 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::DENSE_BACKWARD: {
+        DenseBackwardOperands operands;
+        operands.input = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.data = {SramAddressKind::ABSOLUTE, 128, 0, 0};
+        operands.output = {SramAddressKind::ABSOLUTE, 256, 0, 0};
+        if (schema.opcode == Opcode::RMSNORM_BACKWARD_TIMING) {
+            operands.parameter_count = 4;
+            operands.parameters = {2, 4, 1, 0};
+        } else if (schema.opcode == Opcode::ATTENTION_BACKWARD_TIMING) {
+            operands.parameter_count = 7;
+            operands.parameters = {2, 2, 1, 2, 1, 1, 3};
+        } else if (schema.opcode == Opcode::ROPE_BACKWARD_TIMING) {
+            operands.input_datatype = ExternalDataType::INT32;
+            operands.parameter_count = 11;
+            operands.parameters =
+                {2, 2, 2, 1, 2, 1, 1, 2, 2, 8, 300186932};
+        } else if (schema.opcode == Opcode::RESIDUAL_BACKWARD_TIMING) {
+            operands.has_aux = true;
+            operands.aux =
+                {SramAddressKind::ABSOLUTE, 384, 0, 0};
+            operands.parameter_count = 4;
+            operands.parameters = {2, 2, 1, 4};
+        } else {
+            throw std::logic_error("unexpected Dense backward schema");
+        }
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD: {
         MoeScoreWeightedForwardOperands operands;
         operands.route = {SramAddressKind::ABSOLUTE, 0, 0, 0};
@@ -705,7 +733,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 59, "executable opcode count");
+    checks.Check(executable_count == 63, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {
@@ -1894,20 +1922,20 @@ void CheckExactStage2Rejections(Checks &checks) {
     record = MakeRecord(*LookupRecordSchema(Opcode::GEMM_DX_TIMING),
                         Boundary::TYPICAL);
     auto &dx = std::get<GemmInputDxOperands>(record.operands);
-    checks.Accept("GEMM_INPUT_DX exact FP32 public wire", [&] {
+    checks.Accept("GEMM_INPUT_DX exact FP16 public wire", [&] {
         const auto bytes = EncodeExternalRecord(record);
         const auto decoded = DecodeExternalRecordExact(bytes);
         const auto &out = std::get<GemmInputDxOperands>(decoded.operands);
         checks.Check(out.m == 8 && out.n == 16 && out.k == 4 &&
-                         out.dx_datatype == ExternalDataType::FP32 &&
+                         out.dx_datatype == ExternalDataType::FP16 &&
                          EncodeExternalRecord(decoded) == bytes,
-                     "GEMM_INPUT_DX rank rows/FP32 physical roundtrip");
-    });
-    dx.dx_datatype = ExternalDataType::FP16;
-    checks.Reject("GEMM_INPUT_DX rejects FP16-sized output", [&] {
-        EncodeExternalRecord(record);
+                     "GEMM_INPUT_DX rank rows/FP16 physical roundtrip");
     });
     dx.dx_datatype = ExternalDataType::FP32;
+    checks.Reject("GEMM_INPUT_DX rejects legacy FP32 output ABI", [&] {
+        EncodeExternalRecord(record);
+    });
+    dx.dx_datatype = ExternalDataType::FP16;
     dx.k = 0;
     checks.Reject("GEMM_INPUT_DX rejects zero K", [&] {
         EncodeExternalRecord(record);
@@ -1924,6 +1952,99 @@ void CheckExactStage2Rejections(Checks &checks) {
         checks.Reject("GEMM_INPUT_DX rejects reserved wire mode", [&] {
             DecodeExternalRecordExact(bytes);
         });
+    });
+
+    for (Opcode opcode : {
+             Opcode::RMSNORM_BACKWARD_TIMING,
+             Opcode::ATTENTION_BACKWARD_TIMING,
+             Opcode::ROPE_BACKWARD_TIMING,
+             Opcode::RESIDUAL_BACKWARD_TIMING}) {
+        record = MakeRecord(*LookupRecordSchema(opcode), Boundary::TYPICAL);
+        checks.Accept(std::string(LookupOpcode(opcode)->canonical_name) + " exact public wire",
+                      [&] {
+            const auto bytes = EncodeExternalRecord(record);
+            const auto decoded = DecodeExternalRecordExact(bytes);
+            const auto &out =
+                std::get<DenseBackwardOperands>(decoded.operands);
+            checks.Check(
+                out.has_aux ==
+                    (opcode == Opcode::RESIDUAL_BACKWARD_TIMING) &&
+                    EncodeExternalRecord(decoded) == bytes,
+                std::string(LookupOpcode(opcode)->canonical_name) +
+                    " typed addresses roundtrip");
+            if (opcode == Opcode::RESIDUAL_BACKWARD_TIMING)
+                checks.Check(
+                    out.input.absolute_address_bytes == 0 &&
+                        out.data.absolute_address_bytes == 128 &&
+                        out.output.absolute_address_bytes == 256 &&
+                        out.aux.absolute_address_bytes == 384,
+                    "RESIDUAL_BACKWARD preserves forward/upstream/dual outputs");
+        });
+    }
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::RMSNORM_BACKWARD_TIMING),
+        Boundary::TYPICAL);
+    auto &rms = std::get<DenseBackwardOperands>(record.operands);
+    --rms.parameter_count;
+    checks.Reject("Dense backward rejects missing parameter", [&] {
+        EncodeExternalRecord(record);
+    });
+    rms.parameter_count = 4;
+    rms.data_datatype = ExternalDataType::FP32;
+    checks.Reject("Dense backward rejects wrong dtype", [&] {
+        EncodeExternalRecord(record);
+    });
+    rms.data_datatype = ExternalDataType::FP16;
+    rms.parameters[1] = 8;
+    rms.output.absolute_address_bytes = 65520;
+    checks.Reject("Dense backward rejects short physical extent", [&] {
+        EncodeExternalRecord(record);
+    });
+    rms.output.absolute_address_bytes = rms.data.absolute_address_bytes;
+    checks.Reject("Dense backward rejects overlapping tensors", [&] {
+        EncodeExternalRecord(record);
+    });
+    rms.output.absolute_address_bytes = 256;
+    rms.aux = {SramAddressKind::ABSOLUTE, 512, 0, 0};
+    checks.Reject("Dense backward rejects noncanonical unused aux", [&] {
+        EncodeExternalRecord(record);
+    });
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::ATTENTION_BACKWARD_TIMING),
+        Boundary::TYPICAL);
+    auto &attention_backward =
+        std::get<DenseBackwardOperands>(record.operands);
+    attention_backward.parameters = {
+        kExternalNpuParameterMax - 1,
+        kExternalNpuParameterMax - 1,
+        1,
+        kExternalNpuParameterMax - 1,
+        1,
+        kExternalNpuParameterMax - 1,
+        kExternalNpuParameterMax - 1};
+    checks.Reject("Dense backward rejects derived extent overflow", [&] {
+        EncodeExternalRecord(record);
+    });
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::ROPE_BACKWARD_TIMING),
+        Boundary::TYPICAL);
+    auto &rope_backward = std::get<DenseBackwardOperands>(record.operands);
+    ++rope_backward.parameters[10];
+    checks.Reject("ROPE_BACKWARD rejects wrong source trace tag", [&] {
+        EncodeExternalRecord(record);
+    });
+
+    record = MakeRecord(
+        *LookupRecordSchema(Opcode::RESIDUAL_BACKWARD_TIMING),
+        Boundary::TYPICAL);
+    auto &residual_backward =
+        std::get<DenseBackwardOperands>(record.operands);
+    residual_backward.aux = residual_backward.output;
+    checks.Reject("RESIDUAL_BACKWARD rejects aliased dual outputs", [&] {
+        EncodeExternalRecord(record);
     });
 }
 

@@ -1,7 +1,7 @@
 """NEW-only rank-local GEMM input dX source/timing profile.
 
 Forward X[K,M] × W[M,N] → Y[K,N] proves geometry. The derivative reads
-FP16 W[M,N] and FP16 dY[K,N] and reserves FP32 dX[K,M]. X is a source/tape
+FP16 W[M,N] and FP16 dY[K,N] and reserves FP16 dX[K,M]. X is a source/tape
 witness, not a fabricated third operand read by the derivative primitive.
 """
 
@@ -26,7 +26,7 @@ class GemmInputDxWorkload:
     activation_dtype: DType = DType.FP16
     weight_dtype: DType = DType.FP16
     upstream_dtype: DType = DType.FP16
-    output_dtype: DType = DType.FP32
+    output_dtype: DType = DType.FP16
 
     def validate(self, path: str = "gemm_input_dx_workload") -> None:
         if (any(type(value) is not int or not 1 <= value <= _MAX_PROFILE
@@ -38,8 +38,8 @@ class GemmInputDxWorkload:
         if (self.activation_dtype is not DType.FP16
                 or self.weight_dtype is not DType.FP16
                 or self.upstream_dtype is not DType.FP16
-                or self.output_dtype is not DType.FP32):
-            raise SchemaError("GEMM dX requires source FP16 X/W/dY and FP32 dX", path=path)
+                or self.output_dtype is not DType.FP16):
+            raise SchemaError("GEMM dX requires source FP16 X/W/dY/dX", path=path)
         if max(self.weight_bytes, self.upstream_bytes,
                self.output_bytes) > _MAX_SRAM_SPAN:
             raise SchemaError("one GEMM dX tile exceeds 16-bit physical SRAM", path=path)
@@ -58,7 +58,7 @@ class GemmInputDxWorkload:
 
     @property
     def output_bytes(self) -> int:
-        return 4 * self.k * self.m
+        return 2 * self.k * self.m
 
     @property
     def fma_ops(self) -> int:

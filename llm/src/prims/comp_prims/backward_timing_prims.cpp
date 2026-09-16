@@ -3,6 +3,7 @@
 #include "utils/prim_utils.h"
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -130,7 +131,8 @@ BackwardTimingWork norm_backward_timing::work() const {
 
 void norm_backward_timing::initialize() {
     const auto profile = work();
-    data_size_input = {static_cast<int>(profile.forward_input_bytes / 2)};
+    data_size_input = {static_cast<int>(profile.forward_input_bytes / 2),
+                       static_cast<int>(profile.upstream_bytes / 2)};
     data_chunk = {{"upstream", static_cast<int>(profile.upstream_bytes / 2)},
                   {"output", static_cast<int>(profile.output_bytes / 2)}};
 }
@@ -142,6 +144,13 @@ void norm_backward_timing::taskCore(TaskCoreContext &, string,
     exu = profile.exu_ops;
     sfu = profile.sfu_ops;
     vec = profile.vec_ops;
+    std::cout << "[DENSE_BACKWARD_PUBLIC] stage=rmsnorm"
+              << " forward_read_bytes=" << profile.forward_input_bytes
+              << " upstream_read_bytes=" << profile.upstream_bytes
+              << " output_write_bytes=" << profile.output_bytes
+              << " exu_ops=" << profile.exu_ops
+              << " sfu_ops=" << profile.sfu_ops
+              << " vec_ops=" << profile.vec_ops << " pass=1\n";
 }
 
 vector<sc_bv<128>> norm_backward_timing::serialize() {
@@ -223,7 +232,8 @@ BackwardTimingWork attention_backward_timing::work() const {
 
 void attention_backward_timing::initialize() {
     const auto profile = work();
-    data_size_input = {static_cast<int>(profile.forward_input_bytes / 2)};
+    data_size_input = {static_cast<int>(profile.forward_input_bytes / 2),
+                       static_cast<int>(profile.upstream_bytes / 2)};
     data_chunk = {{"upstream", static_cast<int>(profile.upstream_bytes / 2)},
                   {"output", static_cast<int>(profile.output_bytes / 2)}};
 }
@@ -235,6 +245,13 @@ void attention_backward_timing::taskCore(TaskCoreContext &, string,
     exu = profile.exu_ops;
     sfu = profile.sfu_ops;
     vec = profile.vec_ops;
+    std::cout << "[DENSE_BACKWARD_PUBLIC] stage=attention"
+              << " forward_read_bytes=" << profile.forward_input_bytes
+              << " upstream_read_bytes=" << profile.upstream_bytes
+              << " output_write_bytes=" << profile.output_bytes
+              << " exu_ops=" << profile.exu_ops
+              << " sfu_ops=" << profile.sfu_ops
+              << " vec_ops=" << profile.vec_ops << " pass=1\n";
 }
 
 vector<sc_bv<128>> attention_backward_timing::serialize() {

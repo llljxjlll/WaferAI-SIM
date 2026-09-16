@@ -1,6 +1,6 @@
 """Connect a real LM-head backward source to a complete two-layer CE source.
 
-The FP32 weight gradient and FP32 hidden gradient have separate nodes and
+The FP32 weight gradient and FP16 hidden gradient have separate nodes and
 separate output tensors.  This source transform does not claim physical
 lowering, an optimizer step, or a complete model backward pass.
 """
@@ -34,7 +34,7 @@ def append_dense_training_head_backward_source(source: IR0) -> IR0:
     """Differentiate LM head against CE dLogits and the saved final-norm value.
 
     For a replicated TP1 GEMM ``hidden[M,H] × weight[H,V]``, the two
-    derivatives are ``dWeight[H,V]`` in FP32 and ``dHidden[M,H]`` in FP32.
+    derivatives are ``dWeight[H,V]`` in FP32 and ``dHidden[M,H]`` in FP16.
     Its sole parameter source must be a real persistent StateDecl.
     """
 
@@ -109,7 +109,7 @@ def append_dense_training_head_backward_source(source: IR0) -> IR0:
     ):
         raise SchemaError("LM-head backward source IDs already exist", path="source")
     hidden_grad = TensorValue(
-        id=hidden_grad_value_ref, shape=hidden.shape, dtype=DType.FP32,
+        id=hidden_grad_value_ref, shape=hidden.shape, dtype=DType.FP16,
         logical_layout="MH_hidden_gradient", sharding=hidden.sharding,
         producer=hidden_grad_ref, consumers=(), alias_set=None,
     )

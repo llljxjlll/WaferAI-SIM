@@ -49,7 +49,7 @@ class GemmInputDxNewOnlyContractTest(unittest.TestCase):
                          "T0.cross_entropy_backward")
         self.assertEqual((workload.activation_bytes, workload.weight_bytes,
                           workload.upstream_bytes, workload.output_bytes,
-                          workload.fma_ops), (8, 64, 16, 16, 32))
+                          workload.fma_ops), (8, 64, 16, 8, 32))
         with self.assertRaisesRegex(SchemaError, "public GEMM_DX_TIMING"):
             require_public_gemm_input_dx_physical_opcode(provenance)
 
@@ -65,8 +65,8 @@ class GemmInputDxNewOnlyContractTest(unittest.TestCase):
                                     source_parameter_state_ref="wrong_state"),
                 upstream_value_ref=self.dlogits,
             )
-        with self.assertRaisesRegex(SchemaError, "source FP16 X/W/dY and FP32 dX"):
-            replace(self.workload, output_dtype=DType.FP16).validate()
+        with self.assertRaisesRegex(SchemaError, "source FP16 X/W/dY/dX"):
+            replace(self.workload, output_dtype=DType.FP32).validate()
         with self.assertRaisesRegex(SchemaError, "one GEMM dX tile"):
             replace(self.workload, k=10000).validate()
 

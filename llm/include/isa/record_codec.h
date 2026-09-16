@@ -190,10 +190,10 @@ struct GemmWeightWGradOperands {
 struct GemmInputDxOperands {
     ExternalDataType weight_datatype = ExternalDataType::FP16;
     ExternalDataType upstream_datatype = ExternalDataType::FP16;
-    ExternalDataType dx_datatype = ExternalDataType::FP32;
+    ExternalDataType dx_datatype = ExternalDataType::FP16;
     SramAddressOperand weight;   // explicit StateABI READ -> SRAM LOAD
     SramAddressOperand upstream; // real dY[K,N] producer
-    SramAddressOperand dx;       // independent FP32 dX[K,M]
+    SramAddressOperand dx;       // independent FP16 dX[K,M]
     uint64_t m = 1;
     uint64_t n = 1;
     uint64_t k = 1;
@@ -202,6 +202,23 @@ struct GemmInputDxOperands {
 // Signed top1 route SRAM uses one real, complete five-column INT32 table.
 // Expert return rows are grouped by home/expert/slot, so both records read
 // this route instead of embedding an impossible 80B table in 128-bit literals.
+// Fixed public ABI for source-backed Dense reverse timing records.  The
+// first three addresses are always present; RESIDUAL_BACKWARD_TIMING alone
+// sets has_aux and uses aux as its independent right-input gradient output.
+struct DenseBackwardOperands {
+    ExternalDataType input_datatype = ExternalDataType::FP16;
+    ExternalDataType data_datatype = ExternalDataType::FP16;
+    ExternalDataType output_datatype = ExternalDataType::FP16;
+    ExternalDataType aux_datatype = ExternalDataType::FP16;
+    bool has_aux = false;
+    SramAddressOperand input;
+    SramAddressOperand data;
+    SramAddressOperand output;
+    SramAddressOperand aux;
+    uint64_t parameter_count = 0;
+    std::array<uint64_t, 11> parameters{};
+};
+
 struct MoeScoreWeightedForwardOperands {
     ExternalDataType route_datatype = ExternalDataType::INT32;
     ExternalDataType score_datatype = ExternalDataType::FP16;
@@ -481,7 +498,7 @@ using RecordOperands =
     std::variant<ComputeOperands, RopeQkExactOperands,
                  AttentionExactOperands, EmbeddingLookupOperands,
                  EmbeddingTableWGradOperands, NormGammaWGradOperands,
-                 GemmWeightWGradOperands, GemmInputDxOperands,
+                 GemmWeightWGradOperands, GemmInputDxOperands, DenseBackwardOperands,
                  MoeScoreWeightedForwardOperands, MoeScoreWeightBackwardOperands,
                  GreedySampleOperands, CrossEntropyForwardOperands,
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
@@ -510,6 +527,7 @@ enum class RecordOperandKind : uint8_t {
     NORM_GAMMA_WGRAD,
     GEMM_WEIGHT_WGRAD,
     GEMM_INPUT_DX,
+    DENSE_BACKWARD,
     MOE_SCORE_WEIGHTED_FORWARD,
     MOE_SCORE_WEIGHT_BACKWARD,
     GREEDY_SAMPLE,

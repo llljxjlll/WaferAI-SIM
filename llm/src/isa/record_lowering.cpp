@@ -3,6 +3,8 @@
 #include "dte/dte_async_types.h"
 #include "isa/opcode.h"
 #include "prims/collective_data_v1_prim.h"
+#include "prims/backward_timing_prims.h"
+#include "prims/dense_rope_residual_backward_physical_work.h"
 #include "prims/dte_endpoint_prims.h"
 #include "prims/exact_stage2_prims.h"
 #include "prims/weight_gradient_timing_prims.h"
@@ -216,7 +218,7 @@ LoweredPrimList LowerWeightGradientTiming(const ExternalRecord &record,
     NpuBase *prim = dynamic_cast<NpuBase *>(base.get());
     if (prim == nullptr)
         LoweringFailure(entry, "target weight-gradient Prim is not NpuBase");
-    prim->datatype = FP16; // Typed FP32 output is fixed by native BufferABI.
+    prim->datatype = FP16; // Parameter WGRAD outputs remain FP32; dX is FP16.
     if (record.opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING) {
         if (dynamic_cast<embedding_table_wgrad_timing *>(prim) == nullptr)
             LoweringFailure(entry, "target is not embedding_table_wgrad_timing");
@@ -302,6 +304,52 @@ LoweredPrimList LowerWeightGradientTiming(const ExternalRecord &record,
     LoweredPrimList result;
     result.push_back(std::move(base));
     return result;
+}
+
+LoweredPrimList LowerDenseBackward(const ExternalRecord &record,
+                                      const OpcodeManifestEntry &entry) {
+    const auto &o = std::get<DenseBackwardOperands>(record.operands);
+    std::unique_ptr<PrimBase> base = CreateUntracked(entry.lowering.target);
+    NpuBase *prim = dynamic_cast<NpuBase *>(base.get());
+    if (prim == nullptr) LoweringFailure(entry, "target is not an NpuBase");
+    prim->datatype = FP16;
+    prim->inp_offset = static_cast<int>(o.input.absolute_address_bytes);
+    prim->data_offset = static_cast<int>(o.data.absolute_address_bytes);
+    prim->out_offset = static_cast<int>(o.output.absolute_address_bytes);
+    if (record.opcode == Opcode::RMSNORM_BACKWARD_TIMING) {
+        if (dynamic_cast<norm_backward_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not norm_backward_timing");
+        prim->param_value = {{"ROWS", static_cast<int>(o.parameters[0])},
+                             {"HIDDEN", static_cast<int>(o.parameters[1])},
+                             {"TP", static_cast<int>(o.parameters[2])},
+                             {"MODE", static_cast<int>(o.parameters[3])}};
+    } else if (record.opcode == Opcode::ATTENTION_BACKWARD_TIMING) {
+        if (dynamic_cast<attention_backward_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not attention_backward_timing");
+        const char *names[] = {"TOKENS", "RANK_HEADS", "RANK_KV_HEADS",
+                               "HEAD_DIM", "TP", "SEQUENCES", "PAIRS"};
+        for (std::size_t i=0;i<7;++i)
+            prim->param_value[names[i]]=static_cast<int>(o.parameters[i]);
+    } else if (record.opcode == Opcode::ROPE_BACKWARD_TIMING) {
+        if (dynamic_cast<rope_backward_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not rope_backward_timing");
+        const char *names[] = {"LOGICAL_TOKENS", "RANK_TOKENS",
+            "LOGICAL_Q_HEADS", "LOGICAL_KV_HEADS", "RANK_Q_HEADS",
+            "RANK_KV_HEADS", "TP", "HEAD_DIM", "ROTARY_DIM",
+            "MAX_POSITIONS", "POSITION_TRACE_TAG"};
+        for (std::size_t i=0;i<11;++i)
+            prim->param_value[names[i]]=static_cast<int>(o.parameters[i]);
+    } else if (record.opcode == Opcode::RESIDUAL_BACKWARD_TIMING) {
+        if (dynamic_cast<residual_backward_timing *>(prim) == nullptr)
+            LoweringFailure(entry, "target is not residual_backward_timing");
+        prim->param_value = {{"LOGICAL_ROWS", static_cast<int>(o.parameters[0])},
+                             {"RANK_ROWS", static_cast<int>(o.parameters[1])},
+                             {"TP", static_cast<int>(o.parameters[2])},
+                             {"HIDDEN", static_cast<int>(o.parameters[3])},
+                             {"RIGHT_OUTPUT_OFFSET", static_cast<int>(o.aux.absolute_address_bytes)}};
+    } else LoweringFailure(entry, "unexpected Dense backward opcode");
+    prim->initialize();
+    LoweredPrimList result; result.push_back(std::move(base)); return result;
 }
 
 LoweredPrimList LowerLocalReduce(const ExternalRecord &record,
@@ -1348,6 +1396,11 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
     case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
         return LowerWeightGradientTiming(record, *entry);
+    case Opcode::RMSNORM_BACKWARD_TIMING:
+    case Opcode::ATTENTION_BACKWARD_TIMING:
+    case Opcode::ROPE_BACKWARD_TIMING:
+    case Opcode::RESIDUAL_BACKWARD_TIMING:
+        return LowerDenseBackward(record, *entry);
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:
         return LowerLsu(record, *entry, context);

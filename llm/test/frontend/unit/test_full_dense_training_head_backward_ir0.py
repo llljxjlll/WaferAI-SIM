@@ -61,7 +61,7 @@ class DenseTrainingHeadBackwardIR0Test(unittest.TestCase):
         self.assertIs(values[wgrad.outputs[0]].dtype, DType.FP32)
         self.assertEqual(values[wgrad.outputs[0]].shape,
                          values[head.inputs[1]].shape)
-        self.assertIs(values[dgrad.outputs[0]].dtype, DType.FP32)
+        self.assertIs(values[dgrad.outputs[0]].dtype, DType.FP16)
         self.assertEqual(values[dgrad.outputs[0]].shape,
                          values[head.inputs[0]].shape)
         self.assertIs(values[ce_backward.inputs[2]].dtype, DType.FP32)

@@ -24,7 +24,7 @@ int HalfBytes(uint64_t bytes, const char *field) {
 
 gemm_input_dx_timing::gemm_input_dx_timing() {
     name = "gemm_input_dx_timing";
-    datatype = FP16; // The independent output BufferABI is FP32.
+    datatype = FP16; // W, dY, and independent activation dX are FP16.
     skip_input = true;
     skip_output = true;
     param_name = {"M", "N", "K"};
@@ -42,7 +42,7 @@ GemmInputDxTimingWork gemm_input_dx_timing::work() const {
         k, m, n,
         {static_cast<uint32_t>(inp_offset), 2 * m * n, GemmInputDxDType::FP16},
         {static_cast<uint32_t>(data_offset), 2 * k * n, GemmInputDxDType::FP16},
-        {static_cast<uint32_t>(out_offset), 4 * k * m, GemmInputDxDType::FP32},
+        {static_cast<uint32_t>(out_offset), 2 * k * m, GemmInputDxDType::FP16},
     };
     return BuildGemmInputDxPhysicalWork(tile);
 }
@@ -56,7 +56,7 @@ void gemm_input_dx_timing::initialize() {
     data_chunk = {{"upstream", HalfBytes(profile.tile.upstream.bytes,
                                           "GEMM dX upstream")},
                   {"output", HalfBytes(profile.tile.output.bytes,
-                                        "GEMM dX FP32 output")}};
+                                        "GEMM dX FP16 output")}};
 }
 
 void gemm_input_dx_timing::taskCore(TaskCoreContext &, string,
@@ -65,7 +65,7 @@ void gemm_input_dx_timing::taskCore(TaskCoreContext &, string,
     const auto profile = work();
     dram = sfu = 0;
     exu = profile.exu_flops;
-    vec = profile.fp32_output_vec_ops;
+    vec = profile.fp16_output_vec_ops;
 }
 
 vector<sc_bv<128>> gemm_input_dx_timing::serialize() {
