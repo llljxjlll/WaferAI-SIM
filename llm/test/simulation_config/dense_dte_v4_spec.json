@@ -1,0 +1,39 @@
+{
+    "dte": {
+        "aggregation": false,
+        "aggregation_address_block_bytes": 65536,
+        "aggregation_max_bytes": 4096,
+        "aggregation_max_descriptors": 16,
+        "aggregation_timeout_ns": 20,
+        "async": true,
+        "fine_grained_resources": true,
+        "streaming": false,
+        "use_beha_dte": true
+    },
+    "gpu": {
+        "cache_log": false,
+        "dram_config_file": "../DRAMSys/configs/hbm3-example.json",
+        "use_inner_mm": true
+    },
+    "log": {
+        "colored": false,
+        "log_level": 1,
+        "verbose_debug": false
+    },
+    "memory": {
+        "use_beha_dram": true,
+        "use_beha_sram": true,
+        "use_dramsys": true
+    },
+    "noc": {
+        "fast_warmup": true,
+        "router_pipe": false,
+        "send_recv_parallel": false,
+        "use_beha_noc": true
+    },
+    "operand": {
+        "load_static_as_tile": "layer",
+        "use_perf_gemm": false
+    },
+    "ttf_file": "../font/NotoSansDisplay-Bold.ttf"
+}
