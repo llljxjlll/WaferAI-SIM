@@ -8,6 +8,7 @@
 #include "prims/weight_gradient_timing_prims.h"
 #include "prims/gemm_weight_wgrad_timing_prim.h"
 #include "prims/gemm_input_dx_npu_prim.h"
+#include "prims/moe_signed_router_npu_prim.h"
 #include "prims/norm_prims.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
@@ -258,6 +259,32 @@ LoweredPrimList LowerWeightGradientTiming(const ExternalRecord &record,
         prim->param_value = {{"M", static_cast<int>(o.m)},
                              {"N", static_cast<int>(o.n)},
                              {"K", static_cast<int>(o.k)}};
+    } else if (record.opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD) {
+        if (dynamic_cast<moe_score_weighted_forward *>(prim)==nullptr)
+            LoweringFailure(entry,"target is not moe_score_weighted_forward");
+        const auto &o=std::get<MoeScoreWeightedForwardOperands>(record.operands);
+        prim->inp_offset=static_cast<int>(o.score.absolute_address_bytes);
+        prim->data_offset=static_cast<int>(o.returns.absolute_address_bytes);
+        prim->out_offset=static_cast<int>(o.combined.absolute_address_bytes);
+        prim->param_value={{"K",static_cast<int>(o.rank_rows)},
+                           {"H",static_cast<int>(o.hidden_size)},
+                           {"E",static_cast<int>(o.expert_count)},
+                           {"ROUTE_ADDRESS",static_cast<int>(o.route.absolute_address_bytes)},
+                           {"ROUTE_BYTES",static_cast<int>(o.route_bytes)}};
+    } else if (record.opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD) {
+        if (dynamic_cast<moe_score_weight_backward *>(prim)==nullptr)
+            LoweringFailure(entry,"target is not moe_score_weight_backward");
+        const auto &o=std::get<MoeScoreWeightBackwardOperands>(record.operands);
+        prim->inp_offset=static_cast<int>(o.score.absolute_address_bytes);
+        prim->data_offset=static_cast<int>(o.returns.absolute_address_bytes);
+        prim->out_offset=static_cast<int>(o.dcombined.absolute_address_bytes);
+        prim->param_value={{"K",static_cast<int>(o.rank_rows)},
+                           {"H",static_cast<int>(o.hidden_size)},
+                           {"E",static_cast<int>(o.expert_count)},
+                           {"ROUTE_ADDRESS",static_cast<int>(o.route.absolute_address_bytes)},
+                           {"ROUTE_BYTES",static_cast<int>(o.route_bytes)},
+                           {"DSCORE_ADDRESS",static_cast<int>(o.dscore.absolute_address_bytes)},
+                           {"DEXPERT_ADDRESS",static_cast<int>(o.dexpert.absolute_address_bytes)}};
     } else if (record.opcode == Opcode::GEMM_DX_TIMING) {
         if (dynamic_cast<gemm_input_dx_timing *>(prim) == nullptr)
             LoweringFailure(entry, "target is not gemm_input_dx_timing");
@@ -1318,6 +1345,8 @@ LoweredPrimList LowerExternalRecord(const ExternalRecord &record,
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
     case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
     case Opcode::GEMM_DX_TIMING:
+    case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
+    case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
         return LowerWeightGradientTiming(record, *entry);
     case Opcode::LSU_LOAD:
     case Opcode::LSU_STORE:

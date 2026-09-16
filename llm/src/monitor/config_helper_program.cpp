@@ -230,6 +230,38 @@ void ApplyRelocation(ExternalRecord &record,
         return;
     }
     if (auto *value =
+            std::get_if<MoeScoreWeightedForwardOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "MOE_SCORE_WEIGHTED_FORWARD address");
+        if (operand == SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS)
+            SetAddress(value->route, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->score, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->returns, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->combined, relocation, symbol);
+        else Fail("invalid MOE_SCORE_WEIGHTED_FORWARD relocation operand_id");
+        return;
+    }
+    if (auto *value =
+            std::get_if<MoeScoreWeightBackwardOperands>(&record.operands)) {
+        RequireAbsolute(relocation, "MOE_SCORE_WEIGHT_BACKWARD address");
+        if (operand == SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS)
+            SetAddress(value->route, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)
+            SetAddress(value->score, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_DATA_ADDRESS)
+            SetAddress(value->returns, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS)
+            SetAddress(value->dcombined, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_AUX_ADDRESS)
+            SetAddress(value->dscore, relocation, symbol);
+        else if (operand == SemanticOperandId::COMPUTE_ROUTER_DEXPERT_ADDRESS)
+            SetAddress(value->dexpert, relocation, symbol);
+        else Fail("invalid MOE_SCORE_WEIGHT_BACKWARD relocation operand_id");
+        return;
+    }
+    if (auto *value =
             std::get_if<GemmInputDxOperands>(&record.operands)) {
         RequireAbsolute(relocation, "GEMM_DX_TIMING address");
         if (operand == SemanticOperandId::COMPUTE_INPUT_ADDRESS)

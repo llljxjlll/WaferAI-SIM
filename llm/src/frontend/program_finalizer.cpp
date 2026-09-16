@@ -335,7 +335,7 @@ ProgramSymbolKind ParseProgramSymbolKind(const Json &value,
 SemanticOperandId ParseOperandId(const Json &value,
                                  const std::string &path) {
     const uint64_t raw = U64(value, path);
-    if ((raw >= 1 && raw <= 20) || (raw >= 0x100 && raw <= 0x110))
+    if ((raw >= 1 && raw <= 22) || (raw >= 0x100 && raw <= 0x110))
         return static_cast<SemanticOperandId>(raw);
     Fail(path, "unknown SemanticOperandId");
 }
@@ -361,6 +361,8 @@ Opcode ParseOpcode(const Json &value, const std::string &path) {
     case 0x24:
     case 0x25:
     case 0x26:
+    case 0x27:
+    case 0x28:
     case 0x40:
     case 0x41:
     case 0x43:
@@ -1706,6 +1708,26 @@ uint64_t OperandAccessBytes(const RelocatableRecordDto &record,
             return CheckedMultiply(4, CheckedMultiply(m, n, path), path);
         Fail(path, "GEMM_WEIGHT_WGRAD_TIMING has no such payload operand");
     }
+    case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
+    case Opcode::MOE_SCORE_WEIGHT_BACKWARD: {
+        const bool backward=record.opcode==Opcode::MOE_SCORE_WEIGHT_BACKWARD;
+        const uint64_t rows=LiteralU64(record.operands[backward?12:8],path);
+        const uint64_t hidden=LiteralU64(record.operands[backward?13:9],path);
+        const uint64_t experts=LiteralU64(record.operands[backward?14:10],path);
+        const uint64_t route=LiteralU64(record.operands[backward?15:11],path);
+        if (route!=CheckedMultiply(20,rows,path))
+            Fail(path,"MoE route must cover all five INT32 columns per token");
+        if (operand_id==SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS)
+            return route;
+        if (operand_id==SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+            (backward && operand_id==SemanticOperandId::COMPUTE_AUX_ADDRESS))
+            return CheckedMultiply(2,CheckedMultiply(rows,experts,path),path);
+        if (operand_id==SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+            operand_id==SemanticOperandId::COMPUTE_OUTPUT_ADDRESS ||
+            (backward && operand_id==SemanticOperandId::COMPUTE_ROUTER_DEXPERT_ADDRESS))
+            return CheckedMultiply(2,CheckedMultiply(rows,hidden,path),path);
+        Fail(path,"MoE router address has no independent typed BufferABI extent");
+    }
     case Opcode::GEMM_DX_TIMING: {
         const uint64_t m = LiteralU64(record.operands[6], path);
         const uint64_t n = LiteralU64(record.operands[7], path);
@@ -1850,6 +1872,10 @@ std::optional<BufferDTypeDto> ExpectedBufferDType(
     case Opcode::GEMM_DX_TIMING:
         return operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS
                    ? BufferDTypeDto::FP32 : BufferDTypeDto::FP16;
+    case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
+    case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
+        return operand_id == SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS
+                   ? BufferDTypeDto::INT32 : BufferDTypeDto::FP16;
     case Opcode::GREEDY_SAMPLE:
         return operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS
                    ? BufferDTypeDto::INT32
@@ -2431,6 +2457,76 @@ ExternalRecord FinalizeRecord(
         operands.n = LiteralU64(record.operands[7], path);
         operands.k = LiteralU64(record.operands[8], path);
         result.operands = std::move(operands);
+    } else if (record.opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD ||
+               record.opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD) {
+        const bool backward=record.opcode==Opcode::MOE_SCORE_WEIGHT_BACKWARD;
+        const size_t expected=backward?16:12;
+        if (record.operands.size()!=expected)
+            Fail(path+".operands","MoE signed router fixed record arity differs");
+        constexpr std::array<std::string_view,16> names{{
+            "route_datatype","score_datatype","expert_datatype",
+            "upstream_datatype","dscore_datatype","dexpert_datatype",
+            "route_address","score_address","return_address",
+            "dcombined_address","dscore_address","dexpert_address",
+            "rank_rows","hidden_size","expert_count","route_bytes"}};
+        constexpr std::array<std::string_view,12> forward_names{{
+            "route_datatype","score_datatype","expert_datatype",
+            "combined_datatype","route_address","score_address",
+            "return_address","combined_address","rank_rows",
+            "hidden_size","expert_count","route_bytes"}};
+        for (size_t i=0;i<expected;++i) {
+            const bool address=backward?(i>=6 && i<12):(i>=4 && i<8);
+            if (!address)
+                RequireLiteral(record.operands[i],backward?names[i]:forward_names[i],
+                               path+".operands["+std::to_string(i)+"]");
+        }
+        const size_t first=backward?6:4;
+        const std::array<SemanticOperandId,6> ids{{
+            SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS,
+            SemanticOperandId::COMPUTE_INPUT_ADDRESS,
+            SemanticOperandId::COMPUTE_DATA_ADDRESS,
+            SemanticOperandId::COMPUTE_OUTPUT_ADDRESS,
+            SemanticOperandId::COMPUTE_AUX_ADDRESS,
+            SemanticOperandId::COMPUTE_ROUTER_DEXPERT_ADDRESS}};
+        for (size_t i=0;i<(backward?6u:4u);++i)
+            RequireAddress(record.operands[first+i],
+                           backward?names[first+i]:forward_names[first+i],
+                           ids[i],path+".operands["+std::to_string(first+i)+"]");
+        if (backward) {
+            MoeScoreWeightBackwardOperands operands;
+            operands.route_datatype=LiteralEnum<ExternalDataType>(record.operands[0],path);
+            operands.score_datatype=LiteralEnum<ExternalDataType>(record.operands[1],path);
+            operands.expert_datatype=LiteralEnum<ExternalDataType>(record.operands[2],path);
+            operands.upstream_datatype=LiteralEnum<ExternalDataType>(record.operands[3],path);
+            operands.dscore_datatype=LiteralEnum<ExternalDataType>(record.operands[4],path);
+            operands.dexpert_datatype=LiteralEnum<ExternalDataType>(record.operands[5],path);
+            operands.route=absolute_address(ids[0]);
+            operands.score=absolute_address(ids[1]);
+            operands.returns=absolute_address(ids[2]);
+            operands.dcombined=absolute_address(ids[3]);
+            operands.dscore=absolute_address(ids[4]);
+            operands.dexpert=absolute_address(ids[5]);
+            operands.rank_rows=LiteralU64(record.operands[12],path);
+            operands.hidden_size=LiteralU64(record.operands[13],path);
+            operands.expert_count=LiteralU64(record.operands[14],path);
+            operands.route_bytes=LiteralU64(record.operands[15],path);
+            result.operands=std::move(operands);
+        } else {
+            MoeScoreWeightedForwardOperands operands;
+            operands.route_datatype=LiteralEnum<ExternalDataType>(record.operands[0],path);
+            operands.score_datatype=LiteralEnum<ExternalDataType>(record.operands[1],path);
+            operands.expert_datatype=LiteralEnum<ExternalDataType>(record.operands[2],path);
+            operands.combined_datatype=LiteralEnum<ExternalDataType>(record.operands[3],path);
+            operands.route=absolute_address(ids[0]);
+            operands.score=absolute_address(ids[1]);
+            operands.returns=absolute_address(ids[2]);
+            operands.combined=absolute_address(ids[3]);
+            operands.rank_rows=LiteralU64(record.operands[8],path);
+            operands.hidden_size=LiteralU64(record.operands[9],path);
+            operands.expert_count=LiteralU64(record.operands[10],path);
+            operands.route_bytes=LiteralU64(record.operands[11],path);
+            result.operands=std::move(operands);
+        }
     } else if (record.opcode == Opcode::GEMM_DX_TIMING) {
         if (record.operands.size() != 9)
             Fail(path + ".operands",
@@ -3449,6 +3545,8 @@ std::set<std::string> ValidateActionSequence(
                    opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
                    opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
                    opcode == Opcode::GEMM_DX_TIMING ||
+                   opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD ||
+                   opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD ||
                    opcode == Opcode::GREEDY_SAMPLE ||
                    opcode == Opcode::CROSS_ENTROPY_FORWARD ||
                    opcode == Opcode::CROSS_ENTROPY_BACKWARD ||
@@ -3477,6 +3575,8 @@ std::set<std::string> ValidateActionSequence(
                 compute_opcode == Opcode::ADAMW_UPDATE ? 6 :
                 compute_opcode == Opcode::CROSS_ENTROPY_BACKWARD ? 3 :
                 compute_opcode == Opcode::EMBEDDING_TABLE_WGRAD_TIMING ? 3 :
+                compute_opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD ? 3 :
+                compute_opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD ? 4 :
                 ((s3_lite_backward_link || moe_calibration_link ||
                   moe_swizzle_c1_matmul_bind) &&
                  compute_opcode == Opcode::MATMUL) ? 2 :
@@ -3727,6 +3827,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             manifest.producer_pass == "public_embedding_wgrad_allocated_fragment" ||
             manifest.producer_pass == "public_gemm_wgrad_allocated_fragment" ||
             manifest.producer_pass == "public_gemm_dx_allocated_fragment";
+        const bool public_moe_router_fragment =
+            manifest.producer_pass ==
+            "public_moe_signed_router_scoped_fragment";
         const Opcode public_wgrad_expected_opcode =
             manifest.producer_pass == "public_gemm_wgrad_allocated_fragment"
                 ? Opcode::GEMM_WEIGHT_WGRAD_TIMING
@@ -7953,7 +8056,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             const std::set<std::string> moe_terminal_labels = [&]() {
                 std::set<std::string> result;
                 if (!moe_swizzle_link && !moe_calibration_link &&
-                    !public_wgrad_fragment)
+                    !public_wgrad_fragment && !public_moe_router_fragment)
                     return result;
                 std::set<std::string> terminal_storage_ids;
                 for (const auto &entry : known_buffer_abi) {
@@ -7963,6 +8066,11 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         ((public_wgrad_fragment &&
                           abi.binding_id == "abs_output" &&
                           abi.dtype == BufferDTypeDto::FP32) ||
+                         (public_moe_router_fragment &&
+                          (abi.binding_id == "abs_combined" ||
+                           abi.binding_id == "abs_dscore" ||
+                           abi.binding_id == "abs_dexpert") &&
+                          abi.dtype == BufferDTypeDto::FP16) ||
                          (moe_swizzle_link &&
                           (abi.layout ==
                                "moe_swizzle_terminal_combined_root/v1" ||
@@ -8083,10 +8191,24 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     Fail("linked_program_manifest.core_streams",
                          "public WGRAD fragment requires one exact typed gradient record and one owned FP32 terminal root");
             }
+            if (public_moe_router_fragment) {
+                std::size_t forward_records = 0;
+                std::size_t backward_records = 0;
+                for (const RelocatableRecordDto *record : source_records) {
+                    forward_records +=
+                        record->opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD;
+                    backward_records +=
+                        record->opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD;
+                }
+                if (forward_records != 1 || backward_records != 1 ||
+                    moe_terminal_labels.size() != 3)
+                    Fail("linked_program_manifest.core_streams",
+                         "scoped signed router requires exact 0x27/0x28 records and combined/dScore/dExpert terminal roots");
+            }
             const std::set<std::string> terminal_tape_labels =
                 [&]() {
                     if (moe_swizzle_link || moe_calibration_link ||
-                        public_wgrad_fragment)
+                        public_wgrad_fragment || public_moe_router_fragment)
                         for (const RelocatableRecordDto *record :
                              source_records) {
                             if (record->opcode != Opcode::SRAM_ALLOC_AT)
@@ -8097,7 +8219,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                 record->operands[5],
                                 "linked_program_manifest.core_streams.record.lifetime");
                             const uint64_t expected_lifetime =
-                                public_wgrad_fragment ? 0 :
+                                (public_wgrad_fragment ||
+                                 public_moe_router_fragment) ? 0 :
                                 moe_terminal_labels.count(label) == 1 ? 2 : 0;
                             if (lifetime != expected_lifetime)
                                 Fail("linked_program_manifest.core_streams",
@@ -8154,6 +8277,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 if (promoted != 1)
                     Fail("linked_program_manifest.core_streams",
                          "public WGRAD physical terminal promotion lost FP32 root");
+            }
+            if (public_moe_router_fragment) {
+                std::size_t promoted = 0;
+                for (std::size_t index = 0; index < source_records.size();
+                     ++index) {
+                    if (source_records[index]->opcode != Opcode::SRAM_ALLOC_AT)
+                        continue;
+                    const std::string label = AddressSymbolRef(
+                        *source_records[index],
+                        SemanticOperandId::LABEL_SYMBOL);
+                    if (moe_terminal_labels.count(label) == 0)
+                        continue;
+                    auto &operands = std::get<SramAllocAtOperands>(
+                        core.records[index].operands);
+                    if (operands.lifetime != SramLifetime::TASK)
+                        Fail("linked_program_manifest.core_streams",
+                             "scoped signed router terminal source must lower from TASK");
+                    operands.lifetime = SramLifetime::PERSISTENT;
+                    ++promoted;
+                }
+                if (promoted != 3)
+                    Fail("linked_program_manifest.core_streams",
+                         "scoped signed router terminal promotion lost a physical output");
             }
             artifact.cores.push_back(std::move(core));
         }

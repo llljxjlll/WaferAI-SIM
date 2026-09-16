@@ -9,6 +9,7 @@
 #include "prims/gemm_weight_wgrad_timing_prim.h"
 #include "prims/gemm_input_dx_npu_prim.h"
 #include "prims/norm_prims.h"
+#include "prims/moe_signed_router_npu_prim.h"
 #include "prims/sram_lifecycle_prim.h"
 #include "prims/sync_prims.h"
 #include "utils/prim_utils.h"
@@ -20,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -217,6 +219,34 @@ ExternalRecord MakeRecord(const RecordSchema &schema) {
         operands.m = 8;
         operands.n = 16;
         operands.k = 4;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD: {
+        MoeScoreWeightedForwardOperands operands;
+        operands.route = Absolute(0);
+        operands.score = Absolute(128);
+        operands.returns = Absolute(256);
+        operands.combined = Absolute(384);
+        operands.rank_rows = 4;
+        operands.hidden_size = 4;
+        operands.expert_count = 2;
+        operands.route_bytes = 80;
+        record.operands = operands;
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD: {
+        MoeScoreWeightBackwardOperands operands;
+        operands.route = Absolute(0);
+        operands.score = Absolute(128);
+        operands.returns = Absolute(256);
+        operands.dcombined = Absolute(384);
+        operands.dscore = Absolute(512);
+        operands.dexpert = Absolute(640);
+        operands.rank_rows = 4;
+        operands.hidden_size = 4;
+        operands.expert_count = 2;
+        operands.route_bytes = 80;
         record.operands = operands;
         break;
     }
@@ -501,6 +531,8 @@ bool IsP2Supported(Opcode opcode) noexcept {
     case Opcode::NORM_GAMMA_WGRAD_TIMING:
     case Opcode::GEMM_WEIGHT_WGRAD_TIMING:
     case Opcode::GEMM_DX_TIMING:
+    case Opcode::MOE_SCORE_WEIGHTED_FORWARD:
+    case Opcode::MOE_SCORE_WEIGHT_BACKWARD:
         return true;
     default:
         return false;
@@ -589,6 +621,59 @@ void CheckSupportedFields(Checks &checks, const ExternalRecord &record,
                              work.fp32_gradient_read_modify_write_bytes == 1024,
                          "GEMM WGrad preserves three physical typed buffers and work");
         }
+        return;
+    }
+    if (record.opcode == Opcode::MOE_SCORE_WEIGHTED_FORWARD) {
+        auto *prim = dynamic_cast<moe_score_weighted_forward *>(&base);
+        const auto &operands =
+            std::get<MoeScoreWeightedForwardOperands>(record.operands);
+        checks.Check(prim != nullptr,
+                     "MoE score-weighted forward target type");
+        if (prim == nullptr) return;
+        checks.Check(
+            prim->inp_offset ==
+                    static_cast<int>(operands.score.absolute_address_bytes) &&
+                prim->data_offset == static_cast<int>(
+                    operands.returns.absolute_address_bytes) &&
+                prim->out_offset == static_cast<int>(
+                    operands.combined.absolute_address_bytes) &&
+                prim->param_value ==
+                    std::unordered_map<std::string, int>{
+                        {"K", 4}, {"H", 4}, {"E", 2},
+                        {"ROUTE_ADDRESS", 0}, {"ROUTE_BYTES", 80}} &&
+                prim->data_size_input == std::vector<int>{40, 8, 16} &&
+                prim->data_chunk ==
+                    std::vector<std::pair<std::string, int>>{
+                        {"output", 16}},
+            "MoE score-weighted forward preserves physical spans");
+        return;
+    }
+    if (record.opcode == Opcode::MOE_SCORE_WEIGHT_BACKWARD) {
+        auto *prim = dynamic_cast<moe_score_weight_backward *>(&base);
+        const auto &operands =
+            std::get<MoeScoreWeightBackwardOperands>(record.operands);
+        checks.Check(prim != nullptr,
+                     "MoE score-weight backward target type");
+        if (prim == nullptr) return;
+        checks.Check(
+            prim->inp_offset ==
+                    static_cast<int>(operands.score.absolute_address_bytes) &&
+                prim->data_offset == static_cast<int>(
+                    operands.returns.absolute_address_bytes) &&
+                prim->out_offset == static_cast<int>(
+                    operands.dcombined.absolute_address_bytes) &&
+                prim->param_value ==
+                    std::unordered_map<std::string, int>{
+                        {"K", 4}, {"H", 4}, {"E", 2},
+                        {"ROUTE_ADDRESS", 0}, {"ROUTE_BYTES", 80},
+                        {"DSCORE_ADDRESS", 512},
+                        {"DEXPERT_ADDRESS", 640}} &&
+                prim->data_size_input ==
+                    std::vector<int>{40, 8, 16, 16} &&
+                prim->data_chunk ==
+                    std::vector<std::pair<std::string, int>>{
+                        {"output", 8}},
+            "MoE score-weight backward preserves six physical spans");
         return;
     }
     if (record.opcode == Opcode::ROPE_QK_EXACT ||
@@ -1074,7 +1159,7 @@ void CheckManifestMatrix(Checks &checks) {
                                     error.what());
         }
     }
-    checks.Check(supported == 52,
+    checks.Check(supported == 54,
                  "supported opcode count including exact Stage2 records");
     checks.Check(deferred == 1, "remaining P6 deferred opcode count");
     checks.Check(gated == 4, "capability-gated opcode count");

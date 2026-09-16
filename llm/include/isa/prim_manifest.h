@@ -44,7 +44,7 @@ struct PrimManifestEntry {
     PrimSupport support;
 };
 
-inline constexpr std::size_t kPrimManifestSize = 75;
+inline constexpr std::size_t kPrimManifestSize = 77;
 
 const std::array<PrimManifestEntry, kPrimManifestSize> &
 PrimManifest() noexcept;

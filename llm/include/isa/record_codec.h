@@ -199,6 +199,43 @@ struct GemmInputDxOperands {
     uint64_t k = 1;
 };
 
+// Signed top1 route SRAM uses one real, complete five-column INT32 table.
+// Expert return rows are grouped by home/expert/slot, so both records read
+// this route instead of embedding an impossible 80B table in 128-bit literals.
+struct MoeScoreWeightedForwardOperands {
+    ExternalDataType route_datatype = ExternalDataType::INT32;
+    ExternalDataType score_datatype = ExternalDataType::FP16;
+    ExternalDataType expert_datatype = ExternalDataType::FP16;
+    ExternalDataType combined_datatype = ExternalDataType::FP16;
+    SramAddressOperand route;
+    SramAddressOperand score;
+    SramAddressOperand returns;
+    SramAddressOperand combined;
+    uint64_t rank_rows = 1;
+    uint64_t hidden_size = 1;
+    uint64_t expert_count = 1;
+    uint64_t route_bytes = 20;
+};
+
+struct MoeScoreWeightBackwardOperands {
+    ExternalDataType route_datatype = ExternalDataType::INT32;
+    ExternalDataType score_datatype = ExternalDataType::FP16;
+    ExternalDataType expert_datatype = ExternalDataType::FP16;
+    ExternalDataType upstream_datatype = ExternalDataType::FP16;
+    ExternalDataType dscore_datatype = ExternalDataType::FP16;
+    ExternalDataType dexpert_datatype = ExternalDataType::FP16;
+    SramAddressOperand route;
+    SramAddressOperand score;
+    SramAddressOperand returns;
+    SramAddressOperand dcombined;
+    SramAddressOperand dscore;
+    SramAddressOperand dexpert;
+    uint64_t rank_rows = 1;
+    uint64_t hidden_size = 1;
+    uint64_t expert_count = 1;
+    uint64_t route_bytes = 20;
+};
+
 struct GreedySampleOperands {
     ExternalDataType logits_datatype = ExternalDataType::FP16;
     ExternalDataType output_datatype = ExternalDataType::INT32;
@@ -445,6 +482,7 @@ using RecordOperands =
                  AttentionExactOperands, EmbeddingLookupOperands,
                  EmbeddingTableWGradOperands, NormGammaWGradOperands,
                  GemmWeightWGradOperands, GemmInputDxOperands,
+                 MoeScoreWeightedForwardOperands, MoeScoreWeightBackwardOperands,
                  GreedySampleOperands, CrossEntropyForwardOperands,
                  CrossEntropyBackwardOperands, SgdUpdateOperands,
                  AdamwUpdateOperands,
@@ -472,6 +510,8 @@ enum class RecordOperandKind : uint8_t {
     NORM_GAMMA_WGRAD,
     GEMM_WEIGHT_WGRAD,
     GEMM_INPUT_DX,
+    MOE_SCORE_WEIGHTED_FORWARD,
+    MOE_SCORE_WEIGHT_BACKWARD,
     GREEDY_SAMPLE,
     CROSS_ENTROPY_FORWARD,
     CROSS_ENTROPY_BACKWARD,

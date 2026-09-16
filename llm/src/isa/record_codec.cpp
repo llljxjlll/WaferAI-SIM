@@ -22,6 +22,8 @@ constexpr uint32_t kEmbeddingTableWGradPayloadSize = 192;
 constexpr uint32_t kNormGammaWGradPayloadSize = 92;
 constexpr uint32_t kGemmWeightWGradPayloadSize = 88;
 constexpr uint32_t kGemmInputDxPayloadSize = 88;
+constexpr uint32_t kMoeScoreWeightedForwardPayloadSize = 116;
+constexpr uint32_t kMoeScoreWeightBackwardPayloadSize = 168;
 constexpr uint32_t kGreedySamplePayloadSize = 76;
 constexpr uint32_t kCrossEntropyForwardPayloadSize = 92;
 constexpr uint32_t kCrossEntropyBackwardPayloadSize = 122;
@@ -868,6 +870,73 @@ void ValidateGemmWeightWGrad(const GemmWeightWGradOperands &o) {
     (void)CheckedMul(o.k, mn, "GEMM_WEIGHT_WGRAD FMA work");
 }
 
+void ValidateMoeScoreWeightedForward(
+    const MoeScoreWeightedForwardOperands &o) {
+    RequireExactDataType(o.route_datatype, ExternalDataType::INT32,
+                         "MOE_ROUTER_FORWARD route_datatype");
+    for (auto dtype : {o.score_datatype, o.expert_datatype,
+                       o.combined_datatype})
+        RequireExactDataType(dtype, ExternalDataType::FP16,
+                             "MOE_ROUTER_FORWARD FP16 operand");
+    for (auto profile : {o.rank_rows, o.hidden_size, o.expert_count,
+                         o.route_bytes})
+        Require(profile > 0 && profile <= kExternalNpuParameterMax,
+                "MOE_ROUTER_FORWARD positive 30-bit profile required");
+    const uint64_t route = CheckedMul(o.rank_rows, 20,
+                                       "MOE_ROUTER_FORWARD 5xINT32 route");
+    Require(o.route_bytes == route,
+            "MOE_ROUTER_FORWARD route bytes must be all five INT32 fields per token");
+    const uint64_t score = CheckedMul(2, CheckedMul(o.rank_rows,
+                                  o.expert_count, "router score elements"),
+                                  "router score FP16 bytes");
+    const uint64_t hidden = CheckedMul(2, CheckedMul(o.rank_rows,
+                                   o.hidden_size, "router return elements"),
+                                   "router return FP16 bytes");
+    RequireGradientNonOverlap({
+        ValidateGradientSramSpan(o.route, route, "MOE_ROUTER_FORWARD route"),
+        ValidateGradientSramSpan(o.score, score, "MOE_ROUTER_FORWARD score"),
+        ValidateGradientSramSpan(o.returns, hidden, "MOE_ROUTER_FORWARD expert returns"),
+        ValidateGradientSramSpan(o.combined, hidden, "MOE_ROUTER_FORWARD combined")},
+        "MOE_ROUTER_FORWARD");
+    (void)CheckedMul(2, CheckedMul(o.rank_rows, o.hidden_size,
+                       "MOE_ROUTER_FORWARD cells"), "MOE_ROUTER_FORWARD FLOPs");
+}
+
+void ValidateMoeScoreWeightBackward(
+    const MoeScoreWeightBackwardOperands &o) {
+    RequireExactDataType(o.route_datatype, ExternalDataType::INT32,
+                         "MOE_ROUTER_BACKWARD route_datatype");
+    for (auto dtype : {o.score_datatype, o.expert_datatype,
+                       o.upstream_datatype, o.dscore_datatype,
+                       o.dexpert_datatype})
+        RequireExactDataType(dtype, ExternalDataType::FP16,
+                             "MOE_ROUTER_BACKWARD FP16 operand");
+    for (auto profile : {o.rank_rows, o.hidden_size, o.expert_count,
+                         o.route_bytes})
+        Require(profile > 0 && profile <= kExternalNpuParameterMax,
+                "MOE_ROUTER_BACKWARD positive 30-bit profile required");
+    const uint64_t route = CheckedMul(o.rank_rows, 20,
+                                       "MOE_ROUTER_BACKWARD 5xINT32 route");
+    Require(o.route_bytes == route,
+            "MOE_ROUTER_BACKWARD route bytes must be all five INT32 fields per token");
+    const uint64_t score = CheckedMul(2, CheckedMul(o.rank_rows,
+                                  o.expert_count, "router score elements"),
+                                  "router score FP16 bytes");
+    const uint64_t hidden = CheckedMul(2, CheckedMul(o.rank_rows,
+                                   o.hidden_size, "router return elements"),
+                                   "router return FP16 bytes");
+    RequireGradientNonOverlap({
+        ValidateGradientSramSpan(o.route, route, "MOE_ROUTER_BACKWARD route"),
+        ValidateGradientSramSpan(o.score, score, "MOE_ROUTER_BACKWARD score"),
+        ValidateGradientSramSpan(o.returns, hidden, "MOE_ROUTER_BACKWARD expert returns"),
+        ValidateGradientSramSpan(o.dcombined, hidden, "MOE_ROUTER_BACKWARD real dCombined"),
+        ValidateGradientSramSpan(o.dscore, score, "MOE_ROUTER_BACKWARD independent dScore"),
+        ValidateGradientSramSpan(o.dexpert, hidden, "MOE_ROUTER_BACKWARD independent dExpert")},
+        "MOE_ROUTER_BACKWARD");
+    (void)CheckedMul(3, CheckedMul(o.rank_rows, o.hidden_size,
+                     "MOE_ROUTER_BACKWARD cells"), "MOE_ROUTER_BACKWARD FLOPs");
+}
+
 void ValidateGemmInputDx(const GemmInputDxOperands &o) {
     RequireExactDataType(o.weight_datatype, ExternalDataType::FP16,
                          "GEMM_INPUT_DX weight_datatype");
@@ -1613,6 +1682,12 @@ constexpr std::array<RecordSchema, kOpcodeManifestSize> kSchemas{{
     FixedSchema(Opcode::GEMM_DX_TIMING,
                 RecordOperandKind::GEMM_INPUT_DX,
                 kGemmInputDxPayloadSize),
+    FixedSchema(Opcode::MOE_SCORE_WEIGHTED_FORWARD,
+                RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD,
+                kMoeScoreWeightedForwardPayloadSize),
+    FixedSchema(Opcode::MOE_SCORE_WEIGHT_BACKWARD,
+                RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD,
+                kMoeScoreWeightBackwardPayloadSize),
     FixedSchema(Opcode::DTE_SEND, RecordOperandKind::DTE_SEND,
                 kEndpointPayloadSize),
     FixedSchema(Opcode::DTE_RECV, RecordOperandKind::DTE_RECV,
@@ -1718,6 +1793,16 @@ void ValidateOperandsForSchema(const ExternalRecord &record,
     case RecordOperandKind::GEMM_INPUT_DX:
         ValidateGemmInputDx(RequireOperands<GemmInputDxOperands>(
             record, "GEMM_DX_TIMING"));
+        return;
+    case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD:
+        ValidateMoeScoreWeightedForward(
+            RequireOperands<MoeScoreWeightedForwardOperands>(
+                record, "MOE_SCORE_WEIGHTED_FORWARD"));
+        return;
+    case RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD:
+        ValidateMoeScoreWeightBackward(
+            RequireOperands<MoeScoreWeightBackwardOperands>(
+                record, "MOE_SCORE_WEIGHT_BACKWARD"));
         return;
     case RecordOperandKind::GREEDY_SAMPLE:
         ValidateGreedySample(RequireOperands<GreedySampleOperands>(
@@ -1934,6 +2019,34 @@ std::vector<uint8_t> EncodePayload(const ExternalRecord &record,
         EncodeAddress(payload, o.gradient);
         for (const auto value : {o.m, o.n, o.k})
             AppendLittleEndian(payload, value, 4);
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD: {
+        const auto &o = std::get<MoeScoreWeightedForwardOperands>(record.operands);
+        for (auto dtype : {o.route_datatype, o.score_datatype,
+                           o.expert_datatype, o.combined_datatype})
+            payload.push_back(EnumByte(dtype));
+        for (const auto &address : {o.route, o.score, o.returns, o.combined})
+            EncodeAddress(payload, address);
+        for (auto profile : {o.rank_rows, o.hidden_size, o.expert_count,
+                             o.route_bytes})
+            AppendLittleEndian(payload, profile, 4);
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD: {
+        const auto &o = std::get<MoeScoreWeightBackwardOperands>(record.operands);
+        for (auto dtype : {o.route_datatype, o.score_datatype,
+                           o.expert_datatype, o.upstream_datatype,
+                           o.dscore_datatype, o.dexpert_datatype})
+            payload.push_back(EnumByte(dtype));
+        payload.push_back(0);
+        payload.push_back(0);
+        for (const auto &address : {o.route, o.score, o.returns,
+                                   o.dcombined, o.dscore, o.dexpert})
+            EncodeAddress(payload, address);
+        for (auto profile : {o.rank_rows, o.hidden_size, o.expert_count,
+                             o.route_bytes})
+            AppendLittleEndian(payload, profile, 4);
         break;
     }
     case RecordOperandKind::GEMM_INPUT_DX: {
@@ -2431,6 +2544,46 @@ ExternalRecord DecodePayload(Opcode opcode, const RecordSchema &schema,
         o.m = ReadLittleEndian(payload, 76, 4, "M");
         o.n = ReadLittleEndian(payload, 80, 4, "N");
         o.k = ReadLittleEndian(payload, 84, 4, "K");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD: {
+        MoeScoreWeightedForwardOperands o;
+        o.route_datatype = DecodeEnum<ExternalDataType>(payload, 0, "route_dtype");
+        o.score_datatype = DecodeEnum<ExternalDataType>(payload, 1, "score_dtype");
+        o.expert_datatype = DecodeEnum<ExternalDataType>(payload, 2, "expert_dtype");
+        o.combined_datatype = DecodeEnum<ExternalDataType>(payload, 3, "combined_dtype");
+        o.route = DecodeAddress(payload, 4, "router route");
+        o.score = DecodeAddress(payload, 28, "router score");
+        o.returns = DecodeAddress(payload, 52, "router returns");
+        o.combined = DecodeAddress(payload, 76, "router combined");
+        o.rank_rows = ReadLittleEndian(payload, 100, 4, "rank_rows");
+        o.hidden_size = ReadLittleEndian(payload, 104, 4, "hidden_size");
+        o.expert_count = ReadLittleEndian(payload, 108, 4, "expert_count");
+        o.route_bytes = ReadLittleEndian(payload, 112, 4, "route_bytes");
+        record.operands = std::move(o);
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD: {
+        MoeScoreWeightBackwardOperands o;
+        o.route_datatype = DecodeEnum<ExternalDataType>(payload, 0, "route_dtype");
+        o.score_datatype = DecodeEnum<ExternalDataType>(payload, 1, "score_dtype");
+        o.expert_datatype = DecodeEnum<ExternalDataType>(payload, 2, "expert_dtype");
+        o.upstream_datatype = DecodeEnum<ExternalDataType>(payload, 3, "upstream_dtype");
+        o.dscore_datatype = DecodeEnum<ExternalDataType>(payload, 4, "dscore_dtype");
+        o.dexpert_datatype = DecodeEnum<ExternalDataType>(payload, 5, "dexpert_dtype");
+        Require(payload[6] == 0 && payload[7] == 0,
+                "MOE_ROUTER_BACKWARD reserved bytes must be zero");
+        o.route = DecodeAddress(payload, 8, "router route");
+        o.score = DecodeAddress(payload, 32, "router score");
+        o.returns = DecodeAddress(payload, 56, "router returns");
+        o.dcombined = DecodeAddress(payload, 80, "router dcombined");
+        o.dscore = DecodeAddress(payload, 104, "router dscore");
+        o.dexpert = DecodeAddress(payload, 128, "router dexpert");
+        o.rank_rows = ReadLittleEndian(payload, 152, 4, "rank_rows");
+        o.hidden_size = ReadLittleEndian(payload, 156, 4, "hidden_size");
+        o.expert_count = ReadLittleEndian(payload, 160, 4, "expert_count");
+        o.route_bytes = ReadLittleEndian(payload, 164, 4, "route_bytes");
         record.operands = std::move(o);
         break;
     }

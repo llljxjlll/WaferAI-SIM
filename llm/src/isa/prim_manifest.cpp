@@ -170,6 +170,12 @@ constexpr std::array<E, kPrimManifestSize> kManifest{{
     {PrimId::GEMM_INPUT_DX_TIMING,
      "gemm_input_dx_timing", C::COMPUTE, V::INTERNAL,
      L::STABLE, S::AVAILABLE},
+    {PrimId::MOE_SCORE_WEIGHTED_FORWARD,
+     "moe_score_weighted_forward", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
+    {PrimId::MOE_SCORE_WEIGHT_BACKWARD,
+     "moe_score_weight_backward", C::COMPUTE, V::INTERNAL,
+     L::STABLE, S::AVAILABLE},
 }};
 
 bool SetError(std::string *error, std::string message) {

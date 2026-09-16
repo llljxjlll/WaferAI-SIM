@@ -262,6 +262,34 @@ ExternalRecord MakeRecord(const RecordSchema &schema, Boundary boundary) {
         record.operands = std::move(operands);
         break;
     }
+    case RecordOperandKind::MOE_SCORE_WEIGHTED_FORWARD: {
+        MoeScoreWeightedForwardOperands operands;
+        operands.route = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.score = {SramAddressKind::ABSOLUTE, 128, 0, 0};
+        operands.returns = {SramAddressKind::ABSOLUTE, 256, 0, 0};
+        operands.combined = {SramAddressKind::ABSOLUTE, 384, 0, 0};
+        operands.rank_rows = 4;
+        operands.hidden_size = 4;
+        operands.expert_count = 2;
+        operands.route_bytes = 80;
+        record.operands = std::move(operands);
+        break;
+    }
+    case RecordOperandKind::MOE_SCORE_WEIGHT_BACKWARD: {
+        MoeScoreWeightBackwardOperands operands;
+        operands.route = {SramAddressKind::ABSOLUTE, 0, 0, 0};
+        operands.score = {SramAddressKind::ABSOLUTE, 128, 0, 0};
+        operands.returns = {SramAddressKind::ABSOLUTE, 256, 0, 0};
+        operands.dcombined = {SramAddressKind::ABSOLUTE, 384, 0, 0};
+        operands.dscore = {SramAddressKind::ABSOLUTE, 512, 0, 0};
+        operands.dexpert = {SramAddressKind::ABSOLUTE, 640, 0, 0};
+        operands.rank_rows = 4;
+        operands.hidden_size = 4;
+        operands.expert_count = 2;
+        operands.route_bytes = 80;
+        record.operands = std::move(operands);
+        break;
+    }
     case RecordOperandKind::GREEDY_SAMPLE: {
         GreedySampleOperands operands;
         operands.logits = Address(boundary);
@@ -677,7 +705,7 @@ void CheckBoundariesAndStream(Checks &checks) {
             MakeRecord(schema, Boundary::TYPICAL), CapabilitiesFor(entry));
         stream.insert(stream.end(), typical.begin(), typical.end());
     }
-    checks.Check(executable_count == 57, "executable opcode count");
+    checks.Check(executable_count == 59, "executable opcode count");
     const uint64_t all_caps = CapabilityBit(IsaCapability::PD_CONTEXT) |
                               CapabilityBit(IsaCapability::EXPERIMENTAL_FUSED);
     checks.Accept("record stream decode", [&] {

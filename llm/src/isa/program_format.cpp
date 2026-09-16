@@ -185,6 +185,20 @@ bool ValidRelocationOperand(const ExternalRecord &record,
                id == SemanticOperandId::COMPUTE_AUX_ADDRESS ||
                id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS;
     }
+    if (std::holds_alternative<MoeScoreWeightedForwardOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS;
+    }
+    if (std::holds_alternative<MoeScoreWeightBackwardOperands>(record.operands)) {
+        return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_DATA_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_AUX_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_ROUTER_DEXPERT_ADDRESS ||
+               id == SemanticOperandId::COMPUTE_ROUTE_TABLE_ADDRESS;
+    }
     if (std::holds_alternative<GemmWeightWGradOperands>(record.operands) ||
         std::holds_alternative<GemmInputDxOperands>(record.operands)) {
         return id == SemanticOperandId::COMPUTE_INPUT_ADDRESS ||
@@ -426,6 +440,32 @@ void ValidateRecordReferences(const ExternalRecord &record,
                                      buffers[i].second);
             ValidateAbsoluteSramRegionSpan(*buffers[i].first, artifact, field,
                                            buffers[i].second);
+        }
+    } else if (const auto *o =
+                   std::get_if<MoeScoreWeightedForwardOperands>(&record.operands)) {
+        const std::array<std::pair<const SramAddressOperand *, uint64_t>, 4>
+            buffers{{{&o->route, o->route_bytes},
+                     {&o->score, 2 * o->rank_rows * o->expert_count},
+                     {&o->returns, 2 * o->rank_rows * o->hidden_size},
+                     {&o->combined, 2 * o->rank_rows * o->hidden_size}}};
+        for (std::size_t i=0;i<buffers.size();++i) {
+            const std::string field=where+" MoE router FWD buffer "+std::to_string(i);
+            ValidateAddressReference(*buffers[i].first,artifact,field,buffers[i].second);
+            ValidateAbsoluteSramRegionSpan(*buffers[i].first,artifact,field,buffers[i].second);
+        }
+    } else if (const auto *o =
+                   std::get_if<MoeScoreWeightBackwardOperands>(&record.operands)) {
+        const std::array<std::pair<const SramAddressOperand *, uint64_t>, 6>
+            buffers{{{&o->route, o->route_bytes},
+                     {&o->score, 2 * o->rank_rows * o->expert_count},
+                     {&o->returns, 2 * o->rank_rows * o->hidden_size},
+                     {&o->dcombined, 2 * o->rank_rows * o->hidden_size},
+                     {&o->dscore, 2 * o->rank_rows * o->expert_count},
+                     {&o->dexpert, 2 * o->rank_rows * o->hidden_size}}};
+        for (std::size_t i=0;i<buffers.size();++i) {
+            const std::string field=where+" MoE router BWD buffer "+std::to_string(i);
+            ValidateAddressReference(*buffers[i].first,artifact,field,buffers[i].second);
+            ValidateAbsoluteSramRegionSpan(*buffers[i].first,artifact,field,buffers[i].second);
         }
     } else if (const auto *o =
                    std::get_if<GemmInputDxOperands>(&record.operands)) {

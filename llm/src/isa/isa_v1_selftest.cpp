@@ -138,8 +138,8 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
               "external manifest contains only public entries");
     }
 
-    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 38,
-          "compute range contains 38 assigned opcodes");
+    Check(result, CountCategory(OpcodeCategory::COMPUTE) == 40,
+          "compute range contains 40 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::COMMUNICATION) == 7,
           "communication range contains 7 assigned opcodes");
     Check(result, CountCategory(OpcodeCategory::MEMORY) == 10,
@@ -214,7 +214,7 @@ IsaV1SelfTestResult CheckIsaV1OpcodeManifest() {
     }
 
     constexpr std::array<uint8_t, 7> kReservedEncoding{{
-        0x00, 0x27, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
+        0x00, 0x29, 0x47, 0x8a, 0xc7, 0xf0, 0xff,
     }};
     for (uint8_t value : kReservedEncoding) {
         Check(result, LookupOpcode(value) == nullptr,
@@ -347,7 +347,7 @@ IsaV1SelfTestResult CheckIsaV1PrimManifest() {
             deprecated_ids.insert(PrimIdValue(entry.id));
         }
     }
-    Check(result, compute == 47 && communication == 8 && memory == 14 &&
+    Check(result, compute == 49 && communication == 8 && memory == 14 &&
                       synchronization == 4 && dynamic == 2,
           "Prim primary-category counts match frozen inventory");
     Check(result, public_count == 34,

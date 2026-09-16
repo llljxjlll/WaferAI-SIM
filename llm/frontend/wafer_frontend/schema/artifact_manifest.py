@@ -131,6 +131,8 @@ class RecordOpcode(IntEnum):
     NORM_GAMMA_WGRAD_TIMING = 0x24
     GEMM_WEIGHT_WGRAD_TIMING = 0x25
     GEMM_DX_TIMING = 0x26
+    MOE_SCORE_WEIGHTED_FORWARD = 0x27
+    MOE_SCORE_WEIGHT_BACKWARD = 0x28
     DTE_SEND = 0x40
     DTE_RECV = 0x41
     LOCAL_REDUCE = 0x43
@@ -214,6 +216,8 @@ class SemanticOperandId(IntEnum):
     COMPUTE_UPDATED_FIRST_MOMENT_ADDRESS = 18
     COMPUTE_UPDATED_SECOND_MOMENT_ADDRESS = 19
     COMPUTE_UPDATED_STEP_ADDRESS = 20
+    COMPUTE_ROUTER_DEXPERT_ADDRESS = 21
+    COMPUTE_ROUTE_TABLE_ADDRESS = 22
     SRAM_BIND_INPUT_0 = 0x100
     SRAM_BIND_INPUT_1 = 0x101
     SRAM_BIND_INPUT_2 = 0x102
@@ -828,6 +832,31 @@ _GEMM_INPUT_DX_OPERANDS = (
     _lit("m"), _lit("n"), _lit("k"),
 )
 
+_MOE_ROUTER_FORWARD_OPERANDS = (
+    _lit("route_datatype"), _lit("score_datatype"),
+    _lit("expert_datatype"), _lit("combined_datatype"),
+    _addr("route_address", SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS),
+    _addr("score_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("return_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("combined_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _lit("rank_rows"), _lit("hidden_size"), _lit("expert_count"),
+    _lit("route_bytes"),
+)
+
+_MOE_ROUTER_BACKWARD_OPERANDS = (
+    _lit("route_datatype"), _lit("score_datatype"),
+    _lit("expert_datatype"), _lit("upstream_datatype"),
+    _lit("dscore_datatype"), _lit("dexpert_datatype"),
+    _addr("route_address", SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS),
+    _addr("score_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS),
+    _addr("return_address", SemanticOperandId.COMPUTE_DATA_ADDRESS),
+    _addr("dcombined_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS),
+    _addr("dscore_address", SemanticOperandId.COMPUTE_AUX_ADDRESS),
+    _addr("dexpert_address", SemanticOperandId.COMPUTE_ROUTER_DEXPERT_ADDRESS),
+    _lit("rank_rows"), _lit("hidden_size"), _lit("expert_count"),
+    _lit("route_bytes"),
+)
+
 _GREEDY_SAMPLE_OPERANDS = (
     _lit("logits_datatype"),
     _lit("output_datatype"),
@@ -928,6 +957,8 @@ _OPERAND_SCHEMAS = {
     RecordOpcode.NORM_GAMMA_WGRAD_TIMING: _NORM_GAMMA_WGRAD_OPERANDS,
     RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING: _GEMM_WEIGHT_WGRAD_OPERANDS,
     RecordOpcode.GEMM_DX_TIMING: _GEMM_INPUT_DX_OPERANDS,
+    RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD: _MOE_ROUTER_FORWARD_OPERANDS,
+    RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD: _MOE_ROUTER_BACKWARD_OPERANDS,
     RecordOpcode.GREEDY_SAMPLE: _GREEDY_SAMPLE_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_FORWARD: _CROSS_ENTROPY_FORWARD_OPERANDS,
     RecordOpcode.CROSS_ENTROPY_BACKWARD: _CROSS_ENTROPY_BACKWARD_OPERANDS,
@@ -1127,6 +1158,27 @@ for _operand_id in (
     )
 
 
+for _operand_id in (
+    SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_DATA_ADDRESS,
+    SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS,
+):
+    _ALLOWED_ADDRESS_KINDS[
+        (RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD, _operand_id)
+    ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+for _operand_id in (
+    SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_DATA_ADDRESS,
+    SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    SemanticOperandId.COMPUTE_AUX_ADDRESS,
+    SemanticOperandId.COMPUTE_ROUTER_DEXPERT_ADDRESS,
+    SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS,
+):
+    _ALLOWED_ADDRESS_KINDS[
+        (RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD, _operand_id)
+    ] = (ProgramSymbolKind.ABSOLUTE_ADDRESS,)
+
 _COMPUTE_OPCODE_BY_IMPL_REF = {
     "matmul_forward": (OpKind.GEMM, RecordOpcode.MATMUL),
     "lm_head_wgrad": (OpKind.GEMM, RecordOpcode.MATMUL),
@@ -1146,6 +1198,9 @@ _COMPUTE_OPCODE_BY_IMPL_REF = {
     "gemm_input_dx_timing": (
         OpKind.GEMM_INPUT_DX, RecordOpcode.GEMM_DX_TIMING,
     ),
+    # Router impl_ref/IR0 typed operation awaits genuinely bound early P2
+    # source and shared dCombined physical producer; public records may be
+    # tested independently but cannot be passed off as E2E training actions.
     "greedy_sample": (OpKind.SAMPLING, RecordOpcode.GREEDY_SAMPLE),
     "cross_entropy_forward": (
         OpKind.CE_FORWARD,
@@ -1207,6 +1262,8 @@ _FIXED_COMPUTE_OPCODES = (
     RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
     RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
     RecordOpcode.GEMM_DX_TIMING,
+    RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD,
+    RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD,
     RecordOpcode.GREEDY_SAMPLE,
     RecordOpcode.CROSS_ENTROPY_FORWARD,
     RecordOpcode.CROSS_ENTROPY_BACKWARD,
@@ -1824,6 +1881,28 @@ def _validate_fixed_compute_operands(
                2 * values["k"] * values["n"],
                4 * values["k"] * values["m"]) > 65536:
             raise SchemaError("0x26 tile exceeds typed 16-bit SRAM span", path=path)
+        return
+
+    if opcode in (RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD,
+                  RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD):
+        if values["route_datatype"] != 2 or any(
+            values[name] != 1 for name in (
+                "score_datatype", "expert_datatype",
+                *(("upstream_datatype", "dscore_datatype", "dexpert_datatype")
+                  if opcode is RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD
+                  else ("combined_datatype",)),
+            )
+        ):
+            raise SchemaError("router requires INT32 full route and FP16 distinct operands", path=path)
+        positive("rank_rows", "hidden_size", "expert_count", "route_bytes")
+        rows, hidden, experts = (values[name] for name in (
+            "rank_rows", "hidden_size", "expert_count"))
+        if (values["route_bytes"] != 20 * rows or
+                max(values["route_bytes"], 2 * rows * hidden,
+                    2 * rows * experts) > 65536 or
+                any(values[name] > _COMPUTE_PARAMETER_MAX for name in (
+                    "rank_rows", "hidden_size", "expert_count", "route_bytes"))):
+            raise SchemaError("router must read all five route INT32 fields per token within typed SRAM", path=path)
         return
 
     if opcode is RecordOpcode.GREEDY_SAMPLE:
