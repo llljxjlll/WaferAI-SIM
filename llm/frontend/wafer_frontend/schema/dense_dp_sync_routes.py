@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..errors import SchemaError
 from .action import ChunkSlice, RankProgram
-from .flexible_dense_train import FlexibleDenseTrainPlan
 from .ir1 import PairRoute, PhysicalGroup
-from .placed_ir1 import TrainPlacedIR1
-from .placement import PlacementContext
+
+if TYPE_CHECKING:
+    from .flexible_dense_train import FlexibleDenseTrainPlan
+    from .placed_ir1 import TrainPlacedIR1
+    from .placement import PlacementContext
 
 
 @dataclass(frozen=True, slots=True)

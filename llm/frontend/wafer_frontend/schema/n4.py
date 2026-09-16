@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..errors import SchemaError
-from .action import FusionPlan, StandaloneCollectivePlan
+from .action import FusionPlan, StandaloneCollectivePlan, _validate_rank_programs
+from .dense_dp_sync_routes import DenseDP2RoutePlan
 from .swizzle_plan import FusedPlan, SwizzleFusionPlan
-from .common import stable_artifact_id, validate_nonempty, validate_uint64
+from .common import DType, MeshAxisName, stable_artifact_id, validate_nonempty, validate_uint64
 from .ir0 import (
     CollectiveKind,
     CollectiveWorkload,
@@ -19,6 +20,7 @@ from .ir0 import (
     GemmPartition,
     GemmWorkload,
     OpKind,
+    OpPhase,
     ReduceOp,
     TrainStructure,
 )
@@ -1372,6 +1374,7 @@ class TrainReplicaInterDiePlans:
     graph: IR1
     fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
+    dp_sync_refs: tuple[str, ...] = ()
 
     @classmethod
     def create(
@@ -1381,6 +1384,7 @@ class TrainReplicaInterDiePlans:
         graph: IR1,
         fusion_plans: tuple[FusedPlan, ...],
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
+        dp_sync_refs: tuple[str, ...] = (),
     ) -> "TrainReplicaInterDiePlans":
         semantic_key = {
             "replica_index": replica_index,
@@ -1389,6 +1393,8 @@ class TrainReplicaInterDiePlans:
             "fusion_plans": fusion_plans,
             "standalone_plans": standalone_plans,
         }
+        if dp_sync_refs:
+            semantic_key["dp_sync_refs"] = dp_sync_refs
         return cls(
             id=stable_artifact_id(
                 "train_replica_interdie_plans",
@@ -1410,8 +1416,22 @@ class TrainReplicaInterDiePlans:
             skeleton.id for skeleton in self.graph.fused_op_skeletons
         ):
             raise SchemaError("fusion plans must exactly cover replica skeletons", path=f"{path}.fusion_plans")
-        if tuple(plan.op_id for plan in self.standalone_plans) != _unfused_collective_ids(self.graph):
-            raise SchemaError("standalone plans must exactly cover replica collectives", path=f"{path}.standalone_plans")
+        expected_dp = tuple(
+            node.id for node in self.graph.nodes
+            if node.kind is OpKind.COLLECTIVE
+            and isinstance(node.workload, CollectiveWorkload)
+            and node.workload.collective is CollectiveKind.ALL_REDUCE
+            and node.workload.mesh_axes == (MeshAxisName.DP,)
+            and node.id.startswith("dp_sync::")
+        )
+        if self.dp_sync_refs != expected_dp:
+            raise SchemaError("all DP SUM nodes must be delegated exactly once to the cross-replica plan",
+                              path=f"{path}.dp_sync_refs")
+        expected_local = tuple(ref for ref in _unfused_collective_ids(self.graph)
+                               if ref not in self.dp_sync_refs)
+        if tuple(plan.op_id for plan in self.standalone_plans) != expected_local:
+            raise SchemaError("standalone plans must exactly cover local TP collectives",
+                              path=f"{path}.standalone_plans")
         group_id = self.graph.groups[0].id
         plan_ids: set[str] = set()
         for name, plans in (
@@ -1440,6 +1460,7 @@ class TrainReplicaInterDiePlans:
                 "graph": self.graph,
                 "fusion_plans": self.fusion_plans,
                 "standalone_plans": self.standalone_plans,
+                **({"dp_sync_refs": self.dp_sync_refs} if self.dp_sync_refs else {}),
             },
             schema_version=TRAIN_INTERDIE_PLANNED_IR1_SCHEMA_VERSION,
         )
@@ -1464,6 +1485,7 @@ class TrainInterDiePlannedIR1:
     train_structure: TrainStructure
     dp_degree: int
     replicas: tuple[TrainReplicaInterDiePlans, ...]
+    dp_gradient_routes: DenseDP2RoutePlan | None = None
 
     @classmethod
     def create(
@@ -1472,6 +1494,7 @@ class TrainInterDiePlannedIR1:
         source: TrainFusionPartitionedIR1,
         context: InterDiePlanningContext,
         replicas: tuple[TrainReplicaInterDiePlans, ...],
+        dp_gradient_routes: DenseDP2RoutePlan | None = None,
     ) -> "TrainInterDiePlannedIR1":
         semantic_key = {
             "source_partitioned_id": source.id,
@@ -1482,6 +1505,8 @@ class TrainInterDiePlannedIR1:
             "dp_degree": source.dp_degree,
             "replicas": replicas,
         }
+        if dp_gradient_routes is not None:
+            semantic_key["dp_gradient_routes"] = dp_gradient_routes
         result = cls(
             schema_version=TRAIN_INTERDIE_PLANNED_IR1_SCHEMA_VERSION,
             producer_pass="train_inter_die_plan",
@@ -1504,6 +1529,8 @@ class TrainInterDiePlannedIR1:
             "train_structure": self.train_structure,
             "dp_degree": self.dp_degree,
             "replicas": self.replicas,
+            **({"dp_gradient_routes": self.dp_gradient_routes}
+               if self.dp_gradient_routes is not None else {}),
         }
 
     def validate(self, path: str = "train_interdie_planned_ir1") -> None:
@@ -1564,6 +1591,86 @@ class TrainInterDiePlannedIR1:
             if all_plan_ids.intersection(local_ids):
                 raise SchemaError("plan ids must be replica-distinct", path=replica_path)
             all_plan_ids.update(local_ids)
+        dp_refs = tuple(replica.dp_sync_refs for replica in self.replicas)
+        if any(dp_refs):
+            routes = self.dp_gradient_routes
+            if (
+                routes is None or self.dp_degree != 2
+                or len(self.replicas) != 2
+                or len(routes.dp_groups) != 2
+                or len(routes.gradients) != len(dp_refs[0])
+                or len(dp_refs[0]) != len(dp_refs[1])
+                or routes.source_ir0_id != self.replicas[0].graph.source_ir0_id
+                or not routes.placed_ir1_id
+            ):
+                raise SchemaError("cross-replica DP SUM requires exact two-DP route coverage",
+                                  path=f"{path}.dp_gradient_routes")
+            # The source partition references the placement ID, so the
+            # equality with the original placement is independently checked
+            # when validate_against(source,context) runs.
+            for tp, group in enumerate(routes.dp_groups):
+                group.validate(f"{path}.dp_gradient_routes.groups[{tp}]")
+                if (
+                    group.axis is not MeshAxisName.DP
+                    or tuple(item.die_id for item in group.placements)
+                    != tuple(replica.graph.groups[0].placements[tp].die_id
+                             for replica in self.replicas)
+                ):
+                    raise SchemaError("DP SUM group does not span the exact replica owner dies",
+                                      path=f"{path}.dp_gradient_routes.groups[{tp}]")
+                for route in group.embedding.routes:
+                    route.validate_against(
+                        self.replicas[0].graph.fabric,
+                        {item.rank: item.die_id for item in group.placements},
+                        f"{path}.dp_gradient_routes.groups[{tp}].routes",
+                    )
+            expected_refs = {node_id for refs in dp_refs for node_id in refs}
+            if {ref for gradient in routes.gradients for ref in gradient.sync_refs} != expected_refs:
+                raise SchemaError("cross-replica route actions omit or duplicate DP sync nodes",
+                                  path=f"{path}.dp_gradient_routes")
+            for index, gradient in enumerate(routes.gradients):
+                if (
+                    gradient.tp_shard not in (0, 1)
+                    or gradient.step not in (0, 1)
+                    or gradient.group_ref != routes.dp_groups[gradient.tp_shard].id
+                    or gradient.reduce_route not in routes.dp_groups[gradient.tp_shard].embedding.routes
+                    or gradient.broadcast_route not in routes.dp_groups[gradient.tp_shard].embedding.routes
+                    or gradient.chunk.bytes != gradient.gradient_bytes
+                ):
+                    raise SchemaError("DP SUM route uses an unbound owner, step, payload or pair route",
+                                      path=f"{path}.dp_gradient_routes.gradients[{index}]")
+                _validate_rank_programs(
+                    gradient.rank_programs, (gradient.chunk,),
+                    path=f"{path}.dp_gradient_routes.gradients[{index}]",
+                )
+                for dp, replica in enumerate(self.replicas):
+                    nodes = {node.id: node for node in replica.graph.nodes}
+                    values = {value.id: value for value in replica.graph.values}
+                    wgrad_ref = gradient.local_wgrad_refs[dp]
+                    sync_ref = gradient.sync_refs[dp]
+                    optimizer_ref = gradient.optimizer_refs[dp]
+                    if any(ref not in nodes for ref in (wgrad_ref, sync_ref, optimizer_ref)):
+                        raise SchemaError("cross-replica route lacks a physical source node",
+                                          path=f"{path}.dp_gradient_routes.gradients[{index}]")
+                    wgrad, sync, optimizer = (
+                        nodes[wgrad_ref], nodes[sync_ref], nodes[optimizer_ref]
+                    )
+                    if (
+                        wgrad.phase is not OpPhase.WGRAD
+                        or sync.kind is not OpKind.COLLECTIVE
+                        or sync.workload.collective is not CollectiveKind.ALL_REDUCE
+                        or sync.workload.rank_input_bytes != gradient.gradient_bytes
+                        or sync.inputs != wgrad.outputs
+                        or optimizer.kind is not OpKind.OPTIMIZER_UPDATE
+                        or optimizer.inputs[1] != sync.outputs[0]
+                        or values[wgrad.outputs[0]].dtype is not DType.FP32
+                        or values[sync.outputs[0]].dtype is not DType.FP32
+                    ):
+                        raise SchemaError("DP SUM gradient provenance is not WGRAD→SUM→SGD",
+                                          path=f"{path}.dp_gradient_routes.gradients[{index}]")
+        elif self.dp_gradient_routes is not None:
+            raise SchemaError("unused cross-replica DP route plan is forbidden",
+                              path=f"{path}.dp_gradient_routes")
         expected_id = stable_artifact_id(
             "train_interdie_planned_ir1",
             self._semantic_key(),
@@ -1591,6 +1698,10 @@ class TrainInterDiePlannedIR1:
             or len(self.replicas) != source.dp_degree
         ):
             raise SchemaError("does not preserve train partition provenance", path=path)
+        if (self.dp_gradient_routes is not None
+                and self.dp_gradient_routes.placed_ir1_id != source.source_train_placed_id):
+            raise SchemaError("DP2 route plan must bind the exact source N3 placement",
+                              path=f"{path}.dp_gradient_routes.placed_ir1_id")
         for index, (replica, graph) in enumerate(zip(self.replicas, source.replicas)):
             replica.validate_against(graph, f"{path}.replicas[{index}]")
         expected = (

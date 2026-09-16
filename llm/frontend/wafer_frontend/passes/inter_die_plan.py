@@ -10,8 +10,13 @@ from ..schema.swizzle_plan import FusedPlan
 from ..policies.swizzle_defaults import production_swizzle_policy
 from ..policies.swizzle_topo import SwizzlePlanner
 from ..schema.ir0 import CollectiveKind, CollectiveWorkload, OpKind, ReduceOp
-from ..schema.common import ProfileKey
+from ..schema.common import MeshAxisName, ProfileKey
 from ..schema.ir1 import IR1, PhysicalNode
+from ..schema.flexible_dense_train import FlexibleDenseTrainPlan
+from ..schema.placement import PlacementContext
+from .placement import place_train_forward_ir0
+from .full_dense_training_two_step_ir0 import build_full_dense_training_two_step_ir0
+from .full_dense_training_dp2_routes import build_dense_dp2_route_plan
 from ..schema.n4 import (
     FusionPartitionedIR1Bundle,
     FusionPartitionedProfileIR1,
@@ -27,7 +32,9 @@ from ..schema.n4 import (
 )
 
 
-def _unfused_collectives(graph: IR1) -> tuple[PhysicalNode, ...]:
+def _unfused_collectives(
+    graph: IR1, *, dp_sync_refs: tuple[str, ...] = (),
+) -> tuple[PhysicalNode, ...]:
     fused_members = {
         node_id
         for skeleton in graph.fused_op_skeletons
@@ -36,6 +43,17 @@ def _unfused_collectives(graph: IR1) -> tuple[PhysicalNode, ...]:
     result: list[PhysicalNode] = []
     for index, node in enumerate(graph.nodes):
         if node.kind is not OpKind.COLLECTIVE or node.id in fused_members:
+            continue
+        if node.id in dp_sync_refs:
+            if (
+                not node.id.startswith("dp_sync::")
+                or type(node.workload) is not CollectiveWorkload
+                or node.workload.collective is not CollectiveKind.ALL_REDUCE
+                or node.workload.mesh_axes != (MeshAxisName.DP,)
+                or node.workload.reduce_op is not ReduceOp.SUM
+            ):
+                raise SchemaError("only source-bound DP2 gradient SUM may use a cross-replica plan",
+                                  path=f"ir1.nodes[{index}]")
             continue
         if (
             type(node.workload) is not CollectiveWorkload
@@ -77,6 +95,8 @@ def plan_ir1(
     context: InterDiePlanningContext,
     fused_policy: InterDiePolicy | None = None,
     standalone_policy: StandaloneCollectivePolicy | None = None,
+    *,
+    dp_sync_refs: tuple[str, ...] = (),
 ) -> tuple[tuple[FusedPlan, ...], tuple[StandaloneCollectivePlan, ...]]:
     """Plan one real fusion-partitioned IR-1 without fabricating an N4 wrapper."""
 
@@ -94,7 +114,7 @@ def plan_ir1(
             "must be produced by fusion_partition",
             path="ir1.producer_pass",
         )
-    standalone_nodes = _unfused_collectives(graph)
+    standalone_nodes = _unfused_collectives(graph, dp_sync_refs=dp_sync_refs)
 
     if fused_policy is None:
         selected_fused_policy: InterDiePolicy = (
@@ -268,8 +288,11 @@ def plan_train_forward(
     context: InterDiePlanningContext,
     fused_policy: InterDiePolicy | None = None,
     standalone_policy: StandaloneCollectivePolicy | None = None,
+    *,
+    dense_dp2_plan: FlexibleDenseTrainPlan | None = None,
+    dp2_placement_context: PlacementContext | None = None,
 ) -> TrainInterDiePlannedIR1:
-    """Plan every DP replica independently; no plan may cross replica groups."""
+    """Plan local TP replicas and authenticated physical cross-DP gradient SUM."""
 
     if type(source) is not TrainFusionPartitionedIR1:
         raise SchemaError("must be a TrainFusionPartitionedIR1", path="source")
@@ -277,19 +300,46 @@ def plan_train_forward(
         raise SchemaError("must be an InterDiePlanningContext", path="inter_die_planning_context")
     source.validate("source")
     context.validate("inter_die_planning_context")
+    dp_sync_nodes = tuple(
+        node for node in source.replicas[0].nodes
+        if node.kind is OpKind.COLLECTIVE
+        and type(node.workload) is CollectiveWorkload
+        and node.workload.collective is CollectiveKind.ALL_REDUCE
+        and node.workload.mesh_axes == (MeshAxisName.DP,)
+    )
+    dp_route_plan = None
+    if dp_sync_nodes:
+        if dense_dp2_plan is None or dp2_placement_context is None:
+            raise SchemaError("source-backed cross-DP SUM needs its exact plan and physical N3 placement",
+                              path="dense_dp2_plan")
+        canonical_source = build_full_dense_training_two_step_ir0(dense_dp2_plan)
+        placed = place_train_forward_ir0(canonical_source, dp2_placement_context)
+        if placed.id != source.source_train_placed_id:
+            raise SchemaError("DP SUM physical source placement drifted",
+                              path="source.source_train_placed_id")
+        dp_route_plan = build_dense_dp2_route_plan(
+            dense_dp2_plan, placed, dp2_placement_context,
+        )
+        dp_route_plan.validate_against(dense_dp2_plan, placed, dp2_placement_context)
+    elif dense_dp2_plan is not None or dp2_placement_context is not None:
+        raise SchemaError("cross-DP route plan is forbidden without DP SUM nodes",
+                          path="dense_dp2_plan")
     replica_plans: list[TrainReplicaInterDiePlans] = []
     for replica_index, graph in enumerate(source.replicas):
+        dp_sync_refs = (
+            tuple(item.sync_refs[replica_index] for item in dp_route_plan.gradients)
+            if dp_route_plan is not None else ()
+        )
         fusion_plans, standalone_plans = plan_ir1(
-            graph,
-            context,
-            fused_policy,
-            standalone_policy,
+            graph, context, fused_policy, standalone_policy,
+            dp_sync_refs=dp_sync_refs,
         )
         replica = TrainReplicaInterDiePlans.create(
             replica_index=replica_index,
             graph=graph,
             fusion_plans=fusion_plans,
             standalone_plans=standalone_plans,
+            dp_sync_refs=dp_sync_refs,
         )
         replica.validate_against(graph, f"train_replica_plans[{replica_index}]")
         replica_plans.append(replica)
@@ -297,6 +347,7 @@ def plan_train_forward(
         source=source,
         context=context,
         replicas=tuple(replica_plans),
+        dp_gradient_routes=dp_route_plan,
     )
 
 
