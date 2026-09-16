@@ -20,6 +20,11 @@ class FullDenseDP2N5PhysicalTasksTest(unittest.TestCase):
     def test_exact_task_route_and_sgd_boundaries(self) -> None:
         self.projected.validate_against(self.source)
         self.assertEqual(len(self.projected.tasks), 480)
+        self.assertEqual(
+            {item.source_sync_ref for item in self.projected.tasks},
+            {ref for gradient in self.source.gradients for ref in gradient.sync_refs},
+        )
+        self.assertEqual(len({item.source_sync_ref for item in self.projected.tasks}), 120)
         self.assertEqual({item.die_id for item in self.projected.tasks}, {0, 1, 2, 3})
         self.assertEqual(sum(item.flow is not None for item in self.projected.tasks), 240)
         self.assertEqual(sum(item.task.kind is SemanticTaskKind.REDUCE
@@ -35,6 +40,15 @@ class FullDenseDP2N5PhysicalTasksTest(unittest.TestCase):
         shortened = replace(self.projected, tasks=self.projected.tasks[1:])
         with self.assertRaisesRegex(SchemaError, "coverage must be exact"):
             shortened.validate_against(self.source)
+        flow_index = next(i for i, item in enumerate(self.projected.tasks)
+                          if item.flow is not None)
+        corrupted = list(self.projected.tasks)
+        corrupted[flow_index] = replace(
+            corrupted[flow_index],
+            flow=replace(corrupted[flow_index].flow, pair_route_ref="route.fake"),
+        )
+        with self.assertRaisesRegex(SchemaError, "coverage must be exact"):
+            replace(self.projected, tasks=tuple(corrupted)).validate_against(self.source)
         victim = next(i for i, item in enumerate(self.projected.tasks)
                       if item.consumer_task_ref is not None)
         edited = list(self.projected.tasks)
