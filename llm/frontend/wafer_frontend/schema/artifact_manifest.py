@@ -2884,9 +2884,18 @@ class StateABI:
                     "AdamW states require FP32 vectors or one INT32 step counter",
                     path=path,
                 )
+        elif self.kind is StateKind.MOE_STATIC_ROUTE:
+            if (self.dtype is not DType.INT32 or len(self.shape) != 2
+                    or self.shape[1] != 5
+                    or not self.layout.startswith("MoE_")
+                    or not self.layout.endswith(".moe.route_table_source")):
+                raise SchemaError(
+                    "static MoE route StateABI needs five INT32 fields per token",
+                    path=f"{path}.dtype",
+                )
         elif self.dtype is DType.INT32:
             raise SchemaError(
-                "INT32 StateABI belongs only to AdamW step",
+                "INT32 StateABI belongs only to AdamW step or static MoE route",
                 path=f"{path}.dtype",
             )
         if (
@@ -2918,6 +2927,13 @@ class StateABI:
             ):
                 raise SchemaError(
                     "trainable parameter must be PERSISTENT and READ_WRITE",
+                    path=path,
+                )
+        elif self.kind is StateKind.MOE_STATIC_ROUTE:
+            if (self.lifetime is not PersistentStateLifetime.STEP
+                    or self.access is not PersistentStateAccess.READ_ONLY):
+                raise SchemaError(
+                    "static MoE route StateABI must be STEP and READ_ONLY",
                     path=path,
                 )
         elif self.kind is StateKind.ACTIVATION:
@@ -3000,6 +3016,13 @@ def _fused_recv_wait_pairs(
             and wait.origin_ref.plan_id == recv.origin_ref.plan_id
             and wait.origin_ref.rank == recv.origin_ref.rank
         )
+        standalone_pair = (
+            isinstance(wait.origin_ref, StandaloneNodeOrigin)
+            and isinstance(recv.origin_ref, StandaloneNodeOrigin)
+            and wait.origin_ref.collective_plan_id
+            == recv.origin_ref.collective_plan_id
+            and wait.origin_ref.rank == recv.origin_ref.rank
+        )
         transfer_pair = (
             isinstance(wait.origin_ref, StateTransferOrigin)
             and isinstance(recv.origin_ref, StateTransferOrigin)
@@ -3008,7 +3031,7 @@ def _fused_recv_wait_pairs(
             and wait.origin_ref.rank == recv.origin_ref.rank
         )
         if (
-            not (fused_pair or swizzle_pair or transfer_pair)
+            not (fused_pair or swizzle_pair or standalone_pair or transfer_pair)
             or wait.runtime_binding is None
             or recv.runtime_binding is None
             or wait.runtime_binding.token_symbol is None
