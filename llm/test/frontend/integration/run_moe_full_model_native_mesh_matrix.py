@@ -78,7 +78,6 @@ def _recompute_flow_evidence(
         raise ValueError("expected remote flow binding is missing")
     links: dict[tuple[int, int, str], list[int]] = {}
     endpoint_ranks: set[int] = set()
-    seen_ids: set[str] = set()
     for flow in value:
         if type(flow) is not dict or set(flow) != {
             "id", "source_rank", "destination_rank", "logical_bytes",
@@ -88,7 +87,7 @@ def _recompute_flow_evidence(
         source = flow["source_rank"]
         destination = flow["destination_rank"]
         logical_bytes = flow["logical_bytes"]
-        if (type(flow_id) is not str or not flow_id or flow_id in seen_ids
+        if (type(flow_id) is not str or not flow_id
                 or type(source) is not int
                 or type(destination) is not int
                 or type(logical_bytes) is not int
@@ -96,7 +95,6 @@ def _recompute_flow_evidence(
                 or not 0 <= destination < rank_count
                 or source == destination or logical_bytes <= 0):
             raise ValueError("expected remote flow row is invalid")
-        seen_ids.add(flow_id)
         endpoint_ranks.update((source, destination))
         packets = (
             logical_bytes + _PACKET_PAYLOAD_BYTES - 1

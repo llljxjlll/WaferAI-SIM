@@ -14,6 +14,7 @@ import unittest
 from llm.test.frontend.integration.run_moe_full_model_native_mesh_matrix import (
     M1_SHAPES,
     RELEASE_SHAPES,
+    _recompute_flow_evidence,
     _require_matching_matrix_binding,
     audit_cached_case,
     audit_fresh,
@@ -353,6 +354,25 @@ class MoeFullModelNativeMatrixAuditTest(unittest.TestCase):
             compare_fresh(first, second)
             with self.assertRaisesRegex(ValueError, "independent"):
                 compare_fresh(first, dict(second, makespan_cycles=11))
+
+    def test_repeated_sequence_flow_ids_remain_a_counted_multiset(self) -> None:
+        flow = {
+            "id": "reused_across_sequence",
+            "source_rank": 0,
+            "destination_rank": 1,
+            "logical_bytes": 16,
+        }
+        links, endpoints = _recompute_flow_evidence(
+            [flow, dict(flow)], rows=1, columns=2
+        )
+        self.assertEqual(endpoints, [0, 1])
+        self.assertEqual(links, [{
+            "source_die": 0,
+            "destination_die": 1,
+            "direction": "E",
+            "request_hops": 2,
+            "packet_hops": 2,
+        }])
 
     def test_canonical_m1_and_all_release_shards_are_exact(self) -> None:
         self.assertEqual(
