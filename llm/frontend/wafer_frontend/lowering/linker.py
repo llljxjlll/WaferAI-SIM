@@ -292,6 +292,38 @@ def _operand_role(
             (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
             (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ATTENTION_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.ROPE_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS):
+            (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.RESIDUAL_BACKWARD_TIMING, SemanticOperandId.COMPUTE_AUX_ADDRESS):
+            (BufferUseRole.COMP_OUTPUT, 1),
         (RecordOpcode.CROSS_ENTROPY_FORWARD, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (
             BufferUseRole.COMP_INPUT,
             0,

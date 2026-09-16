@@ -46,6 +46,13 @@ from .ir0 import (
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from .gemm_input_dx_workload import GemmInputDxWorkload
+from .dense_backward_workloads import (
+    AttentionBackwardWorkload,
+    ResidualBackwardWorkload,
+    RmsNormBackwardWorkload,
+    RopeBackwardWorkload,
+    SwiGluBackwardWorkload,
+)
 from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
@@ -1255,6 +1262,21 @@ _COMPUTE_OPCODE_BY_IMPL_REF = {
     "gemm_input_dx_timing": (
         OpKind.GEMM_INPUT_DX, RecordOpcode.GEMM_DX_TIMING,
     ),
+    "rmsnorm_backward_timing": (
+        OpKind.RMSNORM_BACKWARD, RecordOpcode.RMSNORM_BACKWARD_TIMING,
+    ),
+    "attention_backward_timing": (
+        OpKind.ATTENTION_BACKWARD, RecordOpcode.ATTENTION_BACKWARD_TIMING,
+    ),
+    "rope_backward_timing": (
+        OpKind.ROPE_BACKWARD, RecordOpcode.ROPE_BACKWARD_TIMING,
+    ),
+    "residual_backward_timing": (
+        OpKind.RESIDUAL_BACKWARD, RecordOpcode.RESIDUAL_BACKWARD_TIMING,
+    ),
+    "swiglu_backward_timing": (
+        OpKind.SWIGLU_BACKWARD, RecordOpcode.SWIGLU_BACKWARD_TIMING,
+    ),
     # Router impl_ref/IR0 typed operation awaits genuinely bound early P2
     # source and shared dCombined physical producer; public records may be
     # tested independently but cannot be passed off as E2E training actions.
@@ -1484,6 +1506,62 @@ def _fixed_compute_literals(
         return {"weight_datatype": 1, "upstream_datatype": 1,
                 "dx_datatype": 1, "m": workload.m,
                 "n": workload.n, "k": workload.k}
+    if opcode is RecordOpcode.RMSNORM_BACKWARD_TIMING:
+        if type(workload) is not RmsNormBackwardWorkload or len(compute.inputs) != 2:
+            raise SchemaError("0x29 requires saved X and actual dY", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {
+            "input_datatype": 1, "upstream_datatype": 1,
+            "output_datatype": 1, "rows": workload.rows,
+            "hidden_size": workload.hidden_size,
+            "tp_degree": workload.tp_degree, "mode": workload.mode,
+        }
+    if opcode is RecordOpcode.ATTENTION_BACKWARD_TIMING:
+        if type(workload) is not AttentionBackwardWorkload or len(compute.inputs) != 2:
+            raise SchemaError("0x2A requires saved QKV and actual dAttention", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {
+            "input_datatype": 1, "upstream_datatype": 1,
+            "output_datatype": 1, "tokens": workload.tokens,
+            "rank_heads": workload.rank_heads,
+            "rank_kv_heads": workload.rank_kv_heads,
+            "head_dim": workload.head_dim,
+            "tp_degree": workload.tp_degree,
+            "sequences": workload.sequences,
+            "pairs": workload.pairs,
+        }
+    if opcode is RecordOpcode.ROPE_BACKWARD_TIMING:
+        if type(workload) is not RopeBackwardWorkload or len(compute.inputs) != 2:
+            raise SchemaError("0x2B requires exact positions and dQKV", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {
+            "position_datatype": 2, "upstream_datatype": 1,
+            "output_datatype": 1,
+            "logical_tokens": workload.logical_tokens,
+            "rank_tokens": workload.rank_tokens,
+            "logical_query_heads": workload.logical_query_heads,
+            "logical_kv_heads": workload.logical_kv_heads,
+            "rank_query_heads": workload.rank_query_heads,
+            "rank_kv_heads": workload.rank_kv_heads,
+            "tp_degree": workload.tp_degree,
+            "head_dim": workload.head_dim,
+            "rotary_dim": workload.rotary_dim,
+            "max_position_embeddings": workload.max_position_embeddings,
+            "position_trace_tag": workload.position_trace_tag,
+        }
+    if opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING:
+        if (type(workload) is not ResidualBackwardWorkload
+                or len(compute.inputs) != 2 or len(compute.outputs) != 2):
+            raise SchemaError("0x2C requires saved residual, actual dY and both dX", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {
+            "forward_datatype": 1, "upstream_datatype": 1,
+            "left_output_datatype": 1, "right_output_datatype": 1,
+            "logical_rows": workload.logical_rows,
+            "rank_rows": workload.rank_rows,
+            "tp_degree": workload.tp_degree,
+            "hidden_size": workload.hidden_size,
+        }
     if opcode is RecordOpcode.GREEDY_SAMPLE:
         if (
             type(workload) is not GreedySampleWorkload
@@ -2177,7 +2255,8 @@ def _compute_record_abi(
             path=f"{path}.op_kind",
         )
     if len(compute.outputs) != (
-        5 if opcode is RecordOpcode.ADAMW_UPDATE else 1
+        5 if opcode is RecordOpcode.ADAMW_UPDATE
+        else 2 if opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING else 1
     ):
         raise SchemaError(
             "Dense compute ABI output arity differs from its public opcode",
@@ -2193,6 +2272,10 @@ def _compute_record_abi(
             RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
             RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING,
             RecordOpcode.GEMM_DX_TIMING,
+            RecordOpcode.RMSNORM_BACKWARD_TIMING,
+            RecordOpcode.ATTENTION_BACKWARD_TIMING,
+            RecordOpcode.ROPE_BACKWARD_TIMING,
+            RecordOpcode.RESIDUAL_BACKWARD_TIMING,
             RecordOpcode.CROSS_ENTROPY_FORWARD,
             RecordOpcode.CROSS_ENTROPY_BACKWARD,
             RecordOpcode.SGD_UPDATE,
@@ -2254,6 +2337,13 @@ def _compute_record_abi(
             1,
             (1, tokens, qkv_width, workload.rank_num_heads, ratio),
             None,
+        )
+    elif opcode is RecordOpcode.SWIGLU_BACKWARD_TIMING:
+        if type(workload) is not SwiGluBackwardWorkload or len(compute.inputs) != 2:
+            raise SchemaError("0x22 requires saved gate/up and real dY", path=path)
+        workload.validate(path=f"{path}.workload")
+        result = _ComputeRecordABI(
+            opcode, 2, (workload.element_count,), 1,
         )
     elif opcode is RecordOpcode.SWIGLU:
         if (
@@ -5220,6 +5310,9 @@ def _address_operand_role(
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
@@ -6947,6 +7040,9 @@ class LinkedProgramManifest:
             (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
             (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
             (RecordOpcode.GEMM_DX_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
+        (RecordOpcode.SWIGLU_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),
         (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_INPUT_ADDRESS): (BufferUseRole.COMP_INPUT, 0),
         (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_DATA_ADDRESS): (BufferUseRole.COMP_INPUT, 1),
         (RecordOpcode.RMSNORM_BACKWARD_TIMING, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS): (BufferUseRole.COMP_OUTPUT, 0),

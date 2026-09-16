@@ -129,6 +129,25 @@ class TrainGlobalActionReplica:
                 "forward-train GlobalAction requires parameter-only persistent state",
                 path=f"{path}.scheduled.projected.graph.persistent_state_manifest",
             )
+        if {
+            OpKind.RMSNORM_BACKWARD,
+            OpKind.ATTENTION_BACKWARD,
+            OpKind.ROPE_BACKWARD,
+            OpKind.RESIDUAL_BACKWARD,
+            OpKind.SWIGLU_BACKWARD,
+        } <= {node.kind for node in graph.nodes}:
+            self._validate_full_dense_backward_actions(graph, manifest, path)
+            expected_id = stable_artifact_id(
+                "train_global_action_replica",
+                self._semantic_key(),
+                schema_version=TRAIN_GLOBAL_ACTION_SCHEMA_VERSION,
+            )
+            if self.id != expected_id:
+                raise SchemaError(
+                    "complete Dense backward replica id is unstable",
+                    path=f"{path}.id",
+                )
+            return
         state_actions = tuple(
             action for action in self.global_dag.actions if action.state_uses
         )
@@ -258,6 +277,52 @@ class TrainGlobalActionReplica:
             raise SchemaError(
                 f"unstable replica id; expected {expected_id!r}",
                 path=f"{path}.id",
+            )
+
+    def _validate_full_dense_backward_actions(
+        self, graph, manifest, path: str
+    ) -> None:
+        state_actions = tuple(
+            action for action in self.global_dag.actions if action.state_uses
+        )
+        if any(
+            action.task_kind is not SemanticTaskKind.DMA_IN
+            or len(action.state_uses) != 1
+            or action.state_uses[0].access is not StateUseAccess.READ
+            for action in state_actions
+        ):
+            raise SchemaError(
+                "complete Dense backward state actions must be READ-only DMA_IN",
+                path=f"{path}.global_dag.actions",
+            )
+        expected = {
+            (binding.id, access.node_ref)
+            for binding in manifest.bindings
+            for access in graph.state_accesses
+            if access.state_ref == binding.state_ref
+        }
+        actual = {
+            (action.state_uses[0].hbm_binding_ref,
+             getattr(action.origin_ref, "node_ref", None))
+            for action in state_actions
+        }
+        if len(actual) != len(state_actions) or actual != expected:
+            raise SchemaError(
+                "complete Dense backward READ actions must cover every exact parameter access",
+                path=f"{path}.global_dag.actions",
+            )
+        compute_members = {
+            action.member_id for action in self.global_dag.actions
+            if action.task_kind is SemanticTaskKind.COMP
+        }
+        required = {
+            node.id for node in graph.nodes
+            if node.phase in (OpPhase.DGRAD, OpPhase.WGRAD)
+        }
+        if not required <= compute_members:
+            raise SchemaError(
+                "complete Dense backward GlobalAction omits gradient compute",
+                path=f"{path}.global_dag.actions",
             )
 
     def validate_against(

@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import replace
 import unittest
 
+from llm.frontend.wafer_frontend.schema.action import canonical_compute_operand_roles
+from llm.frontend.wafer_frontend.schema.ir0 import OpKind
+
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.schema.dense_backward_workloads import (
     AttentionBackwardWorkload, ResidualBackwardWorkload,
@@ -26,6 +29,27 @@ class DenseBackwardWorkloadsTest(unittest.TestCase):
                           swiglu.input_bytes, swiglu.upstream_bytes),
                          (8, 24, 8, 4, 24, 8, 32, 16))
         self.assertGreater(rope.position_trace_tag, 0)
+
+    def test_opkind_registration_has_exact_multi_output_roles(self) -> None:
+        cases = (
+            (OpKind.RMSNORM_BACKWARD, RmsNormBackwardWorkload(1, 4, 1),
+             (("forward_activation", "upstream_gradient"), ("input_gradient",))),
+            (OpKind.ATTENTION_BACKWARD,
+             AttentionBackwardWorkload(1, 1, 1, 4, 1, 1, 1),
+             (("forward_packed_qkv", "upstream_gradient"), ("input_gradient",))),
+            (OpKind.ROPE_BACKWARD,
+             RopeBackwardWorkload(1, 1, 1, 1, 1, 1, 1, 4, 4, 64),
+             (("position_ids", "upstream_gradient"), ("input_gradient",))),
+            (OpKind.RESIDUAL_BACKWARD, ResidualBackwardWorkload(1, 1, 1, 4),
+             (("forward_output", "upstream_gradient"),
+              ("left_gradient", "right_gradient"))),
+            (OpKind.SWIGLU_BACKWARD, SwiGluBackwardWorkload(1, 8),
+             (("forward_gate_up", "upstream_gradient"), ("input_gradient",))),
+        )
+        for kind, workload, expected in cases:
+            with self.subTest(kind=kind.value):
+                self.assertEqual(canonical_compute_operand_roles(
+                    kind, workload, tiled=False), expected)
 
     def test_invalid_geometry_and_dtype_fail_closed(self) -> None:
         fixtures = (

@@ -380,7 +380,7 @@ class DenseIR0Validator:
         local_shapes: dict[str, tuple[int, ...]],
         path: str,
     ) -> None:
-        """A WGRAD or old FP16 GEMM cannot stand in for public FP32 dX."""
+        """Require the public FP16 activation-gradient GEMM dX source."""
         from ..schema.gemm_input_dx_workload import GemmInputDxWorkload
 
         workload = node.workload
@@ -392,7 +392,7 @@ class DenseIR0Validator:
                               (workload.k, workload.m))
                 or values[node.inputs[1]].producer is None
                 or values[node.outputs[0]].producer != node.id):
-            _fail("GEMM dX needs real source weight/dY and physical FP32 output",
+            _fail("GEMM dX needs real source weight/dY and physical FP16 output",
                   f"{path}.workload")
         _require_pure(node, path)
 
@@ -482,6 +482,11 @@ class DenseIR0Validator:
             return
         if graph.job is not JobKind.TRAIN:
             _fail("unsupported Dense job kind", f"{path}.job")
+        if graph.producer_pass == "full_dense_training_backward_source":
+            DenseIR0Validator._validate_full_dense_backward_job_contract(
+                graph, path
+            )
+            return
         if ce_backward_nodes or optimizer_nodes:
             DenseIR0Validator._validate_lite_train_job_contract(graph, path)
             return
@@ -524,6 +529,79 @@ class DenseIR0Validator:
             for declaration in graph.persistent_states
         ):
             _fail("forward train must not materialize KV state", f"{path}.persistent_states")
+
+    @staticmethod
+    def _validate_full_dense_backward_job_contract(
+        graph: IR0, path: str
+    ) -> None:
+        instance = graph.instances[0] if len(graph.instances) == 1 else None
+        if (
+            instance is None
+            or instance.role is not LogicalRole.TRAIN
+            or instance.replicas != 1
+            or (instance.parallel.tp, instance.parallel.dp,
+                instance.parallel.pp, instance.parallel.ep) != (1, 1, 1, 1)
+            or instance.parallel.sp
+            or graph.train is None
+        ):
+            _fail("complete Dense backward source requires one TP1/DP1 TRAIN instance",
+                  f"{path}.instances")
+        forward = tuple(node for node in graph.nodes
+                        if node.phase is OpPhase.FWD)
+        ce_forward = tuple(node for node in forward
+                           if node.kind is OpKind.CE_FORWARD)
+        ce_backward = tuple(node for node in graph.nodes
+                            if node.kind is OpKind.CE_BACKWARD)
+        if len(ce_forward) != 1 or len(ce_backward) != 1:
+            _fail("complete Dense backward requires one CE forward/backward",
+                  f"{path}.nodes")
+        expected_reverse = {
+            f"backward::{node.id}" for node in reversed(forward)
+            if node.kind not in (OpKind.CE_FORWARD, OpKind.EMBEDDING)
+        }
+        actual_reverse = {
+            node.id for node in graph.nodes
+            if node.phase is OpPhase.DGRAD
+            and node.kind is not OpKind.CE_BACKWARD
+            and not node.id.startswith("gradient_sum::")
+        }
+        if expected_reverse != actual_reverse:
+            _fail("complete Dense backward omits or fabricates a backbone reverse",
+                  f"{path}.nodes")
+        states = {state.id: state for state in graph.persistent_states}
+        expected_wgrad = {
+            f"wgrad::{state.identity.tensor_ref}::tp0"
+            for state in states.values()
+        }
+        actual_wgrad = {
+            node.id for node in graph.nodes if node.phase is OpPhase.WGRAD
+        }
+        if expected_wgrad != actual_wgrad:
+            _fail("complete Dense backward omits or duplicates a parameter WGRAD",
+                  f"{path}.nodes")
+        values = {value.id: value for value in graph.values}
+        if any(values[ref].dtype is not DType.FP16
+               for node in graph.nodes if node.phase is OpPhase.DGRAD
+               for ref in node.outputs):
+            _fail("activation DGRAD chain must remain FP16", f"{path}.values")
+        if any(values[ref].dtype is not DType.FP32
+               for node in graph.nodes if node.phase is OpPhase.WGRAD
+               for ref in node.outputs):
+            _fail("parameter WGRAD chain must remain FP32", f"{path}.values")
+        if not any(".layer0." in node.id for node in forward) or not any(
+            ".layer1." in node.id for node in forward
+        ):
+            _fail("complete Dense backward source requires both model layers",
+                  f"{path}.nodes")
+        control = tuple(edge for edge in graph.edges
+                        if edge.kind is EdgeKind.CONTROL)
+        if (
+            len(control) != 1
+            or control[0].source_node != ce_forward[0].id
+            or control[0].destination_node != ce_backward[0].id
+        ):
+            _fail("CE forward must control its backward exactly once",
+                  f"{path}.edges")
 
     @staticmethod
     def _validate_lite_train_job_contract(graph: IR0, path: str) -> None:
@@ -660,6 +738,11 @@ class DenseIR0Validator:
         node_profiles: dict[str, ProfileKey],
         path: str,
     ) -> None:
+        if graph.producer_pass == "full_dense_training_backward_source":
+            DenseIR0Validator._validate_full_dense_backward_persistent_states(
+                graph, values, axis_sizes, path
+            )
+            return
         if any(node.kind is OpKind.CE_BACKWARD for node in graph.nodes):
             DenseIR0Validator._validate_lite_persistent_states(
                 graph, values, local_shapes, axis_sizes, path
@@ -884,6 +967,75 @@ class DenseIR0Validator:
                 "Dense parameter/KV state accesses are not exact",
                 f"{path}.state_accesses",
             )
+
+    @staticmethod
+    def _validate_full_dense_backward_persistent_states(
+        graph: IR0,
+        values: dict[str, TensorValue],
+        axis_sizes: dict[str, dict[MeshAxisName, int]],
+        path: str,
+    ) -> None:
+        states = {state.id: state for state in graph.persistent_states}
+        if (
+            not states
+            or any(state.identity.kind is not StateKind.PARAMETER
+                   or state.identity.tensor_ref is None
+                   or state.access is not PersistentStateAccess.READ_ONLY
+                   for state in states.values())
+        ):
+            _fail("complete Dense backward requires exact read-only source parameters",
+                  f"{path}.persistent_states")
+        state_by_tensor = {
+            state.identity.tensor_ref: state.id for state in states.values()
+        }
+        expected: list[StateAccess] = []
+        for node in graph.nodes:
+            tp = axis_sizes[node.mesh_ref].get(MeshAxisName.TP)
+            if tp != 1:
+                _fail("initial complete Dense backward state source requires TP1",
+                      f"{path}.persistent_states")
+            if (
+                node.phase is OpPhase.FWD
+                and node.kind in (OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING)
+                and len(node.inputs) == 2
+            ):
+                state_ref = state_by_tensor.get(node.inputs[1])
+                if state_ref is None:
+                    _fail("forward parameter lacks its source declaration",
+                          f"{path}.state_accesses")
+                expected.append(StateAccess.create(
+                    node_ref=node.id, state_ref=state_ref,
+                    mode=StateAccessMode.READ, rank=0,
+                ))
+            elif node.kind is OpKind.GEMM_INPUT_DX:
+                state_ref = node.workload.source_parameter_state_ref
+                if state_ref not in states:
+                    _fail("GEMM dX parameter source is undeclared",
+                          f"{path}.state_accesses")
+                expected.append(StateAccess.create(
+                    node_ref=node.id, state_ref=state_ref,
+                    mode=StateAccessMode.READ, rank=0,
+                ))
+            elif node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
+                state_ref = state_by_tensor.get(node.inputs[1])
+                if state_ref is None:
+                    _fail("embedding WGRAD source is undeclared",
+                          f"{path}.state_accesses")
+                expected.append(StateAccess.create(
+                    node_ref=node.id, state_ref=state_ref,
+                    mode=StateAccessMode.READ, rank=0,
+                ))
+        expected_tuple = tuple(sorted(
+            expected,
+            key=lambda item: (item.node_ref, item.state_ref, item.rank, item.id),
+        ))
+        if graph.state_accesses != expected_tuple:
+            _fail("complete Dense backward parameter accesses are not exact",
+                  f"{path}.state_accesses")
+        used = {access.state_ref for access in expected}
+        if used != set(states):
+            _fail("complete Dense backward leaves a parameter state unused",
+                  f"{path}.persistent_states")
 
     @staticmethod
     def _validate_lite_persistent_states(

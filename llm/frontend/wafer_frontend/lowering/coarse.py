@@ -210,6 +210,7 @@ def _fixed_compute_operands(
     *,
     adamw_inputs: tuple[ProgramSymbol, ...] = (),
     adamw_outputs: tuple[ProgramSymbol, ...] = (),
+    secondary_output_address: ProgramSymbol | None = None,
 ) -> tuple[RecordOperand, ...]:
     values = _fixed_compute_literals(compute, abi.opcode, path="action.compute")
     if abi.opcode is RecordOpcode.ADAMW_UPDATE:
@@ -419,6 +420,90 @@ def _fixed_compute_operands(
                 SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output_address.id),
             *(RecordOperand.literal(name, values[name])
               for name in ("m", "n", "k")),
+        )
+    if abi.opcode in (
+        RecordOpcode.RMSNORM_BACKWARD_TIMING,
+        RecordOpcode.ATTENTION_BACKWARD_TIMING,
+        RecordOpcode.ROPE_BACKWARD_TIMING,
+        RecordOpcode.RESIDUAL_BACKWARD_TIMING,
+    ):
+        if data_address is None:
+            raise SchemaError(
+                "native Dense backward requires independent upstream dY address",
+                path="action.compute",
+            )
+        if abi.opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING:
+            if secondary_output_address is None:
+                raise SchemaError(
+                    "0x2C requires independently bound right gradient output",
+                    path="action.compute",
+                )
+            datatypes = (
+                "forward_datatype", "upstream_datatype",
+                "left_output_datatype", "right_output_datatype",
+            )
+            input_field, data_field = "forward_address", "upstream_address"
+            output_field = "left_output_address"
+            dimensions = (
+                "logical_rows", "rank_rows", "tp_degree", "hidden_size",
+            )
+        elif abi.opcode is RecordOpcode.ROPE_BACKWARD_TIMING:
+            datatypes = (
+                "position_datatype", "upstream_datatype", "output_datatype",
+            )
+            input_field, data_field = "position_address", "upstream_address"
+            output_field = "output_address"
+            dimensions = (
+                "logical_tokens", "rank_tokens", "logical_query_heads",
+                "logical_kv_heads", "rank_query_heads", "rank_kv_heads",
+                "tp_degree", "head_dim", "rotary_dim",
+                "max_position_embeddings", "position_trace_tag",
+            )
+        elif abi.opcode is RecordOpcode.ATTENTION_BACKWARD_TIMING:
+            datatypes = (
+                "input_datatype", "upstream_datatype", "output_datatype",
+            )
+            input_field, data_field = "input_address", "upstream_address"
+            output_field = "output_address"
+            dimensions = (
+                "tokens", "rank_heads", "rank_kv_heads", "head_dim",
+                "tp_degree", "sequences", "pairs",
+            )
+        else:
+            datatypes = (
+                "input_datatype", "upstream_datatype", "output_datatype",
+            )
+            input_field, data_field = "input_address", "upstream_address"
+            output_field = "output_address"
+            dimensions = ("rows", "hidden_size", "tp_degree", "mode")
+        return (
+            *(RecordOperand.literal(field, values[field])
+              for field in datatypes),
+            RecordOperand.address(
+                input_field, SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                input_address.id,
+            ),
+            RecordOperand.address(
+                data_field, SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                data_address.id,
+            ),
+            RecordOperand.address(
+                output_field, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                output_address.id,
+            ),
+            *(
+                (
+                    RecordOperand.address(
+                        "right_output_address",
+                        SemanticOperandId.COMPUTE_AUX_ADDRESS,
+                        secondary_output_address.id,
+                    ),
+                )
+                if abi.opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING
+                else ()
+            ),
+            *(RecordOperand.literal(field, values[field])
+              for field in dimensions),
         )
     if abi.opcode is RecordOpcode.GREEDY_SAMPLE:
         return (
@@ -912,6 +997,15 @@ class NaiveCoarseLowering:
             binding=output,
             kind=ProgramSymbolKind.ABSOLUTE_ADDRESS,
         )
+        secondary_output_address = (
+            _program_symbol(
+                schedule_id=schedule.id,
+                binding=outputs[1],
+                kind=ProgramSymbolKind.ABSOLUTE_ADDRESS,
+            )
+            if compute_abi.opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING
+            else None
+        )
         adamw_input_addresses: tuple[ProgramSymbol, ...] = ()
         adamw_output_addresses: tuple[ProgramSymbol, ...] = ()
         if compute_abi.opcode is RecordOpcode.ADAMW_UPDATE:
@@ -986,6 +1080,7 @@ class NaiveCoarseLowering:
                     output_address,
                     adamw_inputs=adamw_input_addresses,
                     adamw_outputs=adamw_output_addresses,
+                    secondary_output_address=secondary_output_address,
                 )
                 if compute_abi.opcode in _FIXED_COMPUTE_OPCODES
                 else (
@@ -1075,6 +1170,19 @@ class NaiveCoarseLowering:
                 output_address.id,
                 output_addend,
             ),
+            *(
+                (
+                    AddressRelocation(
+                        1,
+                        SemanticOperandId.COMPUTE_AUX_ADDRESS,
+                        ProgramSymbolKind.ABSOLUTE_ADDRESS,
+                        secondary_output_address.id,
+                        output_addends[1],
+                    ),
+                )
+                if secondary_output_address is not None
+                else ()
+            ),
         )
         if compute_abi.opcode is RecordOpcode.ADAMW_UPDATE:
             input_operand_ids = (
@@ -1119,6 +1227,8 @@ class NaiveCoarseLowering:
             *((data_address,) if data_address is not None else ()),
             *((aux_address,) if aux_address is not None else ()),
             output_address,
+            *((secondary_output_address,)
+              if secondary_output_address is not None else ()),
             *adamw_input_addresses,
             *adamw_output_addresses,
         )

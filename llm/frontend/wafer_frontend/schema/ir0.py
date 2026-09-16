@@ -33,6 +33,10 @@ from .moe_full_training_block_workload import (
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from .gemm_input_dx_workload import GemmInputDxWorkload
+from .dense_backward_workloads import (
+    AttentionBackwardWorkload, ResidualBackwardWorkload,
+    RmsNormBackwardWorkload, RopeBackwardWorkload, SwiGluBackwardWorkload,
+)
 
 
 IR0_SCHEMA_VERSION = "wafer_frontend.ir0/v1alpha12"
@@ -63,6 +67,11 @@ class OpKind(str, Enum):
     NORM_GAMMA_WGRAD = "norm_gamma_wgrad"
     GEMM_WEIGHT_WGRAD = "gemm_weight_wgrad"
     GEMM_INPUT_DX = "gemm_input_dx"
+    RMSNORM_BACKWARD = "rmsnorm_backward"
+    ATTENTION_BACKWARD = "attention_backward"
+    ROPE_BACKWARD = "rope_backward"
+    RESIDUAL_BACKWARD = "residual_backward"
+    SWIGLU_BACKWARD = "swiglu_backward"
     MOE_ROUTER = "moe_router"
     MOE_ROUTE_FREEZE = "moe_route_freeze"
     MOE_DISPATCH = "moe_dispatch"
@@ -1480,6 +1489,11 @@ NodeWorkload = (
     | NormGammaWgradWorkload
     | GemmWeightWgradWorkload
     | GemmInputDxWorkload
+    | RmsNormBackwardWorkload
+    | AttentionBackwardWorkload
+    | RopeBackwardWorkload
+    | ResidualBackwardWorkload
+    | SwiGluBackwardWorkload
     | MoeFullTrainingBlockWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
@@ -1564,6 +1578,11 @@ class LogicalNode:
             OpKind.NORM_GAMMA_WGRAD: NormGammaWgradWorkload,
             OpKind.GEMM_WEIGHT_WGRAD: GemmWeightWgradWorkload,
             OpKind.GEMM_INPUT_DX: GemmInputDxWorkload,
+            OpKind.RMSNORM_BACKWARD: RmsNormBackwardWorkload,
+            OpKind.ATTENTION_BACKWARD: AttentionBackwardWorkload,
+            OpKind.ROPE_BACKWARD: RopeBackwardWorkload,
+            OpKind.RESIDUAL_BACKWARD: ResidualBackwardWorkload,
+            OpKind.SWIGLU_BACKWARD: SwiGluBackwardWorkload,
             OpKind.MOE_ROUTER: MoeFullTrainingBlockWorkload,
             OpKind.MOE_ROUTE_FREEZE: MoeFullTrainingBlockWorkload,
             OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
@@ -1610,7 +1629,7 @@ class LogicalNode:
                     or self.math.accumulation_dtype is not DType.FP32
                     or self.effects != NodeEffects(EffectKind.PURE, None, None)):
                 raise SchemaError(
-                    "native GEMM dX needs FP16 weight/dY, FP32 result and pure DGRAD phase",
+                    "native GEMM dX needs FP16 weight/dY/dX, FP32 accumulation and pure DGRAD phase",
                     path=path,
                 )
         source_moe = {
@@ -2126,10 +2145,65 @@ class IR0:
                             (workload.k,workload.n),
                             (workload.k,workload.m))
                         or tuple(value.dtype for value in operands)
-                        != (DType.FP16,DType.FP16,DType.FP32)
+                        != (DType.FP16,DType.FP16,DType.FP16)
                         or operands[1].producer is None
                         or operands[2].producer != node.id):
-                    raise SchemaError("native GEMM dX requires source weight/true upstream and owned FP32 dX",
+                    raise SchemaError("native GEMM dX requires source weight/true upstream and owned FP16 dX",
+                                      path=f"{path}.nodes[{index}].inputs")
+            if node.kind in (
+                OpKind.RMSNORM_BACKWARD, OpKind.ATTENTION_BACKWARD,
+                OpKind.ROPE_BACKWARD, OpKind.RESIDUAL_BACKWARD,
+                OpKind.SWIGLU_BACKWARD,
+            ):
+                if self.job is not JobKind.TRAIN or node.phase is not OpPhase.DGRAD:
+                    raise SchemaError("native Dense backbone backward is TRAIN DGRAD only",
+                                      path=f"{path}.nodes[{index}].kind")
+                workload = node.workload
+                operands = tuple(value_index[ref] for ref in
+                                 (*node.inputs, *node.outputs))
+                if node.kind is OpKind.RMSNORM_BACKWARD:
+                    assert isinstance(workload, RmsNormBackwardWorkload)
+                    shape = ((workload.rows * workload.tp_degree,
+                              workload.hidden_size),) * 3
+                    dtypes = (DType.FP16,) * 3
+                elif node.kind is OpKind.ATTENTION_BACKWARD:
+                    assert isinstance(workload, AttentionBackwardWorkload)
+                    packed = ((workload.rank_heads + 2 * workload.rank_kv_heads)
+                              * workload.tp_degree * workload.head_dim)
+                    hidden = (workload.rank_heads * workload.tp_degree
+                              * workload.head_dim)
+                    shape = ((workload.tokens, packed),
+                             (workload.tokens, hidden),
+                             (workload.tokens, packed))
+                    dtypes = (DType.FP16,) * 3
+                elif node.kind is OpKind.ROPE_BACKWARD:
+                    assert isinstance(workload, RopeBackwardWorkload)
+                    packed = ((workload.logical_query_heads +
+                               2 * workload.logical_kv_heads) *
+                              workload.head_dim)
+                    shape = ((workload.rank_tokens,),
+                             (workload.logical_tokens, packed),
+                             (workload.logical_tokens, packed))
+                    dtypes = (DType.INT32, DType.FP16, DType.FP16)
+                elif node.kind is OpKind.RESIDUAL_BACKWARD:
+                    assert isinstance(workload, ResidualBackwardWorkload)
+                    tensor = (workload.logical_rows, workload.hidden_size)
+                    shape = (tensor, tensor, tensor, tensor)
+                    dtypes = (DType.FP16,) * 4
+                else:
+                    assert isinstance(workload, SwiGluBackwardWorkload)
+                    # The logical tensor is TP-concatenated across its hidden axis.
+                    tp = next(instance.parallel.tp for instance in self.instances
+                              if instance.id == node.instance_id)
+                    shape = ((workload.rows, 2 * workload.intermediate_size * tp),
+                             (workload.rows, workload.intermediate_size * tp),
+                             (workload.rows, 2 * workload.intermediate_size * tp))
+                    dtypes = (DType.FP16,) * 3
+                if (tuple(value.shape for value in operands) != shape
+                        or tuple(value.dtype for value in operands) != dtypes
+                        or any(value.producer is None for value in operands[1:-1])
+                        or any(value.producer != node.id for value in operands[-len(node.outputs):])):
+                    raise SchemaError("native Dense backward needs exact source-shaped operands",
                                       path=f"{path}.nodes[{index}].inputs")
             if node.kind in (
                 OpKind.MOE_ROUTER,OpKind.MOE_ROUTE_FREEZE,
@@ -2337,7 +2411,44 @@ class IR0:
             source = nodes_by_ref.get(workload.source_forward_op_ref)
             parameter = state_index.get(workload.source_parameter_state_ref)
             upstream = value_index[node.inputs[1]]
-            producer = nodes_by_ref.get(upstream.producer)
+
+            def gradient_leaf_producers(
+                value_ref: str, seen: frozenset[str] = frozenset()
+            ) -> frozenset[str]:
+                if value_ref in seen:
+                    raise SchemaError(
+                        "GEMM dX upstream gradient lineage contains a cycle",
+                        path=f"{path}.nodes[{index}].inputs[1]",
+                    )
+                value = value_index[value_ref]
+                producer_ref = value.producer
+                producer_node = nodes_by_ref.get(producer_ref)
+                if (
+                    producer_node is not None
+                    and producer_node.id.startswith("gradient_sum::")
+                ):
+                    return frozenset().union(*(
+                        gradient_leaf_producers(
+                            input_ref, seen | frozenset((value_ref,))
+                        )
+                        for input_ref in producer_node.inputs
+                    ))
+                return frozenset(() if producer_ref is None else (producer_ref,))
+
+            forward_consumers = tuple(
+                nodes_by_ref[consumer_ref]
+                for consumer_ref in value_index[source.outputs[0]].consumers
+                if nodes_by_ref[consumer_ref].phase is OpPhase.FWD
+            ) if source is not None and source.outputs else ()
+            expected_upstream_producers = frozenset(
+                (
+                    f"{consumer.id}_backward"
+                    if consumer.kind is OpKind.CE_FORWARD
+                    else f"backward::{consumer.id}"
+                )
+                for consumer in forward_consumers
+            )
+            actual_upstream_producers = gradient_leaf_producers(upstream.id)
             if (source is None or source.kind is not OpKind.GEMM
                     or source.phase is not OpPhase.FWD
                     or source.workload.rank_shape
@@ -2347,9 +2458,12 @@ class IR0:
                     or value_index[source.inputs[0]].shape
                        != (workload.k,workload.m)
                     or upstream.shape != value_index[source.outputs[0]].shape
-                    or producer is None or producer.phase is not OpPhase.DGRAD
-                    or source.outputs[0] not in producer.inputs
-                    or upstream.id not in producer.outputs
+                    or not expected_upstream_producers
+                    or actual_upstream_producers != expected_upstream_producers
+                    or any(
+                        nodes_by_ref[producer_ref].phase is not OpPhase.DGRAD
+                        for producer_ref in actual_upstream_producers
+                    )
                     or parameter is None
                     or parameter.identity.tensor_ref != node.inputs[0]
                     or parameter.shape != (workload.m,workload.n)
@@ -2362,7 +2476,7 @@ class IR0:
                                                    StateAccessMode.READ_WRITE)
                                for access in self.state_accesses)):
                 raise SchemaError(
-                    "GEMM dX must borrow real forward X/W StateDecl READ and downstream DGRAD dY",
+                    "GEMM dX must borrow real forward X/W StateDecl READ and exact downstream DGRAD lineage",
                     path=f"{path}.nodes[{index}].workload",
                 )
 

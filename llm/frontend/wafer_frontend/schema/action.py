@@ -49,6 +49,10 @@ from .ir0 import (
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from .gemm_input_dx_workload import GemmInputDxWorkload
+from .dense_backward_workloads import (
+    AttentionBackwardWorkload, ResidualBackwardWorkload,
+    RmsNormBackwardWorkload, RopeBackwardWorkload, SwiGluBackwardWorkload,
+)
 from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
@@ -211,6 +215,11 @@ def _validate_workload_kind(
         OpKind.NORM_GAMMA_WGRAD: (NormGammaWgradWorkload,),
         OpKind.GEMM_WEIGHT_WGRAD: (GemmWeightWgradWorkload,),
         OpKind.GEMM_INPUT_DX: (GemmInputDxWorkload,),
+        OpKind.RMSNORM_BACKWARD: (RmsNormBackwardWorkload,),
+        OpKind.ATTENTION_BACKWARD: (AttentionBackwardWorkload,),
+        OpKind.ROPE_BACKWARD: (RopeBackwardWorkload,),
+        OpKind.RESIDUAL_BACKWARD: (ResidualBackwardWorkload,),
+        OpKind.SWIGLU_BACKWARD: (SwiGluBackwardWorkload,),
         OpKind.ROPE: (RopeQkWorkload,),
         OpKind.SAMPLING: (GreedySampleWorkload,),
         OpKind.CE_FORWARD: (CrossEntropyForwardWorkload,),
@@ -258,6 +267,16 @@ def canonical_compute_operand_roles(
         return ("forward_activation", "upstream_gradient"), ("weight_gradient",)
     if op_kind is OpKind.GEMM_INPUT_DX:
         return ("forward_weight", "upstream_gradient"), ("input_gradient",)
+    if op_kind is OpKind.RMSNORM_BACKWARD:
+        return ("forward_activation", "upstream_gradient"), ("input_gradient",)
+    if op_kind is OpKind.ATTENTION_BACKWARD:
+        return ("forward_packed_qkv", "upstream_gradient"), ("input_gradient",)
+    if op_kind is OpKind.ROPE_BACKWARD:
+        return ("position_ids", "upstream_gradient"), ("input_gradient",)
+    if op_kind is OpKind.RESIDUAL_BACKWARD:
+        return ("forward_output", "upstream_gradient"), ("left_gradient", "right_gradient")
+    if op_kind is OpKind.SWIGLU_BACKWARD:
+        return ("forward_gate_up", "upstream_gradient"), ("input_gradient",)
     if type(workload) is RmsNormWorkload:
         return ("activation", "weight"), ("normalized",)
     if op_kind is OpKind.ROPE:

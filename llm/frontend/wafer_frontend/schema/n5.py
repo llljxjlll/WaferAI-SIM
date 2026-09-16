@@ -806,6 +806,55 @@ class ProjectedIR2Bundle:
             )
 
 
+def _is_full_dense_backward_graph(graph: IR1) -> bool:
+    return {
+        OpKind.RMSNORM_BACKWARD,
+        OpKind.ATTENTION_BACKWARD,
+        OpKind.ROPE_BACKWARD,
+        OpKind.RESIDUAL_BACKWARD,
+        OpKind.SWIGLU_BACKWARD,
+    } <= {node.kind for node in graph.nodes}
+
+
+def _validate_full_dense_backward_projection_state(
+    graph: IR1,
+    projection: IR2ProjectionResult,
+    path: str,
+) -> None:
+    """Keep every source parameter read-only until optimizer expansion."""
+    manifest = graph.persistent_state_manifest
+    if (
+        manifest is None
+        or not manifest.declarations
+        or any(
+            declaration.identity.kind is not StateKind.PARAMETER
+            or declaration.access is not PersistentStateAccess.READ_ONLY
+            for declaration in manifest.declarations
+        )
+        or any(access.mode is not StateAccessMode.READ
+               for access in graph.state_accesses)
+    ):
+        raise SchemaError(
+            "complete Dense backward projection requires exact read-only source parameters",
+            path=f"{path}.graph.persistent_state_manifest",
+        )
+    compute_origins = {
+        task.member_id
+        for dag in projection.dags
+        for task in dag.tasks
+        if task.kind is SemanticTaskKind.COMP
+    }
+    required = {
+        node.id for node in graph.nodes
+        if node.phase in (OpPhase.DGRAD, OpPhase.WGRAD)
+    }
+    if not required <= compute_origins:
+        raise SchemaError(
+            "complete Dense backward projection omits a physical gradient task",
+            path=f"{path}.projection.dags",
+        )
+
+
 def _is_s2_lite_train_graph(graph: IR1) -> bool:
     kinds = {node.kind for node in graph.nodes}
     return (
@@ -1011,7 +1060,13 @@ class TrainProjectedReplica:
             )
 
         manifest = self.graph.persistent_state_manifest
-        if _is_s2_lite_train_graph(self.graph):
+        if _is_full_dense_backward_graph(self.graph):
+            _validate_full_dense_backward_projection_state(
+                self.graph,
+                self.projection,
+                path,
+            )
+        elif _is_s2_lite_train_graph(self.graph):
             _validate_s2_lite_projection_state(
                 self.graph,
                 self.projection,
