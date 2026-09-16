@@ -27,6 +27,43 @@ from ..schema.ir0 import OpKind, ResidualWorkload, SwiGluWorkload
 from ..schema.persistent_state import PersistentStateAccess, StateKind
 
 
+_DENSE_DX_UPSTREAM_OUTPUTS = {
+    RecordOpcode.CROSS_ENTROPY_BACKWARD: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    ),
+    RecordOpcode.GEMM_DX_TIMING: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    ),
+    RecordOpcode.SWIGLU_BACKWARD_TIMING: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    ),
+    RecordOpcode.RMSNORM_BACKWARD_TIMING: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    ),
+    RecordOpcode.ATTENTION_BACKWARD_TIMING: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    ),
+    RecordOpcode.ROPE_BACKWARD_TIMING: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+    ),
+    RecordOpcode.RESIDUAL_BACKWARD_TIMING: (
+        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+        SemanticOperandId.COMPUTE_AUX_ADDRESS,
+    ),
+}
+
+
+def dense_dx_upstream_output_operands(
+    opcode: RecordOpcode,
+) -> tuple[SemanticOperandId, ...]:
+    """Return the native output closures that may feed a source GEMM dX."""
+    outputs = _DENSE_DX_UPSTREAM_OUTPUTS.get(opcode)
+    if outputs is None:
+        raise SchemaError("opcode is not a native Dense derivative producer",
+                          path="dense_dx_upstream_opcode")
+    return outputs
+
+
 def require_exact_dense_parameter_state_inventory(
     manifest: LinkedProgramManifest,
     plan: FlexibleDenseTrainPlan,
@@ -462,21 +499,21 @@ def require_full_dense_physical_gradient_paths(
                     if earlier.step != step or earlier.logical_core != reverse.logical_core:
                         continue
                     for producer_fid, producer_idx, producer_opcode in earlier.executable_records:
-                        if producer_opcode not in (
-                            RecordOpcode.CROSS_ENTROPY_BACKWARD,
-                            RecordOpcode.GEMM_DX_TIMING,
-                            RecordOpcode.SWIGLU_BACKWARD_TIMING,
-                        ):
+                        output_operands = _DENSE_DX_UPSTREAM_OUTPUTS.get(
+                            producer_opcode
+                        )
+                        if output_operands is None:
                             continue
-                        closure = closures.get((producer_fid,
-                                                earlier.logical_core,
-                                                producer_idx,
-                                                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS))
-                        if (closure is not None and
-                                len(closure.buffer_abi_ids) == 1 and
-                                same_physical_value(
-                                    buffers[closure.buffer_abi_ids[0]], upstream)
-                                and depends_on(reverse, earlier)):
+                        if any(
+                            (closure := closures.get((
+                                producer_fid, earlier.logical_core,
+                                producer_idx, operand,
+                            ))) is not None
+                            and len(closure.buffer_abi_ids) == 1
+                            and same_physical_value(
+                                buffers[closure.buffer_abi_ids[0]], upstream)
+                            for operand in output_operands
+                        ) and depends_on(reverse, earlier):
                             upstream_producers.append(earlier)
                 if len(upstream_producers) != 1:
                     raise SchemaError("named dX upstream dY lacks one real earlier derivative producer",
@@ -752,4 +789,5 @@ __all__ = ["require_exact_dense_parameter_state_inventory",
            "require_source_gemm_dx_geometry",
            "require_named_gemm_dx_typed_buffers",
            "require_named_gemm_dx_state_load",
+           "dense_dx_upstream_output_operands",
            "require_full_dense_physical_gradient_paths"]

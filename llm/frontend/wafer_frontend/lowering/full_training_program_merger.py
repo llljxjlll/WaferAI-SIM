@@ -47,8 +47,10 @@ _PASS = "full_training_physical_program_merger"
 _SCHEMA = "wafer_frontend.full_training_physical_program_merger/v1alpha1"
 
 
-def require_full_training_opcode_matrix(dag: FullTrainingPhysicalDAG) -> None:
-    """Hard physical minimum for a 2-step, 2-layer native CE + MoE model."""
+def require_full_training_opcode_matrix(
+    dag: FullTrainingPhysicalDAG, *, require_moe: bool = True,
+) -> None:
+    """Hard physical minimum for a two-step, two-layer native model."""
     dag.validate()
     by_step = defaultdict(Counter)
     by_layer = defaultdict(Counter)
@@ -82,12 +84,28 @@ def require_full_training_opcode_matrix(dag: FullTrainingPhysicalDAG) -> None:
                 RecordOpcode.RESIDUAL: 2,
                 RecordOpcode.SWIGLU: 1,
                 RecordOpcode.SWIGLU_BACKWARD_TIMING: 1,
-                RecordOpcode.DTE_SEND: 1,
-                RecordOpcode.DTE_RECV: 1,
                 RecordOpcode.SGD_UPDATE: 1,
             }
+            if require_moe:
+                minimum.update({
+                    RecordOpcode.DTE_SEND: 1,
+                    RecordOpcode.DTE_RECV: 1,
+                })
+                failure = ("layer lacks true Dense attention/norm/residual, "
+                           "MoE backward, transport or update")
+            else:
+                minimum.update({
+                    RecordOpcode.RMSNORM_BACKWARD_TIMING: 2,
+                    RecordOpcode.ATTENTION_BACKWARD_TIMING: 1,
+                    RecordOpcode.ROPE_BACKWARD_TIMING: 1,
+                    RecordOpcode.RESIDUAL_BACKWARD_TIMING: 2,
+                    RecordOpcode.GEMM_DX_TIMING: 3,
+                    RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING: 3,
+                    RecordOpcode.NORM_GAMMA_WGRAD_TIMING: 2,
+                })
+                failure = "Dense layer lacks native forward/backward/WGRAD coverage"
             if any(local[opcode] < count for opcode, count in minimum.items()):
-                raise SchemaError("layer lacks true Dense attention/norm/residual, MoE backward, transport or update",
+                raise SchemaError(failure,
                                   path=f"full_training_opcode_matrix.step[{step}].layer[{layer}]")
 
 
@@ -218,7 +236,7 @@ def link_source_backed_full_training_timeline(
         fragments, core_streams,
         required_operation_ids=tuple(sorted(required_operations)),
     )
-    require_full_training_opcode_matrix(dag)
+    require_full_training_opcode_matrix(dag, require_moe=has_moe_fragments)
     ir1.validate("full_training_source_ir1")
     projection.validate_against(ir1, fusion_plans, standalone_plans)
     schedule_set.validate_against(projection, ir1)
