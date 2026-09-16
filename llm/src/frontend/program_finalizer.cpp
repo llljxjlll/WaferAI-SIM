@@ -3744,6 +3744,7 @@ std::set<std::string> ValidateActionSequence(
                  compute_opcode == Opcode::NORM_GAMMA_WGRAD_TIMING ||
                  compute_opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
                  compute_opcode == Opcode::GEMM_DX_TIMING ||
+                 compute_opcode == Opcode::SWIGLU_BACKWARD_TIMING ||
                  compute_opcode == Opcode::RMSNORM_BACKWARD_TIMING ||
                  compute_opcode == Opcode::ATTENTION_BACKWARD_TIMING ||
                  compute_opcode == Opcode::ROPE_BACKWARD_TIMING ||
