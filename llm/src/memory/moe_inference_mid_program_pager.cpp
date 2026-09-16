@@ -325,7 +325,7 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             parsed.fragments.size() != (segment ? 43 : 39) ||
             parsed.core_streams.size() != 2 ||
             parsed.core_streams[0].runtime_core_id != 0 ||
-            parsed.core_streams[1].runtime_core_id != 16 ||
+            parsed.core_streams[1].runtime_core_id != 4 ||
             parsed.core_streams[0].records.size() != (segment ? 199 : 195) ||
             parsed.core_streams[1].records.size() != 52 ||
             parsed.state_operand_bindings.size() != (segment ? 31 : 27))
@@ -349,14 +349,14 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             Number(raw, "lsu_address"), Number(raw, "lsu_size_bytes"),
             Number(raw, "dma_size_bytes")};
         if (event.segment_index > 2 ||
-            (event.runtime_core_id != 0 && event.runtime_core_id != 16))
+            (event.runtime_core_id != 0 && event.runtime_core_id != 4))
             Fail("signed DMA gate leaves fixed two-core sequence");
         event_indices_by_core_[event.runtime_core_id].push_back(index);
         events_.push_back(std::move(event));
     }
     if (event_indices_by_core_.at(0).size() != 71 ||
-        event_indices_by_core_.at(16).size() != 18)
-        Fail("89 source LSU gates must be Core0=71/Core16=18");
+        event_indices_by_core_.at(4).size() != 18)
+        Fail("89 source LSU gates must be Core0=71/Core4=18");
 
     size_t event_cursor = 0;
     uint64_t restore_bytes = 0, writeback_bytes = 0;
@@ -398,7 +398,7 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             const uint64_t core_id = core.runtime_core_id;
             const uint64_t die = core.logical_core.die_id;
             if ((core_id == 0 && die != 0) ||
-                (core_id == 16 && die != 1))
+                (core_id == 4 && die != 1))
                 Fail("source runtime core physical die mapping changed");
             for (size_t linked_index = 0;
                  linked_index < core.records.size(); ++linked_index) {
@@ -570,7 +570,7 @@ const MoeInferencePagerEvent &MoeInferenceMidProgramPager::NextEvent(
     if (events == event_indices_by_core_.end() ||
         cursor == next_by_core_.end() ||
         cursor->second >= events->second.size())
-        Fail("Core0/Core16 issued LSU beyond source-signed gates");
+        Fail("Core0/Core4 issued LSU beyond source-signed gates");
     const auto &event = events_[events->second[cursor->second]];
     if (event.runtime_core_id != core_id ||
         event.lsu_address != address || event.lsu_size_bytes != size)
@@ -588,7 +588,7 @@ void MoeInferenceMidProgramPager::Transfer(
     if (remainder != 0)
         sc_core::wait(sc_core::sc_time::from_value(quantum - remainder));
     const uint64_t cycle = sc_core::sc_time_stamp().value() / quantum;
-    const uint64_t die = event.runtime_core_id == 16 ? 1 : 0;
+    const uint64_t die = event.runtime_core_id == 4 ? 1 : 0;
     runtime_->Submit({id, connection_by_die_.at(die), direction,
                       event.external_address, event.hbm_address,
                       event.dma_size_bytes, cycle,
@@ -617,7 +617,7 @@ void MoeInferenceMidProgramPager::BeforeLoad(
     if (awaiting_load_.count(core_id))
         Fail("previous real MoE LSU Load has no completion hook");
     const auto &event = NextEvent(core_id, address, size);
-    const uint64_t die = core_id == 16 ? 1 : 0;
+    const uint64_t die = core_id == 4 ? 1 : 0;
     if (event.kind == "weight_restore_before_load") {
         if (weight_pinned_.at(die))
             Fail("parameter page slot reused before prior LSU completion");
@@ -643,7 +643,7 @@ void MoeInferenceMidProgramPager::AfterLoad(
     if (event.lsu_address != address || event.lsu_size_bytes != size)
         Fail("completed MoE LSU Load differs from signed restore gate");
     if (event.kind == "weight_restore_before_load") {
-        const uint64_t die = core_id == 16 ? 1 : 0;
+        const uint64_t die = core_id == 4 ? 1 : 0;
         if (!weight_pinned_.at(die)) Fail("parameter slot pin vanished early");
         weight_pinned_.at(die) = false;
         const auto span = std::find_if(
@@ -669,7 +669,7 @@ void MoeInferenceMidProgramPager::AfterStore(
     if (awaiting_load_.count(core_id))
         Fail("MoE LSU Store raced with incomplete same-core Load");
     const auto &event = NextEvent(core_id, address, size);
-    const uint64_t die = core_id == 16 ? 1 : 0;
+    const uint64_t die = core_id == 4 ? 1 : 0;
     if (weight_pinned_.at(die))
         Fail("expert/KV Store raced with an incomplete weight slot restore");
     if (event.kind == "expert_writeback_after_store") {
@@ -746,7 +746,7 @@ void MoeInferenceMidProgramPager::CompleteSegment(uint64_t segment) {
     for (const auto &[core, indices] : event_indices_by_core_)
         for (size_t index = 0; index < next_by_core_.at(core); ++index)
             if (events_[indices[index]].segment_index > segment)
-                Fail("Core0/Core16 consumed a future-segment source gate early");
+                Fail("Core0/Core4 consumed a future-segment source gate early");
     const uint64_t page_bytes = 32 + 16 * segment;
     const auto kv = ProbeKvPages(page_bytes);
     external_kv_probes_ += 4;

@@ -122,7 +122,7 @@ def build_moe_inference_paged_runtime(
     paged_manifests: tuple[LinkedProgramManifest, ...],
     fabric: ExternalMemoryFabric,
 ) -> dict[str, object]:
-    """Sign every actual Core0/Core16 weight, expert retention and KV gate."""
+    """Sign every actual Core0/Core4 weight, expert retention and KV gate."""
     if len(source_manifests) != 3 or len(paged_manifests) != 3:
         raise SchemaError("three full MoE infer segments required", path="manifests")
     fabric.validate()

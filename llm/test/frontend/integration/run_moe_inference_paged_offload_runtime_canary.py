@@ -82,7 +82,7 @@ def _observe(stdout: str, contract: dict[str, object],
     signed = contract["events"]
     by_index = {int(event[0]): event for event in actual}
     if len(actual) != 89 or len(by_index) != 89:
-        raise RuntimeError("89 real Core0/Core16 DMA completions missing or duplicate")
+        raise RuntimeError("89 real Core0/Core4 DMA completions missing or duplicate")
     for index, item in enumerate(signed):
         event = by_index.get(index)
         if event is None or (
@@ -161,8 +161,8 @@ def _observe(stdout: str, contract: dict[str, object],
     d2d = re.search(r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", stdout)
     east = re.search(r"\[D2D_LINK\] idx=0 die0->die1 .*data_in=(\d+) data_out=(\d+)",stdout)
     west = re.search(r"\[D2D_LINK\] idx=1 die1->die0 .*data_in=(\d+) data_out=(\d+)",stdout)
-    remote = len(re.findall(r"Core 16 start compute primitive Matmul_f\.", stdout))
-    remote_swiglu = len(re.findall(r"Core 16 start compute primitive swiglu_forward\.", stdout))
+    remote = len(re.findall(r"Core 4 start compute primitive Matmul_f\.", stdout))
+    remote_swiglu = len(re.findall(r"Core 4 start compute primitive swiglu_forward\.", stdout))
     if (d2d is None or tuple(map(int,d2d.groups())) != (expected_flows,expected_flows)
         or east is None or tuple(map(int,east.groups())) != (outward,outward)
         or west is None or tuple(map(int,west.groups())) != (inward,inward)
@@ -172,10 +172,10 @@ def _observe(stdout: str, contract: dict[str, object],
     residuals = re.findall(
         r"\[PROGRAM_MEMORY\] core=(\d+) .*lsu_residual=(\d+) dte_residual=(\d+)", stdout,
     )
-    if residuals != [("0", "0", "0"), ("16", "0", "0")] or not all(
+    if residuals != [("0", "0", "0"), ("4", "0", "0")] or not all(
         marker in stdout for marker in (
             "[P5 P2P DRAIN] core=0 residual=0",
-            "[P5 P2P DRAIN] core=16 residual=0",
+            "[P5 P2P DRAIN] core=4 residual=0",
             "[P5 P2P TIMING DRAIN] residual=0",
             "[DRAIN] router_residual=0", "[DRAIN] d2d_link_residual=0",
         )

@@ -88,7 +88,7 @@ private:
     std::vector<MoeInferencePagerSpan> kv_pages_;
     std::vector<MoeInferencePagerEvent> events_;
     std::map<uint64_t, std::vector<uint64_t>> event_indices_by_core_;
-    std::map<uint64_t, size_t> next_by_core_{{0, 0}, {16, 0}};
+    std::map<uint64_t, size_t> next_by_core_{{0, 0}, {4, 0}};
     std::map<uint64_t, uint64_t> awaiting_load_;
     std::map<uint64_t, bool> weight_pinned_{{0, false}, {1, false}};
     std::map<uint64_t, bool> kv_pinned_;

@@ -48,7 +48,7 @@ def _validate_source(source: LinkedProgramManifest, step: int) -> tuple[StateABI
     if (
         source.producer_pass != "moe_full_model_region_linker"
         or len(source.fragments) != (39 if step == 0 else 43)
-        or tuple(stream.runtime_core_id for stream in source.core_streams) != (0, 16)
+        or tuple(stream.runtime_core_id for stream in source.core_streams) != (0, 4)
         or tuple(len(stream.records) for stream in source.core_streams) !=
             ((195, 52) if step == 0 else (199, 52))
         or len(source.state_operand_bindings) != (27 if step == 0 else 31)
