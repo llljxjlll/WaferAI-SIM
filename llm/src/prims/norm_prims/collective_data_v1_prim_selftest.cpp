@@ -296,9 +296,13 @@ struct CollectiveDataV1PrimBench final : sc_module {
             0x40400000u, 0xbf800000u, 0x3f800000u, 0x3f800002u,
             0x7f800000u, 0x7fc00000u, 0x00000002u,
         });
-        Check(prim.taskCoreDefault(context) == 4 * CYCLE &&
-                  storage.Read(0x280, expected.size()) == expected,
-              "key-zero FP32 local REDUCE is bit-exact for finite, RNE, Inf, NaN, and subnormal vectors");
+        const bool timing = prim.taskCoreDefault(context) == 4 * CYCLE;
+        auto actual = storage.Read(0x280, expected.size());
+        // +Inf + -Inf yields a quiet NaN whose sign bit is not prescribed.
+        // Every other bit and every finite/RNE/subnormal lane remain exact.
+        actual[23] &= 0x7f;
+        Check(timing && actual == expected,
+              "key-zero FP32 local REDUCE is bit-exact except unspecified NaN sign");
 
         const auto wire = prim.serialize();
         Collective_data_v1_prim decoded;
@@ -307,6 +311,53 @@ struct CollectiveDataV1PrimBench final : sc_module {
                   decoded.mode == CollectiveDataV1PrimMode::REDUCE &&
                   decoded.length_bytes == 28 && decoded.input_count == 2,
               "FP32 LOCAL_REDUCE primitive wire code 4 round trips");
+    }
+
+    void TestPhysicalRankStride(TaskCoreContext &context) {
+        std::vector<uint8_t> physical(4 * 64, 0x55);
+        const uint16_t half_values[4] = {0x3c00, 0x4000, 0x4200, 0x4400};
+        for (size_t rank = 0; rank < 4; ++rank) {
+            for (size_t element = 0; element < 16; ++element) {
+                physical[rank * 64 + element * 2] =
+                    static_cast<uint8_t>(half_values[rank]);
+                physical[rank * 64 + element * 2 + 1] =
+                    static_cast<uint8_t>(half_values[rank] >> 8);
+            }
+        }
+        Seed(0x200, physical);
+        Collective_data_v1_prim prim;
+        prim.mode = CollectiveDataV1PrimMode::REDUCE;
+        prim.key = {};
+        prim.source_address_bytes = 0x200;
+        prim.destination_address_bytes = 0x340;
+        prim.length_bytes = 32;
+        prim.input_count = 4;
+        prim.input_stride_bytes = 64;
+        prim.dtype = CollDType::FP16;
+        prim.output_dtype = CollDType::FP16;
+        prim.reduce_op = CollReduceOp::SUM;
+        const auto wire = prim.serialize();
+        Check(wire[0].range(23, 16).to_uint64() ==
+                  kCollectiveDataV3StrideWireVersion &&
+                  wire[5].range(95, 32).to_uint64() == 64,
+              "non-tight physical rank stride uses exact V3 wire");
+        Collective_data_v1_prim decoded;
+        decoded.deserialize(wire);
+        Check(decoded.input_stride_bytes == 64 && decoded.input_count == 4,
+              "V3 physical stride survives primitive deserialize");
+        (void)decoded.taskCoreDefault(context);
+        const auto expected_value = Fp16({0x4900}); // 1+2+3+4 = 10
+        std::vector<uint8_t> expected;
+        for (size_t element = 0; element < 16; ++element)
+            Append(&expected, expected_value);
+        Check(storage.Read(0x340, expected.size()) == expected,
+              "four actual 32-byte rank inputs at 64-byte spacing reduce without reading padding");
+        auto malformed = wire;
+        malformed[5].range(95, 32) = sc_bv<64>(16);
+        Check(Rejects<std::invalid_argument>([&] {
+                  Collective_data_v1_prim invalid;
+                  invalid.deserialize(malformed);
+              }), "V3 rejects a stride below the logical input length");
     }
 
     void TestWrappingAndN1(TaskCoreContext &context) {
@@ -382,6 +433,7 @@ struct CollectiveDataV1PrimBench final : sc_module {
         TestNegativeMax(context);
         TestLocalFp16(context);
         TestLocalFp32(context);
+        TestPhysicalRankStride(context);
         TestWrappingAndN1(context);
         TestFailureAtomicity(context);
         Check(access.outstanding() == 0,

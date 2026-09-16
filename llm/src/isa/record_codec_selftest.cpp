@@ -1342,6 +1342,37 @@ void CheckTypedRejections(Checks &checks) {
         operands.input_stride_bytes = 511 * 4;
         (void)EncodeExternalRecord(bad_fp32);
     });
+    auto strided_fp16 = gradient_cast;
+    {
+        auto &operands = std::get<LocalReduceOperands>(strided_fp16.operands);
+        operands.output_dtype = LocalReduceDataType::FP16;
+        operands.input_count = 4;
+        operands.element_count = 16;
+        operands.input_stride_bytes = 64;
+    }
+    checks.Accept("FP16 LOCAL_REDUCE round trips four 32-byte inputs at 64-byte physical stride", [&] {
+        const auto decoded = DecodeExternalRecordExact(EncodeExternalRecord(strided_fp16));
+        const auto &operands = std::get<LocalReduceOperands>(decoded.operands);
+        checks.Check(operands.input_count == 4 && operands.element_count == 16 &&
+                         operands.input_stride_bytes == 64,
+                     "FP16 rank-major physical stride survives native wire");
+    });
+    auto invalid_stride = strided_fp16;
+    std::get<LocalReduceOperands>(invalid_stride.operands).input_stride_bytes = 31;
+    checks.Reject("FP16 LOCAL_REDUCE rejects stride below one input", [&] {
+        EncodeExternalRecord(invalid_stride);
+    });
+    invalid_stride = strided_fp16;
+    std::get<LocalReduceOperands>(invalid_stride.operands).input_stride_bytes = 63;
+    checks.Reject("FP16 LOCAL_REDUCE rejects dtype-unaligned physical stride", [&] {
+        EncodeExternalRecord(invalid_stride);
+    });
+    invalid_stride = strided_fp16;
+    std::get<LocalReduceOperands>(invalid_stride.operands).source.absolute_address_bytes =
+        std::numeric_limits<uint64_t>::max() - 200;
+    checks.Reject("FP16 LOCAL_REDUCE checks last rank physical extent for overflow", [&] {
+        EncodeExternalRecord(invalid_stride);
+    });
     bad_fp32 = record;
     std::get<LocalReduceOperands>(bad_fp32.operands).input_stride_bytes = 2044;
     checks.Reject("FP32 LOCAL_REDUCE rejects non-2048 stride",

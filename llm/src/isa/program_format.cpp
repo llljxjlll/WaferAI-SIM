@@ -391,7 +391,8 @@ void ValidateRecordReferences(const ExternalRecord &record,
         const uint64_t element_bytes =
             o->input_dtype == LocalReduceDataType::FP32 ? 4 : 2;
         const uint64_t length_bytes = o->element_count * element_bytes;
-        const uint64_t source_bytes = o->input_count * length_bytes;
+        const uint64_t source_bytes =
+            (o->input_count - 1) * o->input_stride_bytes + length_bytes;
         ValidateAddressReference(o->source, artifact, where + " source",
                                  source_bytes);
         ValidateAddressReference(o->destination, artifact,

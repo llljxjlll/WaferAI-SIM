@@ -366,6 +366,7 @@ LoweredPrimList LowerLocalReduce(const ExternalRecord &record,
     const bool fp32 = operands.input_dtype == LocalReduceDataType::FP32;
     prim->length_bytes = operands.element_count * (fp32 ? 4 : 2);
     prim->input_count = static_cast<uint16_t>(operands.input_count);
+    prim->input_stride_bytes = operands.input_stride_bytes;
     prim->dtype = fp32 ? CollDType::FP32 : CollDType::FP16;
     prim->output_dtype = operands.output_dtype == LocalReduceDataType::FP32
                              ? CollDType::FP32 : CollDType::FP16;

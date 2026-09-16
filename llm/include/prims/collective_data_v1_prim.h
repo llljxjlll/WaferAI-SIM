@@ -7,6 +7,7 @@
 
 inline constexpr uint8_t kCollectiveDataV1PrimWireVersion = 1;
 inline constexpr uint8_t kCollectiveDataV2CastWireVersion = 2;
+inline constexpr uint8_t kCollectiveDataV3StrideWireVersion = 3;
 inline constexpr uint8_t kCollectiveDataV1PrimWireSegments = 6;
 
 enum class CollectiveDataV1PrimMode : uint8_t {
@@ -25,6 +26,8 @@ public:
     uint64_t source_address_bytes = 0;
     uint64_t destination_address_bytes = 0;
     uint64_t length_bytes = 1;
+    // Zero means the legacy tight rank-major layout (one L-byte input per rank).
+    uint64_t input_stride_bytes = 0;
     uint16_t input_count = 1;
     CollDType dtype = CollDType::UINT8;
     // Equal to dtype on V1 wire. V2 is reserved for one-input FP16->FP32

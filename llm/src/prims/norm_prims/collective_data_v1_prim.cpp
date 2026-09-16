@@ -280,12 +280,24 @@ void Collective_data_v1_prim::Validate() const {
     }
 
     const uint64_t source_bytes = SourceBytes(*this);
+    const uint64_t stride = input_stride_bytes == 0 ? length_bytes : input_stride_bytes;
+    Require(stride >= length_bytes &&
+                stride % DTypeBytes(dtype) == 0,
+            "Collective_data_v1_prim input stride must cover one dtype-aligned input");
+    Require((mode != CollectiveDataV1PrimMode::LOCAL_COPY &&
+             input_count > 1) || stride == length_bytes,
+            "Collective_data_v1_prim single-input or LOCAL_COPY cannot have a non-tight stride");
+    Require(input_count - 1 <=
+                (std::numeric_limits<uint64_t>::max() - length_bytes) / stride,
+            "Collective_data_v1_prim strided source extent overflows");
+    const uint64_t source_extent =
+        (static_cast<uint64_t>(input_count) - 1) * stride + length_bytes;
     const uint64_t destination_bytes = DestinationBytes(*this);
     if (source_bytes > std::numeric_limits<size_t>::max() ||
         destination_bytes > std::numeric_limits<size_t>::max())
         throw std::overflow_error(
             "Collective_data_v1_prim byte size exceeds host size_t");
-    ValidateSpan(source_address_bytes, source_bytes,
+    ValidateSpan(source_address_bytes, source_extent,
                  "Collective_data_v1_prim source span overflows");
     ValidateSpan(destination_address_bytes, destination_bytes,
                  "Collective_data_v1_prim destination span overflows");
@@ -301,8 +313,11 @@ Wire Collective_data_v1_prim::serialize() {
         SetHeader(wire[index], id, index);
     }
     const bool cast = IsFp16ToFp32Cast(*this);
+    const bool strided = input_stride_bytes > length_bytes;
     wire[0].range(23, 16) = sc_bv<8>(
-        cast ? kCollectiveDataV2CastWireVersion : kCollectiveDataV1PrimWireVersion);
+        cast ? kCollectiveDataV2CastWireVersion
+             : strided ? kCollectiveDataV3StrideWireVersion
+                       : kCollectiveDataV1PrimWireVersion);
     wire[0].range(31, 24) = sc_bv<8>(kCollectiveDataV1PrimWireSegments);
     wire[0].range(32, 32) = sc_bv<1>(static_cast<uint8_t>(mode));
     const uint8_t wire_dtype = EncodeWireDType(dtype);
@@ -319,6 +334,8 @@ Wire Collective_data_v1_prim::serialize() {
     wire[3].range(79, 16) = sc_bv<64>(destination_address_bytes);
     wire[4].range(79, 16) = sc_bv<64>(length_bytes);
     wire[5].range(31, 16) = sc_bv<16>(input_count);
+    if (strided)
+        wire[5].range(95, 32) = sc_bv<64>(input_stride_bytes);
     return wire;
 }
 
@@ -327,7 +344,8 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     ValidateHeaders(wire);
     const uint64_t version = wire[0].range(23, 16).to_uint64();
     Require(version == kCollectiveDataV1PrimWireVersion ||
-                version == kCollectiveDataV2CastWireVersion,
+                version == kCollectiveDataV2CastWireVersion ||
+                version == kCollectiveDataV3StrideWireVersion,
             "Collective_data_v1_prim wire version is unsupported");
     Require(wire[0].range(31, 24).to_uint64() ==
                 kCollectiveDataV1PrimWireSegments,
@@ -339,7 +357,9 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     Require(!wire[2].range(127, 80).or_reduce() &&
                 !wire[3].range(127, 80).or_reduce() &&
                 !wire[4].range(127, 80).or_reduce() &&
-                !wire[5].range(127, 32).or_reduce(),
+                !wire[5].range(127, 96).or_reduce() &&
+                (version == kCollectiveDataV3StrideWireVersion ||
+                 !wire[5].range(95, 32).or_reduce()),
             "Collective_data_v1_prim numeric reserved bits are non-zero");
 
     Collective_data_v1_prim decoded;
@@ -365,6 +385,13 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     decoded.length_bytes = wire[4].range(79, 16).to_uint64();
     decoded.input_count = static_cast<uint16_t>(
         wire[5].range(31, 16).to_uint64());
+    if (version == kCollectiveDataV3StrideWireVersion) {
+        decoded.input_stride_bytes = wire[5].range(95, 32).to_uint64();
+        Require(decoded.input_stride_bytes > decoded.length_bytes &&
+                    decoded.mode == CollectiveDataV1PrimMode::REDUCE &&
+                    decoded.input_count > 1,
+                "Collective_data_v1_prim V3 stride wire must be a multi-input non-tight REDUCE");
+    }
     decoded.Validate();
 
     mode = decoded.mode;
@@ -373,6 +400,7 @@ void Collective_data_v1_prim::deserialize(Wire wire) {
     source_address_bytes = decoded.source_address_bytes;
     destination_address_bytes = decoded.destination_address_bytes;
     length_bytes = decoded.length_bytes;
+    input_stride_bytes = decoded.input_stride_bytes;
     input_count = decoded.input_count;
     dtype = decoded.dtype;
     output_dtype = decoded.output_dtype;
@@ -397,7 +425,8 @@ int Collective_data_v1_prim::taskCoreDefault(TaskCoreContext &context) {
         read.initiator = sram::Initiator::kCompute;
         read.command = sram::Command::kRead;
         read.address = source_address_bytes +
-                       static_cast<uint64_t>(rank) * length_bytes;
+                       static_cast<uint64_t>(rank) *
+                           (input_stride_bytes == 0 ? length_bytes : input_stride_bytes);
         read.size_bytes = length_bytes;
         std::vector<uint8_t> chunk =
             context.sram_access->Access(read).payload;

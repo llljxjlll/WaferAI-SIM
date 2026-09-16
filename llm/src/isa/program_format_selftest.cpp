@@ -735,6 +735,16 @@ void CheckSymbolsAndRelocations(Checks &c) {
              [&] { EncodeProgramArtifact(a); });
     c.Accept("LOCAL_REDUCE absolute spans fit declared SRAM region",
              [&] { EncodeProgramArtifact(LocalReduceArtifact()); });
+    a = LocalReduceArtifact();
+    std::get<LocalReduceOperands>(a.cores[0].records[0].operands).input_stride_bytes = 16;
+    a.symbols[0].size_bytes = 40;
+    c.Accept("LOCAL_REDUCE source spans the final strided input, not tight N*L", [&] {
+        EncodeProgramArtifact(a);
+    });
+    a.symbols[0].size_bytes = 39;
+    c.Reject("LOCAL_REDUCE final rank physical extent rejects a one-byte-short region", [&] {
+        EncodeProgramArtifact(a);
+    });
     c.Accept("FP32 LOCAL_REDUCE source 4096B and destination 2048B spans fit",
              [&] { EncodeProgramArtifact(Fp32LocalReduceArtifact()); });
     a = Fp32LocalReduceArtifact();

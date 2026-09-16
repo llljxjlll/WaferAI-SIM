@@ -378,13 +378,18 @@ void ValidateLocalReduce(const LocalReduceOperands &operands) {
                 std::numeric_limits<uint64_t>::max() / element_bytes,
             "LOCAL_REDUCE element_count*dtype_bytes overflows u64");
     const uint64_t length_bytes = operands.element_count * element_bytes;
-    Require(operands.input_stride_bytes == length_bytes,
-            "LOCAL_REDUCE input_stride_bytes must equal one input byte span");
-    Require(length_bytes <=
-                std::numeric_limits<uint64_t>::max() /
-                    operands.input_count,
-            "LOCAL_REDUCE input_count*input_stride_bytes overflows u64");
-    const uint64_t source_bytes = length_bytes * operands.input_count;
+    Require(operands.input_stride_bytes >= length_bytes &&
+                operands.input_stride_bytes % element_bytes == 0,
+            "LOCAL_REDUCE input_stride_bytes must cover one dtype-aligned input span");
+    Require(operands.input_count > 1 ||
+                operands.input_stride_bytes == length_bytes,
+            "LOCAL_REDUCE one-input stride must equal its input byte span");
+    Require(operands.input_count - 1 <=
+                (std::numeric_limits<uint64_t>::max() - length_bytes) /
+                    operands.input_stride_bytes,
+            "LOCAL_REDUCE source stride extent overflows u64");
+    const uint64_t source_bytes =
+        (operands.input_count - 1) * operands.input_stride_bytes + length_bytes;
     ValidateAddress(operands.source, false, "LOCAL_REDUCE source");
     ValidateAddress(operands.destination, false,
                     "LOCAL_REDUCE destination");
