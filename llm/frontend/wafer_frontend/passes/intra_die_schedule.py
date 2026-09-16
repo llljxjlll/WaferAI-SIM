@@ -156,6 +156,10 @@ def schedule_train_forward(
         schedule_set = policy.schedule(
             source_replica.projection,
             source_replica.graph,
+            **({"dp_route_plan": source.dp_gradient_routes,
+                "dp_projected_tasks": source.dp_projected_tasks,
+                "dp_replica_index": index}
+               if source.dp_gradient_routes is not None else {}),
         )
         if type(schedule_set) is not IntraDieScheduleSet:
             raise SchemaError(

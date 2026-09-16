@@ -25,6 +25,10 @@ def build_train_global_action(source: TrainScheduledIR2) -> TrainGlobalAction:
                 replica.projected.graph,
                 replica.projected.projection,
                 replica.schedule_set,
+                **({"dp_route_plan": replica.projected.dp_gradient_routes,
+                    "dp_projected_tasks": replica.projected.dp_projected_tasks,
+                    "dp_replica_index": replica.replica_index}
+                   if replica.projected.dp_gradient_routes is not None else {}),
             ),
         )
         for replica in source.replicas

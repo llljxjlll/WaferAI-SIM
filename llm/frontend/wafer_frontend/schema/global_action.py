@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from ..errors import SchemaError
 from .action import ComputeContract, ReductionContract, SyncContract
+from .dense_dp_sync_routes import DenseDP2RoutePlan
+from .dense_dp_sync_tasks import DenseDP2ProjectedTasks
 from .common import DType, stable_artifact_id, validate_dependency_dag, validate_nonempty, validate_uint64
 from ._validation_session import mark_validation_complete, validation_seen
 from .ir0 import OpKind
@@ -593,9 +595,18 @@ class GlobalActionDAG:
         projection: IR2ProjectionResult,
         schedule_set: IntraDieScheduleSet,
         path: str = "global_action_dag",
+        *,
+        dp_route_plan: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+        dp_replica_index: int | None = None,
     ) -> None:
         self.validate(path)
-        schedule_set.validate_against(projection, ir1, "intra_die_schedule_set")
+        schedule_set.validate_against(
+            projection, ir1, "intra_die_schedule_set",
+            dp_route_plan=dp_route_plan,
+            dp_projected_tasks=dp_projected_tasks,
+            dp_replica_index=dp_replica_index,
+        )
         if self.source_ir1_id != ir1.id:
             raise SchemaError("references a different IR-1", path=f"{path}.source_ir1_id")
         if self.source_projection_id != projection.id:

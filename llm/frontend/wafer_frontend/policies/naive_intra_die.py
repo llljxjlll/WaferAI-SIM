@@ -7,6 +7,8 @@ import math
 
 from ..errors import SchemaError
 from ..schema.common import DType, stable_artifact_id
+from ..schema.dense_dp_sync_routes import DenseDP2RoutePlan
+from ..schema.dense_dp_sync_tasks import DenseDP2ProjectedTasks
 from ..schema.ir1 import IR1, MemoryInitiator
 from ..schema.ir0 import OpKind
 from ..schema.ir2 import (
@@ -348,7 +350,15 @@ def _minimum_root(
 
 def _ordinary_schedule(
     dag: IntraDieDAG, ir1: IR1, *, wire_address_limit_bytes: int | None = None,
+    dp_route_plan: DenseDP2RoutePlan | None = None,
 ) -> IntraDieSchedule:
+    # Each replica projection still contains empty DAG shells for the other
+    # replica's physical dies.  Only an owning die can carry this DP route.
+    if dag.dp_gradient_plan_id is None:
+        dp_route_plan = None
+    elif dp_route_plan is None or dag.dp_gradient_plan_id != dp_route_plan.id:
+        _fail("DP task die requires its exact physical gradient plan",
+              "dag.dp_gradient_plan_id")
     topological = _canonical_kahn(dag)
     split_k_refined = any(".split_k." in task.id for task in dag.tasks)
     supported = {
@@ -1463,6 +1473,15 @@ def _ordinary_schedule(
         if route.id in route_catalog:
             _fail("route ids must be globally unique", "ir1.cross_routes")
         route_catalog[route.id] = route
+    if dp_route_plan is not None:
+        for group in dp_route_plan.dp_groups:
+            for route in group.embedding.routes:
+                if dag.die_id not in route.die_path:
+                    continue
+                if route.id in route_catalog:
+                    _fail("DP route must be distinct from local TP/cross route",
+                          "dp_route_plan.dp_groups")
+                route_catalog[route.id] = route
     ports = {port.id: port for port in die.ports}
     cores_by_id = {core.runtime_core_id: core for core in cores}
     flow_routes: list[FlowRouteBinding] = []
@@ -1602,7 +1621,7 @@ def _ordinary_schedule(
         runtime_bindings=runtime_bindings,
         core_orders=core_orders,
     )
-    result.validate_against(dag, ir1)
+    result.validate_against(dag, ir1, dp_route_plan=dp_route_plan)
     return result
 
 
@@ -1624,6 +1643,10 @@ class NaiveIntraDiePolicy:
         self,
         projection: IR2ProjectionResult,
         ir1: IR1,
+        *,
+        dp_route_plan: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+        dp_replica_index: int | None = None,
     ) -> IntraDieScheduleSet:
         if type(projection) is not IR2ProjectionResult:
             _fail("must be an IR2ProjectionResult", "projection")
@@ -1637,6 +1660,7 @@ class NaiveIntraDiePolicy:
             _ordinary_schedule(
                 dag, ir1,
                 wire_address_limit_bytes=self.wire_address_limit_bytes,
+                dp_route_plan=dp_route_plan,
             ) for dag in projection.dags
         )
         result = IntraDieScheduleSet.create(
@@ -1645,7 +1669,12 @@ class NaiveIntraDiePolicy:
             source_ir1_id=ir1.id,
             schedules=schedules,
         )
-        result.validate_against(projection, ir1)
+        result.validate_against(
+            projection, ir1,
+            dp_route_plan=dp_route_plan,
+            dp_projected_tasks=dp_projected_tasks,
+            dp_replica_index=dp_replica_index,
+        )
         return result
 
 

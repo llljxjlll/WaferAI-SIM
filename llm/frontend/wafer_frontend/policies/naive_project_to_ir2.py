@@ -7,6 +7,8 @@ import math
 import re
 
 from ..errors import SchemaError, UnsupportedFeatureError
+from ..schema.dense_dp_sync_routes import DenseDP2RoutePlan
+from ..schema.dense_dp_sync_tasks import DenseDP2ProjectedTask, DenseDP2ProjectedTasks
 from ..schema.action import (
     canonical_compute_operand_roles,
     ComputeContract,
@@ -197,6 +199,9 @@ class NaiveProjectToIR2:
         standalone_plans: tuple[StandaloneCollectivePlan, ...],
         *,
         state_transfers: tuple[StateTransferLike, ...],
+        dp_route_plan: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+        dp_replica_index: int | None = None,
     ) -> IR2ProjectionResult:
         if type(ir1) is not IR1:
             _fail("must be an IR1", "ir1")
@@ -307,10 +312,32 @@ class NaiveProjectToIR2:
             or set(fusion_by_member).intersection(standalone_by_node)
         ):
             _fail("plans must uniquely partition covered nodes", "fusion_plans")
+        if (dp_route_plan is None) != (dp_projected_tasks is None) or (
+            dp_route_plan is None and dp_replica_index is not None
+        ):
+            _fail("cross-DP route, physical tasks and replica index must be complete",
+                  "dp_route_plan")
+        dp_sync_refs: tuple[str, ...] = ()
+        if dp_route_plan is not None:
+            if dp_replica_index not in (0, 1):
+                _fail("cross-DP requires exact replica index 0 or 1", "dp_replica_index")
+            assert dp_projected_tasks is not None
+            dp_projected_tasks.validate_against(dp_route_plan)
+            dp_sync_refs = tuple(
+                item.sync_refs[dp_replica_index]
+                for item in dp_route_plan.gradients
+            )
+            if (len(dp_sync_refs) != 60 or len(set(dp_sync_refs)) != 60
+                or tuple(node.id for node in ir1.nodes
+                         if node.kind is OpKind.COLLECTIVE
+                         and node.id.startswith("dp_sync::")) != dp_sync_refs):
+                _fail("DP2 projection needs 60 exact physical SUM source refs",
+                      "dp_sync_refs")
         if any(
             node.kind is OpKind.COLLECTIVE
             and node.id not in fusion_by_member
             and node.id not in standalone_by_node
+            and node.id not in dp_sync_refs
             for node in ir1.nodes
         ):
             _fail(
@@ -647,6 +674,26 @@ class NaiveProjectToIR2:
                 )
                 ordinary_ids_by_die[placement.die_id].append(node.id)
 
+        # Map authenticated physical DP tasks back to their own IR-1 source
+        # sync node so WGRAD→SEND/SUM→SGD remain in program source order.
+        dp_refs_by_die: dict[int, tuple[str, ...]] = {}
+        per_die: dict[int, list[SemanticTask]] = {}
+        dp_tasks_by_ref: dict[str, list[DenseDP2ProjectedTask]] = {}
+        if dp_projected_tasks is not None:
+            assert dp_route_plan is not None and dp_replica_index is not None
+            owned_dies = {place.die_id for place in ir1.groups[0].placements}
+            for projected in dp_projected_tasks.tasks:
+                if projected.replica_index != dp_replica_index:
+                    continue
+                if (projected.die_id not in owned_dies
+                        or projected.source_sync_ref not in dp_sync_refs):
+                    _fail("cross-DP projected task does not belong to its physical replica",
+                          "dp_projected_tasks")
+                dp_tasks_by_ref.setdefault(projected.source_sync_ref, []).append(projected)
+            if set(dp_tasks_by_ref) != set(dp_sync_refs):
+                _fail("cross-DP task source nodes need exact 60-source coverage",
+                      "dp_projected_tasks")
+
         for node in ir1.nodes:
             if node.id in fusion_by_member:
                 if node.id in fusion_by_anchor:
@@ -655,7 +702,38 @@ class NaiveProjectToIR2:
             if node.id in standalone_by_node:
                 append_plan("standalone", standalone_by_node[node.id])
                 continue
+            if node.id in dp_sync_refs:
+                for projected in dp_tasks_by_ref[node.id]:
+                    task = projected.task
+                    tasks_by_die[projected.die_id].append(task)
+                    per_die.setdefault(projected.die_id, []).append(task)
+                    if projected.flow is not None:
+                        flows_by_die[projected.die_id].append(projected.flow)
+                continue
             append_ordinary(node)
+
+        if dp_projected_tasks is not None:
+            assert dp_route_plan is not None and dp_replica_index is not None
+            if (sum(map(len, per_die.values())) != (300 if dp_replica_index == 0 else 180)
+                or set(per_die) != owned_dies):
+                _fail("DP root/child must own exactly 300/180 physical gradient tasks",
+                      "dp_projected_tasks")
+            for die_id in sorted(per_die):
+                dp_refs_by_die[die_id] = tuple(dict.fromkeys(
+                    item.source_sync_ref for item in dp_projected_tasks.tasks
+                    if item.replica_index == dp_replica_index
+                    and item.die_id == die_id
+                ))
+                if len(dp_refs_by_die[die_id]) != 30:
+                    _fail("each physical TP die must cover 30 DP gradients",
+                          "dp_projected_tasks")
+                region_id = f"region.dp_gradient.{dp_route_plan.id}.die.{die_id}"
+                regions_by_die[die_id].append(IntraDieRegion(
+                    id=region_id, fusion_plan_id=None,
+                    standalone_collective_plan_id=dp_route_plan.id,
+                    lowering=RegionLowering.STRICT_ACTIONS,
+                    task_ids=tuple(task.id for task in per_die[die_id]),
+                ))
 
         state_specs_by_die: dict[int, list[tuple[object, object, str, str]]] = {
             die.id: [] for die in ir1.fabric.dies
@@ -1575,6 +1653,9 @@ class NaiveProjectToIR2:
         }
 
         def coverage(node_id: str) -> tuple[str, str]:
+            if node_id in dp_sync_refs:
+                assert dp_route_plan is not None
+                return ("dp", dp_route_plan.id)
             if node_id in skeleton_by_member:
                 return ("fusion", skeleton_by_member[node_id].id)
             if node_id in standalone_by_node:
@@ -1586,6 +1667,10 @@ class NaiveProjectToIR2:
             origin = task.origin_ref
             if kind == "ordinary":
                 return isinstance(origin, OrdinaryNodeOrigin) and origin.op_id == unit_id
+            if kind == "dp":
+                return (isinstance(origin, StandaloneNodeOrigin)
+                        and origin.collective_plan_id == unit_id
+                        and task.member_id == node_id)
             if kind == "fusion":
                 return (
                     isinstance(origin, FusedNodeOrigin)
@@ -1622,6 +1707,8 @@ class NaiveProjectToIR2:
                 destination_kind = coverage(edge.destination_node)[0]
                 destination_entry_kinds = (
                     (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND)
+                    if destination_kind == "dp"
+                    else (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND)
                     if destination_kind == "standalone"
                     and node_index[edge.destination_node].workload.collective
                     is CollectiveKind.REDUCE_SCATTER
@@ -1629,6 +1716,7 @@ class NaiveProjectToIR2:
                         "ordinary": (SemanticTaskKind.COMP,),
                         "fusion": (SemanticTaskKind.COMP,),
                         "standalone": (SemanticTaskKind.LOCAL_COPY,),
+                        "dp": (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND),
                     }[destination_kind])
                 )
                 entries = tuple(
@@ -1665,6 +1753,7 @@ class NaiveProjectToIR2:
                         "ordinary": SemanticTaskKind.COMP,
                         "fusion": SemanticTaskKind.REDUCE,
                         "standalone": SemanticTaskKind.BARRIER,
+                        "dp": SemanticTaskKind.REDUCE,
                     }[source_kind]
                 )
                 completions = tuple(
@@ -1673,10 +1762,16 @@ class NaiveProjectToIR2:
                             task
                             for task in tasks
                             if belongs(task, edge.source_node, whole)
-                            and task.kind is expected_completion_kind
+                            and (task.kind is expected_completion_kind
+                                 if source_kind != "dp" else (
+                                     task.kind is SemanticTaskKind.REDUCE
+                                     if dp_replica_index == 0
+                                     else task.kind is SemanticTaskKind.WAIT
+                                     and task.id.endswith("broadcast_wait")
+                                 ))
                             and (
                                 whole
-                                or source_kind == "standalone"
+                                or source_kind in ("standalone", "dp")
                                 or edge.value_id in task.write_values
                             )
                         ),
@@ -1799,6 +1894,23 @@ class NaiveProjectToIR2:
                             for temp_id in action.writes:
                                 bind_temp(temp_id, source_node.inputs[0])
 
+        if dp_route_plan is not None and dp_replica_index == 0:
+            for gradient in dp_route_plan.gradients:
+                local = gradient.local_wgrad_refs[0]
+                source_node = node_index.get(local)
+                if source_node is None or len(source_node.outputs) != 1:
+                    _fail("cross-DP temporary lacks local WGRAD source",
+                          "dp_route_plan.gradients")
+                source_value = source_node.outputs[0]
+                for program in gradient.rank_programs:
+                    if program.rank != 0:
+                        continue
+                    for action in program.actions:
+                        if action.kind in (FusionActionKind.LOCAL_COPY,
+                                           FusionActionKind.RECV):
+                            for temp_id in action.writes:
+                                bind_temp(temp_id, source_value)
+
         dags: list[IntraDieDAG] = []
         for die in ir1.fabric.dies:
             tasks = tuple(tasks_by_die[die.id])
@@ -1875,6 +1987,8 @@ class NaiveProjectToIR2:
                     state_transfer_ids=tuple(
                         state_transfer_ids_by_die[die.id]
                     ),
+                    dp_gradient_plan_id=(dp_route_plan.id if die.id in dp_refs_by_die else None),
+                    dp_sync_refs=dp_refs_by_die.get(die.id, ()),
                 )
             )
 
@@ -1888,8 +2002,15 @@ class NaiveProjectToIR2:
             dags=tuple(dags),
             source_state_manifest_id=(manifest.id if manifest is not None else None),
             state_transfers=state_transfers,
+            dp_gradient_plan_id=(dp_route_plan.id if dp_route_plan is not None else None),
+            dp_sync_refs=dp_sync_refs,
         )
-        result.validate_against(ir1, fusion_plans, standalone_plans)
+        result.validate_against(
+            ir1, fusion_plans, standalone_plans,
+            dp_route_plan=dp_route_plan,
+            dp_projected_tasks=dp_projected_tasks,
+            dp_replica_index=dp_replica_index,
+        )
         return result
 
 

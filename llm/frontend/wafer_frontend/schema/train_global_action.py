@@ -117,6 +117,9 @@ class TrainGlobalActionReplica:
             projected.projection,
             self.scheduled.schedule_set,
             f"{path}.global_dag",
+            dp_route_plan=projected.dp_gradient_routes,
+            dp_projected_tasks=projected.dp_projected_tasks,
+            dp_replica_index=(self.replica_index if projected.dp_gradient_routes is not None else None),
         )
 
         graph = projected.graph
@@ -547,9 +550,26 @@ class TrainGlobalAction:
                 flow_ids.intersection(local_flows),
                 route_ids.intersection(local_routes),
             )
-            if any(intersections):
+            proof = replica.scheduled.projected.dp_projected_tasks
+            if proof is None:
+                expected_shared_flows: set[str] = set()
+                expected_shared_routes: set[str] = set()
+            else:
+                local_proof_flows = tuple(
+                    item.flow for item in proof.tasks
+                    if item.replica_index == index and item.flow is not None
+                )
+                expected_shared_flows = {
+                    flow.id for flow in local_proof_flows
+                }.intersection(flow_ids)
+                expected_shared_routes = {
+                    flow.pair_route_ref for flow in local_proof_flows
+                }.intersection(route_ids)
+            if (any(intersections[:5])
+                    or intersections[5] != expected_shared_flows
+                    or intersections[6] != expected_shared_routes):
                 raise SchemaError(
-                    "action, schedule, core, HBM, flow, and route identities must be DP-replica-disjoint",
+                    "only source-backed DP SEND/RECV may share flow and route identities; all actions, schedules, cores and HBM must be disjoint",
                     path=replica_path,
                 )
             action_ids.update(local_actions)

@@ -365,6 +365,38 @@ def _lower_fragments(
         )
         consumed.update(action.id for action in plan_actions)
 
+    # DP gradient routes live outside a replica's local TP IR1 plan.  The
+    # cross-replica N4 sidecar owns their true physical source and N5 actions.
+    if context.dp_route_plan is not None:
+        from ..lowering.dense_dp_sync import lower_dense_dp_gradient
+
+        for gradient_index, gradient in enumerate(context.dp_route_plan.gradients):
+            source_ids = {
+                action.id
+                for action in gradient.rank_programs[context.dp_replica_index].actions
+            }
+            gradient_actions = tuple(
+                action for action in actions
+                if isinstance(action.origin_ref, StandaloneNodeOrigin)
+                and action.origin_ref.collective_plan_id == context.dp_route_plan.id
+                and action.origin_ref.rank == context.dp_replica_index
+                and action.origin_ref.action_id in source_ids
+            )
+            fragment = lower_dense_dp_gradient(
+                gradient_actions, context, gradient_index,
+            )
+            fragments.append(_decorate_fragment(
+                fragment, context,
+                path=f"dp_gradient_fragments[{gradient_index}]",
+                validate=dependencies.validate_intermediates,
+            ))
+            if consumed.intersection(action.id for action in gradient_actions):
+                raise SchemaError(
+                    "DP gradient overlaps another native lowering group",
+                    path=f"dp_gradient_fragments[{gradient_index}]",
+                )
+            consumed.update(action.id for action in gradient_actions)
+
     action_ids = tuple(action.id for action in actions)
     if consumed != set(action_ids):
         missing = tuple(

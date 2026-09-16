@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from ..errors import SchemaError
 from ..schema.action import StandaloneCollectivePlan
+from ..schema.dense_dp_sync_routes import DenseDP2RoutePlan
+from ..schema.dense_dp_sync_tasks import DenseDP2ProjectedTasks
 from ..schema.swizzle_plan import FusedPlan
 from ..schema.global_action import GlobalActionDAG
 from ..schema._validation_session import mark_validation_complete, validation_seen
@@ -23,6 +25,9 @@ class LoweringContext:
     projection: IR2ProjectionResult
     schedule_set: IntraDieScheduleSet
     global_dag: GlobalActionDAG
+    dp_route_plan: DenseDP2RoutePlan | None = None
+    dp_projected_tasks: DenseDP2ProjectedTasks | None = None
+    dp_replica_index: int | None = None
 
     def validate(self, path: str = "lowering_context") -> None:
         if validation_seen(self, "lowering_context"):
@@ -60,16 +65,25 @@ class LoweringContext:
             self.fusion_plans,
             self.standalone_plans,
             f"{path}.projection",
+            dp_route_plan=self.dp_route_plan,
+            dp_projected_tasks=self.dp_projected_tasks,
+            dp_replica_index=self.dp_replica_index,
         )
         self.schedule_set.validate_against(
             self.projection,
             self.ir1,
             f"{path}.schedule_set",
+            dp_route_plan=self.dp_route_plan,
+            dp_projected_tasks=self.dp_projected_tasks,
+            dp_replica_index=self.dp_replica_index,
         )
         self.global_dag.validate_against(
             self.ir1,
             self.projection,
             self.schedule_set,
             f"{path}.global_dag",
+            dp_route_plan=self.dp_route_plan,
+            dp_projected_tasks=self.dp_projected_tasks,
+            dp_replica_index=self.dp_replica_index,
         )
         mark_validation_complete(self, "lowering_context")

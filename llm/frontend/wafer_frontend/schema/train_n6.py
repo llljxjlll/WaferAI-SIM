@@ -48,6 +48,9 @@ def train_replica_lowering_context(
         projection=projected.projection,
         schedule_set=source.scheduled.schedule_set,
         global_dag=source.global_dag,
+        dp_route_plan=projected.dp_gradient_routes,
+        dp_projected_tasks=projected.dp_projected_tasks,
+        dp_replica_index=(source.replica_index if projected.dp_gradient_routes is not None else None),
     )
     context.validate("lowering_context")
     return context

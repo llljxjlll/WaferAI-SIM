@@ -4974,7 +4974,15 @@ class CommandFragment:
                     and reduction.output_dtype is DType.FP32
                     and reduction.input_ranks == (0, 1)
                     and action.dtype is DType.FP32
-                    and action.bytes == 2048
+                    and action.bytes > 0
+                    and action.bytes % 4 == 0
+                    and action.op_kind is OpKind.COLLECTIVE
+                    and isinstance(action.origin_ref, StandaloneNodeOrigin)
+                    and action.region_id == (
+                        f"region.dp_gradient."
+                        f"{action.origin_ref.collective_plan_id}.die."
+                        f"{action.logical_core.die_id}"
+                    )
                 )
                 dtype_literal = 1 if fp32_dp2 else 0
                 if any(

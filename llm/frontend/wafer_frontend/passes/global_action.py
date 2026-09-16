@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from ..errors import SchemaError
+from ..schema.dense_dp_sync_routes import DenseDP2RoutePlan
+from ..schema.dense_dp_sync_tasks import DenseDP2ProjectedTasks
 from ..schema.global_action import (
     ActionBufferUse,
     ActionStateUse,
@@ -35,6 +37,10 @@ def build_global_action_dag(
     ir1: IR1,
     projection: IR2ProjectionResult,
     schedule_set: IntraDieScheduleSet,
+    *,
+    dp_route_plan: DenseDP2RoutePlan | None = None,
+    dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
+    dp_replica_index: int | None = None,
 ) -> GlobalActionDAG:
     """Build the canonical one-action-per-task quotient without policy choices."""
 
@@ -50,7 +56,12 @@ def build_global_action_dag(
             "schedule_set must be an IntraDieScheduleSet artifact",
             path="schedule_set",
         )
-    schedule_set.validate_against(projection, ir1)
+    schedule_set.validate_against(
+        projection, ir1,
+        dp_route_plan=dp_route_plan,
+        dp_projected_tasks=dp_projected_tasks,
+        dp_replica_index=dp_replica_index,
+    )
 
     schedule_by_dag = {schedule.dag_id: schedule for schedule in schedule_set.schedules}
     action_ids = {
@@ -175,7 +186,12 @@ def build_global_action_dag(
         scheduled_dags=tuple(scheduled_dags),
         actions=tuple(actions),
     )
-    result.validate_against(ir1, projection, schedule_set)
+    result.validate_against(
+        ir1, projection, schedule_set,
+        dp_route_plan=dp_route_plan,
+        dp_projected_tasks=dp_projected_tasks,
+        dp_replica_index=dp_replica_index,
+    )
     return result
 
 

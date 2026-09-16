@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from ..errors import SchemaError
 from ._validation_session import mark_validation_complete, validation_seen
 from .action import StandaloneCollectivePlan
+from .dense_dp_sync_routes import DenseDP2RoutePlan
+from .dense_dp_sync_tasks import DenseDP2ProjectedTasks
 from .common import DType, stable_artifact_id, validate_nonempty, validate_uint64
 from .global_action import GlobalActionDAG
 from .ir1 import IR1
@@ -1020,6 +1022,8 @@ class TrainProjectedReplica:
     fusion_plans: tuple[FusedPlan, ...]
     standalone_plans: tuple[StandaloneCollectivePlan, ...]
     projection: IR2ProjectionResult
+    dp_gradient_routes: DenseDP2RoutePlan | None = None
+    dp_projected_tasks: DenseDP2ProjectedTasks | None = None
 
     @classmethod
     def create(
@@ -1027,6 +1031,8 @@ class TrainProjectedReplica:
         *,
         source: TrainReplicaInterDiePlans,
         projection: IR2ProjectionResult,
+        dp_gradient_routes: DenseDP2RoutePlan | None = None,
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
     ) -> "TrainProjectedReplica":
         semantic_key = {
             "replica_index": source.replica_index,
@@ -1039,6 +1045,9 @@ class TrainProjectedReplica:
             ),
             "projection_id": projection.id,
         }
+        if dp_gradient_routes is not None and dp_projected_tasks is not None:
+            semantic_key["dp_route_plan_id"] = dp_gradient_routes.id
+            semantic_key["dp_projected_task_count"] = len(dp_projected_tasks.tasks)
         return cls(
             id=stable_artifact_id(
                 "train_projected_replica",
@@ -1052,10 +1061,12 @@ class TrainProjectedReplica:
             fusion_plans=source.fusion_plans,
             standalone_plans=source.standalone_plans,
             projection=projection,
+            dp_gradient_routes=dp_gradient_routes,
+            dp_projected_tasks=dp_projected_tasks,
         )
 
     def _semantic_key(self) -> dict[str, object]:
-        return {
+        result = {
             "replica_index": self.replica_index,
             "source_replica_plan_id": self.source_replica_plan_id,
             "source_ir1_id": self.source_ir1_id,
@@ -1066,6 +1077,10 @@ class TrainProjectedReplica:
             ),
             "projection_id": self.projection.id,
         }
+        if self.dp_gradient_routes is not None and self.dp_projected_tasks is not None:
+            result["dp_route_plan_id"] = self.dp_gradient_routes.id
+            result["dp_projected_task_count"] = len(self.dp_projected_tasks.tasks)
+        return result
 
     def validate(self, path: str) -> None:
         if validation_seen(self, "train_projected_replica"):
@@ -1098,11 +1113,20 @@ class TrainProjectedReplica:
                 "must be an IR2ProjectionResult",
                 path=f"{path}.projection",
             )
+        if (self.dp_gradient_routes is None) != (self.dp_projected_tasks is None):
+            raise SchemaError("cross-DP plan and real tasks must be supplied together",
+                              path=f"{path}.dp_gradient_routes")
+        if self.dp_gradient_routes is not None:
+            assert self.dp_projected_tasks is not None
+            self.dp_projected_tasks.validate_against(self.dp_gradient_routes)
         self.projection.validate_against(
             self.graph,
             self.fusion_plans,
             self.standalone_plans,
             f"{path}.projection",
+            dp_route_plan=self.dp_gradient_routes,
+            dp_projected_tasks=self.dp_projected_tasks,
+            dp_replica_index=(self.replica_index if self.dp_gradient_routes is not None else None),
         )
         if self.projection.state_transfers:
             raise SchemaError(
@@ -1281,6 +1305,8 @@ class TrainProjectedIR2:
     train_structure: TrainStructure
     dp_degree: int
     replicas: tuple[TrainProjectedReplica, ...]
+    dp_gradient_routes: DenseDP2RoutePlan | None = None
+    dp_projected_tasks: DenseDP2ProjectedTasks | None = None
 
     @classmethod
     def create(
@@ -1289,6 +1315,7 @@ class TrainProjectedIR2:
         source: TrainInterDiePlannedIR1,
         context: ProjectToIR2Context,
         replicas: tuple[TrainProjectedReplica, ...],
+        dp_projected_tasks: DenseDP2ProjectedTasks | None = None,
     ) -> "TrainProjectedIR2":
         semantic_key = {
             "source_planned_carrier_id": source.id,
@@ -1301,6 +1328,9 @@ class TrainProjectedIR2:
             "dp_degree": source.dp_degree,
             "replicas": replicas,
         }
+        if source.dp_gradient_routes is not None and dp_projected_tasks is not None:
+            semantic_key["dp_route_plan_id"] = source.dp_gradient_routes.id
+            semantic_key["dp_projected_task_count"] = len(dp_projected_tasks.tasks)
         result = cls(
             schema_version=TRAIN_PROJECTED_IR2_SCHEMA_VERSION,
             producer_pass="train_project_to_ir2",
@@ -1309,13 +1339,23 @@ class TrainProjectedIR2:
                 semantic_key,
                 schema_version=TRAIN_PROJECTED_IR2_SCHEMA_VERSION,
             ),
-            **semantic_key,
+            source_planned_carrier_id=source.id,
+            source_partitioned_carrier_id=source.source_partitioned_id,
+            placement_context_id=source.placement_context_id,
+            partition_context_id=source.partition_context_id,
+            planning_context_id=source.planning_context_id,
+            projection_context_id=context.id,
+            train_structure=source.train_structure,
+            dp_degree=source.dp_degree,
+            replicas=replicas,
+            dp_gradient_routes=source.dp_gradient_routes,
+            dp_projected_tasks=dp_projected_tasks,
         )
         result.validate()
         return result
 
     def _semantic_key(self) -> dict[str, object]:
-        return {
+        result = {
             "source_planned_carrier_id": self.source_planned_carrier_id,
             "source_partitioned_carrier_id": self.source_partitioned_carrier_id,
             "placement_context_id": self.placement_context_id,
@@ -1326,6 +1366,10 @@ class TrainProjectedIR2:
             "dp_degree": self.dp_degree,
             "replicas": self.replicas,
         }
+        if self.dp_gradient_routes is not None and self.dp_projected_tasks is not None:
+            result["dp_route_plan_id"] = self.dp_gradient_routes.id
+            result["dp_projected_task_count"] = len(self.dp_projected_tasks.tasks)
+        return result
 
     def validate(self, path: str = "train_projected_ir2") -> None:
         if validation_seen(self, "train_projected_ir2"):
@@ -1362,6 +1406,23 @@ class TrainProjectedIR2:
                 "replica projections must use canonical DP order",
                 path=f"{path}.replicas",
             )
+        if (self.dp_gradient_routes is None) != (self.dp_projected_tasks is None):
+            raise SchemaError("cross-DP plan and physical tasks must both be present",
+                              path=f"{path}.dp_gradient_routes")
+        if self.dp_gradient_routes is not None:
+            assert self.dp_projected_tasks is not None
+            self.dp_projected_tasks.validate_against(self.dp_gradient_routes)
+            if (self.dp_degree != 2 or len(self.dp_gradient_routes.gradients) != 60
+                    or any(replica.dp_gradient_routes != self.dp_gradient_routes
+                           or replica.dp_projected_tasks != self.dp_projected_tasks
+                           for replica in self.replicas)):
+                raise SchemaError("two replicas require the same complete DP route/task proof",
+                                  path=f"{path}.replicas")
+        elif any(replica.dp_gradient_routes is not None
+                 or replica.dp_projected_tasks is not None
+                 for replica in self.replicas):
+            raise SchemaError("DP task proof forbidden without global route plan",
+                              path=f"{path}.replicas")
         projection_ids: set[str] = set()
         task_ids: set[str] = set()
         flow_ids: set[str] = set()
@@ -1392,9 +1453,18 @@ class TrainProjectedIR2:
                 for dag in replica.projection.dags
                 for flow in dag.flows
             }
-            if flow_ids.intersection(local_flow_ids):
+            shared_flow_ids = flow_ids.intersection(local_flow_ids)
+            if self.dp_projected_tasks is None:
+                expected_shared_ids: set[str] = set()
+            else:
+                expected_shared_ids = {
+                    item.flow.id
+                    for item in self.dp_projected_tasks.tasks
+                    if item.replica_index == index and item.flow is not None
+                }.intersection(flow_ids)
+            if shared_flow_ids != expected_shared_ids:
                 raise SchemaError(
-                    "flow ids must be replica-distinct",
+                    "only source-backed DP SEND/RECV may share flow identity across replicas",
                     path=f"{replica_path}.projection.dags",
                 )
             flow_ids.update(local_flow_ids)
@@ -1434,6 +1504,7 @@ class TrainProjectedIR2:
             or self.train_structure != source.train_structure
             or self.dp_degree != source.dp_degree
             or len(self.replicas) != len(source.replicas)
+            or self.dp_gradient_routes != source.dp_gradient_routes
         ):
             raise SchemaError(
                 "must preserve complete train planning provenance",
@@ -1761,6 +1832,9 @@ class TrainScheduledReplica:
             self.projected.projection,
             self.projected.graph,
             f"{path}.schedule_set",
+            dp_route_plan=self.projected.dp_gradient_routes,
+            dp_projected_tasks=self.projected.dp_projected_tasks,
+            dp_replica_index=(self.replica_index if self.projected.dp_gradient_routes is not None else None),
         )
 
         graph = self.projected.graph
@@ -1771,6 +1845,15 @@ class TrainScheduledReplica:
         route_ids = {
             route.id for route in graph.groups[0].embedding.routes
         }
+        if self.projected.dp_gradient_routes is not None:
+            # Each TP shard has its own physical DP pair (Die0↔2 or
+            # Die1↔3); permit only the exact source-bound routes for this
+            # replica's placed dies, never another replica's TP collective.
+            own_dies = set(local_rank_by_die)
+            for dp_group in self.projected.dp_gradient_routes.dp_groups:
+                for route in dp_group.embedding.routes:
+                    if set(route.die_path).intersection(own_dies):
+                        route_ids.add(route.id)
         ce_node = next(
             node for node in graph.nodes if node.kind is OpKind.CE_FORWARD
         )

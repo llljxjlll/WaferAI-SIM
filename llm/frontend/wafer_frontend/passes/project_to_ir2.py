@@ -136,6 +136,16 @@ def project_train_forward(
         from ..policies.naive_project_to_ir2 import NaiveProjectToIR2
 
         projector = NaiveProjectToIR2()
+    dp_routes = source.dp_gradient_routes
+    dp_tasks = None
+    if dp_routes is not None:
+        from .full_dense_training_dp2_tasks import project_dense_dp2_tasks
+
+        dp_tasks = project_dense_dp2_tasks(dp_routes)
+        dp_tasks.validate_against(dp_routes)
+        if len(dp_routes.gradients) != 60 or len(dp_tasks.tasks) != 480:
+            raise SchemaError("DP2 N5 requires all 60 gradients and 480 physical tasks",
+                              path="source.dp_gradient_routes")
     replicas: list[TrainProjectedReplica] = []
     for index, source_replica in enumerate(source.replicas):
         projection = projector.run(
@@ -143,6 +153,10 @@ def project_train_forward(
             source_replica.fusion_plans,
             source_replica.standalone_plans,
             state_transfers=(),
+            **({"dp_route_plan": dp_routes,
+                "dp_projected_tasks": dp_tasks,
+                "dp_replica_index": index}
+               if dp_routes is not None else {}),
         )
         if type(projection) is not IR2ProjectionResult:
             raise SchemaError(
@@ -152,6 +166,8 @@ def project_train_forward(
         replica = TrainProjectedReplica.create(
             source=source_replica,
             projection=projection,
+            dp_gradient_routes=dp_routes,
+            dp_projected_tasks=dp_tasks,
         )
         replica.validate_against(
             source_replica,
@@ -162,6 +178,7 @@ def project_train_forward(
         source=source,
         context=context,
         replicas=tuple(replicas),
+        dp_projected_tasks=dp_tasks,
     )
     result.validate_against(source, context)
     return result
