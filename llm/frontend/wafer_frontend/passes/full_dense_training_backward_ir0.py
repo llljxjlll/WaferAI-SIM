@@ -18,7 +18,7 @@ from ..schema.gemm_input_dx_workload import GemmInputDxWorkload
 from ..schema.gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from ..schema.ir0 import (
     EdgeKind, EffectKind, GraphEdge, IR0, LogicalNode, NodeEffects,
-    OpKind, OpPhase, ResidualWorkload, StateAccess, StateAccessMode,
+    OpKind, OpPhase, MeshAxis, ResidualWorkload, StateAccess, StateAccessMode,
     CollectiveKind, CollectiveWorkload, ReduceOp,
 )
 from ..schema.moe_training_ir0_workloads import (
@@ -37,7 +37,7 @@ def build_full_dense_training_backward_ir0(
 ) -> IR0:
     """Append every native backbone dX and parameter WGRAD to real forward+CE.
 
-    DP1 uses typed, rank-local TP shards: each reverse node consumes its actual
+    Typed, rank-local TP shards: each reverse node consumes its actual
     downstream gradient and saved forward value; residual branches are added
     explicitly and each parameter shard has a public FP32 WGRAD node.  The
     following two-step pass expands optimizer and parameter-state versions.
@@ -45,14 +45,39 @@ def build_full_dense_training_backward_ir0(
     if type(plan) is not FlexibleDenseTrainPlan:
         raise SchemaError("requires production FlexibleDenseTrainPlan", path="plan")
     plan.validate()
-    if plan.spec.dp_degree != 1:
+    if plan.spec.dp_degree not in (1, 2):
         raise UnsupportedFeatureError(
-            "complete backward source requires one DP replica before real FP32 SUM",
+            "complete backward source supports DP1 or physical DP2 FP32 SUM",
             path="plan.spec",
         )
     admission = build_dense_two_step_backbone_source_admission(plan)
     admission.validate_against(plan)
-    graph = append_dense_training_ce_backward_source(plan.forward_graph)
+    forward_graph = plan.forward_graph
+    if plan.spec.dp_degree == 2:
+        # Preserve the independently validated forward plan.  A complete
+        # backward source additionally needs the DP axis for a typed partial.
+        instance = forward_graph.instances[0]
+        (mesh,) = instance.meshes
+        if tuple(axis.name for axis in mesh.axes) != (MeshAxisName.TP,):
+            raise SchemaError("DP2 source requires the original TP mesh", path="plan.forward_graph")
+        instance = replace(instance, meshes=(replace(
+            mesh, axes=(*mesh.axes, MeshAxis(MeshAxisName.DP, 2)),
+        ),))
+        forward_graph = IR0.create(
+            producer_pass=forward_graph.producer_pass,
+            job=forward_graph.job, instances=(instance,),
+            nodes=forward_graph.nodes, values=forward_graph.values,
+            edges=forward_graph.edges,
+            fusion_candidates=forward_graph.fusion_candidates,
+            profile=forward_graph.profile, train=forward_graph.train,
+            instance_profiles=forward_graph.instance_profiles,
+            node_profiles=forward_graph.node_profiles,
+            pd_plan_id=forward_graph.pd_plan_id,
+            persistent_states=forward_graph.persistent_states,
+            state_accesses=forward_graph.state_accesses,
+        )
+        forward_graph.validate("dp2_forward_source")
+    graph = append_dense_training_ce_backward_source(forward_graph)
     nodes = list(graph.nodes)
     values = {value.id: value for value in graph.values}
     original_nodes = {node.id: node for node in plan.forward_graph.nodes}
@@ -68,6 +93,16 @@ def build_full_dense_training_backward_ir0(
         ]
     }
     new_accesses = list(graph.state_accesses)
+    if plan.spec.dp_degree == 2:
+        new_accesses.extend(
+            StateAccess.create(
+                node_ref=access.node_ref, state_ref=access.state_ref,
+                mode=access.mode, rank=access.rank + plan.spec.tp_degree,
+                read_offset=access.read_offset, read_shape=access.read_shape,
+                write_offset=access.write_offset, write_shape=access.write_shape,
+            )
+            for access in graph.state_accesses
+        )
     position_values: dict[str, str] = {}
 
     def add_value(value: TensorValue) -> str:
@@ -155,7 +190,10 @@ def build_full_dense_training_backward_ir0(
             add_value(TensorValue(
                 output_id, parameter_value.shape, DType.FP32,
                 f"{parameter_value.logical_layout}.gradient",
-                parameter_value.sharding, template.wgrad_ref, (), None,
+                Sharding(parameter_value.sharding.mesh_ref,
+                         parameter_value.sharding.dim_map, (MeshAxisName.DP,))
+                if plan.spec.dp_degree == 2 else parameter_value.sharding,
+                template.wgrad_ref, (), None,
             ))
             add_node(LogicalNode(
                 template.wgrad_ref, forward.instance_id, kind, OpPhase.WGRAD,
@@ -202,10 +240,12 @@ def build_full_dense_training_backward_ir0(
                 (output_id,), "gemm_input_dx_timing",
             )
             for rank, state_ref in enumerate(state_refs):
-                new_accesses.append(StateAccess.create(
-                    node_ref=reverse_ref.backward_ref, state_ref=state_ref,
-                    mode=StateAccessMode.READ, rank=rank,
-                ))
+                for dp in range(plan.spec.dp_degree):
+                    new_accesses.append(StateAccess.create(
+                        node_ref=reverse_ref.backward_ref, state_ref=state_ref,
+                        mode=StateAccessMode.READ,
+                        rank=rank + dp * plan.spec.tp_degree,
+                    ))
         elif leaf.family is DenseReverseSourceFamily.NORM_DX:
             rows, hidden = dict(leaf.profile)["rows"], dict(leaf.profile)["hidden"]
             output_id = f"{reverse_ref.backward_ref}.input_gradient"
@@ -358,7 +398,10 @@ def build_full_dense_training_backward_ir0(
         output_id = f"{template.wgrad_ref}.output"
         add_value(TensorValue(
             output_id, table.shape, DType.FP32,
-            f"{table.logical_layout}.gradient", table.sharding,
+            f"{table.logical_layout}.gradient",
+            Sharding(table.sharding.mesh_ref, table.sharding.dim_map,
+                     (MeshAxisName.DP,))
+            if plan.spec.dp_degree == 2 else table.sharding,
             template.wgrad_ref, (), None,
         ))
         add_node(LogicalNode(
@@ -372,10 +415,12 @@ def build_full_dense_training_backward_ir0(
                 state.shape[0], 0, state.shape[0], state.shape[1], trace,
             ), embedding.math, _pure(), "embedding_table_wgrad_timing",
         ))
-        new_accesses.append(StateAccess.create(
-            node_ref=template.wgrad_ref, state_ref=state.id,
-            mode=StateAccessMode.READ, rank=template.tp_shard_index,
-        ))
+        for dp in range(plan.spec.dp_degree):
+            new_accesses.append(StateAccess.create(
+                node_ref=template.wgrad_ref, state_ref=state.id,
+                mode=StateAccessMode.READ,
+                rank=template.tp_shard_index + dp * plan.spec.tp_degree,
+            ))
 
     # Rebuild value consumers and all data edges from the actual typed nodes.
     consumers: dict[str, list[str]] = {value_id: [] for value_id in values}
@@ -393,7 +438,9 @@ def build_full_dense_training_backward_ir0(
     ce_forward = f"{graph.instances[0].id}.cross_entropy"
     ce_backward = f"{ce_forward}_backward"
     result = IR0.create(
-        producer_pass="full_dense_training_backward_source",
+        producer_pass=("full_dense_training_backward_dp2_source"
+                       if plan.spec.dp_degree == 2 else
+                       "full_dense_training_backward_source"),
         job=graph.job, instances=graph.instances, nodes=tuple(nodes),
         values=final_values,
         edges=(*data_edges, GraphEdge(

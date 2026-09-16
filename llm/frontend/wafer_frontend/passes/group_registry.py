@@ -51,9 +51,18 @@ def _scopes(graph: IR0) -> tuple[tuple[LogicalInstance, DeviceMesh], ...]:
                 path=f"{instance_path}.meshes",
             )
         mesh = instance.meshes[0]
-        if len(mesh.axes) != 1 or mesh.axes[0].name is not MeshAxisName.TP:
+        dp2_training_source = (
+            graph.producer_pass == "full_dense_training_two_step_dp2_source"
+            and instance.role is LogicalRole.TRAIN
+            and instance.parallel.dp == 2
+            and tuple((axis.name, axis.size) for axis in mesh.axes)
+                == ((MeshAxisName.TP, instance.parallel.tp), (MeshAxisName.DP, 2))
+        )
+        if not dp2_training_source and (
+            len(mesh.axes) != 1 or mesh.axes[0].name is not MeshAxisName.TP
+        ):
             _unsupported(
-                "N3b requires a one-dimensional TP mesh",
+                "N3b requires a TP mesh (or exact two-axis DP2 training source)",
                 path=f"{instance_path}.meshes[0].axes",
             )
         if mesh.axes[0].size != instance.parallel.tp:

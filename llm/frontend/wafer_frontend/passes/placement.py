@@ -109,6 +109,8 @@ def _train_replica_components(
     """Rewrite all node-bearing references to canonical replica-local ids."""
 
     node_ids = {node.id: f"{node.id}__dp{replica_index}" for node in graph.nodes}
+    exact_dp2 = graph.producer_pass == "full_dense_training_two_step_dp2_source"
+    tp = graph.instances[0].parallel.tp
     nodes = tuple(
         replace(_physical_node(node, group.id), id=node_ids[node.id])
         for node in graph.nodes
@@ -143,13 +145,14 @@ def _train_replica_components(
             node_ref=node_ids[access.node_ref],
             state_ref=access.state_ref,
             mode=access.mode,
-            rank=access.rank,
+            rank=access.rank % tp if exact_dp2 else access.rank,
             read_offset=access.read_offset,
             read_shape=access.read_shape,
             write_offset=access.write_offset,
             write_shape=access.write_shape,
         )
         for access in graph.state_accesses
+        if not exact_dp2 or access.rank // tp == replica_index
     )
     node_profiles = tuple(
         replace(binding, node_ref=node_ids[binding.node_ref])

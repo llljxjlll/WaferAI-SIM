@@ -118,7 +118,9 @@ def build_full_dense_training_two_step_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
     ) for value in final_values if value.producer is not None
       for consumer in value.consumers)
     result = IR0.create(
-        producer_pass="full_dense_training_two_step_source",
+        producer_pass=("full_dense_training_two_step_dp2_source"
+                       if plan.spec.dp_degree == 2 else
+                       "full_dense_training_two_step_source"),
         job=one.job, instances=one.instances, nodes=tuple(nodes),
         values=final_values, edges=(*data, *controls),
         fusion_candidates=(), profile=one.profile, train=one.train,

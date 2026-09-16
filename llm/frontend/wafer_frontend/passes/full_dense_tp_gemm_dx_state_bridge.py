@@ -18,9 +18,9 @@ def dense_tp_gemm_dx_state_refs(
     The returned tuple is a source proof, not a generated native action.
     """
     plan.validate("dense_tp_gemm_dx_plan")
-    if plan.spec.dp_degree != 1:
+    if plan.spec.dp_degree not in (1, 2):
         raise UnsupportedFeatureError(
-            "TP GEMM dX source binding first requires one DP group",
+            "TP GEMM dX source binding supports physical DP1 or DP2",
             path="plan.spec.dp_degree",
         )
     graph = plan.forward_graph
@@ -50,7 +50,10 @@ def dense_tp_gemm_dx_state_refs(
                 or declaration.identity.shard_index != rank
                 or declaration.shape != (in_width, out_width)
                 or declaration.dtype is not DType.FP16
-                or template.owner_ranks != (rank,)
+                or template.owner_ranks != tuple(
+                    dp * plan.spec.tp_degree + rank
+                    for dp in range(plan.spec.dp_degree)
+                )
                 or template.weight_bytes != 2 * in_width * out_width
                 or len(tuple(access for access in graph.state_accesses
                              if access.node_ref == forward_ref

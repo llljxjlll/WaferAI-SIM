@@ -10,13 +10,14 @@ from dataclasses import replace
 from math import prod
 
 from ..errors import SchemaError
-from ..schema.common import DType, TensorValue
+from ..schema.common import DType, MeshAxisName, Sharding, TensorValue
 from ..schema.flexible_dense_train import FlexibleDenseTrainPlan
 from ..schema.gemm_input_dx_workload import GemmInputDxWorkload
 from ..schema.gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from ..schema.ir0 import (
     EdgeKind, EffectKind, GraphEdge, IR0, LogicalNode, NodeEffects,
     OpKind, OpPhase, SgdUpdateWorkload, StateAccess, StateAccessMode,
+    CollectiveKind, CollectiveRole, CollectiveWorkload, ReduceOp,
 )
 from ..schema.persistent_state import (
     PersistentStateAccess, PersistentStateDecl, PersistentStateIdentity,
@@ -75,6 +76,59 @@ def build_full_dense_training_sgd_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
         weight = values[weight_ref]
         gradient_ref = f"{template.wgrad_ref}.output"
         gradient = values[gradient_ref]
+        if plan.spec.dp_degree == 2:
+            # One logical FP32 WGRAD is physically instantiated once per DP
+            # replica.  This collective names the required real cross-replica
+            # SUM; the local gradient cannot flow straight to either SGD.
+            if (gradient.sharding.partial != (MeshAxisName.DP,)
+                    or gradient.shape != weight.shape
+                    or template.owner_ranks != (
+                        template.tp_shard_index,
+                        plan.spec.tp_degree + template.tp_shard_index,
+                    )):
+                raise SchemaError("DP2 SUM needs both genuine local WGRAD replicas",
+                                  path=template.state_ref)
+            sync_ref = f"dp_sync::{state.id}::tp{template.tp_shard_index}"
+            sync_value_ref = f"{sync_ref}.output"
+            synchronized = TensorValue(
+                sync_value_ref, gradient.shape, DType.FP32,
+                f"{gradient.logical_layout}.dp_sum",
+                Sharding(gradient.sharding.mesh_ref,
+                         gradient.sharding.dim_map, ()),
+                sync_ref, (), None,
+            )
+            values[sync_value_ref] = synchronized
+            wgrad_node = next(node for node in nodes if node.id == template.wgrad_ref)
+            nodes.append(LogicalNode(
+                sync_ref, source.instances[0].id, OpKind.COLLECTIVE,
+                OpPhase.WGRAD, wgrad_node.stage, wgrad_node.mesh_ref,
+                (gradient_ref,), (sync_value_ref,),
+                CollectiveWorkload(
+                    collective=CollectiveKind.ALL_REDUCE,
+                    reduce_op=ReduceOp.SUM,
+                    mesh_axes=(MeshAxisName.DP,), participant_count=2,
+                    reduction_mesh_axes=(MeshAxisName.DP,),
+                    scatter_tensor_axis=None, gather_tensor_axis=None,
+                    logical_tensor_bytes=template.gradient_bytes,
+                    rank_input_bytes=template.gradient_bytes,
+                    rank_output_bytes=template.gradient_bytes,
+                    rank_logical_payload_bytes=template.gradient_bytes,
+                    group_logical_payload_bytes=2 * template.gradient_bytes,
+                    dtype=DType.FP32, role=CollectiveRole.GRADIENT,
+                    input_layout=gradient.logical_layout,
+                    output_layout=synchronized.logical_layout,
+                ),
+                wgrad_node.math,
+                wgrad_node.effects, "collective_derived",
+            ))
+            edges.append(GraphEdge(
+                f"{gradient_ref}.edge_to.{sync_ref}", EdgeKind.DATA,
+                template.wgrad_ref, sync_ref, gradient_ref,
+            ))
+            values[gradient_ref] = replace(
+                gradient, consumers=(*gradient.consumers, sync_ref),
+            )
+            gradient_ref, gradient = sync_value_ref, synchronized
         if (weight.dtype is not DType.FP16
                 or gradient.dtype is not DType.FP32
                 or weight.shape != gradient.shape
@@ -105,14 +159,15 @@ def build_full_dense_training_sgd_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
             NodeEffects(EffectKind.INPLACE, f"{node_ref}.effect", alias),
             "sgd_update",
         ))
-        accesses.append(StateAccess.create(
-            node_ref=node_ref, state_ref=state.id,
-            mode=StateAccessMode.READ_WRITE,
-            rank=template.tp_shard_index,
-        ))
+        for dp in range(plan.spec.dp_degree):
+            accesses.append(StateAccess.create(
+                node_ref=node_ref, state_ref=state.id,
+                mode=StateAccessMode.READ_WRITE,
+                rank=template.tp_shard_index + dp * plan.spec.tp_degree,
+            ))
         edges.append(GraphEdge(
             f"{gradient_ref}.edge_to.{node_ref}", EdgeKind.DATA,
-            template.wgrad_ref, node_ref, gradient_ref,
+            gradient.producer, node_ref, gradient_ref,
         ))
         values[weight_ref] = replace(
             weight, consumers=(*weight.consumers, node_ref),
@@ -121,7 +176,9 @@ def build_full_dense_training_sgd_ir0(plan: FlexibleDenseTrainPlan) -> IR0:
             gradient, consumers=(*gradient.consumers, node_ref),
         )
     result = IR0.create(
-        producer_pass="full_dense_training_sgd_source",
+        producer_pass=("full_dense_training_sgd_dp2_source"
+                       if plan.spec.dp_degree == 2 else
+                       "full_dense_training_sgd_source"),
         job=source.job, instances=source.instances, nodes=tuple(nodes),
         values=tuple(values.values()), edges=tuple(edges),
         fusion_candidates=(), profile=source.profile, train=source.train,
