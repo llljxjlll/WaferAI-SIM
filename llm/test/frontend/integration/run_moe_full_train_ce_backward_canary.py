@@ -21,6 +21,9 @@ from llm.frontend.wafer_frontend.passes.lower_program import (
 from llm.frontend.wafer_frontend.passes.moe_full_train_ce_backward_ir0 import (
     append_moe_full_train_ce_backward_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_head_backward_ir0 import (
+    append_moe_full_train_head_backward_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -64,6 +67,7 @@ def main() -> None:
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)
     parser.add_argument("--npusim", type=Path, required=True)
+    parser.add_argument("--head-backward", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -78,20 +82,23 @@ def main() -> None:
         )
         native_context = physical
         source = append_moe_full_train_ce_backward_ir0(phase)
+        if args.head_backward:
+            source = append_moe_full_train_head_backward_ir0(source)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
             dense_manifest=Fixture.manifest,
         ).physical_ir1
-        reverse = source.nodes[-1]
+        reverse = source.nodes[len(phase.graph.nodes):]
         instance = replace(base.instances[0], node_ids=(
-            *base.instances[0].node_ids, reverse.id,
+            *base.instances[0].node_ids, *(node.id for node in reverse),
         ))
         ir1 = IR1.create(
             producer_pass="placement", source_ir0_id=source.id,
             profile=source.profile, fabric=physical.fabric,
             instances=(instance,), groups=base.groups,
-            nodes=(*base.nodes, _physical_node(reverse, base.groups[0].id)),
+            nodes=(*base.nodes, *(
+                _physical_node(node, base.groups[0].id) for node in reverse)),
             values=source.values, edges=source.edges,
             fusion_candidates=source.fusion_candidates,
             state_accesses=source.state_accesses,
@@ -108,8 +115,8 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != 52:
-            raise RuntimeError("CE backward did not add exactly one physical leaf")
+        if len(leaves) != (55 if args.head_backward else 52):
+            raise RuntimeError("reverse path physical leaf count drifted")
         manifest = NaiveManifestLinker().link(context, leaves)
         manifest.validate_against(
             context.ir1, context.fusion_plans, context.standalone_plans,
@@ -118,8 +125,10 @@ def main() -> None:
         )
         opcodes = [record.opcode for fragment in manifest.fragments
                    for stream in fragment.core_streams for record in stream.records]
-        if opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1:
-            raise RuntimeError("linked program lacks exact physical CE backward")
+        if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
+                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != int(args.head_backward)
+                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != int(args.head_backward)):
+            raise RuntimeError("linked program lacks exact CE/LM-head reverse records")
         linked = output / f"step{step}.linked.json"
         artifact = output / f"step{step}.npup"
         sidecar = output / f"step{step}.program_io.json"
@@ -145,7 +154,8 @@ def main() -> None:
                 )
             else:
                 raise RuntimeError(f"unseeded physical state: {abi.state_ref}")
-        gradient = source.values[-2]
+        gradient = next(value for value in source.values
+                        if value.id == f"{source.instances[0].id}.loss_gradient")
         dloss = [item.abi for item in _resolved_abis_prevalidated(carrier)
                  if item.abi.value_id == gradient.id
                  and item.abi.ownership is BufferOwnership.BORROWED]
@@ -171,6 +181,8 @@ def main() -> None:
             leaves=len(leaves), records=sum(len(stream.records)
                 for stream in manifest.core_streams),
             ce_backward_records=opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD),
+            head_wgrad_records=opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING),
+            head_dx_records=opcodes.count(RecordOpcode.GEMM_DX_TIMING),
             dloss_seed_abi=dloss[0].id,
         ))
     assert native_context is not None
@@ -214,6 +226,7 @@ def main() -> None:
     repo = Path(__file__).resolve().parents[4]
     source_files = (
         "llm/frontend/wafer_frontend/passes/moe_full_train_ce_backward_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_head_backward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_forward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_ep_ir1_source.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_ep_placement.py",
@@ -225,7 +238,8 @@ def main() -> None:
     source_sha256 = {name: _sha(repo / name) for name in source_files}
     (output / "receipt.json").write_text(json.dumps(dict(
         source_file_sha256=source_sha256,
-        status="ce_backward_physical_partial",
+        status=("head_backward_physical_partial" if args.head_backward
+                else "ce_backward_physical_partial"),
         full_training_gate="closed", steps=receipts,
         finalizer_sha256=_sha(finalizer), resolver_sha256=_sha(resolver),
         npusim_sha256=_sha(npusim), hardware_sha256=_sha(hardware_path),
