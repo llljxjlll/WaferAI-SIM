@@ -121,8 +121,14 @@ class TrainGlobalActionReplica:
 
         graph = projected.graph
         manifest = graph.persistent_state_manifest
+        full_sgd = {
+            OpKind.RMSNORM_BACKWARD, OpKind.ATTENTION_BACKWARD,
+            OpKind.ROPE_BACKWARD, OpKind.RESIDUAL_BACKWARD,
+            OpKind.SWIGLU_BACKWARD, OpKind.OPTIMIZER_UPDATE,
+        } <= {node.kind for node in graph.nodes}
         if manifest is None or any(
-            declaration.identity.kind is not StateKind.PARAMETER
+            declaration.identity.kind is not (
+                StateKind.TRAINABLE_PARAMETER if full_sgd else StateKind.PARAMETER)
             for declaration in manifest.declarations
         ):
             raise SchemaError(
@@ -136,7 +142,10 @@ class TrainGlobalActionReplica:
             OpKind.RESIDUAL_BACKWARD,
             OpKind.SWIGLU_BACKWARD,
         } <= {node.kind for node in graph.nodes}:
-            self._validate_full_dense_backward_actions(graph, manifest, path)
+            if full_sgd:
+                self._validate_full_dense_sgd_actions(graph, manifest, path)
+            else:
+                self._validate_full_dense_backward_actions(graph, manifest, path)
             expected_id = stable_artifact_id(
                 "train_global_action_replica",
                 self._semantic_key(),
@@ -278,6 +287,42 @@ class TrainGlobalActionReplica:
                 f"unstable replica id; expected {expected_id!r}",
                 path=f"{path}.id",
             )
+
+    def _validate_full_dense_sgd_actions(self, graph, manifest, path: str) -> None:
+        """Every trainable source read/write is witnessed on the physical DAG."""
+        expected = {
+            (binding.id, access.node_ref, use)
+            for binding in manifest.bindings
+            for access in graph.state_accesses
+            if access.state_ref == binding.state_ref
+            for use in ((StateUseAccess.READ, StateUseAccess.WRITE)
+                        if access.mode.value == "read_write"
+                        else (StateUseAccess.READ,))
+        }
+        actual_actions = tuple(action for action in self.global_dag.actions
+                               if action.state_uses)
+        actual = {
+            (action.state_uses[0].hbm_binding_ref,
+             getattr(action.origin_ref, "node_ref", None),
+             action.state_uses[0].access)
+            for action in actual_actions
+        }
+        if (len(actual) != len(actual_actions) or actual != expected
+                or any(len(action.state_uses) != 1
+                       or action.task_kind is not (
+                           SemanticTaskKind.DMA_OUT
+                           if action.state_uses[0].access is StateUseAccess.WRITE
+                           else SemanticTaskKind.DMA_IN)
+                       for action in actual_actions)):
+            raise SchemaError("Dense SGD state actions must cover all source READ/WRITE accesses",
+                              path=f"{path}.global_dag.actions")
+        compute = {action.member_id for action in self.global_dag.actions
+                   if action.task_kind is SemanticTaskKind.COMP}
+        required = {node.id for node in graph.nodes if node.phase in (
+            OpPhase.DGRAD, OpPhase.WGRAD, OpPhase.UPDATE)}
+        if not required <= compute:
+            raise SchemaError("Dense SGD action DAG omits gradient or update compute",
+                              path=f"{path}.global_dag.actions")
 
     def _validate_full_dense_backward_actions(
         self, graph, manifest, path: str

@@ -855,6 +855,56 @@ def _validate_full_dense_backward_projection_state(
         )
 
 
+def _validate_full_dense_sgd_projection_state(
+    graph: IR1, projection: IR2ProjectionResult, path: str,
+) -> None:
+    """Every source parameter read and in-place SGD write owns actual HBM IO."""
+    manifest = graph.persistent_state_manifest
+    updates = {node.id for node in graph.nodes
+               if node.kind is OpKind.OPTIMIZER_UPDATE}
+    steps = sum(node.kind is OpKind.CE_FORWARD for node in graph.nodes)
+    if (manifest is None or steps not in (1, 2) or not updates or
+            len(updates) != steps * len(manifest.declarations) or
+            any(state.identity.kind is not StateKind.TRAINABLE_PARAMETER
+                or state.access is not PersistentStateAccess.READ_WRITE
+                for state in manifest.declarations)):
+        raise SchemaError("Dense SGD projection requires one writable state per update",
+                          path=f"{path}.graph.persistent_state_manifest")
+    accesses = {access.id: access for access in graph.state_accesses}
+    read_ids = set(accesses)
+    write_ids = {access.id for access in accesses.values()
+                 if access.mode is StateAccessMode.READ_WRITE}
+    if {accesses[ref].node_ref for ref in write_ids} != updates or (
+        len(write_ids) != len(updates)
+    ):
+        raise SchemaError("each SGD update needs one exact state write",
+                          path=f"{path}.graph.state_accesses")
+    physical_read = []
+    physical_write = []
+    for dag in projection.dags:
+        for task in dag.tasks:
+            origin = task.origin_ref
+            if not isinstance(origin, StateIoOrigin):
+                continue
+            if task.kind is SemanticTaskKind.DMA_IN:
+                physical_read.append(origin.state_access_ref)
+            elif task.kind is SemanticTaskKind.DMA_OUT:
+                physical_write.append(origin.state_access_ref)
+    if (len(physical_read) != len(read_ids) or set(physical_read) != read_ids
+            or len(physical_write) != len(write_ids)
+            or set(physical_write) != write_ids):
+        raise SchemaError("Dense SGD requires exact source READ and WRITE DMA coverage",
+                          path=f"{path}.projection.dags")
+    compute_origins = {task.member_id for dag in projection.dags
+                       for task in dag.tasks
+                       if task.kind is SemanticTaskKind.COMP}
+    required = {node.id for node in graph.nodes if node.phase in (
+        OpPhase.DGRAD, OpPhase.WGRAD, OpPhase.UPDATE)}
+    if not required <= compute_origins:
+        raise SchemaError("Dense SGD projection omits gradient or optimizer compute",
+                          path=f"{path}.projection.dags")
+
+
 def _is_s2_lite_train_graph(graph: IR1) -> bool:
     kinds = {node.kind for node in graph.nodes}
     return (
@@ -1061,11 +1111,15 @@ class TrainProjectedReplica:
 
         manifest = self.graph.persistent_state_manifest
         if _is_full_dense_backward_graph(self.graph):
-            _validate_full_dense_backward_projection_state(
-                self.graph,
-                self.projection,
-                path,
-            )
+            if any(node.kind is OpKind.OPTIMIZER_UPDATE
+                   for node in self.graph.nodes):
+                _validate_full_dense_sgd_projection_state(
+                    self.graph, self.projection, path,
+                )
+            else:
+                _validate_full_dense_backward_projection_state(
+                    self.graph, self.projection, path,
+                )
         elif _is_s2_lite_train_graph(self.graph):
             _validate_s2_lite_projection_state(
                 self.graph,
@@ -1115,63 +1169,70 @@ class TrainProjectedReplica:
         ce_nodes = tuple(
             node for node in self.graph.nodes if node.kind is OpKind.CE_FORWARD
         )
-        if len(ce_nodes) != 1:
+        two_step = len(ce_nodes) == 2 and all(
+            any(node.id.endswith(f"::step{step}__dp{self.replica_index}")
+                for node in ce_nodes)
+            for step in (0, 1)
+        ) and sum(node.kind is OpKind.OPTIMIZER_UPDATE
+                  for node in self.graph.nodes) == 2 * len(
+                      self.graph.persistent_state_manifest.declarations)
+        if not (len(ce_nodes) == 1 or two_step):
             raise SchemaError(
-                "train forward requires exactly one CE_FORWARD node",
+                "train forward requires one CE or exact two-step CE/SGD inventory",
                 path=f"{path}.graph.nodes",
             )
-        ce_node = ce_nodes[0]
         value_index = {value.id: value for value in self.graph.values}
-        if (
-            len(ce_node.inputs) != 2
-            or len(ce_node.outputs) != 1
-            or value_index[ce_node.inputs[0]].dtype is not DType.FP16
-            or value_index[ce_node.inputs[1]].dtype is not DType.INT32
-            or value_index[ce_node.outputs[0]].dtype is not DType.FP32
-        ):
-            raise SchemaError(
-                "CE_FORWARD requires FP16 logits, INT32 labels, and FP32 loss",
-                path=f"{path}.graph.nodes",
-            )
-        incoming = tuple(
-            edge for edge in self.graph.edges if edge.destination_node == ce_node.id
-        )
-        if len(incoming) != 1:
-            raise SchemaError(
-                "CE_FORWARD must have one logits producer dependency",
-                path=f"{path}.graph.edges",
-            )
-        predecessor_id = incoming[0].source_node
-        for die_id, rank in local_rank_by_die.items():
-            dag = next(item for item in self.projection.dags if item.die_id == die_id)
-            tasks = tuple(
-                task
-                for task in dag.tasks
-                if isinstance(task.origin_ref, OrdinaryNodeOrigin)
-                and task.origin_ref.op_id == ce_node.id
-            )
-            if len(tasks) != 1:
-                raise SchemaError(
-                    "each replica rank requires one CE_FORWARD task",
-                    path=f"{path}.projection.dags",
-                )
-            task = tasks[0]
+        for ce_node in ce_nodes:
             if (
-                task.id != f"task.{ce_node.id}.rank.{rank}.comp"
-                or task.kind is not SemanticTaskKind.COMP
-                or task.read_values != ce_node.inputs
-                or task.write_values != ce_node.outputs
-                or task.deps
-                != (f"task.{predecessor_id}.rank.{rank}.comp",)
-                or task.compute is None
-                or tuple(item.role for item in task.compute.inputs)
-                != ("logits", "labels")
-                or tuple(item.role for item in task.compute.outputs) != ("loss",)
+                len(ce_node.inputs) != 2
+                or len(ce_node.outputs) != 1
+                or value_index[ce_node.inputs[0]].dtype is not DType.FP16
+                or value_index[ce_node.inputs[1]].dtype is not DType.INT32
+                or value_index[ce_node.outputs[0]].dtype is not DType.FP32
             ):
                 raise SchemaError(
-                    "CE_FORWARD task role/arity/dependency contract is not exact",
-                    path=f"{path}.projection.dags",
+                    "CE_FORWARD requires FP16 logits, INT32 labels, and FP32 loss",
+                    path=f"{path}.graph.nodes",
                 )
+            incoming = tuple(
+                edge for edge in self.graph.edges if edge.destination_node == ce_node.id
+            )
+            if len(incoming) != 1:
+                raise SchemaError(
+                    "CE_FORWARD must have one logits producer dependency",
+                    path=f"{path}.graph.edges",
+                )
+            predecessor_id = incoming[0].source_node
+            for die_id, rank in local_rank_by_die.items():
+                dag = next(item for item in self.projection.dags if item.die_id == die_id)
+                tasks = tuple(
+                    task
+                    for task in dag.tasks
+                    if isinstance(task.origin_ref, OrdinaryNodeOrigin)
+                    and task.origin_ref.op_id == ce_node.id
+                )
+                if len(tasks) != 1:
+                    raise SchemaError(
+                        "each replica rank requires one CE_FORWARD task",
+                        path=f"{path}.projection.dags",
+                    )
+                task = tasks[0]
+                if (
+                    task.id != f"task.{ce_node.id}.rank.{rank}.comp"
+                    or task.kind is not SemanticTaskKind.COMP
+                    or task.read_values != ce_node.inputs
+                    or task.write_values != ce_node.outputs
+                    or task.deps
+                    != (f"task.{predecessor_id}.rank.{rank}.comp",)
+                    or task.compute is None
+                    or tuple(item.role for item in task.compute.inputs)
+                    != ("logits", "labels")
+                    or tuple(item.role for item in task.compute.outputs) != ("loss",)
+                ):
+                    raise SchemaError(
+                        "CE_FORWARD task role/arity/dependency contract is not exact",
+                        path=f"{path}.projection.dags",
+                    )
         expected_id = stable_artifact_id(
             "train_projected_replica",
             self._semantic_key(),

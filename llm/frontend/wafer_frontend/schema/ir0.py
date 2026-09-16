@@ -1224,8 +1224,10 @@ class SgdUpdateWorkload:
             "rank_updated_weight_shape",
         ):
             _validate_shape(
-                getattr(self, field_name), f"{path}.{field_name}", expected_rank=2
+                getattr(self, field_name), f"{path}.{field_name}"
             )
+        if len(self.logical_weight_shape) not in (1, 2):
+            raise SchemaError("SGD supports rank-one gamma or rank-two weights", path=path)
         if not (
             self.logical_gradient_shape
             == self.logical_updated_weight_shape

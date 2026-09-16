@@ -482,7 +482,9 @@ class DenseIR0Validator:
             return
         if graph.job is not JobKind.TRAIN:
             _fail("unsupported Dense job kind", f"{path}.job")
-        if graph.producer_pass == "full_dense_training_backward_source":
+        if graph.producer_pass in ("full_dense_training_backward_source",
+                                   "full_dense_training_sgd_source",
+                                   "full_dense_training_two_step_source"):
             DenseIR0Validator._validate_full_dense_backward_job_contract(
                 graph, path
             )
@@ -552,8 +554,9 @@ class DenseIR0Validator:
                            if node.kind is OpKind.CE_FORWARD)
         ce_backward = tuple(node for node in graph.nodes
                             if node.kind is OpKind.CE_BACKWARD)
-        if len(ce_forward) != 1 or len(ce_backward) != 1:
-            _fail("complete Dense backward requires one CE forward/backward",
+        steps = (0, 1) if graph.producer_pass == "full_dense_training_two_step_source" else (0,)
+        if len(ce_forward) != len(steps) or len(ce_backward) != len(steps):
+            _fail("complete Dense backward requires one CE forward/backward per step",
                   f"{path}.nodes")
         expected_reverse = {
             f"backward::{node.id}" for node in reversed(forward)
@@ -569,9 +572,43 @@ class DenseIR0Validator:
             _fail("complete Dense backward omits or fabricates a backbone reverse",
                   f"{path}.nodes")
         states = {state.id: state for state in graph.persistent_states}
+        updates = tuple(node for node in graph.nodes
+                        if node.kind is OpKind.OPTIMIZER_UPDATE)
+        if graph.producer_pass in ("full_dense_training_sgd_source",
+                                   "full_dense_training_two_step_source"):
+            values_by_ref = {value.id: value for value in graph.values}
+            by_weight = {state.identity.tensor_ref: state for state in states.values()}
+            if len(updates) != len(states) * len(steps) or any(
+                state.identity.kind is not StateKind.TRAINABLE_PARAMETER
+                or state.access is not PersistentStateAccess.READ_WRITE
+                for state in states.values()
+            ) or any(
+                node.phase is not OpPhase.UPDATE
+                or node.inputs != (weight_ref, (
+                    f"wgrad::{weight_ref}::tp0.output"
+                    if len(steps) == 1 else
+                    f"wgrad::{weight_ref}::tp0.output::{node.id.rsplit('::', 1)[-1]}"))
+                or by_weight[weight_ref].identity.tensor_ref != weight_ref
+                or len(node.outputs) != 1
+                or values_by_ref[node.outputs[0]].dtype is not DType.FP16
+                for node in updates
+                for weight_ref in node.inputs[:1]
+                if weight_ref in by_weight
+            ) or {node.inputs[0] for node in updates} != set(by_weight) or (
+                len(steps) == 2 and {
+                    (node.inputs[0], node.id.rsplit("::", 1)[-1])
+                    for node in updates
+                } != {(ref, f"step{step}")
+                      for ref in by_weight for step in steps}
+            ):
+                _fail("complete Dense SGD must update each trainable state from its own FP32 WGRAD exactly once",
+                      f"{path}.nodes")
+        elif updates:
+            _fail("backward-only source cannot contain SGD updates", f"{path}.nodes")
         expected_wgrad = {
-            f"wgrad::{state.identity.tensor_ref}::tp0"
+            f"wgrad::{state.identity.tensor_ref}::tp0{suffix}"
             for state in states.values()
+            for suffix in (("::step0", "::step1") if len(steps) == 2 else ("",))
         }
         actual_wgrad = {
             node.id for node in graph.nodes if node.phase is OpPhase.WGRAD
@@ -595,13 +632,35 @@ class DenseIR0Validator:
                   f"{path}.nodes")
         control = tuple(edge for edge in graph.edges
                         if edge.kind is EdgeKind.CONTROL)
-        if (
-            len(control) != 1
-            or control[0].source_node != ce_forward[0].id
-            or control[0].destination_node != ce_backward[0].id
-        ):
-            _fail("CE forward must control its backward exactly once",
+        expected_ce = {
+            (forward_node.id, backward_node.id)
+            for forward_node in ce_forward for backward_node in ce_backward
+            if backward_node.id == f"{forward_node.id}_backward"
+        }
+        actual_ce = {(edge.source_node, edge.destination_node)
+                     for edge in control if edge.source_node in
+                     {node.id for node in ce_forward}}
+        if (len(expected_ce) != len(steps) or actual_ce != expected_ce):
+            _fail("every CE forward must control its own backward exactly once",
                   f"{path}.edges")
+        if len(steps) == 2:
+            state_by_weight = {state.identity.tensor_ref: state
+                               for state in graph.persistent_states}
+            expected_version = {
+                (f"sgd_update::{weight}::tp0::step0", node.id)
+                for node in forward if node.id.endswith("::step1")
+                for weight in node.inputs
+                if (weight in state_by_weight and node.kind in (
+                    OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING))
+            }
+            actual_version = {(edge.source_node, edge.destination_node)
+                              for edge in control
+                              if edge.source_node.startswith("sgd_update::")}
+            if actual_version != expected_version:
+                _fail("step0 SGD STORE must control every matching step1 parameter LOAD",
+                      f"{path}.edges")
+        elif len(control) != 1:
+            _fail("single-step CE control edge must remain exact", f"{path}.edges")
 
     @staticmethod
     def _validate_lite_train_job_contract(graph: IR0, path: str) -> None:
@@ -738,7 +797,9 @@ class DenseIR0Validator:
         node_profiles: dict[str, ProfileKey],
         path: str,
     ) -> None:
-        if graph.producer_pass == "full_dense_training_backward_source":
+        if graph.producer_pass in ("full_dense_training_backward_source",
+                                   "full_dense_training_sgd_source",
+                                   "full_dense_training_two_step_source"):
             DenseIR0Validator._validate_full_dense_backward_persistent_states(
                 graph, values, axis_sizes, path
             )
@@ -978,9 +1039,17 @@ class DenseIR0Validator:
         states = {state.id: state for state in graph.persistent_states}
         if (
             not states
-            or any(state.identity.kind is not StateKind.PARAMETER
+            or any(state.identity.kind is not (
+                       StateKind.TRAINABLE_PARAMETER
+                       if graph.producer_pass in ("full_dense_training_sgd_source",
+                                              "full_dense_training_two_step_source")
+                       else StateKind.PARAMETER)
                    or state.identity.tensor_ref is None
-                   or state.access is not PersistentStateAccess.READ_ONLY
+                   or state.access is not (
+                       PersistentStateAccess.READ_WRITE
+                       if graph.producer_pass in ("full_dense_training_sgd_source",
+                                              "full_dense_training_two_step_source")
+                       else PersistentStateAccess.READ_ONLY)
                    for state in states.values())
         ):
             _fail("complete Dense backward requires exact read-only source parameters",
@@ -1015,6 +1084,18 @@ class DenseIR0Validator:
                 expected.append(StateAccess.create(
                     node_ref=node.id, state_ref=state_ref,
                     mode=StateAccessMode.READ, rank=0,
+                ))
+            elif node.kind is OpKind.OPTIMIZER_UPDATE and (
+                graph.producer_pass in ("full_dense_training_sgd_source",
+                                        "full_dense_training_two_step_source")
+            ):
+                state_ref = state_by_tensor.get(node.inputs[0])
+                if state_ref is None:
+                    _fail("SGD source lacks its trainable parameter state",
+                          f"{path}.state_accesses")
+                expected.append(StateAccess.create(
+                    node_ref=node.id, state_ref=state_ref,
+                    mode=StateAccessMode.READ_WRITE, rank=0,
                 ))
             elif node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
                 state_ref = state_by_tensor.get(node.inputs[1])
