@@ -1543,10 +1543,10 @@ class IR1:
                     )
                 if identity.ep_owner_rank is not None:
                     if (group.axis is not MeshAxisName.EP
-                            or group.logical_shape != (1, 2)
+                            or group.logical_shape not in ((1, 1), (1, 2))
                             or identity.shard_index != 0):
                         raise SchemaError(
-                            "EP owner requires physical EP2 and genuine TP shard0",
+                            "EP owner requires physical TP1/EP1-or-EP2 and genuine TP shard0",
                             path=f"{declaration_path}.identity.ep_owner_rank",
                         )
                     owner_rank = identity.ep_owner_rank

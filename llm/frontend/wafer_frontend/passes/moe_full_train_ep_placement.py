@@ -1,4 +1,4 @@
-"""Source-bound 2D TP1×EP2 group and disjoint Dense/MoE HBM home proposal.
+"""Source-bound 2D TP1×EP1/EP2 group and disjoint Dense/MoE HBM home proposal.
 
 The existing TP-only TrainPlacedIR1 builder cannot represent EP ownership;
 this typed result is a physical placement input, not an executable IR1.
@@ -109,7 +109,9 @@ def _require_source_memory_and_sram(
     capacities={entry.location_ref:entry for entry in memory.capacities
                 if entry.tier.value=="hbm"}
     spaces={space.die_id:space for space in context.hbm_address_spaces}
-    if (set(capacities)!={"die:0","die:1"} or set(spaces)!={0,1}
+    expected_dies=set(range(sequence.materialization.request.mesh.rank_count))
+    if (set(capacities)!={f"die:{die}" for die in expected_dies}
+            or set(spaces)!=expected_dies
             or any(capacities[f"die:{die}"].base_address!=0
                    or capacities[f"die:{die}"].capacity_bytes!=space.size_bytes
                    for die,space in spaces.items())):
@@ -133,19 +135,24 @@ def _physical_ep_group(phase: FullMoeForwardIr0Phase,
                        context: PlacementContext) -> PhysicalGroup:
     instance = phase.graph.instances[0]
     mesh = instance.meshes[0]
+    ep_degree=instance.parallel.ep
     if (len(mesh.axes)!=2
             or tuple((axis.name,axis.size) for axis in mesh.axes)
-                != ((MeshAxisName.TP,1),(MeshAxisName.EP,2))
-            or instance.parallel.tp != 1 or instance.parallel.ep != 2
+                != ((MeshAxisName.TP,1),(MeshAxisName.EP,ep_degree))
+            or instance.parallel.tp != 1 or ep_degree not in (1,2)
             or instance.parallel.dp != 1
             or context.placement.strategy.value != "compact"
-            or not {0,1}.issubset({die.id for die in context.fabric.dies})):
-        raise SchemaError("requires original TP1×EP2×DP1 twoDie source topology",
+            or not set(range(ep_degree)).issubset(
+                {die.id for die in context.fabric.dies})):
+        raise SchemaError("requires original TP1×EP1/EP2×DP1 source topology",
                           path="moe_full_train_ep.mesh")
-    gid=f"group__{instance.id}__{mesh.id}__ep2"
-    dies=(0,1)
+    gid=f"group__{instance.id}__{mesh.id}__ep{ep_degree}"
+    dies=tuple(range(ep_degree))
     placements=tuple(RankPlacement(rank,die,(0,rank))
                      for rank,die in enumerate(dies))
+    if ep_degree==1:
+        return PhysicalGroup(gid,instance.id,mesh.id,MeshAxisName.EP,(1,1),
+                             placements,GroupEmbedding((),(),()))
     links=_link_index(context.fabric)
     catalog=_capacity_catalog(context.fabric)
     routes=tuple(_route(group_id=gid,source_rank=src,

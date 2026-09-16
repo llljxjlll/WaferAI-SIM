@@ -1,4 +1,4 @@
-"""Source-backed physical HBM home proposal for full two-layer EP2 training.
+"""Source-backed physical HBM home proposal for two-layer EP1/EP2 training.
 
 This does not relocate a linked fragment.  The executable linker must prove
 its rewritten StateABI, state refs, LSU operands and segment versions match
@@ -62,15 +62,15 @@ class MoeFullTrainHbmLayout:
         if (self.source_ir0_ref != phase.graph.id
                 or self.dense_forward_manifest_ref != dense_manifest.id
                 or self.source_sequence_ref != sequence.id
-                or len(self.shared) != 11 or len(self.ep) != 16
+                or len(self.shared) != 11 or len(self.ep) != len(phase.ep_state_owners)
                 or {home.declaration_ref for home in (*self.shared,*self.ep)}
                     != {state.id for state in phase.graph.persistent_states}):
             raise SchemaError("shared+EP exact StateDecl/production source map lost",
                               path="moe_full_train_hbm_layout.source")
         spaces = {space.die_id:space for space in self.source_spaces}
-        if set(spaces) != {0,1} or any(space.die_id != die
-                                    for die,space in spaces.items()):
-            raise SchemaError("production EP2 requires exact two physical address spaces",
+        if (set(spaces) != set(range(phase.graph.instances[0].parallel.ep))
+                or len(self.source_spaces) != len(spaces)):
+            raise SchemaError("production EP requires exact physical address spaces",
                               path="moe_full_train_hbm_layout.spaces")
         states = {state.id:state for state in phase.graph.persistent_states}
         for home in (*self.shared,*self.ep):
@@ -122,8 +122,9 @@ class MoeFullTrainHbmLayout:
                 raise SchemaError("leaf group parameter StateABI identity/extent drifted",
                                   path=f"moe_full_train_hbm_layout.ep[{home.declaration_ref}]")
             if group.expert is None:
-                if home.slice_offset != 0 or home.original_leaf_size != 16:
-                    raise SchemaError("one full router replica tensor must be 16B",
+                if (home.slice_offset != 0
+                        or home.original_leaf_size != states[home.declaration_ref].tensor_bytes):
+                    raise SchemaError("one full router replica tensor must match its source tensor bytes",
                                       path=f"moe_full_train_hbm_layout.ep[{home.declaration_ref}]")
             else:
                 projection = owner.source_e2e_parameter_name.rsplit('.',2)[-2]
@@ -133,7 +134,7 @@ class MoeFullTrainHbmLayout:
                         or home.tensor_size != 64):
                     raise SchemaError("all three full expert projections require exact 192B ABI",
                                       path=f"moe_full_train_hbm_layout.ep[{home.declaration_ref}]")
-        by_die: dict[int,list[MoeFullTrainParameterHome]] = {0:[],1:[]}
+        by_die: dict[int,list[MoeFullTrainParameterHome]] = {die: [] for die in spaces}
         for home in (*self.shared,*self.ep):
             by_die[home.die_id].append(home)
         for die,homes in by_die.items():
@@ -156,8 +157,9 @@ def build_moe_full_train_hbm_layout(
     for space in spaces:
         space.validate()
     catalog = {space.die_id:space for space in spaces}
-    if set(catalog) != {0,1} or len(spaces) != 2:
-        raise SchemaError("true EP2 placement needs exactly two address spaces",
+    if (set(catalog) != set(range(phase.graph.instances[0].parallel.ep))
+            or len(spaces) != phase.graph.instances[0].parallel.ep):
+        raise SchemaError("true EP placement needs exactly the active address spaces",
                           path="moe_full_train_hbm_layout.spaces")
     states = {state.id:state for state in phase.graph.persistent_states}
     originals = dict(phase.shared_source_state_refs)

@@ -127,6 +127,56 @@ class MoeFullTrainEpPlacementTest(unittest.TestCase):
             sequence=cls.sequence,context=cls.context,
         )
 
+    def test_single_die_two_layer_physical_ep1_forward_ir1(self):
+        request = _request(WorkloadFamily.MOE_TRAINING, rows=1, columns=1)
+        semantic = request._semantic_key()
+        semantic["memory"] = replace(request.memory, allow_sram_spill=False)
+        request = WorkloadRunRequest.create(**semantic)
+        capacity = MemoryTierCapacity.create(
+            tier=MemoryTier.HBM, location_ref="die:0",
+            base_address=0, capacity_bytes=1 << 25, alignment_bytes=16,
+        )
+        sequence = compile_moe_sequence(
+            materialize_workload_preflight(
+                request, _capability(supported=True), capacities=(capacity,),
+            ),
+            source_rank_policy="rank0_shared_spine",
+        )
+        phase = build_moe_full_train_forward_ir0(self.dense, sequence)
+        fabric = physical_fabric_from_data(
+            minimal_hardware(1, 1, sram_bytes=131072),
+        )
+        context = PlacementContext.create(
+            producer_pass="moe_ep1_train_resident_32MiB_128KiB",
+            fabric=fabric,
+            placement=self.forward.plan.source_experiment.placement,
+            hbm_address_spaces=(self.context.hbm_address_spaces[0],),
+        )
+        placement = build_moe_full_train_ep_placement(
+            phase, original_dense=self.dense, dense_manifest=self.manifest,
+            sequence=sequence, context=context,
+        )
+        self.assertEqual(placement.physical_group.logical_shape, (1, 1))
+        self.assertEqual(placement.physical_group.embedding.routes, ())
+        self.assertEqual(len(placement.hbm_layout.shared), 11)
+        self.assertEqual(len(placement.hbm_layout.ep), 8)
+        self.assertEqual(len(placement.persistent_state_manifest.bindings), 19)
+        from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
+            build_moe_ep_placed_ir1_candidate,
+        )
+        candidate = build_moe_ep_placed_ir1_candidate(
+            phase, original_dense=self.dense, sequence=sequence,
+            placement=placement, context=context, dense_manifest=self.manifest,
+        )
+        candidate.validate_official_ir1()
+        self.assertEqual(len(candidate.owner_proofs), 8)
+        self.assertEqual({proof.physical_die for proof in candidate.owner_proofs}, {0})
+        forged = replace(candidate.owner_proofs[0], physical_die=1)
+        with self.assertRaisesRegex(SchemaError, "source E2E EP tensor"):
+            replace(candidate, owner_proofs=(forged, *candidate.owner_proofs[1:])).validate_source_against(
+                phase, self.dense, sequence, placement, context, self.manifest,
+            )
+
     def test_real_two_axis_group_routes_and_exact_model_homes(self):
         placement=self.placement
         placement.validate(self.phase,self.dense,self.manifest,

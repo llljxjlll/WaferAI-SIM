@@ -1,4 +1,4 @@
-"""Strict EP2 source→physical IR1 candidate with explicit expert owner proof.
+"""Strict EP1/EP2 source→physical IR1 candidate with expert owner proof.
 
 An actual IR1 is constructed with official schema types.  Existing IR1.validate
 still rejects the MoE PhysicalNode workload and then mistakes TP shard0 for an
@@ -61,7 +61,7 @@ class MoeEpPlacedIr1SourceCandidate:
         group=placement.physical_group
         source={node.id:node for node in phase.graph.nodes}
         actual={node.origin_node_id:node for node in self.physical_ir1.nodes}
-        if (set(source)!=set(actual) or len(source)!=32
+        if (set(source)!=set(actual) or len(actual)!=len(source)
                 or any(node.execution_group_ref!=group.id
                        or node.id!=ref or node.mesh_ref!=source[ref].mesh_ref
                        or node.kind is not source[ref].kind
@@ -81,8 +81,9 @@ class MoeEpPlacedIr1SourceCandidate:
         owners={owner.source_state_decl_ref:owner
                 for owner in phase.ep_state_owners}
         proofs={proof.declaration_ref:proof for proof in self.owner_proofs}
-        if (len(proofs)!=16 or set(proofs)!=set(owners)):
-            raise SchemaError("all 16 router/expert E2E EP owner proofs must be unique",
+        if (len(proofs)!=len(phase.ep_state_owners)
+                or set(proofs)!=set(owners)):
+            raise SchemaError("all router/expert E2E EP owner proofs must be unique",
                               path="moe_ep_ir1_candidate.owner_proofs")
         ranks={place.rank:place.die_id for place in group.placements}
         for ref,proof in proofs.items():
