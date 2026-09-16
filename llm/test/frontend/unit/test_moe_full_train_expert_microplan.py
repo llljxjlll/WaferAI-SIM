@@ -4,6 +4,7 @@ from dataclasses import replace
 import unittest
 
 from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.lowering.moe_full_train_expert import lower_moe_expert_record_fragment
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -41,6 +42,7 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
         cls.schedule = schedule_set.schedules[0]
         cls.graph = graph
         dag = build_global_action_dag(graph, projection, schedule_set)
+        cls.dag = dag
         cls.actions = tuple(action for action in dag.actions
                             if action.op_kind is OpKind.MOE_EXPERT_FORWARD)
 
@@ -83,6 +85,35 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
             self.assertEqual(plan.operations[3].output_ref,
                              next(use.binding_id for use in self.actions[plans.index(plan)].buffer_uses
                                   if use.role.value == "comp_output"))
+
+    def test_two_physical_multirecord_fragments_have_owned_scratch_lifecycle(self):
+        for action in self.actions:
+            fragment = lower_moe_expert_record_fragment(
+                action, self.schedule, self.graph,
+                source_global_dag_id=self.dag.id)
+            fragment.validate()
+            opcodes = [record.opcode for record in fragment.core_streams[0].records]
+            self.assertEqual(opcodes, [
+                RecordOpcode.SRAM_ALLOC_AT, RecordOpcode.SRAM_ALLOC_AT,
+                RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
+                RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
+                RecordOpcode.SRAM_BIND, RecordOpcode.SWIGLU,
+                RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
+                RecordOpcode.SRAM_FREE, RecordOpcode.SRAM_FREE,
+            ])
+            scratch = [abi for abi in fragment.buffer_abi
+                       if abi.binding_id not in {binding.id for binding
+                                                 in self.schedule.buffer_bindings}]
+            self.assertEqual(len(scratch), 2)
+            self.assertTrue(all(abi.ownership is BufferOwnership.OWNED
+                                for abi in scratch))
+            self.assertEqual(sorted(abi.size_bytes for abi in scratch), [64, 128])
+            # N5 ScheduleSet does not expose scratch uses yet; the public
+            # validate_against gate must remain closed rather than accepting
+            # an unlinked record stream as a complete expert executable.
+            with self.assertRaisesRegex(
+                    SchemaError, "lifecycle records must exactly cover"):
+                fragment.validate_against(self.dag)
 
     def test_short_weight_and_scratch_alias_fail_closed(self):
         action = self.actions[0]

@@ -1,0 +1,186 @@
+"""Source-bound EP1 expert native records, pending public scratch/link closure.
+
+This emits a structurally valid physical fragment with explicit SRAM_ALLOC_AT
+and SRAM_FREE roots.  The public N5 action/schedule ABI does not yet expose
+those two internal roots, so validate_against/link deliberately still reject.
+"""
+
+from __future__ import annotations
+
+from ..errors import SchemaError
+from ..passes.moe_full_train_expert_microplan import plan_moe_expert_native_forward
+from ..policies.naive_intra_die import _banks
+from ..schema.artifact_manifest import (
+    AddressRelocation, CommandFragment, CoreFragmentStream, FragmentKind,
+    ProgramSymbol, ProgramSymbolKind, RecordOpcode, RecordOperand,
+    RelocatableRecord, SemanticOperandId,
+)
+from ..schema.common import DType, stable_artifact_id
+from ..schema.global_action import GlobalAction
+from ..schema.ir1 import IR1
+from ..schema.ir2 import BufferBinding, BufferOwnership, IntraDieSchedule, TensorSlice
+from .coarse import _buffer_abi, _program_symbol
+
+
+_PRODUCER = "moe_full_train_expert_lowering"
+
+
+def lower_moe_expert_record_fragment(
+    action: GlobalAction, schedule: IntraDieSchedule, ir1: IR1,
+    *, source_global_dag_id: str,
+) -> CommandFragment:
+    """Emit both distinct owned scratch allocations and four true compute opcodes."""
+    plan = plan_moe_expert_native_forward(action, schedule, ir1)
+    if not source_global_dag_id:
+        raise SchemaError("expert fragment needs a source GlobalActionDAG", path="source_global_dag_id")
+    die = next(die for die in ir1.fabric.dies if die.id == plan.logical_core_die)
+    core = next(core for core in die.cores
+                if core.local_core_id == plan.logical_core_id)
+    profile = next(profile for profile in ir1.fabric.sram_profiles
+                   if profile.id == core.sram_profile_ref)
+    region = next(region for region in profile.regions
+                  if region.id == plan.scratch_region_ref)
+    m, i = action.compute.workload.owned_token_count, action.compute.workload.intermediate_size
+    first_public = next(binding for binding in schedule.buffer_bindings
+                        if binding.id == plan.operations[0].input_ref)
+    scratch_specs = (
+        (plan.operations[0].output_ref, (m, 2*i),
+         plan.concat_region_offset_bytes, plan.concat_scratch_bytes),
+        (plan.operations[2].output_ref, (m, i),
+         plan.activated_region_offset_bytes, plan.activated_scratch_bytes),
+    )
+    scratch = []
+    for value_id, shape, offset, size in scratch_specs:
+        identity = {"action": action.id, "value": value_id,
+                    "region": region.id, "offset": offset, "bytes": size}
+        scratch.append(BufferBinding(
+            id=stable_artifact_id("moe_expert_scratch_binding", identity,
+                                  schema_version="moe_expert_scratch/v1"),
+            value_id=value_id, tensor_slice=TensorSlice(
+                value_id, (0, 0), shape),
+            core_id=plan.runtime_core_id, region_ref=region.id,
+            region_offset_bytes=offset, size_bytes=size,
+            alignment_bytes=profile.allocation_alignment_bytes,
+            banks=_banks(region.base_bytes + offset, size,
+                         bank_count=profile.bank_count,
+                         interleave_bytes=profile.bank_interleave_bytes),
+            storage_id=stable_artifact_id("moe_expert_scratch_storage", identity,
+                                          schema_version="moe_expert_scratch/v1"),
+            alias_of=None, ownership=BufferOwnership.OWNED,
+            lifetime_start=plan.core_order_index,
+            lifetime_end_exclusive=plan.core_order_index + 1,
+            dtype=DType.FP16, layout=first_public.layout,
+        ))
+    bindings = {binding.id: binding for binding in schedule.buffer_bindings}
+    for binding in scratch:
+        bindings[binding.id] = binding
+    value_to_binding = {binding.id: binding for binding in schedule.buffer_bindings}
+    value_to_binding[plan.operations[0].output_ref] = scratch[0]
+    value_to_binding[plan.operations[2].output_ref] = scratch[1]
+
+    symbols: dict[str, ProgramSymbol] = {}
+    records: list[RelocatableRecord] = []
+    relocations: list[AddressRelocation] = []
+
+    def symbol(binding: BufferBinding, kind: ProgramSymbolKind) -> ProgramSymbol:
+        result = _program_symbol(schedule_id=schedule.id, binding=binding, kind=kind)
+        symbols[result.id] = result
+        return result
+
+    def emit(opcode: RecordOpcode, operands: tuple[RecordOperand, ...],
+             addresses: tuple[tuple[SemanticOperandId, ProgramSymbol, int], ...]) -> None:
+        index = len(records)
+        records.append(RelocatableRecord(action.id, opcode, operands))
+        relocations.extend(AddressRelocation(index, operand_id, sym.kind, sym.id, addend)
+                           for operand_id, sym, addend in addresses)
+
+    region_symbol = ProgramSymbol(
+        stable_artifact_id("moe_expert_region_symbol",
+                           {"schedule": schedule.id, "region": region.id},
+                           schema_version="moe_expert_region/v1"),
+        ProgramSymbolKind.SRAM_REGION, region.id,
+    )
+    symbols[region_symbol.id] = region_symbol
+    for binding in scratch:
+        label = symbol(binding, ProgramSymbolKind.SRAM_LABEL)
+        emit(RecordOpcode.SRAM_ALLOC_AT, (
+            RecordOperand.address("region_name", SemanticOperandId.REGION_NAME,
+                                  region_symbol.id),
+            RecordOperand.address("label_symbol", SemanticOperandId.LABEL_SYMBOL,
+                                  label.id),
+            RecordOperand.literal("region_offset_bytes", binding.region_offset_bytes),
+            RecordOperand.literal("size_bytes", binding.size_bytes),
+            RecordOperand.literal("alignment_bytes", binding.alignment_bytes),
+            RecordOperand.literal("lifetime", 0),
+            RecordOperand.literal("spillable", False),
+        ), ((SemanticOperandId.REGION_NAME, region_symbol, 0),
+            (SemanticOperandId.LABEL_SYMBOL, label, 0)))
+
+    for op in plan.operations:
+        source = value_to_binding[op.input_ref]
+        target = value_to_binding[op.output_ref]
+        input_label = symbol(source, ProgramSymbolKind.SRAM_LABEL)
+        output_label = symbol(target, ProgramSymbolKind.SRAM_LABEL)
+        emit(RecordOpcode.SRAM_BIND, (
+            RecordOperand.literal("input_count", 1),
+            RecordOperand.address("input_label_0",
+                                  SemanticOperandId.SRAM_BIND_INPUT_0,
+                                  input_label.id),
+            *(RecordOperand.literal(f"input_label_{index}", 0)
+              for index in range(1, 16)),
+            RecordOperand.address("output_label", SemanticOperandId.SRAM_BIND_OUTPUT,
+                                  output_label.id),
+        ), ((SemanticOperandId.SRAM_BIND_INPUT_0, input_label, 0),
+            (SemanticOperandId.SRAM_BIND_OUTPUT, output_label, 0)))
+        input_address = symbol(source, ProgramSymbolKind.ABSOLUTE_ADDRESS)
+        output_address = symbol(target, ProgramSymbolKind.ABSOLUTE_ADDRESS)
+        data_binding = value_to_binding[op.weight_ref] if op.weight_ref else None
+        data_address = symbol(data_binding, ProgramSymbolKind.ABSOLUTE_ADDRESS) if data_binding else None
+        emit(op.opcode, (
+            RecordOperand.literal("datatype", 1),
+            RecordOperand.address("input_address", SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                                  input_address.id),
+            (RecordOperand.address("data_address", SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                                   data_address.id)
+             if data_address is not None else RecordOperand.literal("data_address", 0)),
+            RecordOperand.address("output_address", SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                                  output_address.id),
+            RecordOperand.literal("parameters", op.parameters),
+        ), ((SemanticOperandId.COMPUTE_INPUT_ADDRESS, input_address, 0),
+            *((((SemanticOperandId.COMPUTE_DATA_ADDRESS, data_address, 0),)
+               if data_address is not None else ())),
+            (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output_address,
+             op.output_offset_bytes)))
+    for binding in reversed(scratch):
+        label = symbol(binding, ProgramSymbolKind.SRAM_LABEL)
+        emit(RecordOpcode.SRAM_FREE, (
+            RecordOperand.address("symbol", SemanticOperandId.SYMBOL, label.id),
+        ), ((SemanticOperandId.SYMBOL, label, 0),))
+
+    fragment = CommandFragment.create(
+        producer_pass=_PRODUCER, source_global_dag_id=source_global_dag_id,
+        kind=FragmentKind.COARSE, claimed_action_ids=(action.id,),
+        core_streams=(CoreFragmentStream(
+            action.logical_core, tuple(records), (),
+            tuple(sorted(relocations, key=lambda relocation:
+                         (relocation.record_index, int(relocation.operand_id))))),),
+        runtime_symbols=(), program_symbols=tuple(sorted(symbols.values(),
+                                                           key=lambda symbol: symbol.id)),
+        buffer_abi=tuple(sorted(
+            (_buffer_abi(schedule.id, binding, action.logical_core)
+             for binding in (*(
+                 value_to_binding[ref] for ref in (
+                     plan.operations[0].input_ref,
+                     plan.operations[0].weight_ref,
+                     plan.operations[1].weight_ref,
+                     plan.operations[3].weight_ref,
+                     plan.operations[3].output_ref,
+                 )), *scratch)),
+            key=lambda abi: abi.id)),
+        state_abi=(),
+    )
+    fragment.validate()
+    return fragment
+
+
+__all__ = ["lower_moe_expert_record_fragment"]
