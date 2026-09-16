@@ -187,6 +187,7 @@ def lower_link_flexible_moe_multi(
     *,
     physical_region_name: str | None = None,
     full_model_dataflow: bool = False,
+    runtime_core_ids: tuple[int, ...] | None = None,
 ) -> FlexibleMoeProductionArtifacts:
     """Materialize a deterministic multi-die timing manifest, fail closed."""
 
@@ -203,6 +204,20 @@ def lower_link_flexible_moe_multi(
     rank_count = spec.mesh.rank_count
     if not 2 <= rank_count <= 100:
         raise SchemaError("multi-die production rank count must lie in [2, 100]", path="spec.mesh")
+    if runtime_core_ids is None:
+        runtime_core_ids = tuple(
+            rank * _P5_RUNTIME_CORES_PER_DIE for rank in range(rank_count)
+        )
+    if (
+        type(runtime_core_ids) is not tuple
+        or len(runtime_core_ids) != rank_count
+        or any(type(item) is not int or item < 0 for item in runtime_core_ids)
+        or len(set(runtime_core_ids)) != rank_count
+    ):
+        raise SchemaError(
+            "runtime_core_ids must bind one unique non-negative core per rank",
+            path="runtime_core_ids",
+        )
     standard_ir = plan_flexible_moe_standard_mapping(plan, spec)
     cores = tuple(LogicalCoreRef(rank, 0) for rank in range(rank_count))
     core_by_rank = dict(enumerate(cores))
@@ -1192,6 +1207,10 @@ def lower_link_flexible_moe_multi(
         relocation.symbol_ref for core in cores for relocation in address_relocs["compute"][core]
     }
     compute_program_symbols = tuple(item for item in all_program_symbols if item.id in compute_symbol_ids)
+    compute_cores = tuple(core for core in cores if records["compute"][core])
+    compute_buffers = tuple(
+        item for item in buffers if item.logical_core in compute_cores
+    )
 
     state_fragment = CommandFragment.create(
         producer_pass=_LOWERING_PASS, source_global_dag_id=plan.id, kind=FragmentKind.STATE_IO,
@@ -1209,9 +1228,9 @@ def lower_link_flexible_moe_multi(
             core, tuple(records["compute"][core]),
             tuple(runtime_relocs["compute"][core]),
             tuple(sorted(address_relocs["compute"][core], key=lambda item: (item.record_index, int(item.operand_id)))),
-        ) for core in cores),
+        ) for core in compute_cores),
         runtime_symbols=tuple(sorted(runtime_symbols.values(), key=lambda item: item.id)),
-        program_symbols=compute_program_symbols, buffer_abi=buffers, state_abi=(),
+        program_symbols=compute_program_symbols, buffer_abi=compute_buffers, state_abi=(),
     )
     state_fragment.validate("state_fragment")
     compute_fragment.validate("compute_fragment")
@@ -1306,7 +1325,7 @@ def lower_link_flexible_moe_multi(
                 for role, record_core, record_index in refs_by_action[physical_action_id]:
                     if record_core == core:
                         linked_refs.append(LinkedRecordRef(fragment_by_role[role].id, record_index, physical_action_id))
-        runtime_core_id = core.die_id * _P5_RUNTIME_CORES_PER_DIE
+        runtime_core_id = runtime_core_ids[core.die_id]
         linked_streams.append(LinkedCoreStream(core, runtime_core_id, tuple(linked_refs)))
 
     starts = []
@@ -1333,7 +1352,7 @@ def lower_link_flexible_moe_multi(
         fragment_interfaces=tuple(sorted(interfaces, key=lambda item: item.fragment_id)),
         core_bindings=tuple(CoreRuntimeBinding(
             core, f"flexible_moe.die{core.die_id}.core0",
-            core.die_id * _P5_RUNTIME_CORES_PER_DIE,
+            runtime_core_ids[core.die_id],
             "flexible_moe.sram_profile0",
         ) for core in cores),
         core_streams=tuple(linked_streams),

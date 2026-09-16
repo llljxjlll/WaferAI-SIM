@@ -476,6 +476,7 @@ def lower_link_flexible_moe_production(
     *,
     physical_region_name: str | None = None,
     full_model_dataflow: bool = False,
+    runtime_core_ids: tuple[int, ...] | None = None,
 ) -> FlexibleMoeProductionArtifacts:
     """Lower/link the exact timing subset into one real public manifest."""
 
@@ -490,6 +491,12 @@ def lower_link_flexible_moe_production(
         return lower_link_flexible_moe_multi(
             plan, spec, physical_region_name=physical_region_name,
             full_model_dataflow=full_model_dataflow,
+            runtime_core_ids=runtime_core_ids,
+        )
+    if runtime_core_ids not in (None, (0,)):
+        raise SchemaError(
+            "single-rank runtime_core_ids must be absent or (0,)",
+            path="runtime_core_ids",
         )
     if plan.flows:
         raise SchemaError("1x1 production plan must not contain remote flows", path="plan.flows")

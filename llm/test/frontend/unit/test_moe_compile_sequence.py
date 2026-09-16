@@ -52,9 +52,16 @@ from llm.frontend.wafer_frontend.schema.workload_run import (
 from llm.test.frontend.unit.test_workload_materialization import _capability
 
 
-def _request(family: WorkloadFamily, *, tp: int = 1) -> WorkloadRunRequest:
+def _request(
+    family: WorkloadFamily,
+    *,
+    tp: int = 1,
+    rows: int = 1,
+    columns: int = 2,
+) -> WorkloadRunRequest:
     training = family is WorkloadFamily.MOE_TRAINING
-    ep = 2 if tp == 1 else 1
+    rank_count = rows * columns
+    ep = rank_count if tp == 1 else 1
     return WorkloadRunRequest.create(
         family=family,
         model=WorkloadModelSpec(
@@ -68,7 +75,7 @@ def _request(family: WorkloadFamily, *, tp: int = 1) -> WorkloadRunRequest:
             head_dim=2,
             max_sequence_length=32,
             dtype=DType.FP16,
-            num_experts=2,
+            num_experts=rank_count,
             experts_per_token=1,
         ),
         steps=(
@@ -90,11 +97,11 @@ def _request(family: WorkloadFamily, *, tp: int = 1) -> WorkloadRunRequest:
                 )
             )
         ),
-        mesh=WorkloadMeshSpec(1, 2),
+        mesh=WorkloadMeshSpec(rows, columns),
         parallel=WorkloadParallelSpec(
             tp=tp,
             ep=ep,
-            active_die_ids=(0, 1),
+            active_die_ids=tuple(range(rank_count)),
         ),
         optimizer=(
             WorkloadOptimizerSpec(WorkloadOptimizerKind.SGD, 0.001)
@@ -104,7 +111,14 @@ def _request(family: WorkloadFamily, *, tp: int = 1) -> WorkloadRunRequest:
     )
 
 
-def _manifest(family: WorkloadFamily, *, tp: int = 1):
+def _manifest(
+    family: WorkloadFamily,
+    *,
+    tp: int = 1,
+    rows: int = 1,
+    columns: int = 2,
+):
+    rank_count = rows * columns
     capacities = tuple(
         MemoryTierCapacity.create(
             tier=MemoryTier.HBM,
@@ -113,10 +127,10 @@ def _manifest(family: WorkloadFamily, *, tp: int = 1):
             capacity_bytes=1 << 24,
             alignment_bytes=16,
         )
-        for rank in range(2)
+        for rank in range(rank_count)
     )
     return materialize_workload_preflight(
-        _request(family, tp=tp),
+        _request(family, tp=tp, rows=rows, columns=columns),
         _capability(supported=True),
         capacities=capacities,
     )

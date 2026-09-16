@@ -615,7 +615,23 @@ def link_moe_full_model_segment(profile, units, replaced_node_refs: tuple[str, .
         key: (replace(value, name=f"{value.name}.{key[-8:]}") if name_counts[value.name] > 1 else value)
         for key, value in program_definitions.items()
     }
-    by_core = {LogicalCoreRef(0, 0): [], LogicalCoreRef(1, 0): []}
+    unit_cores = tuple(
+        sorted(
+            {stream.logical_core for stream in units[0].linked_manifest.core_streams},
+            key=lambda item: (item.die_id, item.local_core_id),
+        )
+    )
+    if not unit_cores or unit_cores[0] != LogicalCoreRef(0, 0):
+        raise SchemaError("MoE units lack rank-zero shared-spine core", path="units")
+    if any(
+        tuple(sorted(
+            {stream.logical_core for stream in unit.linked_manifest.core_streams},
+            key=lambda item: (item.die_id, item.local_core_id),
+        )) != unit_cores
+        for unit in units
+    ):
+        raise SchemaError("MoE units disagree on active cores", path="units")
+    by_core = {core: [] for core in unit_cores}
     dense_stream = dense.core_streams[0]
     inserted = set()
     unit_by_layer = {unit.layer: unit for unit in units}
@@ -644,15 +660,28 @@ def link_moe_full_model_segment(profile, units, replaced_node_refs: tuple[str, .
         if mapped is not None:
             by_core[LogicalCoreRef(0, 0)].append(replace(ref, fragment_id=mapped[0], fragment_record_index=mapped[1][ref.fragment_record_index]))
     for unit in units:
-        source_stream = next(item for item in unit.linked_manifest.core_streams if item.logical_core.die_id == 1)
-        for item in source_stream.records:
-            clone_id, indices = clone_maps[(f"moe:{unit.layer}", item.fragment_id)]
-            by_core[LogicalCoreRef(1, 0)].append(replace(item, fragment_id=clone_id, fragment_record_index=indices[item.fragment_record_index], source_global_action_id=namespaces[f"moe:{unit.layer}"][0][item.source_global_action_id]))
+        for core in unit_cores[1:]:
+            source_stream = next(
+                item for item in unit.linked_manifest.core_streams
+                if item.logical_core == core
+            )
+            for item in source_stream.records:
+                clone_id, indices = clone_maps[(f"moe:{unit.layer}", item.fragment_id)]
+                by_core[core].append(replace(
+                    item,
+                    fragment_id=clone_id,
+                    fragment_record_index=indices[item.fragment_record_index],
+                    source_global_action_id=namespaces[f"moe:{unit.layer}"][0][item.source_global_action_id],
+                ))
 
     cores = tuple(by_core)
+    unit_bindings = {
+        item.logical_core: item
+        for item in units[0].linked_manifest.core_bindings
+    }
     core_bindings = (
         dense.core_bindings[0],
-        next(item for item in units[0].linked_manifest.core_bindings if item.logical_core.die_id == 1),
+        *(unit_bindings[core] for core in unit_cores[1:]),
     )
     starts = []
     for core in cores:

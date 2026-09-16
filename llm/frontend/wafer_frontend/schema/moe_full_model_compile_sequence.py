@@ -343,14 +343,21 @@ class MoeFullModelCompileSequence:
                 for stream in fragment.core_streams
                 for record in stream.records
             }
-            if not {
+            required_opcodes = {
                 RecordOpcode.EMBEDDING_LOOKUP,
                 RecordOpcode.ATTENTION_EXACT,
-                RecordOpcode.DTE_SEND,
-                RecordOpcode.DTE_RECV,
                 RecordOpcode.LOCAL_REDUCE,
                 RecordOpcode.MATMUL,
-            }.issubset(opcodes):
+            }
+            has_remote_flow = any(
+                moe_units[ref].plan.flows for ref in segment.moe_unit_refs
+            )
+            if has_remote_flow:
+                required_opcodes.update({
+                    RecordOpcode.DTE_SEND,
+                    RecordOpcode.DTE_RECV,
+                })
+            if not required_opcodes.issubset(opcodes):
                 raise SchemaError("executable manifest lacks shared-spine/MoE/head records", path=f"{segment_path}.executable_manifest")
             ir1 = segment.shared_spine_profile.lowering_context.ir1
             if (

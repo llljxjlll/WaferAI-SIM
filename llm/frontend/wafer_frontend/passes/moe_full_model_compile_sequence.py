@@ -67,24 +67,29 @@ def _validate_inputs(
         reasons.append("request.llama_moe_required")
     if request.model.dtype is not DType.FP16:
         reasons.append("request.fp16_required")
-    if (request.mesh.rows, request.mesh.columns) != (1, 2):
-        reasons.append("request.mesh_1x2_required")
     if (
         request.parallel.tp,
         request.parallel.dp,
-        request.parallel.ep,
         request.parallel.pp,
-    ) != (1, 1, 2, 1):
-        reasons.append("request.tp1_dp1_ep2_pp1_required")
-    if request.parallel.active_die_ids and request.parallel.active_die_ids != (0, 1):
+    ) != (1, 1, 1):
+        reasons.append("request.tp1_dp1_pp1_required")
+    rank_count = request.mesh.rank_count
+    expected_dies = tuple(range(rank_count))
+    if request.parallel.ep != rank_count:
+        reasons.append("request.ep_must_cover_mesh")
+    if request.model.num_experts != rank_count:
+        reasons.append("request.experts_must_cover_mesh")
+    if request.parallel.active_die_ids and request.parallel.active_die_ids != expected_dies:
         reasons.append("request.full_mesh_required")
-    if manifest.placement.active_die_ids != (0, 1):
+    if manifest.placement.active_die_ids != expected_dies:
         reasons.append("manifest.full_mesh_required")
-    if fabric.die_grid != (2, 1) or tuple(die.id for die in fabric.dies) != (0, 1):
-        reasons.append("fabric.1x2_row_major_required")
-    if len(hbm_address_spaces) != 2 or tuple(
+    if fabric.die_grid != (request.mesh.columns, request.mesh.rows) or tuple(
+        die.id for die in fabric.dies
+    ) != expected_dies:
+        reasons.append("fabric.full_row_major_mesh_required")
+    if len(hbm_address_spaces) != rank_count or tuple(
         item.die_id for item in hbm_address_spaces
-    ) != (0, 1):
+    ) != expected_dies:
         reasons.append("hbm.one_space_per_die_required")
     if legacy_template.workload.mode is not WorkloadMode.INFER:
         reasons.append("legacy.inference_template_required")
@@ -336,8 +341,13 @@ def compile_moe_full_model_inference_sequence(
     if type(manifest) is not WorkloadMaterializationManifest:
         raise SchemaError("must be a WorkloadMaterializationManifest", path="manifest")
     _validate_inputs(manifest, legacy_template, fabric, hbm_address_spaces)
+    runtime_core_ids = tuple(
+        next(core.runtime_core_id for core in die.cores if core.local_core_id == 0)
+        for die in fabric.dies
+    )
     moe_blocks = compile_moe_sequence(
-        manifest, source_rank_policy="rank0_shared_spine"
+        manifest, source_rank_policy="rank0_shared_spine",
+        runtime_core_ids=runtime_core_ids,
     )
     operations = manifest.logical_graph.operations
     segments = []

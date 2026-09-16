@@ -408,6 +408,7 @@ def compile_moe_sequence(
     manifest: WorkloadMaterializationManifest,
     *,
     source_rank_policy: str = "token_index_mod_ep",
+    runtime_core_ids: tuple[int, ...] | None = None,
 ) -> MoeCompileSequence:
     """Compile every P3 MoE block without claiming full-model runtime."""
 
@@ -425,6 +426,7 @@ def compile_moe_sequence(
         artifacts = lower_link_flexible_moe_production(
             plan, spec,
             full_model_dataflow=source_rank_policy == "rank0_shared_spine",
+            runtime_core_ids=runtime_core_ids,
         )
         operation_binding = _operation_binding(graph, trace, training)
         units.append(MoeCompileUnit.create(

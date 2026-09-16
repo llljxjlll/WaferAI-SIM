@@ -86,6 +86,56 @@ class MoeFullModelCompileSequenceTest(unittest.TestCase):
             hbm_address_spaces=valid_hbm_address_spaces(cls.fabric),
         )
 
+    def test_single_rank_mesh_omits_remote_transport_requirement(self) -> None:
+        manifest = _manifest(
+            WorkloadFamily.MOE_INFERENCE, rows=1, columns=1,
+        )
+        fabric = physical_fabric_from_data(
+            minimal_hardware(1, 1, sram_bytes=65536)
+        )
+        sequence = compile_moe_full_model_inference_sequence(
+            manifest,
+            _legacy_template(),
+            fabric,
+            hbm_address_spaces=valid_hbm_address_spaces(fabric),
+        )
+        for segment in sequence.segments:
+            self.assertEqual(
+                tuple(item.runtime_core_id for item in segment.executable_manifest.core_bindings),
+                (0,),
+            )
+            opcodes = {
+                record.opcode
+                for fragment in segment.executable_manifest.fragments
+                for stream in fragment.core_streams
+                for record in stream.records
+            }
+            self.assertNotIn(RecordOpcode.DTE_SEND, opcodes)
+            self.assertNotIn(RecordOpcode.DTE_RECV, opcodes)
+
+    def test_rectangular_three_rank_mesh_uses_fabric_runtime_core_ids(self) -> None:
+        manifest = _manifest(
+            WorkloadFamily.MOE_INFERENCE, rows=1, columns=3,
+        )
+        fabric = physical_fabric_from_data(
+            minimal_hardware(3, 1, sram_bytes=65536)
+        )
+        sequence = compile_moe_full_model_inference_sequence(
+            manifest,
+            _legacy_template(),
+            fabric,
+            hbm_address_spaces=valid_hbm_address_spaces(fabric),
+        )
+        for segment in sequence.segments:
+            self.assertEqual(
+                tuple(item.runtime_core_id for item in segment.executable_manifest.core_bindings),
+                (0, 4, 8),
+            )
+            self.assertEqual(
+                tuple(item.logical_core.die_id for item in segment.executable_manifest.core_streams),
+                (0, 1, 2),
+            )
+
     def test_full_graph_is_bound_in_exact_step_and_operation_order(self) -> None:
         sequence = self.sequence
         self.assertIs(sequence.coverage, MoeFullModelCoverage.FULL_MODEL)
