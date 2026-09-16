@@ -395,9 +395,9 @@ def build_moe_full_train_forward_ir0(
         hidden = model.hidden_size
         tokens = dense_forward.profile.prefill_tokens
         route_scores = add_value(prefix+"moe.router_scores",
-                                 (tokens,model.num_experts), DType.FP32,
+                                 (tokens,model.num_experts), DType.FP16,
                                  router_ref, (freeze_ref,))
-        route = add_value(prefix+"moe.route_ids", (tokens,), DType.INT32,
+        route = add_value(prefix+"moe.route_ids", (tokens,5), DType.INT32,
                           freeze_ref, (dispatch_ref, combine_ref))
         router_weights = []
         for rank in range(ep_degree):

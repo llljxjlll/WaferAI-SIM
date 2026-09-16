@@ -10,6 +10,7 @@ from llm.frontend.wafer_frontend.passes.moe_compile_sequence import (
     compile_moe_sequence,
 )
 from llm.frontend.wafer_frontend.schema.workload_run import WorkloadFamily
+from llm.frontend.wafer_frontend.schema.common import DType
 from llm.test.frontend.unit.test_moe_compile_sequence import _manifest
 from llm.frontend.wafer_frontend.passes.moe_full_train_forward_ir0 import (
     _source_moe_operation_workload,
@@ -81,6 +82,33 @@ class MoeFullTrainForwardIr0Test(unittest.TestCase):
             )
         with self.assertRaisesRegex(UnsupportedFeatureError, "typed source phase"):
             DenseIR0Validator.validate(phase.graph)
+
+    def test_ep1_native_router_source_has_fp16_scores_and_five_int32_route_fields(self):
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING, rows=1, columns=1),
+            source_rank_policy="rank0_shared_spine",
+        )
+        phase = build_moe_full_train_forward_ir0(self.forward, sequence)
+        values = {value.id: value for value in phase.graph.values}
+        for layer in (0, 1):
+            prefix = f"T0.layer{layer}.moe."
+            scores = values[prefix + "router_scores"]
+            route = values[prefix + "route_ids"]
+            self.assertEqual((scores.shape, scores.dtype), ((4, 1), DType.FP16))
+            self.assertEqual((route.shape, route.dtype), ((4, 5), DType.INT32))
+            self.assertEqual(route.shape[0] * route.shape[1] * 4, 80)
+            self.assertEqual(scores.shape[0] * scores.shape[1] * 2, 8)
+        route_ref = "T0.layer0.moe.route_ids"
+        forged_values = tuple(replace(value, shape=(4,),
+                                      sharding=replace(value.sharding, dim_map=(None,)))
+                              if value.id == route_ref
+                              else value for value in phase.graph.values)
+        forged_graph = IR0.create(
+            producer_pass=phase.graph.producer_pass,
+            **{**phase.graph._semantic_key(), "values": forged_values},
+        )
+        with self.assertRaisesRegex(SchemaError, "route/three expert projections"):
+            forged_graph.validate("forged_four_byte_route")
 
     def test_ep1_router_rejects_missing_or_phantom_gate_replica(self):
         sequence = compile_moe_sequence(

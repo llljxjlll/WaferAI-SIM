@@ -1,8 +1,8 @@
 """Strict EP1/EP2 source→physical IR1 candidate with expert owner proof.
 
-An actual IR1 is constructed with official schema types.  Existing IR1.validate
-still rejects the MoE PhysicalNode workload and then mistakes TP shard0 for an
-EP rank on expert1.  Callers must not submit this candidate to a finalizer.
+The candidate uses official IR1 schema types and must pass public IR1.validate.
+It is a forward source only; full native TRAIN still requires N6 lowering,
+backward dataflow and two complete linked SGD steps.
 """
 
 from __future__ import annotations
