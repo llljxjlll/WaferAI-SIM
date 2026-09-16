@@ -28,7 +28,7 @@ from .serde import canonical_digest
 
 
 FULL_DENSE_TRAINING_SOURCE_PIPELINE_SCHEMA_VERSION = (
-    "wafer_frontend.full_dense_training_source_pipeline/v1alpha1"
+    "wafer_frontend.full_dense_training_source_pipeline/v1alpha2"
 )
 
 
@@ -52,6 +52,7 @@ class DenseFullTrainingSourceTask:
     ordinal: int
     kind: DenseFullTrainingTaskKind
     operation_ref: str
+    rank_instance_ref: str
     source_forward_refs: tuple[str, ...]
     parameter_state_ref: str | None
     reverse_family: DenseReverseSourceFamily | None
@@ -60,7 +61,7 @@ class DenseFullTrainingSourceTask:
     depends_on: tuple[str, ...]
 
     def validate(self, path: str) -> None:
-        if not self.id or not self.operation_ref:
+        if not self.id or not self.operation_ref or not self.rank_instance_ref:
             raise SchemaError("source task identity is empty", path=path)
         if (type(self.step) is not int or self.step not in (0, 1)
                 or type(self.rank) is not int or self.rank < 0
@@ -68,6 +69,11 @@ class DenseFullTrainingSourceTask:
             raise SchemaError("source task coordinate is invalid", path=path)
         if type(self.kind) is not DenseFullTrainingTaskKind:
             raise SchemaError("source task kind is untyped", path=path)
+        if self.rank_instance_ref != _rank_instance_ref(
+            step=self.step, rank=self.rank, operation_ref=self.operation_ref
+        ):
+            raise SchemaError("rank instance does not bind its logical operation",
+                              path=path)
         if (not self.source_forward_refs
                 or len(set(self.source_forward_refs)) !=
                 len(self.source_forward_refs)):
@@ -84,17 +90,16 @@ class DenseFullTrainingSourceTask:
         )
         if parameter != (self.parameter_state_ref is not None):
             raise SchemaError("parameter identity is exact for state tasks", path=path)
-        versioned = self.kind in (
-            DenseFullTrainingTaskKind.PARAMETER_LOAD,
-            DenseFullTrainingTaskKind.SGD_UPDATE,
-            DenseFullTrainingTaskKind.PARAMETER_STORE,
-        )
-        if versioned != (self.read_version is not None
-                          and self.write_version is not None):
-            raise SchemaError("state versions are exact for load/update/store", path=path)
-        if versioned and not (self.read_version == self.step
-                              and self.write_version == self.step + 1):
-            raise SchemaError("source task state version differs from SGD step", path=path)
+        expected_versions = {
+            DenseFullTrainingTaskKind.PARAMETER_LOAD: (self.step, None),
+            DenseFullTrainingTaskKind.SGD_UPDATE: (self.step, self.step + 1),
+            DenseFullTrainingTaskKind.PARAMETER_STORE: (self.step + 1, None),
+        }.get(self.kind, (None, None))
+        if (self.read_version, self.write_version) != expected_versions:
+            raise SchemaError(
+                "LOAD must read current, SGD must write next, and STORE must persist next",
+                path=path,
+            )
         if self.depends_on != tuple(sorted(set(self.depends_on))):
             raise SchemaError("source dependencies must be canonical", path=path)
 
@@ -167,6 +172,8 @@ class DenseFullTrainingSourceIR:
                     or by_id[source].rank != by_id[target].rank
                     or by_id[source].parameter_state_ref !=
                     by_id[target].parameter_state_ref
+                    or by_id[source].read_version != 1
+                    or by_id[target].read_version != 1
                     or source not in by_id[target].depends_on):
                 raise SchemaError("state version edge is not exact STORE0 to LOAD1", path=path)
         semantic = {
@@ -184,6 +191,10 @@ class DenseFullTrainingSourceIR:
         if self != build_full_dense_training_source_ir(plan):
             raise SchemaError("source IR drifted from production Dense plan",
                               path="full_dense_training_source_ir")
+
+
+def _rank_instance_ref(*, step: int, rank: int, operation_ref: str) -> str:
+    return f"step{step}.rank{rank}::{operation_ref}"
 
 
 def _task_id(*, plan_id: str, step: int, rank: int, ordinal: int,
@@ -229,7 +240,8 @@ def build_full_dense_training_source_ir(
                 source_forward_refs: tuple[str, ...], *,
                 state_ref: str | None = None,
                 family: DenseReverseSourceFamily | None = None,
-                versioned: bool = False,
+                read_version: int | None = None,
+                write_version: int | None = None,
                 extra_dependencies: tuple[str, ...] = (),
             ) -> str:
                 nonlocal ordinal, previous
@@ -243,10 +255,13 @@ def build_full_dense_training_source_ir(
                 task = DenseFullTrainingSourceTask(
                     id=identifier, step=step, rank=rank, ordinal=ordinal,
                     kind=kind, operation_ref=operation_ref,
+                    rank_instance_ref=_rank_instance_ref(
+                        step=step, rank=rank, operation_ref=operation_ref
+                    ),
                     source_forward_refs=source_forward_refs,
                     parameter_state_ref=state_ref, reverse_family=family,
-                    read_version=step if versioned else None,
-                    write_version=step + 1 if versioned else None,
+                    read_version=read_version,
+                    write_version=write_version,
                     depends_on=tuple(sorted(dependencies)),
                 )
                 tasks.append(task)
@@ -260,7 +275,7 @@ def build_full_dense_training_source_ir(
                     DenseFullTrainingTaskKind.PARAMETER_LOAD,
                     f"load::{state_ref}::r{rank}::step{step}",
                     templates[state_ref].forward_consumer_refs,
-                    state_ref=state_ref, versioned=True,
+                    state_ref=state_ref, read_version=step,
                     extra_dependencies=dependency,
                 )
                 if step == 1:
@@ -292,12 +307,15 @@ def build_full_dense_training_source_ir(
                 path = paths[(step, rank, state_ref)]
                 append(DenseFullTrainingTaskKind.SGD_UPDATE,
                        path.named_optimizer_op_ref, path.forward_op_refs,
-                       state_ref=state_ref, versioned=True)
+                       state_ref=state_ref, read_version=step,
+                       write_version=step + 1)
             for state_ref in local_states:
                 path = paths[(step, rank, state_ref)]
-                store = append(DenseFullTrainingTaskKind.PARAMETER_STORE,
-                               path.named_store_op_ref, path.forward_op_refs,
-                               state_ref=state_ref, versioned=True)
+                store = append(
+                    DenseFullTrainingTaskKind.PARAMETER_STORE,
+                    path.named_store_op_ref, path.forward_op_refs,
+                    state_ref=state_ref, read_version=step + 1,
+                )
                 if step == 0:
                     stores[(rank, state_ref)] = store
 

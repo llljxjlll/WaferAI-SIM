@@ -50,6 +50,18 @@ class FullDenseTrainingSourcePipelineTest(unittest.TestCase):
             self.assertIn("T0.layer0.attention", forward)
             self.assertIn("T0.layer1.attention", forward)
             self.assertIn("T0.cross_entropy", forward)
+            loads = tuple(task for task in current if task.kind is
+                          DenseFullTrainingTaskKind.PARAMETER_LOAD)
+            updates = tuple(task for task in current if task.kind is
+                            DenseFullTrainingTaskKind.SGD_UPDATE)
+            stores = tuple(task for task in current if task.kind is
+                           DenseFullTrainingTaskKind.PARAMETER_STORE)
+            self.assertTrue(all((task.read_version, task.write_version)
+                                == (step, None) for task in loads))
+            self.assertTrue(all((task.read_version, task.write_version)
+                                == (step, step + 1) for task in updates))
+            self.assertTrue(all((task.read_version, task.write_version)
+                                == (step + 1, None) for task in stores))
 
     def test_rectangular_2x3_is_rank_complete_and_versioned(self) -> None:
         plan, source = self._build(2, 3)
@@ -66,6 +78,18 @@ class FullDenseTrainingSourcePipelineTest(unittest.TestCase):
                 self.assertEqual(sum(task.kind is
                                      DenseFullTrainingTaskKind.PARAMETER_WGRAD
                                      for task in current), 15)
+                self.assertTrue(all(
+                    task.rank_instance_ref.startswith(f"step{step}.rank{rank}::")
+                    for task in current
+                ))
+        attention_instances = {
+            task.rank_instance_ref
+            for task in source.tasks
+            if task.step == 0
+            and task.kind is DenseFullTrainingTaskKind.FORWARD
+            and task.operation_ref == "T0.layer0.attention"
+        }
+        self.assertEqual(len(attention_instances), 6)
 
     def test_missing_reverse_and_forged_version_edges_fail_closed(self) -> None:
         plan, source = self._build(1, 1)
@@ -75,8 +99,18 @@ class FullDenseTrainingSourcePipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "dangling|task order"):
             replace(source, tasks=tuple(task for task in source.tasks
                                         if task.id != victim.id)).validate()
+        load = next(task for task in source.tasks
+                    if task.kind is DenseFullTrainingTaskKind.PARAMETER_LOAD)
+        with self.assertRaisesRegex(SchemaError, "LOAD must read current"):
+            replace(load, write_version=load.step + 1).validate("load")
+        store = next(task for task in source.tasks
+                     if task.kind is DenseFullTrainingTaskKind.PARAMETER_STORE)
+        with self.assertRaisesRegex(SchemaError, "STORE must persist next"):
+            replace(store, read_version=store.step).validate("store")
+        with self.assertRaisesRegex(SchemaError, "rank instance"):
+            replace(load, rank_instance_ref="global").validate("load")
         source_edge, target_edge = source.state_version_edges[0]
-        with self.assertRaisesRegex(SchemaError, "STORE0 to LOAD1"):
+        with self.assertRaisesRegex(SchemaError, "canonical|STORE0 to LOAD1"):
             replace(source, state_version_edges=((target_edge, source_edge),
                                                   *source.state_version_edges[1:])).validate()
         with self.assertRaisesRegex(SchemaError, "drifted"):
