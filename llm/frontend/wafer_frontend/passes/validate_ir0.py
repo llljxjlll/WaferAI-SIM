@@ -236,7 +236,7 @@ class DenseIR0Validator:
                     and producer.phase is OpPhase.DGRAD
                     and isinstance(producer.workload, GemmInputDxWorkload)):
                 forward = nodes.get(producer.workload.source_forward_op_ref)
-                tp = sizes[MeshAxisName.TP]
+                tp = axis_sizes[value.sharding.mesh_ref][MeshAxisName.TP]
                 state_by_id = {state.id: state for state in graph.persistent_states}
                 source = state_by_id.get(producer.workload.source_parameter_state_ref)
                 accesses = tuple(access for access in graph.state_accesses
