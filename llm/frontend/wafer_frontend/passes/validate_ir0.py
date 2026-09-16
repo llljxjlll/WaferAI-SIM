@@ -689,14 +689,38 @@ class DenseIR0Validator:
         for wgrad in actual_wgrad:
             weight, rank = expected_wgrad[wgrad.id]
             state = state_by_weight_rank[weight, rank]
-            # The source WGRAD and its SGD must carry the same physical shard.
-            # A GEMM/NORM derivative can read that state directly; embedding
-            # uses the parameter as an explicit source operand.
+            # Parameter WGRAD consumes saved activation and upstream gradient;
+            # only GEMM dX and the forward actually need the parameter value.
+            # Bind WGRAD to the authentic shard through producer provenance,
+            # never fabricate an HBM DMA merely to satisfy a source audit.
+            step_suffix = (
+                "::step1" if wgrad.id.endswith("::step1")
+                else "::step0" if wgrad.id.endswith("::step0") else ""
+            )
+            forward_read = any(
+                access.state_ref == state.id and access.rank == rank
+                and node_by_id[access.node_ref].phase is OpPhase.FWD
+                and (not step_suffix or access.node_ref.endswith(step_suffix))
+                and (wgrad.kind is not OpKind.GEMM_WEIGHT_WGRAD
+                     or access.node_ref == wgrad.workload.source_forward_op_ref)
+                for access in graph.state_accesses
+                if access.node_ref in node_by_id
+            )
+            if not forward_read:
+                _fail("complete Dense WGRAD lacks an authentic forward TP shard",
+                      f"{path}.state_accesses")
+            if (wgrad.kind is OpKind.GEMM_WEIGHT_WGRAD
+                    and wgrad.workload.source_parameter_state_ref != state.id):
+                _fail("complete Dense WGRAD binds a wrong forward TP shard",
+                      f"{path}.nodes")
+            if (wgrad.kind is OpKind.EMBEDDING_TABLE_WGRAD
+                    and wgrad.inputs[1] != weight):
+                _fail("complete Dense embedding WGRAD binds a wrong parameter",
+                      f"{path}.nodes")
             direct = access_by_node.get(wgrad.id, ())
-            if ((tp > 1 or wgrad.kind is OpKind.EMBEDDING_TABLE_WGRAD or direct)
-                    and (len(direct) != 1 or direct[0] != StateAccess.create(
-                        node_ref=wgrad.id, state_ref=state.id,
-                        mode=StateAccessMode.READ, rank=rank))):
+            if direct and (len(direct) != 1 or direct[0] != StateAccess.create(
+                    node_ref=wgrad.id, state_ref=state.id,
+                    mode=StateAccessMode.READ, rank=rank)):
                 _fail("complete Dense WGRAD reads the wrong TP parameter shard",
                       f"{path}.state_accesses")
         values = {value.id: value for value in graph.values}
@@ -1209,9 +1233,10 @@ class DenseIR0Validator:
                 if state_ref is None:
                     _fail("WGRAD parameter source is undeclared",
                           f"{path}.state_accesses")
-                # Original TP1 GEMM/NORM WGRAD derived the StateABI from its
-                # source node; TP>1 requires an explicit per-rank READ.
-                if (tp > 1 or node.kind is OpKind.EMBEDDING_TABLE_WGRAD
+                # A WGRAD parameter READ, if retained for a legacy source,
+                # must be exact.  TP rank identity is independently proved
+                # against the parameter's real forward READ and producer.
+                if ((tp == 1 and node.kind is OpKind.EMBEDDING_TABLE_WGRAD)
                         or any(access.node_ref == node.id
                                for access in graph.state_accesses)):
                     expected.append(StateAccess.create(

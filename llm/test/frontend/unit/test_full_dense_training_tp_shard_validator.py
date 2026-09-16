@@ -61,15 +61,26 @@ class FullDenseTrainingTp4ShardValidatorTest(unittest.TestCase):
         self.assertEqual(sum(node.kind is OpKind.OPTIMIZER_UPDATE
                              for node in self.graph.nodes), 120)
 
-    def test_missing_one_rank_gradient_read_fails(self) -> None:
+    def test_tp3_gradient_binds_authentic_forward_shard_without_fake_dma(self) -> None:
         graph = self.graph
-        victim = next(access for access in graph.state_accesses
-                      if "wgrad::" in access.node_ref and "::tp3::step1" in access.node_ref)
-        with self.assertRaisesRegex(SchemaError, "WGRAD reads the wrong TP parameter shard"):
+        victim = next(node for node in graph.nodes
+                      if node.kind is OpKind.GEMM_WEIGHT_WGRAD
+                      and "::tp3::step1" in node.id)
+        self.assertFalse(any(access.node_ref == victim.id
+                             for access in graph.state_accesses))
+        states = {state.id: state for state in graph.persistent_states}
+        source = states[victim.workload.source_parameter_state_ref]
+        wrong = next(state for state in states.values()
+                     if state.identity.tensor_ref == source.identity.tensor_ref
+                     and state.identity.shard_index == 0)
+        forged = replace(victim, workload=replace(
+            victim.workload, source_parameter_state_ref=wrong.id,
+        ))
+        with self.assertRaisesRegex(SchemaError, "binds a wrong forward TP shard"):
             DenseIR0Validator._validate_full_dense_backward_job_contract(
-                replace(graph, state_accesses=tuple(
-                    access for access in graph.state_accesses if access is not victim)),
-                "missing_tp3_read",
+                replace(graph, nodes=tuple(forged if node is victim else node
+                                           for node in graph.nodes)),
+                "wrong_tp3_gradient_source",
             )
 
     def test_rank_three_update_cannot_write_rank_zero_state(self) -> None:
