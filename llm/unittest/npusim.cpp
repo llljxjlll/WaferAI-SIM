@@ -2011,11 +2011,11 @@ int sc_main(int argc, char *argv[]) {
         try {
             if (monitor->hbmRuntime == nullptr ||
                 monitor->workerCores[0] == nullptr ||
-                monitor->workerCores[16] == nullptr ||
+                monitor->workerCores[4] == nullptr ||
                 !monitor->workerCores[0]->lsu_memory ||
-                !monitor->workerCores[16]->lsu_memory)
+                !monitor->workerCores[4]->lsu_memory)
                 throw std::runtime_error(
-                    "paged full MoE inference requires physical Core0/Core16 LSU");
+                    "paged full MoE inference requires physical Core0/Core4 LSU");
             auto *home0 = monitor->hbmRuntime->Find(0, 0);
             auto *home1 = monitor->hbmRuntime->Find(1, 0);
             if (!home0 || !home1 || !home0->backend || !home1->backend)
@@ -2032,7 +2032,7 @@ int sc_main(int argc, char *argv[]) {
                     sc_time(CYCLE, SC_NS));
             monitor->workerCores[0]->lsu_memory->SetMoeInferencePager(
                 moe_inference_mid_program_pager.get());
-            monitor->workerCores[16]->lsu_memory->SetMoeInferencePager(
+            monitor->workerCores[4]->lsu_memory->SetMoeInferencePager(
                 moe_inference_mid_program_pager.get());
             std::cout << "[MOE_INFERENCE_PAGED_BINDING] source="
                       << moe_inference_mid_program_pager->SourceRef()
