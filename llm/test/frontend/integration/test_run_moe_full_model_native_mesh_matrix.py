@@ -17,6 +17,7 @@ from llm.test.frontend.integration.run_moe_full_model_native_mesh_matrix import 
     _recompute_flow_evidence,
     _require_matching_matrix_binding,
     audit_cached_case,
+    audit_partial_case,
     audit_fresh,
     compare_fresh,
     matrix_binding,
@@ -420,6 +421,32 @@ class MoeFullModelNativeMatrixAuditTest(unittest.TestCase):
             forged = dict(binding, shapes=("1x1", "1x3"))
             with self.assertRaisesRegex(ValueError, "JSON-native"):
                 _require_matching_matrix_binding(persisted, forged)
+
+    def test_partial_resume_reopens_fresh_prefix_and_rejects_corruption(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            case = root / "case"
+            case.mkdir()
+            self.assertEqual(audit_partial_case(case, "1x2"), [])
+            shutil.copytree(_fixture(root / "source0"), case / "fresh0")
+            self.assertEqual(len(audit_partial_case(case, "1x2")), 1)
+            (case / "fresh1").mkdir()
+            with self.assertRaises((ValueError, OSError)):
+                audit_partial_case(case, "1x2")
+            shutil.rmtree(case / "fresh1")
+            shutil.copytree(_fixture(root / "source1"), case / "fresh1")
+            self.assertEqual(len(audit_partial_case(case, "1x2")), 2)
+            (case / "fresh0" / "segment_0.npup").write_bytes(b"tampered")
+            with self.assertRaises(ValueError):
+                audit_partial_case(case, "1x2")
+
+    def test_partial_resume_rejects_missing_fresh0(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            case = Path(raw) / "case"
+            case.mkdir()
+            (case / "fresh1").mkdir()
+            with self.assertRaisesRegex(ValueError, "fresh1 without fresh0"):
+                audit_partial_case(case, "1x2")
 
     def test_resume_reopens_both_fresh_trees_and_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

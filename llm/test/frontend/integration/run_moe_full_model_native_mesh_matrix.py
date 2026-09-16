@@ -585,6 +585,24 @@ def audit_cached_case(case_root: Path, shape: str) -> dict[str, object]:
     return evidence
 
 
+def audit_partial_case(case_root: Path, shape: str) -> list[dict[str, object]]:
+    """Accept only a contiguous prefix of fully audited native fresh runs."""
+    if (case_root / "case_evidence.json").exists():
+        audit_cached_case(case_root, shape)
+        return [audit_fresh(case_root / f"fresh{index}", shape) for index in (0, 1)]
+    if (case_root / "fresh1").exists() and not (case_root / "fresh0").exists():
+        raise ValueError(f"partial {shape} has fresh1 without fresh0")
+    observed = []
+    for index in (0, 1):
+        directory = case_root / f"fresh{index}"
+        if not directory.exists():
+            break
+        observed.append(audit_fresh(directory, shape))
+    if len(observed) == 2:
+        compare_fresh(*observed)
+    return observed
+
+
 def run(args: argparse.Namespace) -> None:
     requested = (
         RELEASE_SHAPES if args.all_release_shapes else tuple(args.shapes)
@@ -617,13 +635,16 @@ def run(args: argparse.Namespace) -> None:
     for shape in shapes:
         case_root = root / shape
         if case_root.exists():
-            audit_cached_case(case_root, shape)
-            completed_shapes.append(shape)
-            print(f"MoE full-model matrix RESUME {shape} verified", flush=True)
-            continue
-        case_root.mkdir()
-        observations = []
-        for fresh in (0, 1):
+            if (case_root / "case_evidence.json").exists():
+                audit_cached_case(case_root, shape)
+                completed_shapes.append(shape)
+                print(f"MoE full-model matrix RESUME {shape} verified", flush=True)
+                continue
+            observations = audit_partial_case(case_root, shape)
+        else:
+            case_root.mkdir()
+            observations = []
+        for fresh in range(len(observations), 2):
             directory = case_root / f"fresh{fresh}"
             command = (
                 sys.executable,
