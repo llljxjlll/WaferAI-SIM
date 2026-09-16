@@ -74,10 +74,11 @@ std::string SemanticId(Json value) {
         frontend::program_io::Sha256Hex(value.dump()).substr(0, 20);
 }
 
-FabricConfig ParseTwoDieFabric(const Json &value,
-                               std::string &external_ref,
-                               std::map<uint64_t, std::string> &connections,
-                               std::map<uint64_t, std::string> &hbm_refs) {
+FabricConfig ParseVersionedFabric(const Json &value, uint64_t die_count,
+                                  uint64_t external_capacity,
+                                  std::string &external_ref,
+                                  std::map<uint64_t, std::string> &connections,
+                                  std::map<uint64_t, std::string> &hbm_refs) {
     Exact(value, {"schema_version", "producer_pass", "id",
                   "external_capacities", "hbm_capacities", "links",
                   "connections"});
@@ -87,11 +88,11 @@ FabricConfig ParseTwoDieFabric(const Json &value,
         !value.at("external_capacities").is_array() ||
         value.at("external_capacities").size() != 1 ||
         !value.at("hbm_capacities").is_array() ||
-        value.at("hbm_capacities").size() != 2 ||
+        value.at("hbm_capacities").size() != die_count ||
         !value.at("links").is_array() || value.at("links").size() != 1 ||
         !value.at("connections").is_array() ||
-        value.at("connections").size() != 2)
-        Fail("requires official shared one-link/two-die fabric");
+        value.at("connections").size() != die_count)
+        Fail("versioned shared-link/physical Die fabric shape changed");
     FabricConfig fabric;
     const auto &external = value.at("external_capacities")[0];
     Exact(external, {"id", "tier", "location_ref", "base_address",
@@ -99,26 +100,30 @@ FabricConfig ParseTwoDieFabric(const Json &value,
     if (String(external, "tier") != "external" ||
         String(external, "location_ref") != "host:0" ||
         Number(external, "base_address") != 0 ||
-        Number(external, "capacity_bytes") != 2304 ||
+        Number(external, "capacity_bytes") != external_capacity ||
         Number(external, "alignment_bytes") != 16)
-        Fail("host effective capacity/base changed");
+        Fail("versioned host effective capacity/base changed");
     external_ref = String(external, "id");
-    fabric.external_capacities.push_back({external_ref, "host:0", 0, 2304});
+    fabric.external_capacities.push_back(
+        {external_ref, "host:0", 0, external_capacity});
     for (const auto &raw : value.at("hbm_capacities")) {
         Exact(raw, {"id", "tier", "location_ref", "base_address",
                     "capacity_bytes", "alignment_bytes"});
         const auto location = String(raw, "location_ref");
-        const uint64_t die = location == "die:0" ? 0 : location == "die:1" ? 1 : 2;
-        if (die > 1 || String(raw, "tier") != "hbm" ||
-            Number(raw, "base_address") != (die ? kHome1 : 0) ||
+        uint64_t die = die_count;
+        for (uint64_t candidate = 0; candidate < die_count; ++candidate)
+            if (location == "die:" + std::to_string(candidate)) die = candidate;
+        if (die >= die_count || String(raw, "tier") != "hbm" ||
+            Number(raw, "base_address") != die * kHome1 ||
             Number(raw, "capacity_bytes") != 1024 ||
             Number(raw, "alignment_bytes") != 16 ||
             !hbm_refs.emplace(die, String(raw, "id")).second)
-            Fail("physical per-die 1024B HBM home changed");
+            Fail("versioned physical per-Die 1024B HBM home changed");
         fabric.hbm_capacities.push_back(
-            {String(raw, "id"), die, die ? kHome1 : 0, 1024});
+            {String(raw, "id"), die, die * kHome1, 1024});
     }
-    if (hbm_refs.size() != 2) Fail("both physical HBM homes required");
+    if (hbm_refs.size() != die_count)
+        Fail("versioned physical HBM homes incomplete");
     const auto &link = value.at("links")[0];
     Exact(link, {"id", "external_capacity_ref", "ingress_die_id",
                  "bytes_per_cycle", "latency_cycles", "queue_depth",
@@ -138,22 +143,25 @@ FabricConfig ParseTwoDieFabric(const Json &value,
                     "target_die_id", "route_die_ids",
                     "route_latency_cycles", "route_bytes_per_cycle"});
         const uint64_t die = Number(raw, "target_die_id");
-        if (die > 1 || String(raw, "link_ref") != link_ref ||
+        if (die >= die_count || String(raw, "link_ref") != link_ref ||
             String(raw, "hbm_capacity_ref") != hbm_refs.at(die) ||
             !connections.emplace(die, String(raw, "id")).second)
-            Fail("two die HBM connections do not share source link");
+            Fail("versioned Die HBM connections do not share source link");
+        Json expected_route = Json::array();
+        std::vector<uint64_t> route;
+        for (uint64_t rank = 0; rank <= die; ++rank) {
+            expected_route.push_back(rank);
+            route.push_back(rank);
+        }
         if (!raw.at("route_die_ids").is_array() ||
-            raw.at("route_die_ids") !=
-                (die ? Json::array({0, 1}) : Json::array({0})) ||
+            raw.at("route_die_ids") != expected_route ||
             Number(raw, "route_latency_cycles") != die ||
             (die ? !raw.at("route_bytes_per_cycle").is_number_integer() ||
                    Number(raw, "route_bytes_per_cycle") != 256
                  : !raw.at("route_bytes_per_cycle").is_null()))
-            Fail("official die0/die1 route service shape changed");
+            Fail("versioned X-first line route service shape changed");
         fabric.connections.push_back({String(raw, "id"), link_ref,
-                                      hbm_refs.at(die), die,
-                                      die ? std::vector<uint64_t>{0, 1}
-                                          : std::vector<uint64_t>{0},
+                                      hbm_refs.at(die), die, std::move(route),
                                       die, die ? std::optional<uint64_t>{256}
                                                : std::nullopt});
     }
@@ -196,42 +204,80 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
     sc_core::sc_time cycle_time)
     : cycle_time_(cycle_time) {
     const Json contract = ReadJson(sidecar);
-    Exact(contract, {"schema_version", "producer_pass", "id",
-                     "request_digest", "model_digest", "logical_graph_digest",
-                     "offload_memory_plan_digest",
-                     "source_external_parameter_allocation_refs",
-                     "source_rank0_kv_inventory_digest", "linked_manifest_ids",
-                     "linked_manifest_digests", "hbm_capacity_bytes_per_die",
-                     "workspace_end_bytes_per_die", "physical_parameter_bytes",
-                     "physical_kv_bytes", "highest_relative_state_end_bytes",
-                     "fabric", "parameter_spans", "kv_spans", "events", "seeds"});
+    const bool ep4 = String(contract, "schema_version") ==
+        "wafer_frontend.moe_inference_paged_runtime/v2alpha1";
+    if (ep4)
+        Exact(contract, {"schema_version", "producer_pass", "id",
+                         "request_digest", "model_digest", "logical_graph_digest",
+                         "offload_memory_plan_digest",
+                         "source_external_parameter_allocation_refs",
+                         "source_rank0_kv_inventory_digest", "linked_manifest_ids",
+                         "linked_manifest_digests", "hbm_capacity_bytes_per_die",
+                         "workspace_end_bytes_per_die", "physical_parameter_bytes",
+                         "physical_kv_bytes", "highest_relative_state_end_bytes",
+                         "active_die_ids", "expected_dma_events",
+                         "expected_external_read_bytes",
+                         "expected_external_write_bytes", "fabric",
+                         "parameter_spans", "kv_spans", "events", "seeds"});
+    else
+        Exact(contract, {"schema_version", "producer_pass", "id",
+                         "request_digest", "model_digest", "logical_graph_digest",
+                         "offload_memory_plan_digest",
+                         "source_external_parameter_allocation_refs",
+                         "source_rank0_kv_inventory_digest", "linked_manifest_ids",
+                         "linked_manifest_digests", "hbm_capacity_bytes_per_die",
+                         "workspace_end_bytes_per_die", "physical_parameter_bytes",
+                         "physical_kv_bytes", "highest_relative_state_end_bytes",
+                         "fabric", "parameter_spans", "kv_spans", "events", "seeds"});
+    active_die_count_ = ep4 ? 4 : 2;
+    expected_events_ = ep4 ? 125 : 89;
+    expected_read_bytes_ = ep4 ? 7480 : 4600;
+    expected_write_bytes_ = ep4 ? 5184 : 2880;
+    parameter_bytes_ = ep4 ? 2344 : 1384;
+    const uint64_t external_capacity = ep4 ? 8192 : 2304;
     if (String(contract, "schema_version") !=
-            "wafer_frontend.moe_inference_paged_runtime/v1alpha1" ||
+            (ep4 ? "wafer_frontend.moe_inference_paged_runtime/v2alpha1"
+                 : "wafer_frontend.moe_inference_paged_runtime/v1alpha1") ||
         String(contract, "producer_pass") != "moe_inference_paged_runtime" ||
         String(contract, "id") != SemanticId(contract) ||
         Number(contract, "hbm_capacity_bytes_per_die") != 1024 ||
         Number(contract, "workspace_end_bytes_per_die") != 464 ||
-        Number(contract, "physical_parameter_bytes") != 1384 ||
+        Number(contract, "physical_parameter_bytes") != parameter_bytes_ ||
         Number(contract, "physical_kv_bytes") != 256 ||
         Number(contract, "highest_relative_state_end_bytes") != 960 ||
-        manifest_texts.size() != 3 || backends.size() != 2 ||
-        !backends.count({0, 0}) || !backends.count({1, 0}) ||
-        !backends.at({0, 0}) || !backends.at({1, 0}))
-        Fail("source-signed fixed full MoE two-die identity changed");
+        manifest_texts.size() != 3 ||
+        backends.size() != active_die_count_)
+        Fail("source-signed fixed full MoE versioned identity changed");
+    if (ep4) {
+        if (contract.at("active_die_ids") != Json::array({0, 1, 2, 3}) ||
+            Number(contract, "expected_dma_events") != expected_events_ ||
+            Number(contract, "expected_external_read_bytes") !=
+                expected_read_bytes_ ||
+            Number(contract, "expected_external_write_bytes") !=
+                expected_write_bytes_)
+            Fail("EP4 source-signed physical Die/DMA oracle changed");
+    }
+    for (uint64_t die = 0; die < active_die_count_; ++die) {
+        const auto backend = backends.find({die, 0});
+        if (backend == backends.end() || !backend->second)
+            Fail("source-signed physical MoE HBM backend missing");
+        next_by_core_.emplace(die * 4, 0);
+        weight_pinned_.emplace(die, false);
+    }
     source_ref_ = String(contract, "id");
     std::map<uint64_t, std::string> hbm_refs;
-    const FabricConfig fabric = ParseTwoDieFabric(
-        contract.at("fabric"), external_capacity_ref_, connection_by_die_,
-        hbm_refs);
+    const FabricConfig fabric = ParseVersionedFabric(
+        contract.at("fabric"), active_die_count_, external_capacity,
+        external_capacity_ref_, connection_by_die_, hbm_refs);
     const auto &raw_parameters = contract.at("parameter_spans");
     const auto &raw_kv = contract.at("kv_spans");
     const auto &raw_events = contract.at("events");
     const auto &raw_seeds = contract.at("seeds");
-    if (!raw_parameters.is_array() || raw_parameters.size() != 19 ||
+    if (!raw_parameters.is_array() || raw_parameters.size() != (ep4 ? 27u : 19u) ||
         !raw_kv.is_array() || raw_kv.size() != 4 ||
-        !raw_events.is_array() || raw_events.size() != 89 ||
-        !raw_seeds.is_array() || raw_seeds.size() != 23)
-        Fail("19 physical weights/four KV pages/89 LSU gates required");
+        !raw_events.is_array() || raw_events.size() != expected_events_ ||
+        !raw_seeds.is_array() || raw_seeds.size() != (ep4 ? 31u : 23u))
+        Fail("versioned physical weights/KV/LSU gate inventory required");
     std::set<std::pair<uint64_t, uint64_t>> sources;
     std::set<std::pair<uint64_t, uint64_t>> external_ranges;
     uint64_t effective_parameter_bytes = 0;
@@ -244,9 +290,9 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             String(raw, "source_state_ref"), Number(raw, "source_hbm_address"),
             Number(raw, "external_address"), Number(raw, "hbm_address"),
             Number(raw, "size_bytes")};
-        if (span.die_id > 1 || span.size_bytes == 0 ||
+        if (span.die_id >= active_die_count_ || span.size_bytes == 0 ||
             span.size_bytes > 192 || span.hbm_address !=
-                (span.die_id ? kHome1 : 0) + 512 ||
+                span.die_id * kHome1 + 512 ||
             (span.kind != "shared_or_router" &&
              span.kind != "expert_retention") ||
             !sources.emplace(span.die_id, span.source_hbm_address).second ||
@@ -258,24 +304,44 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
         effective_parameter_bytes += span.size_bytes;
         parameters_.push_back(std::move(span));
     }
-    if (effective_parameter_bytes != 1384)
-        Fail("physical parameter payload is not 1384B exact");
+    if (effective_parameter_bytes != parameter_bytes_)
+        Fail("versioned physical parameter payload byte count changed");
     std::sort(parameters_.begin(), parameters_.end(),
               [](const auto &a, const auto &b) {
                   return a.external_address < b.external_address;
               });
-    const std::array<std::pair<uint64_t, uint64_t>, 4> groups{{
-        {0, 384}, {384, 968}, {976, 1360}, {1360, 1392}}};
-    for (const auto &[begin, end] : groups) {
-        uint64_t cursor = begin;
-        for (const auto &span : parameters_)
-            if (span.external_address >= begin && span.external_address < end) {
-                if (span.external_address != cursor)
-                    Fail("physical parameter pages do not tightly cover P3 subrange");
-                cursor += span.size_bytes;
-            }
-        if (cursor != end)
-            Fail("physical parameter payload P3 subrange is incomplete");
+    if (!ep4) {
+        const std::array<std::pair<uint64_t, uint64_t>, 4> groups{{
+            {0, 384}, {384, 968}, {976, 1360}, {1360, 1392}}};
+        for (const auto &[begin, end] : groups) {
+            uint64_t cursor = begin;
+            for (const auto &span : parameters_)
+                if (span.external_address >= begin && span.external_address < end) {
+                    if (span.external_address != cursor)
+                        Fail("physical parameter pages do not tightly cover P3 subrange");
+                    cursor += span.size_bytes;
+                }
+            if (cursor != end)
+                Fail("physical parameter payload P3 subrange is incomplete");
+        }
+    } else {
+        std::map<uint64_t, std::pair<uint64_t, uint64_t>> by_die;
+        uint64_t previous_end = 0;
+        for (const auto &span : parameters_) {
+            if (span.external_address < previous_end ||
+                span.external_address + span.size_bytes > external_capacity)
+                Fail("EP4 physical parameter pages overlap or exceed external capacity");
+            previous_end = span.external_address + span.size_bytes;
+            auto &amounts = by_die[span.die_id];
+            if (span.kind == "expert_retention")
+                amounts.first += span.size_bytes;
+            else
+                amounts.second += span.size_bytes;
+        }
+        for (uint64_t die = 0; die < 4; ++die)
+            if (by_die[die] != std::make_pair<uint64_t, uint64_t>(
+                    384, die == 0 ? 616 : 64))
+                Fail("EP4 true per-Die expert/router payload changed");
     }
     for (const auto &raw : raw_kv) {
         Exact(raw, {"die_id", "kind", "source_state_ref",
@@ -288,7 +354,8 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             Number(raw, "size_bytes")};
         if (span.die_id != 0 || span.size_bytes != 64 ||
             (span.kind != "kv_key" && span.kind != "kv_value") ||
-            span.source_hbm_address < 1344 || span.external_address < 1952 ||
+            span.source_hbm_address < 1344 ||
+            span.external_address < (ep4 ? 4032u : 1952u) ||
             span.hbm_address < 704 ||
             !sources.emplace(span.die_id, span.source_hbm_address).second)
             Fail("four real source rank0 KV pages changed");
@@ -301,7 +368,8 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
               });
     for (size_t index = 0; index < 4; ++index)
         if (kv_pages_[index].source_hbm_address != 1344 + 64 * index ||
-            kv_pages_[index].external_address != 1952 + 64 * index ||
+            kv_pages_[index].external_address !=
+                (ep4 ? 4032u : 1952u) + 64 * index ||
             kv_pages_[index].hbm_address != 704 + 64 * index)
             Fail("KV source/external/physical page continuity changed");
     if (std::count_if(kv_pages_.begin(), kv_pages_.end(),
@@ -322,14 +390,21 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             frontend::ProgramArtifactFinalizer::CanonicalManifestDigest(
                 manifest_texts[segment]) != digests[segment].get<std::string>() ||
             parsed.producer_pass != "moe_full_model_region_linker" ||
-            parsed.fragments.size() != (segment ? 43 : 39) ||
-            parsed.core_streams.size() != 2 ||
-            parsed.core_streams[0].runtime_core_id != 0 ||
-            parsed.core_streams[1].runtime_core_id != 4 ||
-            parsed.core_streams[0].records.size() != (segment ? 199 : 195) ||
-            parsed.core_streams[1].records.size() != 52 ||
-            parsed.state_operand_bindings.size() != (segment ? 31 : 27))
+            parsed.fragments.size() != (segment ? 43u : 39u) ||
+            parsed.core_streams.size() != active_die_count_ ||
+            parsed.state_operand_bindings.size() !=
+                (ep4 ? (segment ? 43u : 39u) : (segment ? 31u : 27u)))
             Fail("production full MoE linked segment identity/shape drifted");
+        for (uint64_t die = 0; die < active_die_count_; ++die) {
+            const auto &stream = parsed.core_streams[die];
+            const uint64_t records = die == 0
+                ? (ep4 && segment == 0 ? 207u : segment ? 199u : 195u)
+                : die == 1 ? 52u : segment ? 30u : 52u;
+            if (stream.runtime_core_id != die * 4 ||
+                stream.logical_core.die_id != die ||
+                stream.records.size() != records)
+                Fail("versioned MoE linked core/Die record identity drifted");
+        }
         manifests.push_back(std::move(parsed));
     }
     for (size_t index = 0; index < raw_events.size(); ++index) {
@@ -349,14 +424,15 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             Number(raw, "lsu_address"), Number(raw, "lsu_size_bytes"),
             Number(raw, "dma_size_bytes")};
         if (event.segment_index > 2 ||
-            (event.runtime_core_id != 0 && event.runtime_core_id != 4))
-            Fail("signed DMA gate leaves fixed two-core sequence");
+            (event.runtime_core_id % 4 != 0 ||
+             event.runtime_core_id / 4 >= active_die_count_))
+            Fail("signed DMA gate leaves versioned physical EP cores");
         event_indices_by_core_[event.runtime_core_id].push_back(index);
         events_.push_back(std::move(event));
     }
-    if (event_indices_by_core_.at(0).size() != 71 ||
-        event_indices_by_core_.at(4).size() != 18)
-        Fail("89 source LSU gates must be Core0=71/Core4=18");
+    for (uint64_t die = 0; die < active_die_count_; ++die)
+        if (event_indices_by_core_.at(die * 4).size() != (die ? 18u : 71u))
+            Fail("versioned source LSU gates differ from actual per-core oracle");
 
     size_t event_cursor = 0;
     uint64_t restore_bytes = 0, writeback_bytes = 0;
@@ -381,8 +457,8 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
                     Fail("shared KV StateABI has conflicting physical definitions");
             }
         }
-        if (abis.size() != 23)
-            Fail("23 true source shared/router/expert/KV StateABI required");
+        if (abis.size() != (ep4 ? 31u : 23u))
+            Fail("versioned true source shared/router/expert/KV StateABI required");
         std::map<std::tuple<std::string, uint64_t, uint64_t>,
                  frontend::StateOperandBindingDto> bindings;
         for (const auto &binding : manifest.state_operand_bindings)
@@ -392,14 +468,13 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
                                     binding.logical_core.die_id), binding).second)
                 Fail("duplicate StateOperandBinding at physical MoE core");
         const std::array<uint64_t, 4> expected_counts{{
-            19, 4, segment ? 4u : 0u, 4}};
+            ep4 ? 27u : 19u, ep4 ? 8u : 4u, segment ? 4u : 0u, 4u}};
         std::array<uint64_t, 4> counts{{0, 0, 0, 0}};
         for (const auto &core : manifest.core_streams) {
             const uint64_t core_id = core.runtime_core_id;
             const uint64_t die = core.logical_core.die_id;
-            if ((core_id == 0 && die != 0) ||
-                (core_id == 4 && die != 1))
-                Fail("source runtime core physical die mapping changed");
+            if (die >= active_die_count_ || core_id != die * 4)
+                Fail("source runtime core physical Die mapping changed");
             for (size_t linked_index = 0;
                  linked_index < core.records.size(); ++linked_index) {
                 const auto &ref = core.records[linked_index];
@@ -425,7 +500,7 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
                     continue;
                 }
                 if (event_cursor >= events_.size())
-                    Fail("more real LSU records than 89 signed DMA gates");
+                    Fail("more real LSU records than versioned signed DMA gates");
                 const auto &event = events_[event_cursor++];
                 const auto abi = abis.find(binding->second.state_abi_id);
                 if (abi == abis.end() ||
@@ -441,7 +516,7 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
                     abi->second.die_id != die ||
                     abi->second.alignment_bytes != 64 ||
                     event.lsu_size_bytes != RecordBytes(record))
-                    Fail("89 real linked MoE LSU gates no longer bind physical StateABI");
+                    Fail("versioned real linked MoE LSU gates no longer bind physical StateABI");
                 const int64_t addend = HbmAddend(*stream,
                                                   ref.fragment_record_index);
                 if (addend < 0 || event.lsu_address !=
@@ -518,16 +593,18 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             }
         }
         if (counts != expected_counts ||
-            event_cursor != (segment == 0 ? 27 : segment == 1 ? 58 : 89))
-            Fail("segment lacks 19 weights/4 expert stores/4 real KV lifecycle");
+            event_cursor != (ep4 ? (segment == 0 ? 39u : segment == 1 ? 82u : 125u)
+                                : (segment == 0 ? 27u : segment == 1 ? 58u : 89u)))
+            Fail("segment lacks versioned physical weights/expert Stores/KV lifecycle");
     }
     if (event_cursor != events_.size() ||
-        restore_bytes != 4600 || writeback_bytes != 2880)
-        Fail("89 real StateABI gates disagree with exact traffic oracle");
+        restore_bytes != expected_read_bytes_ ||
+        writeback_bytes != expected_write_bytes_)
+        Fail("versioned real StateABI gates disagree with exact traffic oracle");
 
-    std::map<std::string, HBMBackend *> hbm{
-        {hbm_refs.at(0), backends.at({0, 0})},
-        {hbm_refs.at(1), backends.at({1, 0})}};
+    std::map<std::string, HBMBackend *> hbm;
+    for (uint64_t die = 0; die < active_die_count_; ++die)
+        hbm.emplace(hbm_refs.at(die), backends.at({die, 0}));
     runtime_ = std::make_unique<ExternalMemoryRuntimeBridge>(
         name, fabric, std::move(hbm), cycle_time_);
     std::set<std::pair<uint64_t, uint64_t>> seeded;
@@ -556,7 +633,7 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
             Fail("initial KV future page bytes must be empty");
         runtime_->SeedExternal(external_capacity_ref_, address, payload);
     }
-    if (seeded.size() != 23)
+    if (seeded.size() != (ep4 ? 31u : 23u))
         Fail("external authority seed omitted a true physical page");
     initial_parameter_digest_ = frontend::program_io::Sha256Hex(
         ProbeParameters());
@@ -570,7 +647,7 @@ const MoeInferencePagerEvent &MoeInferenceMidProgramPager::NextEvent(
     if (events == event_indices_by_core_.end() ||
         cursor == next_by_core_.end() ||
         cursor->second >= events->second.size())
-        Fail("Core0/Core4 issued LSU beyond source-signed gates");
+        Fail("physical MoE core issued LSU beyond source-signed gates");
     const auto &event = events_[events->second[cursor->second]];
     if (event.runtime_core_id != core_id ||
         event.lsu_address != address || event.lsu_size_bytes != size)
@@ -583,17 +660,30 @@ void MoeInferenceMidProgramPager::Transfer(
     const MoeInferencePagerEvent &event, TransferDirection direction) {
     const std::string id = "moe_inference_paged_" +
         std::to_string(event.index) + "_" + event.state_abi_id;
+    const auto queued_at = sc_core::sc_time_stamp();
+    external_admission_.wait();
     const auto quantum = cycle_time_.value();
+    const auto waited_ticks = (sc_core::sc_time_stamp() - queued_at).value();
+    const auto waited_cycles = (waited_ticks + quantum - 1) / quantum;
+    if (waited_cycles != 0) {
+        ++admission_waited_events_;
+        admission_wait_cycles_ += waited_cycles;
+        std::cout << "[MOE_INFERENCE_PAGED_ADMISSION] index=" << event.index
+                  << " core=" << event.runtime_core_id
+                  << " wait_cycles=" << waited_cycles
+                  << " capacity=2 pass=1" << std::endl;
+    }
     const auto remainder = sc_core::sc_time_stamp().value() % quantum;
     if (remainder != 0)
         sc_core::wait(sc_core::sc_time::from_value(quantum - remainder));
     const uint64_t cycle = sc_core::sc_time_stamp().value() / quantum;
-    const uint64_t die = event.runtime_core_id == 4 ? 1 : 0;
+    const uint64_t die = event.runtime_core_id / 4;
     runtime_->Submit({id, connection_by_die_.at(die), direction,
                       event.external_address, event.hbm_address,
                       event.dma_size_bytes, cycle,
                       kExternalDmaRequestSchemaVersion});
     const auto completion = runtime_->Wait(id);
+    external_admission_.post();
     if (completion.status != 0 ||
         completion.payload_bytes != event.dma_size_bytes)
         Fail("real shared-link DMA completion failed for " +
@@ -617,7 +707,7 @@ void MoeInferenceMidProgramPager::BeforeLoad(
     if (awaiting_load_.count(core_id))
         Fail("previous real MoE LSU Load has no completion hook");
     const auto &event = NextEvent(core_id, address, size);
-    const uint64_t die = core_id == 4 ? 1 : 0;
+    const uint64_t die = core_id / 4;
     if (event.kind == "weight_restore_before_load") {
         if (weight_pinned_.at(die))
             Fail("parameter page slot reused before prior LSU completion");
@@ -643,7 +733,7 @@ void MoeInferenceMidProgramPager::AfterLoad(
     if (event.lsu_address != address || event.lsu_size_bytes != size)
         Fail("completed MoE LSU Load differs from signed restore gate");
     if (event.kind == "weight_restore_before_load") {
-        const uint64_t die = core_id == 4 ? 1 : 0;
+        const uint64_t die = core_id / 4;
         if (!weight_pinned_.at(die)) Fail("parameter slot pin vanished early");
         weight_pinned_.at(die) = false;
         const auto span = std::find_if(
@@ -669,7 +759,7 @@ void MoeInferenceMidProgramPager::AfterStore(
     if (awaiting_load_.count(core_id))
         Fail("MoE LSU Store raced with incomplete same-core Load");
     const auto &event = NextEvent(core_id, address, size);
-    const uint64_t die = core_id == 4 ? 1 : 0;
+    const uint64_t die = core_id / 4;
     if (weight_pinned_.at(die))
         Fail("expert/KV Store raced with an incomplete weight slot restore");
     if (event.kind == "expert_writeback_after_store") {
@@ -713,7 +803,7 @@ std::vector<uint8_t> MoeInferenceMidProgramPager::ProbeKvPages(
 
 std::vector<uint8_t> MoeInferenceMidProgramPager::ProbeParameters() const {
     std::vector<uint8_t> authority;
-    authority.reserve(1384);
+    authority.reserve(parameter_bytes_);
     for (const auto &span : parameters_) {
         const auto payload = runtime_->ProbeExternal(
             external_capacity_ref_, span.external_address, span.size_bytes);
@@ -721,8 +811,8 @@ std::vector<uint8_t> MoeInferenceMidProgramPager::ProbeParameters() const {
             Fail("external parameter authority missed true physical bytes");
         authority.insert(authority.end(), payload.begin(), payload.end());
     }
-    if (authority.size() != 1384)
-        Fail("physical parameter authority must cover 1384B without padding");
+    if (authority.size() != parameter_bytes_)
+        Fail("physical parameter authority must cover signed bytes without padding");
     return authority;
 }
 
@@ -738,7 +828,10 @@ std::string MoeInferenceMidProgramPager::ProbeInitialKvAuthority() const {
 }
 
 void MoeInferenceMidProgramPager::CompleteSegment(uint64_t segment) {
-    const uint64_t expected = segment == 0 ? 27 : segment == 1 ? 58 : 89;
+    const uint64_t expected = segment == 0
+        ? (active_die_count_ == 4 ? 39u : 27u)
+        : segment == 1 ? (active_die_count_ == 4 ? 82u : 58u)
+                       : expected_events_;
     if (segment > 2 || completed_events_ != expected || Pending() != 0 ||
         Pinned() != 0 || dirty_ != 0 || !awaiting_load_.empty() ||
         !expert_awaiting_store_.empty())
@@ -746,7 +839,7 @@ void MoeInferenceMidProgramPager::CompleteSegment(uint64_t segment) {
     for (const auto &[core, indices] : event_indices_by_core_)
         for (size_t index = 0; index < next_by_core_.at(core); ++index)
             if (events_[indices[index]].segment_index > segment)
-                Fail("Core0/Core4 consumed a future-segment source gate early");
+                Fail("physical MoE core consumed a future-segment source gate early");
     const uint64_t page_bytes = 32 + 16 * segment;
     const auto kv = ProbeKvPages(page_bytes);
     external_kv_probes_ += 4;
@@ -759,7 +852,8 @@ void MoeInferenceMidProgramPager::CompleteSegment(uint64_t segment) {
     if (parameter_digest_ != initial_parameter_digest_)
         Fail("expert retention Store changed immutable MoE inference weights");
     std::cout << "[MOE_INFERENCE_PAGED_PARAMETER_AUTHORITY] version="
-              << segment + 1 << " physical_bytes=1384 digest="
+              << segment + 1 << " physical_bytes=" << parameter_bytes_
+              << " digest="
               << parameter_digest_ << " immutable=1 functional=0 pass=1"
               << std::endl;
 }

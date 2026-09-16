@@ -2009,35 +2009,50 @@ int sc_main(int argc, char *argv[]) {
 
     if (moe_inference_paged) {
         try {
-            if (monitor->hbmRuntime == nullptr ||
-                monitor->workerCores[0] == nullptr ||
-                monitor->workerCores[4] == nullptr ||
-                !monitor->workerCores[0]->lsu_memory ||
-                !monitor->workerCores[4]->lsu_memory)
-                throw std::runtime_error(
-                    "paged full MoE inference requires physical Core0/Core4 LSU");
-            auto *home0 = monitor->hbmRuntime->Find(0, 0);
-            auto *home1 = monitor->hbmRuntime->Find(1, 0);
-            if (!home0 || !home1 || !home0->backend || !home1->backend)
-                throw std::runtime_error(
-                    "paged full MoE inference requires both real HBM backends");
-            std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends{
-                {{0, 0}, home0->backend.get()},
-                {{1, 0}, home1->backend.get()}};
+            const std::filesystem::path sidecar_path(
+                g_flag_moe_inference_paged_runtime);
+            std::ifstream sidecar_stream(sidecar_path);
+            if (!sidecar_stream)
+                throw std::runtime_error("MoE paged sidecar cannot be opened");
+            nlohmann::json sidecar_json;
+            sidecar_stream >> sidecar_json;
+            const auto schema = sidecar_json.at("schema_version").get<std::string>();
+            const uint64_t die_count = schema ==
+                "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
+            if (monitor->hbmRuntime == nullptr)
+                throw std::runtime_error("paged MoE inference requires physical HBM runtime");
+            std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends;
+            for (uint64_t die = 0; die < die_count; ++die) {
+                const uint64_t core_id = die * 4;
+                if (core_id >= TOTAL_CORES ||
+                    monitor->workerCores[core_id] == nullptr ||
+                    !monitor->workerCores[core_id]->lsu_memory)
+                    throw std::runtime_error(
+                        "paged MoE inference requires each physical EP core LSU");
+                auto *home = monitor->hbmRuntime->Find(die, 0);
+                if (!home || !home->backend)
+                    throw std::runtime_error(
+                        "paged MoE inference requires each real HBM backend");
+                backends.emplace(std::make_pair(die, 0), home->backend.get());
+            }
             moe_inference_mid_program_pager = std::make_unique<
                 external_memory::MoeInferenceMidProgramPager>(
-                    "moe_inference_mid_program_pager",
-                    std::filesystem::path(g_flag_moe_inference_paged_runtime),
+                    "moe_inference_mid_program_pager", sidecar_path,
                     sequence_manifest_texts, std::move(backends),
                     sc_time(CYCLE, SC_NS));
-            monitor->workerCores[0]->lsu_memory->SetMoeInferencePager(
-                moe_inference_mid_program_pager.get());
-            monitor->workerCores[4]->lsu_memory->SetMoeInferencePager(
-                moe_inference_mid_program_pager.get());
+            if (moe_inference_mid_program_pager->ActiveDieCount() != die_count)
+                throw std::runtime_error("MoE pager version/active Die count differs");
+            for (uint64_t die = 0; die < die_count; ++die)
+                monitor->workerCores[die * 4]->lsu_memory->SetMoeInferencePager(
+                    moe_inference_mid_program_pager.get());
             std::cout << "[MOE_INFERENCE_PAGED_BINDING] source="
                       << moe_inference_mid_program_pager->SourceRef()
-                      << " mesh=1x2 ep=2 physical_weights=19 kv_pages=4"
-                      << " lsu_gates=89 hbm_capacity_per_die=1024"
+                      << " mesh=1x" << die_count << " ep=" << die_count
+                      << " physical_weights="
+                      << moe_inference_mid_program_pager->WeightPageCount()
+                      << " kv_pages=4 lsu_gates="
+                      << moe_inference_mid_program_pager->ExpectedEvents()
+                      << " hbm_capacity_per_die=1024"
                       << " workspace_end=464 highest_relative_state_end=960"
                       << " pass=1" << std::endl;
         } catch (const std::exception &error) {
@@ -2490,21 +2505,35 @@ int sc_main(int argc, char *argv[]) {
         }
         if (moe_inference_paged) {
             const auto &stats = moe_inference_mid_program_pager->Stats();
-            if (moe_inference_mid_program_pager->CompletedEvents() != 89 ||
+            const auto events = moe_inference_mid_program_pager->ExpectedEvents();
+            const auto reads = moe_inference_mid_program_pager->ExpectedReadBytes();
+            const auto writes = moe_inference_mid_program_pager->ExpectedWriteBytes();
+            if (moe_inference_mid_program_pager->CompletedEvents() != events ||
                 moe_inference_mid_program_pager->ExternalKvProbes() != 12 ||
                 moe_inference_mid_program_pager->Pending() != 0 ||
                 moe_inference_mid_program_pager->Dirty() != 0 ||
                 moe_inference_mid_program_pager->Pinned() != 0 ||
-                stats.submitted_requests != 89 ||
-                stats.completed_requests != 89 ||
+                stats.submitted_requests != events ||
+                stats.completed_requests != events ||
                 stats.failed_requests != 0 ||
-                stats.external_read_bytes != 4600 ||
-                stats.hbm_write_bytes != 4600 ||
-                stats.external_write_bytes != 2880 ||
-                stats.hbm_read_bytes != 2880)
+                stats.external_read_bytes != reads ||
+                stats.hbm_write_bytes != reads ||
+                stats.external_write_bytes != writes ||
+                stats.hbm_read_bytes != writes)
                 throw std::runtime_error(
-                    "full MoE inference shared DMA/StateABI drain disagreed with 89-gate byte oracle");
-            std::cout << "[MOE_INFERENCE_PAGED_DMA_DRAIN] events=89"
+                    "full MoE inference shared DMA/StateABI drain disagreed with signed byte oracle");
+            if (moe_inference_mid_program_pager->ActiveDieCount() == 4) {
+                if (moe_inference_mid_program_pager->AdmissionWaitedEvents() == 0 ||
+                    moe_inference_mid_program_pager->AdmissionWaitCycles() == 0)
+                    throw std::runtime_error(
+                        "four EP cores did not exercise bounded two-request DMA admission");
+                std::cout << "[MOE_INFERENCE_PAGED_ADMISSION_DRAIN] waited_events="
+                          << moe_inference_mid_program_pager->AdmissionWaitedEvents()
+                          << " wait_cycles="
+                          << moe_inference_mid_program_pager->AdmissionWaitCycles()
+                          << " capacity=2 pass=1" << std::endl;
+            }
+            std::cout << "[MOE_INFERENCE_PAGED_DMA_DRAIN] events=" << events
                       << " kv_probes=12 submitted=" << stats.submitted_requests
                       << " completed=" << stats.completed_requests
                       << " external_read_bytes=" << stats.external_read_bytes

@@ -39,9 +39,8 @@ struct MoeInferencePagerEvent {
     uint64_t dma_size_bytes = 0;
 };
 
-// Fixed full-model 1x2/EP2 MoE Prefill+2Decode. One actual shared external
-// link services both physical HBM homes. Each core consumes its source-signed
-// LSU gates in linked order; SystemC may interleave the two core streams.
+// Fixed full-model MoE Prefill+2Decode. Versioned contracts cover EP2 and
+// EP4 with one actual shared external link and source-signed per-core LSU gates.
 class MoeInferenceMidProgramPager {
 public:
     MoeInferenceMidProgramPager(
@@ -70,6 +69,14 @@ public:
     const std::string &ParameterAuthorityDigest() const { return parameter_digest_; }
     const std::string &SourceRef() const { return source_ref_; }
     const RuntimeStats &Stats() const;
+    uint64_t ActiveDieCount() const { return active_die_count_; }
+    uint64_t ExpectedEvents() const { return expected_events_; }
+    uint64_t ExpectedReadBytes() const { return expected_read_bytes_; }
+    uint64_t ExpectedWriteBytes() const { return expected_write_bytes_; }
+    uint64_t PhysicalParameterBytes() const { return parameter_bytes_; }
+    uint64_t AdmissionWaitedEvents() const { return admission_waited_events_; }
+    uint64_t AdmissionWaitCycles() const { return admission_wait_cycles_; }
+    uint64_t WeightPageCount() const { return parameters_.size(); }
 
 private:
     const MoeInferencePagerEvent &NextEvent(uint64_t core_id,
@@ -84,15 +91,24 @@ private:
     std::string external_capacity_ref_;
     std::map<uint64_t, std::string> connection_by_die_;
     std::unique_ptr<ExternalMemoryRuntimeBridge> runtime_;
+    sc_core::sc_semaphore external_admission_{2};
     std::vector<MoeInferencePagerSpan> parameters_;
     std::vector<MoeInferencePagerSpan> kv_pages_;
     std::vector<MoeInferencePagerEvent> events_;
     std::map<uint64_t, std::vector<uint64_t>> event_indices_by_core_;
-    std::map<uint64_t, size_t> next_by_core_{{0, 0}, {4, 0}};
+    std::map<uint64_t, size_t> next_by_core_;
     std::map<uint64_t, uint64_t> awaiting_load_;
-    std::map<uint64_t, bool> weight_pinned_{{0, false}, {1, false}};
+    std::map<uint64_t, bool> weight_pinned_;
     std::map<uint64_t, bool> kv_pinned_;
     std::set<std::pair<uint64_t, uint64_t>> expert_awaiting_store_;
+    uint64_t active_die_count_ = 0;
+    uint64_t expected_events_ = 0;
+    uint64_t expected_read_bytes_ = 0;
+    uint64_t expected_write_bytes_ = 0;
+    uint64_t parameter_bytes_ = 0;
+    std::vector<uint64_t> cumulative_events_;
+    uint64_t admission_waited_events_ = 0;
+    uint64_t admission_wait_cycles_ = 0;
     uint64_t dirty_ = 0;
     uint64_t completed_events_ = 0;
     uint64_t external_kv_probes_ = 0;
