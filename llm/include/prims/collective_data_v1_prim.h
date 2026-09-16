@@ -16,8 +16,9 @@ enum class CollectiveDataV1PrimMode : uint8_t {
 };
 
 // Strict-only real-byte collective data operation.  Addresses are relocated
-// absolute SRAM byte addresses.  REDUCE source is rank-major N*L; destination
-// is one L-byte result.
+// absolute SRAM byte addresses. REDUCE has N logical L-byte inputs; V1/V2
+// stores them tightly, while V3 stores each at source + rank*input_stride_bytes.
+// Destination is one L-byte result (or 2*L for the existing V2 cast).
 class Collective_data_v1_prim final : public PrimBase {
 public:
     CollectiveDataV1PrimMode mode = CollectiveDataV1PrimMode::LOCAL_COPY;
