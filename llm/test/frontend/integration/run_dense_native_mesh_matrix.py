@@ -64,8 +64,12 @@ def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[st
     }
     if any(not path.is_file() for path in paths.values()):
         raise ValueError("all native tools and simulation must be files")
+    dram_config = Path(__file__).resolve().parents[4] / "DRAMSys/configs/hbm2-example.json"
+    if not dram_config.is_file():
+        raise ValueError("bound DRAMSys HBM profile is missing")
     return {
-        "schema_version": "dense-native-mesh-matrix-binding-v2",
+        "schema_version": "dense-native-mesh-matrix-binding-v3",
+        "dram_config_sha256": _sha(dram_config),
         "driver_sha256": _sha(Path(__file__).resolve()),
         "runner_sha256": _sha(Path(__file__).resolve().parent / "run_dense_sequence_runtime_canary.py"),
         "shapes": shapes,
@@ -87,6 +91,19 @@ def audit_cached_case(case_root: Path, shape: str) -> dict[str, object]:
     if evidence != expected:
         raise ValueError(f"cached {shape} evidence bytes or semantics drifted")
     return evidence
+
+
+def bind_case_dram_config(case_root: Path) -> None:
+    """Resolve the simulator's ../DRAMSys config against the frozen source tree."""
+    expected = Path(__file__).resolve().parents[4] / "DRAMSys"
+    path = case_root / "DRAMSys"
+    if path.is_symlink():
+        if path.resolve() != expected.resolve():
+            raise ValueError("DRAMSys case resource points outside bound source")
+    elif path.exists():
+        raise ValueError("DRAMSys case resource is not a bound source link")
+    else:
+        path.symlink_to(expected, target_is_directory=True)
 
 
 def audit_partial_case(case_root: Path, shape: str) -> list[dict[str, object]]:
@@ -249,6 +266,7 @@ def run(args: argparse.Namespace) -> None:
         else:
             case_root.mkdir()
             observations = []
+        bind_case_dram_config(case_root)
         for fresh in range(len(observations), 2):
             directory = case_root / f"fresh{fresh}"
             command = (

@@ -14,6 +14,7 @@ from llm.test.frontend.integration.run_dense_native_mesh_matrix import (
     RELEASE_SHAPES,
     audit_cached_case,
     audit_partial_case,
+    bind_case_dram_config,
     audit_fresh,
     compare_fresh,
     matrix_binding,
@@ -208,6 +209,18 @@ class NativeMatrixAuditTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fresh1 without fresh0"):
                 audit_partial_case(case, "1x4")
 
+    def test_case_dram_config_binds_frozen_source_and_rejects_redirect(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            case = Path(raw) / "case"
+            case.mkdir()
+            bind_case_dram_config(case)
+            self.assertTrue((case / "DRAMSys/configs/hbm2-example.json").is_file())
+            bind_case_dram_config(case)
+            (case / "DRAMSys").unlink()
+            (case / "DRAMSys").symlink_to(Path(raw))
+            with self.assertRaisesRegex(ValueError, "outside bound source"):
+                bind_case_dram_config(case)
+
     def test_matrix_binding_includes_exact_sequence_runner(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             tool = Path(raw) / "tool"
@@ -218,7 +231,8 @@ class NativeMatrixAuditTest(unittest.TestCase):
             from llm.test.frontend.integration import run_dense_native_mesh_matrix as driver
             runner = Path(driver.__file__).parent / "run_dense_sequence_runtime_canary.py"
             self.assertEqual(binding["runner_sha256"], hashlib.sha256(runner.read_bytes()).hexdigest())
-            self.assertEqual(binding["schema_version"], "dense-native-mesh-matrix-binding-v2")
+            self.assertEqual(binding["schema_version"], "dense-native-mesh-matrix-binding-v3")
+            self.assertEqual(binding["dram_config_sha256"], hashlib.sha256((Path(driver.__file__).resolve().parents[4] / "DRAMSys/configs/hbm2-example.json").read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":
