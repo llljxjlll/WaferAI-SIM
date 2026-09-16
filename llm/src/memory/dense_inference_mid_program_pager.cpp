@@ -138,7 +138,8 @@ FabricConfig ParseFixedFabric(const Json &value) {
     return result;
 }
 
-FabricConfig ParseRectFabric(const Json &value) {
+FabricConfig ParseRectFabric(const Json &value, uint64_t rows,
+                             uint64_t columns) {
     Exact(value, {"schema_version", "producer_pass", "id",
                   "external_capacities", "hbm_capacities", "links",
                   "connections"});
@@ -204,9 +205,16 @@ FabricConfig ParseRectFabric(const Json &value) {
                            "target_die_id", "route_die_ids",
                            "route_latency_cycles", "route_bytes_per_cycle"});
         const uint64_t die = Number(connection, "target_die_id");
-        const std::array<std::vector<uint64_t>, 4> expected_routes = {
-            std::vector<uint64_t>{0}, std::vector<uint64_t>{0, 1},
-            std::vector<uint64_t>{0, 2}, std::vector<uint64_t>{0, 1, 3}};
+        const std::array<std::vector<uint64_t>, 4> expected_routes =
+            rows == 2 && columns == 2
+                ? std::array<std::vector<uint64_t>, 4>{
+                      std::vector<uint64_t>{0}, std::vector<uint64_t>{0, 1},
+                      std::vector<uint64_t>{0, 2},
+                      std::vector<uint64_t>{0, 1, 3}}
+                : std::array<std::vector<uint64_t>, 4>{
+                      std::vector<uint64_t>{0}, std::vector<uint64_t>{0, 1},
+                      std::vector<uint64_t>{0, 1, 2},
+                      std::vector<uint64_t>{0, 1, 2, 3}};
         std::vector<uint64_t> route;
         if (!connection.at("route_die_ids").is_array())
             Fail("rectangular external route is not an array");
@@ -281,7 +289,8 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
             manifest_texts.size() != 3)
             Fail("source-signed TP4 rectangular bounded identity changed");
         source_ref_ = String(contract, "id");
-        const FabricConfig fabric = ParseRectFabric(contract.at("fabric"));
+        const FabricConfig fabric = ParseRectFabric(contract.at("fabric"),
+                                                    rows, columns);
         external_capacity_ref_ = fabric.external_capacities.front().id;
         if (backends.size() != 4)
             Fail("four physical TP4 HBM backends required");

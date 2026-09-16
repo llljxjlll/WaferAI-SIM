@@ -34,6 +34,14 @@ PARAMETER_BYTES_PER_DIE = 26944
 KV_BYTES_PER_DIE = 1536
 
 
+def rect_routes(rows: int, columns: int) -> tuple[tuple[int, ...], ...]:
+    if (rows, columns) == (2, 2):
+        return ((0,), (0, 1), (0, 2), (0, 1, 3))
+    if (rows, columns) in ((1, 4), (4, 1)):
+        return ((0,), (0, 1), (0, 1, 2), (0, 1, 2, 3))
+    raise SchemaError("requires a four-Die TP4 rectangle", path="mesh")
+
+
 def _fragment(item):
     return item.fragment if isinstance(item, RegionManifest) else item
 
@@ -293,6 +301,20 @@ def build_dense_inference_rect_paged_runtime(
             {item.link_ref for item in fabric.connections} != {fabric.links[0].id}):
         raise SchemaError("requires one external ingress and four routed TP4 HBM homes",
                           path="fabric")
+    rows = physical_source.external_manifest.request.mesh.rows
+    columns = physical_source.external_manifest.request.mesh.columns
+    expected_routes = rect_routes(rows, columns)
+    if any(
+        connection.target_die_id != die or
+        connection.route_die_ids != expected_routes[die] or
+        connection.route_latency_cycles != len(expected_routes[die]) - 1 or
+        connection.route_bytes_per_cycle != (None if die == 0 else 256)
+        for die, connection in enumerate(sorted(
+            fabric.connections, key=lambda item: item.target_die_id,
+        ))
+    ):
+        raise SchemaError("external routes do not match signed TP4 mesh",
+                          path="fabric.connections")
     requests = {item.id: item for item in
                 physical_source.external_manifest.memory_plan.requests}
     allocations = {item.id: item for item in
@@ -467,4 +489,5 @@ def build_dense_inference_rect_paged_runtime(
 __all__ = [
     "build_dense_inference_rect_paged_runtime",
     "relink_dense_inference_rect_paged_segment",
+    "rect_routes",
 ]

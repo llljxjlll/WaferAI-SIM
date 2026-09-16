@@ -1,4 +1,4 @@
-"""True low-HBM 2x2 TP4 Dense Prefill+2Decode resident reject/paged DMA pair."""
+"""True low-HBM TP4 Dense Prefill+2Decode resident reject/paged DMA pair."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from llm.frontend.wafer_frontend.passes.dense_inference_rect_physical_source imp
 from llm.frontend.wafer_frontend.passes.dense_inference_rect_paged_runtime import (
     build_dense_inference_rect_paged_runtime,
     relink_dense_inference_rect_paged_segment,
+    rect_routes,
 )
 from llm.frontend.wafer_frontend.passes.dense_inference_paged_program_io import (
     retarget_dense_inference_paged_sram_program_io,
@@ -55,7 +56,10 @@ from llm.test.frontend.unit.test_dense_compile_sequence import _two_by_two_case
 from .flexible_mesh_release_hardware import (
     specialize_p5_large_release_hardware,
 )
-from .run_dense_sequence_runtime_canary import _bind_native_hardware_to_fabric
+from .run_dense_sequence_runtime_canary import (
+    _bind_native_hardware_to_fabric,
+    _four_die_rect_case,
+)
 
 
 _ROOT = Path(__file__).resolve().parents[4]
@@ -240,11 +244,12 @@ def _observe(stdout: str, sidecar: dict[str, object]) -> dict[str, object]:
     if len(d2d) != 2 or d2d[0] <= 0 or d2d[0] != d2d[1]:
         raise RuntimeError(f"native D2D packet accounting is invalid: {d2d}")
     participating = set()
+    columns = int(sidecar["mesh_columns"])
     for source, target, direction, data_in, data_out in links:
         if source >= 4 or target >= 4:
-            raise RuntimeError("native D2D link lies outside the physical 2x2 mesh")
-        sr, sc = divmod(source, 2)
-        tr, tc = divmod(target, 2)
+            raise RuntimeError("native D2D link lies outside the physical TP4 mesh")
+        sr, sc = divmod(source, columns)
+        tr, tc = divmod(target, columns)
         expected = ("E" if sr == tr and tc == sc + 1 else
                     "W" if sr == tr and tc == sc - 1 else
                     "N" if tr == sr + 1 and tc == sc else
@@ -276,7 +281,11 @@ def _observe(stdout: str, sidecar: dict[str, object]) -> dict[str, object]:
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     source_tool_at_entry = _source_tool_snapshot(args)
-    resident, template, fabric = _two_by_two_case()
+    mesh_rows, mesh_columns = map(int, args.mesh_size.split("x"))
+    resident, template, fabric = (
+        _two_by_two_case() if (mesh_rows, mesh_columns) == (2, 2)
+        else _four_die_rect_case(mesh_rows, mesh_columns)
+    )
     model_digest = canonical_digest(resident.request.model)
     sequence, linked_profiles = compile_dense_e2e_sequence_runtime_profiles(
         resident, template, fabric,
@@ -296,7 +305,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         ingress_die_id=0, bytes_per_cycle=256, latency_cycles=2,
         queue_depth=4, max_outstanding=4,
     ),)
-    routes = ((0,), (0, 1), (0, 2), (0, 1, 3))
+    routes = rect_routes(mesh_rows, mesh_columns)
     connections = tuple(ExternalMemoryConnection.create(
         link_ref=links[0].id,
         hbm_capacity_ref=physical_source.hbm_capacities[die].id,
@@ -406,10 +415,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         paged_manifest_paths.append(paged_manifest_path)
         paged_artifact_paths.append(paged_artifact_path)
         paged_io_paths.append(paged_io_path)
-    hardware = json.loads(specialize_p5_large_release_hardware(2, 2))
+    hardware = json.loads(specialize_p5_large_release_hardware(
+        mesh_rows, mesh_columns,
+    ))
     core_grid = _bind_native_hardware_to_fabric(hardware, fabric)
-    if len(fabric.dies) != 4 or hardware["die"] != {"x": 2, "y": 2}:
-        raise RuntimeError("native physical 2x2 Die geometry drifted")
+    if (len(fabric.dies) != 4 or
+            hardware["die"] != {"x": mesh_columns, "y": mesh_rows}):
+        raise RuntimeError("native physical TP4 Die geometry drifted")
     hardware["memory"]["sram_size"] = 65536
     hardware["memory"]["sram"]["capacity_bytes"] = 65536
     hardware["memory"]["sram"]["regions"][0]["name"] = "sram"
@@ -519,6 +531,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "npusim_sha256": binary_sha,
         "finalizer_sha256": finalizer_sha,
         "resolver_sha256": resolver_sha,
+        "mesh_rows": mesh_rows,
+        "mesh_columns": mesh_columns,
         "frontend_core_grid": core_grid,
         "native_core_grid": (hardware["x"], hardware["y"]),
         "hardware_sha256": hardware_sha,
@@ -529,7 +543,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8",
     )
     print(
-        "Dense TP4 2x2 bounded external physical parameter+KV offload PASS "
+        f"Dense TP4 {args.mesh_size} bounded external physical parameter+KV offload PASS "
         "resident=memory_capacity_exceeded HBM_per_die=12288 peak_end_per_die=11328 "
         "KV_versions=0,1,2,3 DMA=260 fresh_runs=2 "
         f"makespan={report['makespan_cycles']} functional=0"
@@ -542,6 +556,8 @@ def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path,
                         default=build / "dense-inference-rect-paged-offload-canary")
+    parser.add_argument("--mesh-size", choices=("2x2", "1x4", "4x1"),
+                        default="2x2")
     parser.add_argument("--npusim", type=Path, default=build / "npusim")
     parser.add_argument("--finalizer", type=Path,
                         default=_ROOT / "build-debug-final/npusim_program_finalizer")

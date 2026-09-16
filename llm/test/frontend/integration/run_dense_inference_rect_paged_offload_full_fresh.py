@@ -1,4 +1,4 @@
-"""Two independent full materializations of the low-HBM TP4 2x2 Dense inference pair."""
+"""Two independent full materializations of low-HBM TP4 Dense inference."""
 
 from __future__ import annotations
 
@@ -18,7 +18,8 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def audit_full_fresh(directory: Path) -> dict[str, object]:
+def audit_full_fresh(directory: Path, mesh_size: str) -> dict[str, object]:
+    rows, columns = map(int, mesh_size.split("x"))
     report = json.loads((directory / "dense-inference-rect-paged-runtime-evidence.json").read_text(encoding="utf-8"))
     hardware = json.loads((directory / "hardware.json").read_text(encoding="utf-8"))
     if report.get("resident_rejection_code") != "memory_capacity_exceeded":
@@ -30,9 +31,13 @@ def audit_full_fresh(directory: Path) -> dict[str, object]:
             [0, 1073741824, 2147483648, 3221225472] or
             report.get("observed_paged_peak_end_bytes_per_die") != 11328):
         raise ValueError("logical/native HBM boundary or observed peak disagrees")
-    if report.get("frontend_core_grid") != [2, 2] or report.get("native_core_grid") != [2, 2]:
+    if (report.get("mesh_rows") != rows or
+            report.get("mesh_columns") != columns or
+            report.get("frontend_core_grid") != [2, 2] or
+            report.get("native_core_grid") != [2, 2]):
         raise ValueError("frontend/native low-HBM inference core geometry disagrees")
-    if (hardware.get("x"), hardware.get("y")) != (2, 2) or hardware.get("die") != {"x": 2, "y": 2}:
+    if ((hardware.get("x"), hardware.get("y")) != (2, 2) or
+            hardware.get("die") != {"x": columns, "y": rows}):
         raise ValueError("actual native hardware core or physical Die geometry disagrees")
     if _sha(directory / "hardware.json") != report.get("hardware_sha256"):
         raise ValueError("native hardware bytes drifted from full-fresh report")
@@ -98,6 +103,7 @@ def run(args: argparse.Namespace) -> None:
         command = (
             sys.executable, "-m", "llm.test.frontend.integration.run_dense_inference_rect_paged_offload_runtime_canary",
             "--output", str(directory),
+            "--mesh-size", args.mesh_size,
             "--npusim", str(args.npusim.resolve()),
             "--finalizer", str(args.finalizer.resolve()),
             "--resolver", str(args.resolver.resolve()),
@@ -108,15 +114,17 @@ def run(args: argparse.Namespace) -> None:
         (root / f"full_fresh_{index}.runner.stdout.txt").write_text(completed.stdout, encoding="utf-8")
         if completed.returncode != 0:
             raise RuntimeError(f"independent full materialization {index} failed with exit {completed.returncode}")
-        evidence.append(audit_full_fresh(directory))
+        evidence.append(audit_full_fresh(directory, args.mesh_size))
     compare_full_fresh(*evidence)
-    (root / "full_fresh_evidence.json").write_text(json.dumps({"status": "verified", "independent_full_materializations": 2, "case": evidence[0]}, indent=2, sort_keys=True), encoding="utf-8")
-    print("Dense TP4 2x2 full inference low-HBM external offload PASS two independent full materializations", flush=True)
+    (root / "full_fresh_evidence.json").write_text(json.dumps({"status": "verified", "mesh_size": args.mesh_size, "independent_full_materializations": 2, "case": evidence[0]}, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"Dense TP4 {args.mesh_size} full inference low-HBM external offload PASS two independent full materializations", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--mesh-size", choices=("2x2", "1x4", "4x1"),
+                        default="2x2")
     parser.add_argument("--npusim", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)

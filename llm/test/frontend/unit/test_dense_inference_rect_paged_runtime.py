@@ -5,10 +5,20 @@ import unittest
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes.dense_inference_rect_paged_runtime import (
     _insert_record_identity,
+    rect_routes,
 )
 
 
 class DenseInferenceRectPagedRuntimeTest(unittest.TestCase):
+    def test_physical_routes_follow_signed_tp4_mesh(self) -> None:
+        self.assertEqual(rect_routes(2, 2),
+                         ((0,), (0, 1), (0, 2), (0, 1, 3)))
+        chain = ((0,), (0, 1), (0, 1, 2), (0, 1, 2, 3))
+        self.assertEqual(rect_routes(1, 4), chain)
+        self.assertEqual(rect_routes(4, 1), chain)
+        with self.assertRaises(SchemaError):
+            rect_routes(2, 1)
+
     def test_outer_inner_record_identity_conflict_is_rejected(self) -> None:
         records: dict[tuple[int, int, str, int], object] = {}
         streams: dict[tuple[int, int, str, int], object] = {}
