@@ -320,10 +320,8 @@ class DenseIR0ValidatorTest(unittest.TestCase):
                 for value_id in residual.inputs
             ),
         )
-        changed_candidate = replace(
-            graph.fusion_candidates[0],
-            boundary_outputs=(partial.id, rs_output.id),
-        )
+        # This case exercises partial-use validation; a pre-existing fusion
+        # candidate cannot keep its old boundary after the consumer rewiring.
         broken = _rebuild(
             graph,
             nodes=tuple(
@@ -350,7 +348,7 @@ class DenseIR0ValidatorTest(unittest.TestCase):
                 else edge
                 for edge in graph.edges
             ),
-            fusion_candidates=(changed_candidate, *graph.fusion_candidates[1:]),
+            fusion_candidates=(),
         )
         with self.assertRaisesRegex(SchemaError, "exactly one reduction consumer"):
             DenseIR0Validator.validate(broken)
