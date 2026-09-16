@@ -2018,7 +2018,8 @@ int sc_main(int argc, char *argv[]) {
             sidecar_stream >> sidecar_json;
             const auto schema = sidecar_json.at("schema_version").get<std::string>();
             const uint64_t die_count = schema ==
-                "wafer_frontend.moe_inference_paged_runtime/v3alpha1" ? 6 :
+                "wafer_frontend.moe_inference_paged_runtime/v4alpha1" ? 9 :
+                schema == "wafer_frontend.moe_inference_paged_runtime/v3alpha1" ? 6 :
                 schema == "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
             if (DIE_X <= 0 || DIE_Y <= 0 || DIE_COUNT != static_cast<int>(die_count) ||
                 DIE_X * DIE_Y != static_cast<int>(die_count))
