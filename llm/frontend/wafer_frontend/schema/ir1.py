@@ -40,6 +40,7 @@ from .ir0 import (
     NormGammaWgradWorkload,
     MoeFullTrainingBlockWorkload,
     MoeCombineBackwardWorkload,
+    MoeExpertBackwardWorkload,
     LogicalNode,
     GreedySampleWorkload,
     GraphEdge,
@@ -1122,6 +1123,7 @@ class PhysicalNode:
             OpKind.MOE_EXPERT_FORWARD: MoeFullTrainingBlockWorkload,
             OpKind.MOE_COMBINE: MoeFullTrainingBlockWorkload,
             OpKind.MOE_COMBINE_BACKWARD: MoeCombineBackwardWorkload,
+            OpKind.MOE_EXPERT_BACKWARD: MoeExpertBackwardWorkload,
             OpKind.ROPE: RopeQkWorkload,
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
@@ -1146,7 +1148,7 @@ class PhysicalNode:
             OpKind.MOE_ROUTER,
             OpKind.MOE_ROUTE_FREEZE, OpKind.MOE_DISPATCH,
             OpKind.MOE_EXPERT_FORWARD, OpKind.MOE_COMBINE,
-            OpKind.MOE_COMBINE_BACKWARD,
+            OpKind.MOE_COMBINE_BACKWARD, OpKind.MOE_EXPERT_BACKWARD,
         ):
             # The native gradient and MoE phase/arity/impl/dtype contract must
             # survive projection intact; the physical node cannot self-report

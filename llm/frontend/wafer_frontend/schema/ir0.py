@@ -28,6 +28,7 @@ from .moe_training_ir0_workloads import (
     NormGammaWgradWorkload,
 )
 from .moe_combine_backward_workload import MoeCombineBackwardWorkload
+from .moe_expert_backward_workload import MoeExpertBackwardWorkload
 from .moe_full_training_block_workload import (
     MoeForwardBlockKind,
     MoeFullTrainingBlockWorkload,
@@ -79,6 +80,7 @@ class OpKind(str, Enum):
     MOE_EXPERT_FORWARD = "moe_expert_forward"
     MOE_COMBINE = "moe_combine"
     MOE_COMBINE_BACKWARD = "moe_combine_backward"
+    MOE_EXPERT_BACKWARD = "moe_expert_backward"
     ROPE = "rope"
     SAMPLING = "sampling"
     CE_FORWARD = "ce_forward"
@@ -1508,6 +1510,7 @@ NodeWorkload = (
     | SwiGluBackwardWorkload
     | MoeFullTrainingBlockWorkload
     | MoeCombineBackwardWorkload
+    | MoeExpertBackwardWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
     | CrossEntropyForwardWorkload
@@ -1602,6 +1605,7 @@ class LogicalNode:
             OpKind.MOE_EXPERT_FORWARD: MoeFullTrainingBlockWorkload,
             OpKind.MOE_COMBINE: MoeFullTrainingBlockWorkload,
             OpKind.MOE_COMBINE_BACKWARD: MoeCombineBackwardWorkload,
+            OpKind.MOE_EXPERT_BACKWARD: MoeExpertBackwardWorkload,
             OpKind.ROPE: RopeQkWorkload,
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
@@ -1644,6 +1648,16 @@ class LogicalNode:
                     or self.effects != NodeEffects(EffectKind.PURE, None, None)):
                 raise SchemaError(
                     "native GEMM dX needs FP16 weight/dY/dX, FP32 accumulation and pure DGRAD phase",
+                    path=path,
+                )
+        if self.kind is OpKind.MOE_EXPERT_BACKWARD:
+            if (self.phase is not OpPhase.DGRAD
+                    or self.impl_ref != "moe_expert_backward_recompute"
+                    or len(self.inputs) != 5 or len(self.outputs) != 4
+                    or self.math.accumulation_dtype is not DType.FP32
+                    or self.effects != NodeEffects(EffectKind.PURE, None, None)):
+                raise SchemaError(
+                    "expert backward needs actual dExpert, three FP32 WGRAD outputs and pure DGRAD phase",
                     path=path,
                 )
         if self.kind is OpKind.MOE_COMBINE_BACKWARD:
@@ -2288,6 +2302,45 @@ class IR0:
                 if actual != specs:
                     raise SchemaError("MoE source node route/three expert projections or FP32 router tensor shape differs from physical model",
                                       path=f"{path}.nodes[{index}].inputs")
+            if node.kind is OpKind.MOE_EXPERT_BACKWARD:
+                if self.job is not JobKind.TRAIN:
+                    raise SchemaError("expert backward requires TRAIN job",
+                                      path=f"{path}.nodes[{index}].kind")
+                workload = node.workload
+                assert isinstance(workload, MoeExpertBackwardWorkload)
+                forward = node_index.get(workload.source_forward_op_ref)
+                combine = node_index.get(workload.source_combine_backward_op_ref)
+                if (forward is None or forward.kind is not OpKind.MOE_EXPERT_FORWARD
+                        or combine is None
+                        or combine.kind is not OpKind.MOE_COMBINE_BACKWARD
+                        or forward.phase is not OpPhase.FWD
+                        or forward.instance_id != node.instance_id
+                        or combine.instance_id != node.instance_id
+                        or forward.mesh_ref != node.mesh_ref
+                        or combine.mesh_ref != node.mesh_ref
+                        or forward.workload.step != workload.step
+                        or combine.workload.step != workload.step
+                        or forward.workload.layer != workload.layer
+                        or combine.workload.layer != workload.layer
+                        or forward.workload.expert != workload.expert
+                        or forward.workload.source_route_trace_digest !=
+                           workload.source_route_trace_digest
+                        or combine.workload.source_route_trace_digest !=
+                           workload.source_route_trace_digest
+                        or forward.outputs[0] != combine.inputs[2]
+                        or node.inputs != (*forward.inputs, combine.outputs[1])
+                        or node.stage != forward.stage
+                        or tuple((value_index[ref].shape, value_index[ref].dtype)
+                                 for ref in node.outputs) != (
+                            ((workload.token_count, workload.hidden_size), DType.FP16),
+                            ((workload.hidden_size, workload.intermediate_size), DType.FP32),
+                            ((workload.hidden_size, workload.intermediate_size), DType.FP32),
+                            ((workload.intermediate_size, workload.hidden_size), DType.FP32),
+                        )
+                        or any(value_index[ref].producer != node.id
+                               for ref in node.outputs)):
+                    raise SchemaError("expert reverse must derive exact same-layer forward weights, activation, 0x28 dExpert and FP32 projection gradients",
+                                      path=f"{path}.nodes[{index}]")
             if node.kind is OpKind.MOE_COMBINE_BACKWARD:
                 if self.job is not JobKind.TRAIN:
                     raise SchemaError("0x28 requires TRAIN job",

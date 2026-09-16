@@ -58,6 +58,7 @@ from .moe_training_ir0_workloads import (
     NormGammaWgradWorkload,
 )
 from .moe_combine_backward_workload import MoeCombineBackwardWorkload
+from .moe_expert_backward_workload import MoeExpertBackwardWorkload
 from .moe_full_training_block_workload import (
     MoeForwardBlockKind, MoeFullTrainingBlockWorkload,
 )
@@ -235,6 +236,7 @@ def _validate_workload_kind(
         OpKind.MOE_EXPERT_FORWARD: (MoeFullTrainingBlockWorkload,),
         OpKind.MOE_COMBINE: (MoeFullTrainingBlockWorkload,),
         OpKind.MOE_COMBINE_BACKWARD: (MoeCombineBackwardWorkload,),
+        OpKind.MOE_EXPERT_BACKWARD: (MoeExpertBackwardWorkload,),
     }.get(op_kind)
     if expected_types is None:
         raise SchemaError(
@@ -290,6 +292,11 @@ def canonical_compute_operand_roles(
     if op_kind is OpKind.MOE_COMBINE:
         return ((*tuple(f"expert{rank}_output" for rank in range(workload.expert_count)),
                  "route_ids", "route_scores"), ("combined_output",))
+    if op_kind is OpKind.MOE_EXPERT_BACKWARD:
+        return (("expert_activation", "gate_weight", "up_weight",
+                 "down_weight", "expert_output_gradient"),
+                ("expert_activation_gradient", "gate_weight_gradient",
+                 "up_weight_gradient", "down_weight_gradient"))
     if op_kind is OpKind.MOE_COMBINE_BACKWARD:
         return (("route_ids", "route_scores", "expert_output",
                  "dcombined_gradient"),
