@@ -2019,6 +2019,9 @@ int sc_main(int argc, char *argv[]) {
             const auto schema = sidecar_json.at("schema_version").get<std::string>();
             const uint64_t die_count = schema ==
                 "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
+            if (DIE_X <= 0 || DIE_Y <= 0 || DIE_COUNT != static_cast<int>(die_count) ||
+                DIE_X * DIE_Y != static_cast<int>(die_count))
+                throw std::runtime_error("paged MoE inference physical Die mesh differs from EP");
             if (monitor->hbmRuntime == nullptr)
                 throw std::runtime_error("paged MoE inference requires physical HBM runtime");
             std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends;
@@ -2047,7 +2050,7 @@ int sc_main(int argc, char *argv[]) {
                     moe_inference_mid_program_pager.get());
             std::cout << "[MOE_INFERENCE_PAGED_BINDING] source="
                       << moe_inference_mid_program_pager->SourceRef()
-                      << " mesh=1x" << die_count << " ep=" << die_count
+                      << " mesh=" << DIE_Y << "x" << DIE_X << " ep=" << die_count
                       << " physical_weights="
                       << moe_inference_mid_program_pager->WeightPageCount()
                       << " kv_pages=4 lsu_gates="

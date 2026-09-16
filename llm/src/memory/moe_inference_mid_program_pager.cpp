@@ -2,6 +2,7 @@
 
 #include "frontend/program_finalizer.h"
 #include "frontend/program_io.h"
+#include "defs/spec.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -75,10 +76,13 @@ std::string SemanticId(Json value) {
 }
 
 FabricConfig ParseVersionedFabric(const Json &value, uint64_t die_count,
+                                  uint64_t die_columns, uint64_t die_rows,
                                   uint64_t external_capacity,
                                   std::string &external_ref,
                                   std::map<uint64_t, std::string> &connections,
                                   std::map<uint64_t, std::string> &hbm_refs) {
+    if (!die_columns || !die_rows || die_columns * die_rows != die_count)
+        Fail("physical Die mesh does not match source EP count");
     Exact(value, {"schema_version", "producer_pass", "id",
                   "external_capacities", "hbm_capacities", "links",
                   "connections"});
@@ -148,21 +152,25 @@ FabricConfig ParseVersionedFabric(const Json &value, uint64_t die_count,
             !connections.emplace(die, String(raw, "id")).second)
             Fail("versioned Die HBM connections do not share source link");
         Json expected_route = Json::array();
-        std::vector<uint64_t> route;
-        for (uint64_t rank = 0; rank <= die; ++rank) {
-            expected_route.push_back(rank);
-            route.push_back(rank);
-        }
+        std::vector<uint64_t> route{0};
+        const uint64_t destination_x = die % die_columns;
+        const uint64_t destination_y = die / die_columns;
+        for (uint64_t x = 1; x <= destination_x; ++x)
+            route.push_back(x);
+        for (uint64_t y = 1; y <= destination_y; ++y)
+            route.push_back(y * die_columns + destination_x);
+        for (const auto rank : route) expected_route.push_back(rank);
+        const uint64_t hops = route.size() - 1;
         if (!raw.at("route_die_ids").is_array() ||
             raw.at("route_die_ids") != expected_route ||
-            Number(raw, "route_latency_cycles") != die ||
+            Number(raw, "route_latency_cycles") != hops ||
             (die ? !raw.at("route_bytes_per_cycle").is_number_integer() ||
                    Number(raw, "route_bytes_per_cycle") != 256
                  : !raw.at("route_bytes_per_cycle").is_null()))
-            Fail("versioned X-first line route service shape changed");
+            Fail("versioned physical X-first route service shape changed");
         fabric.connections.push_back({String(raw, "id"), link_ref,
                                       hbm_refs.at(die), die, std::move(route),
-                                      die, die ? std::optional<uint64_t>{256}
+                                      hops, die ? std::optional<uint64_t>{256}
                                                : std::nullopt});
     }
     ValidateFabricConfig(fabric);
@@ -267,7 +275,9 @@ MoeInferenceMidProgramPager::MoeInferenceMidProgramPager(
     source_ref_ = String(contract, "id");
     std::map<uint64_t, std::string> hbm_refs;
     const FabricConfig fabric = ParseVersionedFabric(
-        contract.at("fabric"), active_die_count_, external_capacity,
+        contract.at("fabric"), active_die_count_,
+        static_cast<uint64_t>(DIE_X), static_cast<uint64_t>(DIE_Y),
+        external_capacity,
         external_capacity_ref_, connection_by_die_, hbm_refs);
     const auto &raw_parameters = contract.at("parameter_spans");
     const auto &raw_kv = contract.at("kv_spans");

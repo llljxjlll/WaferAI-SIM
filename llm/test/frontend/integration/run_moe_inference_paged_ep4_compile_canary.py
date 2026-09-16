@@ -1,8 +1,4 @@
-"""Compile, relink, finalize and build ProgramIO for fixed 1x4 MoE offload.
-
-This stage intentionally stops before the versioned native pager/sidecar exists.
-It cannot be counted as a low-HBM offload native execution.
-"""
+"""Compile, relink, finalize and build ProgramIO for fixed EP4 MoE offload."""
 
 from __future__ import annotations
 
@@ -19,7 +15,10 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(source_root: Path, finalizer: Path, output: Path) -> dict:
+def run(source_root: Path, finalizer: Path, output: Path, mesh: str = "1x4") -> dict:
+    if mesh not in ("1x4", "4x1", "2x2"):
+        raise ValueError("only audited four-Die meshes are supported")
+    rows, columns = (int(item) for item in mesh.split("x"))
     source_root = source_root.resolve()
     finalizer = finalizer.resolve()
     output = output.resolve()
@@ -49,11 +48,13 @@ def run(source_root: Path, finalizer: Path, output: Path) -> dict:
     from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
         compile_moe_full_model_inference_sequence,
     )
+    from llm.frontend.wafer_frontend.schema.flexible_moe import MoeRectFlowStage
     from llm.frontend.wafer_frontend.schema.serde import canonical_digest, canonical_json
     from llm.frontend.wafer_frontend.schema.workload_run import WorkloadFamily
     from llm.test.frontend.flexible_mesh_fixtures import minimal_hardware
     from llm.test.frontend.integration.run_moe_full_model_sequence_runtime_canary import (
-        build_full_model_program_io, prove_full_model_dataflow,
+        _flow_link_expectations, build_full_model_program_io,
+        prove_full_model_dataflow,
     )
     from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
     from llm.test.frontend.unit.test_moe_compile_sequence import _manifest
@@ -62,9 +63,9 @@ def run(source_root: Path, finalizer: Path, output: Path) -> dict:
     frozen_module = Path(sys.modules[_manifest.__module__].__file__).resolve()
     if not frozen_module.is_relative_to(source_root):
         raise ValueError("production MoE source was not loaded from frozen root")
-    fabric = physical_fabric_from_data(minimal_hardware(4, 1, sram_bytes=65536))
+    fabric = physical_fabric_from_data(minimal_hardware(columns, rows, sram_bytes=65536))
     sequence = compile_moe_full_model_inference_sequence(
-        _manifest(WorkloadFamily.MOE_INFERENCE, rows=1, columns=4),
+        _manifest(WorkloadFamily.MOE_INFERENCE, rows=rows, columns=columns),
         _legacy_template(), fabric,
         hbm_address_spaces=valid_hbm_address_spaces(fabric),
     )
@@ -74,9 +75,14 @@ def run(source_root: Path, finalizer: Path, output: Path) -> dict:
     relinker_sha = _sha(module_path)
     units = {item.id: item for item in sequence.moe_blocks.units}
     segments = []
+    expected_flows = []
     for step, segment in enumerate(sequence.segments):
-        prove_full_model_dataflow(
-            segment, tuple(units[ref] for ref in segment.moe_unit_refs)
+        segment_units = tuple(units[ref] for ref in segment.moe_unit_refs)
+        prove_full_model_dataflow(segment, segment_units)
+        expected_flows.extend(
+            flow for unit in segment_units for flow in unit.plan.flows
+            if flow.stage in (MoeRectFlowStage.DISPATCH, MoeRectFlowStage.COMBINE)
+            and flow.source_rank != flow.destination_rank
         )
         source = segment.executable_manifest
         paged = relinker.relink_moe_inference_paged_segment_ep4(source, step)
@@ -129,16 +135,26 @@ def run(source_root: Path, finalizer: Path, output: Path) -> dict:
             "runtime_core_ids": [item.runtime_core_id for item in paged.core_streams],
         })
         print(f"MoE EP4 compile/finalizer/ProgramIO PASS step={step}", flush=True)
+    link_expectations = _flow_link_expectations(expected_flows, rows, columns)
+    if not link_expectations:
+        raise ValueError("physical MoE remote flow inventory is empty")
     result = {
         "schema_version": "moe-ep4-low-hbm-compile-canary-v1",
         "status": "compile_finalizer_program_io_only",
-        "mesh": "1x4",
+        "mesh": mesh,
         "ep": 4,
         "source_root": str(source_root),
         "driver_sha256": driver_sha,
         "relinker_sha256": relinker_sha,
         "finalizer_sha256": finalizer_sha,
         "segments": segments,
+        "expected_d2d_links": [
+            {"source_die": source, "destination_die": destination,
+             "direction": direction, "request_hops": requests,
+             "packet_hops": packets}
+            for (source, destination, direction), (requests, packets)
+            in sorted(link_expectations.items())
+        ],
     }
     (output / "compile_canary_receipt.json").write_text(
         json.dumps(result, indent=2, sort_keys=True), encoding="utf-8"
@@ -151,8 +167,9 @@ def main() -> None:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--mesh", choices=("1x4", "4x1", "2x2"), default="1x4")
     args = parser.parse_args()
-    run(args.source_root, args.finalizer, args.output)
+    run(args.source_root, args.finalizer, args.output, args.mesh)
 
 
 if __name__ == "__main__":

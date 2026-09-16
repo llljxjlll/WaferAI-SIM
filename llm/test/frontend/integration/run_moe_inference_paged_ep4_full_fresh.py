@@ -1,4 +1,4 @@
-"""Two independent fixed-model 1x4 low-HBM MoE offload materializations."""
+"""Two independent fixed-model four-Die low-HBM MoE offload runs."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ _ROOT = Path(__file__).resolve().parents[4]
 _COMPILE = Path(__file__).with_name("run_moe_inference_paged_ep4_compile_canary.py")
 _RELINK = _ROOT / "llm/frontend/wafer_frontend/passes/moe_inference_paged_compile_sequence_ep4.py"
 _SIDECAR = _ROOT / "llm/frontend/wafer_frontend/passes/moe_inference_paged_runtime_ep4.py"
-_SCHEMA = "moe-ep4-low-hbm-two-full-fresh-v1"
+_SCHEMA = "moe-ep4-low-hbm-two-full-fresh-v3-physical-routes"
 
 
 def _sha(path: Path) -> str:
@@ -72,8 +72,8 @@ def _sidecar_module():
     ]
 
 
-def _source_contract():
-    request = _request(WorkloadFamily.MOE_INFERENCE, rows=1, columns=4)
+def _source_contract(rows: int, columns: int):
+    request = _request(WorkloadFamily.MOE_INFERENCE, rows=rows, columns=columns)
     hbm = tuple(MemoryTierCapacity.create(
         tier=MemoryTier.HBM, location_ref=f"die:{die}",
         base_address=die << 30, capacity_bytes=1024, alignment_bytes=16,
@@ -104,7 +104,7 @@ def _source_contract():
         offload_request, _capability(supported=True),
         capacities=(external, *hbm),
     )
-    resident = _manifest(WorkloadFamily.MOE_INFERENCE, rows=1, columns=4)
+    resident = _manifest(WorkloadFamily.MOE_INFERENCE, rows=rows, columns=columns)
     if (resident.request.model != offload.request.model
             or resident.request.steps != offload.request.steps
             or _useful_graph_digest(resident) != _useful_graph_digest(offload)):
@@ -114,10 +114,15 @@ def _source_contract():
         bytes_per_cycle=256, latency_cycles=2, queue_depth=2,
         max_outstanding=2,
     )
+    def x_first_route(die: int) -> tuple[int, ...]:
+        x, y = die % columns, die // columns
+        return tuple(range(x + 1)) + tuple(
+            row * columns + x for row in range(1, y + 1)
+        )
     connections = tuple(ExternalMemoryConnection.create(
         link_ref=link.id, hbm_capacity_ref=hbm[die].id,
-        target_die_id=die, route_die_ids=tuple(range(die + 1)),
-        route_latency_cycles=die,
+        target_die_id=die, route_die_ids=x_first_route(die),
+        route_latency_cycles=len(x_first_route(die)) - 1,
         route_bytes_per_cycle=(256 if die else None),
     ) for die in range(4))
     fabric = ExternalMemoryFabric.create(
@@ -127,11 +132,11 @@ def _source_contract():
     return resident, offload, fabric, rejection
 
 
-def _hardware() -> dict:
+def _hardware(rows: int, columns: int) -> dict:
     source_fabric = physical_fabric_from_data(
-        minimal_hardware(4, 1, sram_bytes=65536)
+        minimal_hardware(columns, rows, sram_bytes=65536)
     )
-    hardware = json.loads(specialize_p5_large_release_hardware(1, 4))
+    hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
     if _bind_native_hardware_to_fabric(hardware, source_fabric) != (2, 2):
         raise ValueError("physical core grid differs from source Fabric")
     hardware["memory"]["sram_size"] = 131072
@@ -162,7 +167,7 @@ def _hardware() -> dict:
     return hardware
 
 
-def _native_observation(fresh: Path, contract: dict) -> dict:
+def _native_observation(fresh: Path, contract: dict, rows: int, columns: int) -> dict:
     compiled = fresh / "compiled"
     paged_path = fresh / "moe_inference_paged_runtime.json"
     sidecar = _json(paged_path)
@@ -170,7 +175,7 @@ def _native_observation(fresh: Path, contract: dict) -> dict:
         raise ValueError("physical EP4 sidecar differs from source-derived contract")
     receipt = _json(compiled / "compile_canary_receipt.json")
     if (receipt["status"] != "compile_finalizer_program_io_only"
-            or receipt["mesh"] != "1x4" or receipt["ep"] != 4):
+            or receipt["mesh"] != f"{rows}x{columns}" or receipt["ep"] != 4):
         raise ValueError("three production compile/finalizer/ProgramIO stages absent")
     for step, segment in enumerate(receipt["segments"]):
         if (step != segment["step"] or segment["runtime_core_ids"] != [0, 4, 8, 12]
@@ -186,9 +191,17 @@ def _native_observation(fresh: Path, contract: dict) -> dict:
                     raise ValueError("EP4 production artifact SHA drifted")
         if _sha(compiled / f"segment_{step}.program_io.json") != segment["program_io_sha256"]:
             raise ValueError("EP4 ProgramIO SHA drifted")
-    if _json(fresh / "hardware.json") != _hardware():
+    if _json(fresh / "hardware.json") != _hardware(rows, columns):
         raise ValueError("actual physical 1024B/Die hardware drifted")
     text = (fresh / "npusim.stdout.txt").read_text(encoding="utf-8")
+    if len(re.findall(
+        r"\[MOE_INFERENCE_PAGED_BINDING\] .*?mesh=(\d+x\d+) ep=(\d+)",
+        text,
+    )) != 1 or re.findall(
+        r"\[MOE_INFERENCE_PAGED_BINDING\] .*?mesh=(\d+x\d+) ep=(\d+)",
+        text,
+    )[0] != (f"{rows}x{columns}", "4"):
+        raise ValueError("native paged MoE binding did not use actual physical mesh")
     dma = re.findall(
         r"\[MOE_INFERENCE_PAGED_DMA_EVENT\] index=(\d+) segment=(\d+) "
         r"core=(\d+) linked_record=(\d+) kind=(\w+) state_ref=(\S+) "
@@ -255,9 +268,41 @@ def _native_observation(fresh: Path, contract: dict) -> dict:
     if (len(kv) != 4 or [int(item[1]) for item in kv] != [0, 128, 192, 256]
             or any(item[3:] != ("0", "1") for item in kv)):
         raise ValueError("external KV authority did not advance through all versions")
-    packets = re.findall(r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", text)
-    if packets != [("32", "32")]:
-        raise ValueError("true four-Die MoE dispatch/combine D2D did not drain")
+    expected_links = receipt["expected_d2d_links"]
+    expected = {
+        (row["source_die"], row["destination_die"], row["direction"]):
+            (row["request_hops"], row["request_hops"],
+             2 * row["request_hops"], 2 * row["request_hops"],
+             row["packet_hops"], row["packet_hops"])
+        for row in expected_links
+    }
+    if len(expected) != len(expected_links):
+        raise ValueError("production source remote-flow link identity repeated")
+    actual = {}
+    for match in re.finditer(
+        r"\[D2D_LINK\] idx=\d+ die(\d+)->die(\d+) dir=([EWNS]) "
+        r"req_in=(\d+) req_out=(\d+) ack_in=(\d+) ack_out=(\d+) "
+        r"data_in=(\d+) data_out=(\d+)", text,
+    ):
+        source, destination, direction, *counts = match.groups()
+        key = (int(source), int(destination), direction)
+        if key in actual:
+            raise ValueError("physical directed D2D link repeated")
+        actual[key] = tuple(map(int, counts))
+    if actual != expected:
+        raise ValueError(f"physical MoE D2D links differ from signed flows: {actual!r}")
+    request_hops = sum(item["request_hops"] for item in expected_links)
+    packet_hops = sum(item["packet_hops"] for item in expected_links)
+    if (re.findall(r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", text)
+            != [(str(packet_hops), str(packet_hops))]
+            or re.findall(
+                r"\[D2D_TYPE\] request_in=(\d+) request_out=(\d+) "
+                r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)",
+                text,
+            ) != [tuple(map(str, (request_hops, request_hops,
+                                  2 * request_hops, 2 * request_hops,
+                                  packet_hops, packet_hops)))]):
+        raise ValueError("physical MoE D2D aggregate differs from signed flows")
     return {
         "schema_version": _SCHEMA,
         "sidecar_sha256": _sha(paged_path),
@@ -265,14 +310,14 @@ def _native_observation(fresh: Path, contract: dict) -> dict:
         "hardware_sha256": _sha(fresh / "hardware.json"),
         "native_stdout_sha256": _sha(fresh / "npusim.stdout.txt"),
         "resident_rejection_code": "memory_capacity_exceeded",
-        "ep": 4, "mesh": "1x4", "hbm_capacity_bytes_per_die": 1024,
+        "ep": 4, "mesh": f"{rows}x{columns}", "hbm_capacity_bytes_per_die": 1024,
         "external_capacity_bytes": 8192,
         "dma_events": len(dma), "external_read_bytes": 7480,
         "external_write_bytes": 5184,
         "admission_waited_events": int(admission[0][0]),
         "admission_wait_cycles": int(admission[0][1]),
         "native_cycles": cycles, "memory": memory, "kv": kv,
-        "d2d_packets": 32,
+        "d2d_packets": packet_hops, "d2d_links": expected_links,
     }
 
 
@@ -307,15 +352,19 @@ def _binding(args: argparse.Namespace, source_root: Path) -> dict:
         "dramsys_config_files": len(config_files),
         "frozen_imported_source_sha256": dict(sorted(imported.items())),
         "source_root": str(source_root),
+        "mesh": args.mesh,
     }
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.mesh not in ("1x4", "4x1", "2x2"):
+        raise ValueError("only audited four-Die meshes are supported")
+    rows, columns = (int(item) for item in args.mesh.split("x"))
     source_root = args.source_root.resolve()
     if not Path(sys.modules[_request.__module__].__file__).resolve().is_relative_to(source_root):
         raise ValueError("MoE source was not imported from frozen root")
     root = args.output_root.resolve()
-    resident, offload, fabric, rejection = _source_contract()
+    resident, offload, fabric, rejection = _source_contract(rows, columns)
     builder = _sidecar_module()
     binding = _binding(args, source_root)
     if root.exists():
@@ -335,6 +384,7 @@ def run(args: argparse.Namespace) -> None:
                 "--source-root", str(source_root),
                 "--finalizer", str(args.finalizer.resolve()),
                 "--output", str(compiled),
+                "--mesh", args.mesh,
             ]
             env = dict(os.environ, PYTHONPATH=str(source_root))
             done = subprocess.run(command, cwd=source_root, env=env,
@@ -361,12 +411,12 @@ def run(args: argparse.Namespace) -> None:
         native_path = fresh / "npusim.stdout.txt"
         if args.resume:
             if (_json(contract_path) != contract
-                    or _json(hardware_path) != _hardware()
+                    or _json(hardware_path) != _hardware(rows, columns)
                     or mapping_path.read_text() != "0:0\n"):
                 raise ValueError("source-derived EP4 sidecar or hardware drifted")
         else:
             contract_path.write_text(json.dumps(contract, sort_keys=True, separators=(",", ":")))
-            hardware_path.write_text(json.dumps(_hardware(), sort_keys=True, separators=(",", ":")))
+            hardware_path.write_text(json.dumps(_hardware(rows, columns), sort_keys=True, separators=(",", ":")))
             mapping_path.write_text("0:0\n")
             files = lambda suffix: ",".join(
                 str(compiled / f"segment_{step}.{suffix}") for step in range(3)
@@ -388,7 +438,7 @@ def run(args: argparse.Namespace) -> None:
             native_path.write_text(done.stdout)
             if done.returncode:
                 raise RuntimeError(f"physical EP4 native Fresh{index} failed exit={done.returncode}; see {native_path}")
-        item = _native_observation(fresh, contract)
+        item = _native_observation(fresh, contract, rows, columns)
         evidence_path = fresh / "evidence.json"
         if args.resume:
             if _json(evidence_path) != json.loads(json.dumps(item)):
@@ -428,6 +478,7 @@ def main() -> None:
     parser.add_argument("--simulation", type=Path, required=True)
     parser.add_argument("--native-timeout", type=int, default=1200)
     parser.add_argument("--process-timeout", type=int, default=1800)
+    parser.add_argument("--mesh", choices=("1x4", "4x1", "2x2"), default="1x4")
     parser.add_argument("--resume", action="store_true")
     run(parser.parse_args())
 
