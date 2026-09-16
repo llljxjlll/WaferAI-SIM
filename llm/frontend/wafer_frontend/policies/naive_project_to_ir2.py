@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import math
+import re
 
 from ..errors import SchemaError, UnsupportedFeatureError
 from ..schema.action import (
@@ -20,6 +21,7 @@ from ..schema.action import (
 from ..schema.common import DType, RoundingMode, Sharding
 from ..schema.ir0 import EdgeKind, FusionPattern, OpKind, ReduceOp, StateAccessMode
 from ..schema.ir1 import IR1, PhysicalNode
+from ..schema.persistent_state import StateKind
 from ..schema.ir2 import (
     DmaContract,
     FusedNodeOrigin,
@@ -113,6 +115,49 @@ def _ordinary_compute(node: PhysicalNode) -> ComputeContract:
             for value_id, role in zip(node.outputs, output_roles, strict=True)
         ),
     )
+
+
+_DENSE_TP_PARAMETER_NODE = re.compile(
+    r"^(?:wgrad::|sgd_update::).+::tp(?P<shard>[0-9]+)(?:::step[01])?(?:__dp[0-9]+)?$"
+)
+
+
+def _dense_train_tp_owner_placements(ir1: IR1, node: PhysicalNode, group):
+    """Use the real shard StateAccess/home to select one native TP rank.
+
+    Only an explicitly named Dense WGRAD/SGD shard opts in.  Ordinary forward
+    and backbone dX nodes still execute on every participating rank.
+    """
+    if (len(group.placements) <= 1
+            or node.kind not in (
+                OpKind.GEMM_WEIGHT_WGRAD, OpKind.NORM_GAMMA_WGRAD,
+                OpKind.EMBEDDING_TABLE_WGRAD, OpKind.OPTIMIZER_UPDATE,
+            )
+            or not (match := _DENSE_TP_PARAMETER_NODE.fullmatch(node.id))):
+        return group.placements
+    manifest = ir1.persistent_state_manifest
+    if manifest is None:
+        _fail("shard-specific Dense gradient lacks persistent StateABI", node.id)
+    accesses = tuple(item for item in ir1.state_accesses
+                     if item.node_ref == node.id)
+    states = {item.id: item for item in manifest.declarations}
+    bindings = {item.state_ref: item for item in manifest.bindings}
+    shards = {item.state_ref for item in accesses}
+    ranks = {item.rank for item in accesses}
+    if len(accesses) != 1 or len(shards) != 1 or len(ranks) != 1:
+        _fail("shard-specific Dense gradient requires one physical StateAccess",
+              node.id)
+    access = accesses[0]
+    declaration = states.get(access.state_ref)
+    binding = bindings.get(access.state_ref)
+    owner = tuple(item for item in group.placements if item.rank == access.rank)
+    if (declaration is None or binding is None or len(owner) != 1
+            or declaration.identity.kind is not StateKind.TRAINABLE_PARAMETER
+            or declaration.identity.shard_index != int(match["shard"])
+            or binding.die_id != owner[0].die_id):
+        _fail("shard-specific Dense gradient disagrees with owner StateABI",
+              node.id)
+    return owner
 
 
 class NaiveProjectToIR2:
@@ -534,7 +579,7 @@ class NaiveProjectToIR2:
 
         def append_ordinary(node: PhysicalNode) -> None:
             group = group_index[node.execution_group_ref]
-            for placement in group.placements:
+            for placement in _dense_train_tp_owner_placements(ir1, node, group):
                 task_id = _ordinary_task_id(node.id, placement.rank)
                 region_id = _ordinary_region_id(node.id, placement.rank)
                 tasks_by_die[placement.die_id].append(
