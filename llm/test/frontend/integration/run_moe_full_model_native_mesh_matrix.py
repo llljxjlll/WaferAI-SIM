@@ -44,6 +44,7 @@ _RESOLVER = re.compile(
     r"initializations=(\d+) probes=(\d+)"
 )
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_PACKET_PAYLOAD_BYTES = 16
 
 
 def _sha(path: Path) -> str:
@@ -67,6 +68,79 @@ def _shape(value: str) -> tuple[int, int]:
     if not 1 <= rows <= 10 or not 1 <= columns <= 10:
         raise ValueError(f"outside 1..10 release envelope: {value}")
     return rows, columns
+
+
+def _recompute_flow_evidence(
+    value: object, *, rows: int, columns: int,
+) -> tuple[list[dict[str, int | str]], list[int]]:
+    rank_count = rows * columns
+    if type(value) is not list:
+        raise ValueError("expected remote flow binding is missing")
+    links: dict[tuple[int, int, str], list[int]] = {}
+    endpoint_ranks: set[int] = set()
+    seen_ids: set[str] = set()
+    for flow in value:
+        if type(flow) is not dict or set(flow) != {
+            "id", "source_rank", "destination_rank", "logical_bytes",
+        }:
+            raise ValueError("expected remote flow row is malformed")
+        flow_id = flow["id"]
+        source = flow["source_rank"]
+        destination = flow["destination_rank"]
+        logical_bytes = flow["logical_bytes"]
+        if (type(flow_id) is not str or not flow_id or flow_id in seen_ids
+                or type(source) is not int
+                or type(destination) is not int
+                or type(logical_bytes) is not int
+                or not 0 <= source < rank_count
+                or not 0 <= destination < rank_count
+                or source == destination or logical_bytes <= 0):
+            raise ValueError("expected remote flow row is invalid")
+        seen_ids.add(flow_id)
+        endpoint_ranks.update((source, destination))
+        packets = (
+            logical_bytes + _PACKET_PAYLOAD_BYTES - 1
+        ) // _PACKET_PAYLOAD_BYTES
+        current = source
+        source_x, source_y = source % columns, source // columns
+        destination_x, destination_y = (
+            destination % columns, destination // columns
+        )
+        while source_x != destination_x:
+            step = 1 if source_x < destination_x else -1
+            next_rank = current + step
+            direction = "E" if step > 0 else "W"
+            counts = links.setdefault(
+                (current, next_rank, direction), [0, 0]
+            )
+            counts[0] += 1
+            counts[1] += packets
+            current = next_rank
+            source_x += step
+        while source_y != destination_y:
+            step = 1 if source_y < destination_y else -1
+            next_rank = current + step * columns
+            direction = "N" if step > 0 else "S"
+            counts = links.setdefault(
+                (current, next_rank, direction), [0, 0]
+            )
+            counts[0] += 1
+            counts[1] += packets
+            current = next_rank
+            source_y += step
+        if current != destination:
+            raise ValueError("expected remote flow failed X-first routing")
+    rows_out = [
+        {
+            "source_die": source,
+            "destination_die": destination,
+            "direction": direction,
+            "request_hops": counts[0],
+            "packet_hops": counts[1],
+        }
+        for (source, destination, direction), counts in sorted(links.items())
+    ]
+    return rows_out, sorted(endpoint_ranks)
 
 
 def select_shapes(
@@ -230,6 +304,22 @@ def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
     if core_rows != expected_core_rows:
         raise ValueError("executable core bindings disagree with native stride")
     expected_cores = {item["runtime_core_id"] for item in expected_core_rows}
+    recomputed_links, endpoint_ranks = _recompute_flow_evidence(
+        binding.get("expected_remote_flows"), rows=rows, columns=columns
+    )
+    rank_to_core = {
+        item["rank"]: item["runtime_core_id"] for item in core_rows
+    }
+    recomputed_p2p_cores = sorted(
+        rank_to_core[rank] for rank in endpoint_ranks
+    )
+    bound_p2p_cores = binding.get("expected_p2p_core_ids")
+    if (type(bound_p2p_cores) is not list
+            or any(type(core) is not int for core in bound_p2p_cores)
+            or bound_p2p_cores != recomputed_p2p_cores):
+        raise ValueError(
+            "bound P2P endpoint cores differ from signed remote flows"
+        )
     memory = tuple(
         tuple(int(part) for part in match.groups())
         for match in _MEMORY.finditer(runtime)
@@ -245,7 +335,7 @@ def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
             r"\[P5 P2P DRAIN\] core=(\d+) residual=(\d+)", runtime
         )
     )
-    expected_p2p_cores = expected_cores if rank_count > 1 else set()
+    expected_p2p_cores = set(recomputed_p2p_cores)
     if (len(p2p) != len(expected_p2p_cores)
             or {core for core, _ in p2p} != expected_p2p_cores
             or any(residual for _, residual in p2p)):
@@ -321,8 +411,10 @@ def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
         raise ValueError("native makespan is missing or duplicated")
 
     expected_links = binding.get("expected_d2d_links")
-    if not isinstance(expected_links, list):
-        raise ValueError("expected D2D link binding is missing")
+    if expected_links != recomputed_links:
+        raise ValueError(
+            "expected D2D links differ from signed remote flows"
+        )
     actual_links = []
     for match in _LINK.finditer(runtime):
         (index, source, destination, direction,
@@ -428,6 +520,7 @@ def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
             (item["rank"], item["runtime_core_id"]) for item in core_rows
         ),
         "memory": memory,
+        "p2p_core_ids": tuple(sorted(expected_p2p_cores)),
         "kv_bytes": kv_bytes,
         "kv_digests": tuple(item[2] for item in kv),
         "makespan_cycles": makespans[0],

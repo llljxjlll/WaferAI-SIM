@@ -153,6 +153,19 @@ def _flow_link_expectations(flows, rows: int, columns: int):
     return {key: tuple(value) for key, value in links.items()}
 
 
+def _expected_p2p_core_ids(
+    expected_flows, core_bindings: dict[int, int],
+) -> tuple[int, ...]:
+    endpoint_ranks = {
+        rank
+        for flow in expected_flows
+        for rank in (flow.source_rank, flow.destination_rank)
+    }
+    if not endpoint_ranks <= set(core_bindings):
+        raise RuntimeError("remote flow endpoint lacks an executable core binding")
+    return tuple(sorted(core_bindings[rank] for rank in endpoint_ranks))
+
+
 def _audit_native_runtime(
     stdout: str,
     *,
@@ -248,7 +261,9 @@ def _audit_native_runtime(
             r"\[P5 P2P DRAIN\] core=(\d+) residual=(\d+)", stdout
         )
     )
-    expected_p2p_cores = expected_cores if links_expected else set()
+    expected_p2p_cores = set(_expected_p2p_core_ids(
+        expected_flows, core_bindings
+    ))
     if (len(p2p) != len(expected_p2p_cores)
             or {core for core, _ in p2p} != expected_p2p_cores
             or any(residual for _, residual in p2p)):
@@ -940,8 +955,27 @@ def run(args: argparse.Namespace) -> None:
         *manifests, *artifacts, *reports, *sidecars, *resolver_logs,
         hardware_path, mapping_path,
     )
+    frozen_expected_flows = tuple(expected_flows)
     link_expectations = _flow_link_expectations(
-        tuple(expected_flows), rows, columns
+        frozen_expected_flows, rows, columns
+    )
+    remote_flow_rows = sorted(
+        (
+            {
+                "id": flow.id,
+                "source_rank": flow.source_rank,
+                "destination_rank": flow.destination_rank,
+                "logical_bytes": flow.logical_bytes,
+            }
+            for flow in frozen_expected_flows
+        ),
+        key=lambda item: (
+            item["id"], item["source_rank"],
+            item["destination_rank"], item["logical_bytes"],
+        ),
+    )
+    expected_p2p_core_ids = _expected_p2p_core_ids(
+        frozen_expected_flows, core_bindings
     )
     source_tool_binding_path = output / "source_tool_binding.json"
     source_tool_binding_path.write_text(json.dumps({
@@ -969,6 +1003,8 @@ def run(args: argparse.Namespace) -> None:
             {"rank": rank, "runtime_core_id": core_bindings[rank]}
             for rank in sorted(core_bindings)
         ],
+        "expected_remote_flows": remote_flow_rows,
+        "expected_p2p_core_ids": expected_p2p_core_ids,
         "expected_d2d_links": [
             {
                 "source_die": source,

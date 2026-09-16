@@ -96,10 +96,27 @@ def _fixture(root: Path, shape: str = "1x2") -> Path:
     artifact_names.extend(("hardware.json", "mapping.spec"))
 
     if ranks == 1:
+        expected_flows = []
+        transport_ranks = ()
         expected_links = []
         link_lines = []
         request_hops = packet_hops = 0
-    elif shape == "1x2":
+    elif shape in ("1x2", "1x3"):
+        expected_flows = [
+            {
+                "id": "flow_0_to_1",
+                "source_rank": 0,
+                "destination_rank": 1,
+                "logical_bytes": 16,
+            },
+            {
+                "id": "flow_1_to_0",
+                "source_rank": 1,
+                "destination_rank": 0,
+                "logical_bytes": 16,
+            },
+        ]
+        transport_ranks = (0, 1)
         expected_links = [
             {
                 "source_die": 0,
@@ -124,7 +141,7 @@ def _fixture(root: Path, shape: str = "1x2") -> Path:
         ]
         request_hops = packet_hops = 2
     else:
-        raise ValueError("unit fixture only supports 1x1 and 1x2")
+        raise ValueError("unit fixture only supports 1x1, 1x2, and 1x3")
 
     runtime_lines = [
         *(
@@ -134,7 +151,7 @@ def _fixture(root: Path, shape: str = "1x2") -> Path:
         ),
         *(
             f"[P5 P2P DRAIN] core={rank * 4} residual=0"
-            for rank in range(ranks) if ranks > 1
+            for rank in transport_ranks
         ),
         "[DENSE_SEQUENCE_SEGMENT] index=0 status=done final=0",
         "[DENSE_SEQUENCE_SEGMENT] index=1 status=done final=0",
@@ -189,6 +206,8 @@ def _fixture(root: Path, shape: str = "1x2") -> Path:
             {"rank": rank, "runtime_core_id": rank * 4}
             for rank in range(ranks)
         ],
+        "expected_remote_flows": expected_flows,
+        "expected_p2p_core_ids": [rank * 4 for rank in transport_ranks],
         "expected_d2d_links": expected_links,
         "runtime_status": "verified",
     }
@@ -244,6 +263,44 @@ class MoeFullModelNativeMatrixAuditTest(unittest.TestCase):
             observed = audit_fresh(_fixture(Path(raw), "1x1"), "1x1")
             self.assertEqual(observed["d2d_links"], ())
             self.assertEqual(observed["core_bindings"], ((0, 0),))
+
+    def test_zero_flow_rank_has_memory_without_p2p_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            observed = audit_fresh(_fixture(Path(raw), "1x3"), "1x3")
+            self.assertEqual(observed["core_bindings"], (
+                (0, 0), (1, 4), (2, 8),
+            ))
+            self.assertEqual(observed["p2p_core_ids"], (0, 4))
+            self.assertEqual(tuple(row[0] for row in observed["memory"]), (
+                0, 4, 8,
+            ))
+
+    def test_tampered_or_missing_p2p_endpoint_binding_is_rejected(self) -> None:
+        for replacement in ([0], [0, 4, 8]):
+            with self.subTest(replacement=replacement):
+                with tempfile.TemporaryDirectory() as raw:
+                    directory = _fixture(Path(raw), "1x3")
+                    binding_path = directory / "source_tool_binding.json"
+                    binding = json.loads(binding_path.read_text())
+                    binding["expected_p2p_core_ids"] = replacement
+                    binding_path.write_text(json.dumps(binding, sort_keys=True))
+                    _rebind_source_tool(directory)
+                    with self.assertRaisesRegex(
+                        ValueError, "endpoint cores differ",
+                    ):
+                        audit_fresh(directory, "1x3")
+
+    def test_phantom_zero_flow_p2p_drain_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = _fixture(Path(raw), "1x3")
+            runtime = directory / "npusim.stdout.txt"
+            runtime.write_text(
+                runtime.read_text()
+                + "[P5 P2P DRAIN] core=8 residual=0\n"
+            )
+            _rebind_runtime(directory)
+            with self.assertRaisesRegex(ValueError, "transport core"):
+                audit_fresh(directory, "1x3")
 
     def test_artifact_byte_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
