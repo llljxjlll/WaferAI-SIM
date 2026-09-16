@@ -1,9 +1,4 @@
-"""Source-bound EP1 expert native records, pending public scratch/link closure.
-
-This emits a structurally valid physical fragment with explicit SRAM_ALLOC_AT
-and SRAM_FREE roots.  The public N5 action/schedule ABI does not yet expose
-those two internal roots, so validate_against/link deliberately still reject.
-"""
+"""Source-bound EP1 expert native records with signed schedule scratch."""
 
 from __future__ import annotations
 
@@ -14,7 +9,6 @@ from ..schema.artifact_manifest import (
     ProgramSymbol, ProgramSymbolKind, RecordOpcode, RecordOperand,
     RelocatableRecord, SemanticOperandId,
 )
-from ..schema.common import stable_artifact_id
 from ..schema.global_action import GlobalAction
 from ..schema.ir1 import IR1
 from ..schema.ir2 import BufferBinding, IntraDieSchedule, MoeExpertScratchRole
@@ -28,17 +22,10 @@ def lower_moe_expert_record_fragment(
     action: GlobalAction, schedule: IntraDieSchedule, ir1: IR1,
     *, source_global_dag_id: str,
 ) -> CommandFragment:
-    """Emit both distinct owned scratch allocations and four true compute opcodes."""
+    """Emit four native compute opcodes using distinct signed scratch roots."""
     plan = plan_moe_expert_native_forward(action, schedule, ir1)
     if not source_global_dag_id:
         raise SchemaError("expert fragment needs a source GlobalActionDAG", path="source_global_dag_id")
-    die = next(die for die in ir1.fabric.dies if die.id == plan.logical_core_die)
-    core = next(core for core in die.cores
-                if core.local_core_id == plan.logical_core_id)
-    profile = next(profile for profile in ir1.fabric.sram_profiles
-                   if profile.id == core.sram_profile_ref)
-    region = next(region for region in profile.regions
-                  if region.id == plan.scratch_region_ref)
     scratch_by_role = {item.role: item.binding
                        for item in schedule.moe_expert_scratch_bindings
                        if item.task_id == action.source.task_id}
@@ -69,28 +56,6 @@ def lower_moe_expert_record_fragment(
         records.append(RelocatableRecord(action.id, opcode, operands))
         relocations.extend(AddressRelocation(index, operand_id, sym.kind, sym.id, addend)
                            for operand_id, sym, addend in addresses)
-
-    region_symbol = ProgramSymbol(
-        stable_artifact_id("moe_expert_region_symbol",
-                           {"schedule": schedule.id, "region": region.id},
-                           schema_version="moe_expert_region/v1"),
-        ProgramSymbolKind.SRAM_REGION, region.id,
-    )
-    symbols[region_symbol.id] = region_symbol
-    for binding in scratch:
-        label = symbol(binding, ProgramSymbolKind.SRAM_LABEL)
-        emit(RecordOpcode.SRAM_ALLOC_AT, (
-            RecordOperand.address("region_name", SemanticOperandId.REGION_NAME,
-                                  region_symbol.id),
-            RecordOperand.address("label_symbol", SemanticOperandId.LABEL_SYMBOL,
-                                  label.id),
-            RecordOperand.literal("region_offset_bytes", binding.region_offset_bytes),
-            RecordOperand.literal("size_bytes", binding.size_bytes),
-            RecordOperand.literal("alignment_bytes", binding.alignment_bytes),
-            RecordOperand.literal("lifetime", 0),
-            RecordOperand.literal("spillable", False),
-        ), ((SemanticOperandId.REGION_NAME, region_symbol, 0),
-            (SemanticOperandId.LABEL_SYMBOL, label, 0)))
 
     for op in plan.operations:
         source = value_to_binding[op.input_ref]
@@ -127,12 +92,6 @@ def lower_moe_expert_record_fragment(
                if data_address is not None else ())),
             (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, output_address,
              op.output_offset_bytes)))
-    for binding in reversed(scratch):
-        label = symbol(binding, ProgramSymbolKind.SRAM_LABEL)
-        emit(RecordOpcode.SRAM_FREE, (
-            RecordOperand.address("symbol", SemanticOperandId.SYMBOL, label.id),
-        ), ((SemanticOperandId.SYMBOL, label, 0),))
-
     fragment = CommandFragment.create(
         producer_pass=_PRODUCER, source_global_dag_id=source_global_dag_id,
         kind=FragmentKind.COARSE, claimed_action_ids=(action.id,),

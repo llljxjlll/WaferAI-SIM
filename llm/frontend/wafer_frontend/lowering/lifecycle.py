@@ -22,6 +22,7 @@ from ..schema.artifact_manifest import (
 )
 from ..schema.common import stable_artifact_id
 from ..schema.global_action import GlobalAction, LogicalCoreRef
+from ..schema.ir0 import OpKind
 from ..schema.ir1 import SramAllocator
 from ..schema.ir2 import BufferOwnership
 from .context import LoweringContext
@@ -265,6 +266,27 @@ def add_fixed_sram_lifecycle(
                         "lifecycle storage must resolve to one canonical root",
                         path="fragment.buffer_abi",
                     )
+            if (fragment.producer_pass == "moe_full_train_expert_lowering"
+                    and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+                schedule = next((item for item in context.schedule_set.schedules
+                                 if item.id == action.source.schedule_id), None)
+                scratch = (tuple(item.binding for item in
+                                 schedule.moe_expert_scratch_bindings
+                                 if item.task_id == action.source.task_id)
+                           if schedule is not None else ())
+                if len(scratch) != 2:
+                    raise SchemaError("expert lifecycle needs two signed scratch roots",
+                                      path="fragment.buffer_abi")
+                for binding in scratch:
+                    abi = abi_by_binding.get((action.source.schedule_id, binding.id))
+                    if abi is None or abi.storage_id != binding.storage_id:
+                        raise SchemaError("expert lifecycle scratch differs from ScheduleSet",
+                                          path="fragment.buffer_abi")
+                    root = root_by_storage[abi.storage_id]
+                    previous = used.setdefault(abi.storage_id, root)
+                    if previous != root:
+                        raise SchemaError("expert scratch resolves to conflicting root",
+                                          path="fragment.buffer_abi")
 
             starts = tuple(
                 sorted(

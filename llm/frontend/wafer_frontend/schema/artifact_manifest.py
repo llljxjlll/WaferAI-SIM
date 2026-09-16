@@ -3511,6 +3511,7 @@ def _lifecycle_payload_indices(
     *,
     lifecycle_required: bool,
     path: str,
+    allow_moe_expert_scratch: bool = False,
 ) -> list[int]:
     """Validate canonical action-owned fixed allocations and return payload indices."""
 
@@ -3556,6 +3557,19 @@ def _lifecycle_payload_indices(
                 "lifecycle action uses conflicting canonical roots for one storage",
                 path=path,
             )
+    if allow_moe_expert_scratch and action.op_kind is OpKind.MOE_EXPERT_FORWARD:
+        scratch = tuple(abi for abi in buffer_abi
+                        if abi.value_id in (
+                            f"{action.source.task_id}:gate_up_concat",
+                            f"{action.source.task_id}:swiglu_activated",
+                        ))
+        if len(scratch) != 2:
+            raise SchemaError("expert lifecycle needs exact two scratch ABIs", path=path)
+        for abi in scratch:
+            root = root_by_id[abi.id]
+            previous = used.setdefault(root.storage_id, root)
+            if previous != root:
+                raise SchemaError("expert lifecycle scratch storage conflicts", path=path)
 
     def order_key(abi: BufferABI) -> tuple[str, int, str, str]:
         return (abi.region_ref, abi.region_offset_bytes, abi.storage_id, abi.id)
@@ -4273,6 +4287,8 @@ class CommandFragment:
                 self.buffer_abi,
                 lifecycle_required=lifecycle_required,
                 path=f"{path}.core_streams[{stream_index}].records",
+                allow_moe_expert_scratch=(
+                    self.producer_pass == "moe_full_train_expert_lowering"),
             )
             if not indices:
                 raise SchemaError(
@@ -4384,6 +4400,106 @@ class CommandFragment:
                         or source.region_ref != output.region_ref):
                     raise SchemaError("route-freeze must copy exact INT32 five-field table",
                                       path=f"{path}.buffer_abi")
+            elif (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+                compute = action.compute
+                if (self.producer_pass != "moe_full_train_expert_lowering"
+                        or self.kind is not FragmentKind.COARSE
+                        or compute is None
+                        or compute.impl_ref != "moe_expert_forward"
+                        or type(compute.workload) is not MoeFullTrainingBlockWorkload
+                        or compute.workload.kind is not MoeForwardBlockKind.EXPERT
+                        or len(indices) != 8
+                        or tuple(records[index].opcode for index in indices)
+                           != (RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
+                               RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
+                               RecordOpcode.SRAM_BIND, RecordOpcode.SWIGLU,
+                               RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL)):
+                    raise SchemaError("expert macro requires exact four native compute pairs",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                uses = {(use.role, use.operand_index): use
+                        for use in action.buffer_uses}
+                if (len(uses) != 5 or set(uses) != {
+                        *((BufferUseRole.COMP_INPUT, index) for index in range(4)),
+                        (BufferUseRole.COMP_OUTPUT, 0)}):
+                    raise SchemaError("expert public operands are not exact",
+                                      path=f"{path}.buffer_abi")
+                abis = {abi.binding_id: abi for abi in self.buffer_abi}
+                if len(abis) != 7:
+                    raise SchemaError("expert needs five public and two owned scratch BufferABIs",
+                                      path=f"{path}.buffer_abi")
+                public = [abis[uses[(BufferUseRole.COMP_INPUT, index)].binding_id]
+                          for index in range(4)]
+                output = abis[uses[(BufferUseRole.COMP_OUTPUT, 0)].binding_id]
+                task_ref = action.source.task_id
+                scratch = {}
+                for role in ("gate_up_concat", "swiglu_activated"):
+                    matches = tuple(abi for abi in self.buffer_abi
+                                    if abi.value_id == f"{task_ref}:{role}")
+                    if len(matches) != 1:
+                        raise SchemaError("expert lacks signed scratch role",
+                                          path=f"{path}.buffer_abi")
+                    scratch[role] = matches[0]
+                concat = scratch["gate_up_concat"]
+                activated = scratch["swiglu_activated"]
+                m = compute.workload.owned_token_count
+                h = compute.workload.hidden_size
+                width = compute.workload.intermediate_size
+                projection_bytes = 2*m*width
+                if (set(abis) != {abi.binding_id for abi in (*public, output,
+                                                              concat, activated)}
+                        or concat.ownership is not BufferOwnership.OWNED
+                        or activated.ownership is not BufferOwnership.OWNED
+                        or concat.tensor_slice.shape != (m, 2*width)
+                        or activated.tensor_slice.shape != (m, width)
+                        or concat.size_bytes != 2*projection_bytes
+                        or activated.size_bytes != projection_bytes
+                        or any(abi.dtype is not DType.FP16
+                               for abi in (*public, output, concat, activated))
+                        or len({abi.storage_id for abi in (*public, output,
+                                                            concat, activated)}) != 7):
+                    raise SchemaError("expert scratch/public ABI geometry or ownership drifted",
+                                      path=f"{path}.buffer_abi")
+                specs = (
+                    (public[0], public[1], concat, (1,m,h,width), 0),
+                    (public[0], public[2], concat, (1,m,h,width), projection_bytes),
+                    (concat, None, activated, (m*width,), 0),
+                    (activated, public[3], output, (1,m,width,h), 0),
+                )
+                relocation_index = {(item.record_index, item.operand_id): item
+                                    for item in stream.address_relocations}
+                for op_index, (input_abi, data_abi, output_abi,
+                               parameters, output_addend) in enumerate(specs):
+                    bind_index, compute_index = indices[2*op_index:2*op_index+2]
+                    bind, operation = records[bind_index], records[compute_index]
+                    if (bind.operands[0].literal_value != 1
+                            or operation.operands[0].literal_value != 1
+                            or operation.operands[-1].literal_value != parameters
+                            or (data_abi is None)
+                               != (operation.operands[2].literal_value == 0)):
+                        raise SchemaError("expert op literals differ from source workload",
+                                          path=f"{path}.core_streams[{stream_index}].records")
+                    expected = (
+                        (bind_index, SemanticOperandId.SRAM_BIND_INPUT_0,
+                         input_abi.storage_id, 0),
+                        (bind_index, SemanticOperandId.SRAM_BIND_OUTPUT,
+                         output_abi.storage_id, 0),
+                        (compute_index, SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                         input_abi.binding_id, 0),
+                        *((((compute_index, SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                             data_abi.binding_id, 0),) if data_abi is not None else ())),
+                        (compute_index, SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                         output_abi.binding_id, output_addend),
+                    )
+                    for record_index, operand_id, source_ref, addend in expected:
+                        relocation = relocation_index.get((record_index, operand_id))
+                        symbol = (program_symbols.get(relocation.symbol_ref)
+                                  if relocation is not None else None)
+                        if (relocation is None or symbol is None
+                                or symbol.source_ref != source_ref
+                                or relocation.addend != addend):
+                            raise SchemaError("expert record address differs from exact scratch/public ABI",
+                                              path=f"{path}.core_streams[{stream_index}].address_relocations")
             elif action.task_kind is SemanticTaskKind.COMP:
                 assert action.compute is not None
                 abi = _compute_record_abi(
@@ -4862,6 +4978,9 @@ class CommandFragment:
                             "HBM relocation does not exactly select its GlobalAction state endpoint",
                             path=f"{path}.core_streams[{stream_index}].address_relocations[{relocation_index}]",
                         )
+                    continue
+                if (action.op_kind is OpKind.MOE_EXPERT_FORWARD
+                        and self.producer_pass == "moe_full_train_expert_lowering"):
                     continue
                 role, operand_index = _address_operand_role(
                     record.opcode, relocation.operand_id, path, action=action
@@ -7043,6 +7162,32 @@ class LinkedProgramManifest:
             for action in executable.values()
             for use in action.buffer_uses
         }
+        expert_scratch_by_action: dict[str, tuple[BufferABI, ...]] = {}
+        for action in executable.values():
+            if action.op_kind is not OpKind.MOE_EXPERT_FORWARD:
+                continue
+            schedule = schedules[action.source.schedule_id]
+            scratch = tuple(item.binding for item in
+                            schedule.moe_expert_scratch_bindings
+                            if item.task_id == action.source.task_id)
+            if len(scratch) != 2:
+                raise SchemaError("expert needs exact two scheduled scratch roots",
+                                  path=f"{path}.fragments")
+            for binding in scratch:
+                key = (schedule.id, binding.id)
+                if key in schedule_bindings:
+                    raise SchemaError("expert scratch duplicates public binding",
+                                      path=f"{path}.fragments")
+                schedule_bindings[key] = (schedule, binding)
+                used_schedule_bindings.add(key)
+            scratch_abis = tuple(
+                abi_by_schedule_binding.get((schedule.id, binding.id))
+                for binding in scratch
+            )
+            if any(abi is None for abi in scratch_abis):
+                raise SchemaError("expert scheduled scratch lacks a leaf BufferABI",
+                                  path=f"{path}.fragments")
+            expert_scratch_by_action[action.id] = scratch_abis
         if set(abi_by_schedule_binding) != used_schedule_bindings:
             raise SchemaError("BufferABI must exactly cover every scheduled action buffer use", path=f"{path}.fragments")
         for key, abi in abi_by_schedule_binding.items():
@@ -7241,10 +7386,14 @@ class LinkedProgramManifest:
                 )
             if (
                 (action.source.schedule_id, abi.binding_id)
-                not in {
+                not in ({
                     (action.source.schedule_id, use.binding_id)
                     for use in action.buffer_uses
-                }
+                } | {
+                    (action.source.schedule_id, item.binding_id)
+                    for item in expert_scratch_by_action.get(action.id, ())
+                    if item is not None
+                })
                 or abi.logical_core != action.logical_core
                 or abi.alias_of is not None
             ):
@@ -7396,6 +7545,27 @@ class LinkedProgramManifest:
                                 path=f"{path}.fragments",
                             )
                         roles[role] = occurrence
+                    elif (fragment.producer_pass == "moe_full_train_expert_lowering"
+                          and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+                        definition = program_definitions[relocation.symbol_ref]
+                        source_ref = definition.symbol.source_ref
+                        matches = tuple(abi for abi in fragment.buffer_abi
+                                        if (abi.storage_id if definition.symbol.kind
+                                            is ProgramSymbolKind.SRAM_LABEL else abi.binding_id)
+                                        == source_ref)
+                        if (len(matches) != 1
+                                or definition.symbol.kind not in (
+                                    ProgramSymbolKind.SRAM_LABEL,
+                                    ProgramSymbolKind.ABSOLUTE_ADDRESS)
+                                or closure.buffer_abi_ids != (matches[0].id,)
+                                or closure.tensor_slices != (matches[0].tensor_slice,)
+                                or relocation.addend < 0
+                                or relocation.addend >= matches[0].size_bytes):
+                            raise SchemaError("expert address closure must match signed BufferABI",
+                                              path=f"{path}.address_operand_bindings")
+                        closure_abis = matches
+                        view_addends = (relocation.addend,)
+                        view_lengths = (matches[0].size_bytes - relocation.addend,)
                     else:
                         role, operand_index = role_for_operand(
                             record.opcode, relocation.operand_id, action

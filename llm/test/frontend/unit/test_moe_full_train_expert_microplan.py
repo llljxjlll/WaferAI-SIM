@@ -5,6 +5,8 @@ import unittest
 
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.lowering.moe_full_train_expert import lower_moe_expert_record_fragment
+from llm.frontend.wafer_frontend.lowering.context import LoweringContext
+from llm.frontend.wafer_frontend.lowering.lifecycle import add_fixed_sram_lifecycle
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -15,7 +17,9 @@ from llm.frontend.wafer_frontend.passes.fusion_partition import partition_ir1
 from llm.frontend.wafer_frontend.passes.global_action import build_global_action_dag
 from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePolicy
 from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import NaiveProjectToIR2
-from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.artifact_manifest import (
+    CommandFragment, RecordOpcode, SemanticOperandId,
+)
 from llm.frontend.wafer_frontend.schema.ir0 import OpKind
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
 from llm.frontend.wafer_frontend.schema.ir2 import (
@@ -46,6 +50,7 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
         cls.graph = graph
         dag = build_global_action_dag(graph, projection, schedule_set)
         cls.dag = dag
+        cls.context = LoweringContext(graph, (), (), projection, schedule_set, dag)
         cls.actions = tuple(action for action in dag.actions
                             if action.op_kind is OpKind.MOE_EXPERT_FORWARD)
 
@@ -97,12 +102,10 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
             fragment.validate()
             opcodes = [record.opcode for record in fragment.core_streams[0].records]
             self.assertEqual(opcodes, [
-                RecordOpcode.SRAM_ALLOC_AT, RecordOpcode.SRAM_ALLOC_AT,
                 RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
                 RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
                 RecordOpcode.SRAM_BIND, RecordOpcode.SWIGLU,
                 RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL,
-                RecordOpcode.SRAM_FREE, RecordOpcode.SRAM_FREE,
             ])
             scratch = [abi for abi in fragment.buffer_abi
                        if abi.binding_id not in {binding.id for binding
@@ -111,12 +114,33 @@ class MoeFullTrainExpertMicroplanTest(unittest.TestCase):
             self.assertTrue(all(abi.ownership is BufferOwnership.OWNED
                                 for abi in scratch))
             self.assertEqual(sorted(abi.size_bytes for abi in scratch), [64, 128])
-            # N5 ScheduleSet does not expose scratch uses yet; the public
-            # validate_against gate must remain closed rather than accepting
-            # an unlinked record stream as a complete expert executable.
-            with self.assertRaisesRegex(
-                    SchemaError, "lifecycle records must exactly cover"):
-                fragment.validate_against(self.dag)
+            fragment.validate_against(self.dag)
+            decorated = add_fixed_sram_lifecycle(fragment, self.context)
+            decorated.validate_against(self.dag)
+            self.assertEqual(len(decorated.core_streams[0].records), 17)
+            self.assertEqual(sum(record.opcode is RecordOpcode.SRAM_ALLOC_AT
+                                 for record in decorated.core_streams[0].records), 3)
+            self.assertEqual(sum(record.opcode is RecordOpcode.SRAM_FREE
+                                 for record in decorated.core_streams[0].records), 6)
+
+    def test_expert_fragment_rejects_wrong_second_projection_scratch_offset(self):
+        action = self.actions[0]
+        fragment = lower_moe_expert_record_fragment(
+            action, self.schedule, self.graph, source_global_dag_id=self.dag.id)
+        stream = fragment.core_streams[0]
+        forged_relocations = tuple(
+            replace(item, addend=0)
+            if item.record_index == 3
+            and item.operand_id is SemanticOperandId.COMPUTE_OUTPUT_ADDRESS
+            else item for item in stream.address_relocations)
+        forged = CommandFragment.create(
+            producer_pass=fragment.producer_pass,
+            **{**fragment._semantic_key(),
+               "core_streams": (replace(stream,
+                                        address_relocations=forged_relocations),)},
+        )
+        with self.assertRaisesRegex(SchemaError, "expert record address differs"):
+            forged.validate_against(self.dag)
 
     def test_schedule_signs_exact_two_roots_per_expert_and_rejects_phantom(self):
         scratch = self.schedule.moe_expert_scratch_bindings

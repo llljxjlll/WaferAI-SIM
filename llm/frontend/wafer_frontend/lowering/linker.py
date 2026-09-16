@@ -464,13 +464,15 @@ def _lifecycle_operand_abis(
     operand_id: SemanticOperandId,
     symbol_source_ref: str,
     abi_by_schedule_binding: dict[tuple[str, str], BufferABI],
+    *,
+    expert_scratch: tuple[BufferABI, ...] = (),
 ) -> tuple[BufferABI, ...]:
     candidates = tuple(
         abi_by_schedule_binding[(action.source.schedule_id, use.binding_id)]
         for use in action.buffer_uses
         if (action.source.schedule_id, use.binding_id)
         in abi_by_schedule_binding
-    )
+    ) + expert_scratch
     if record.opcode is RecordOpcode.SRAM_ALLOC_AT:
         candidates = tuple(
             abi
@@ -903,8 +905,28 @@ class NaiveManifestLinker:
                             relocation.operand_id,
                             symbol.source_ref,
                             abi_by_schedule_binding,
+                            expert_scratch=(
+                                tuple(abi for abi in fragment.buffer_abi
+                                      if abi.value_id in (
+                                          f"{action.source.task_id}:gate_up_concat",
+                                          f"{action.source.task_id}:swiglu_activated"))
+                                if fragment.producer_pass == "moe_full_train_expert_lowering"
+                                and action.op_kind is OpKind.MOE_EXPERT_FORWARD else ()),
                         )
                         tensor_slices = tuple(abi.tensor_slice for abi in abis)
+                    elif (fragment.producer_pass == "moe_full_train_expert_lowering"
+                          and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+                        symbol = declared_symbols[relocation.symbol_ref]
+                        matches = tuple(abi for abi in fragment.buffer_abi
+                                        if (abi.storage_id if symbol.kind is ProgramSymbolKind.SRAM_LABEL
+                                            else abi.binding_id) == symbol.source_ref)
+                        if (len(matches) != 1 or symbol.kind not in (
+                                ProgramSymbolKind.SRAM_LABEL,
+                                ProgramSymbolKind.ABSOLUTE_ADDRESS)):
+                            raise SchemaError("expert relocation needs one signed BufferABI",
+                                              path="fragments")
+                        abis = matches
+                        tensor_slices = (matches[0].tensor_slice,)
                     else:
                         role, operand_index = _operand_role(
                             record.opcode,
