@@ -739,9 +739,18 @@ def lower_link_flexible_moe_production(
                 else spec.intermediate_size
             )
             parameters = (
-                (1, 32, 1, 16)
-                if action.kind is MoeRectActionKind.GATE or wgrad
-                else (1, 1, max(1, spec.hidden_size), max(1, output_width))
+                (
+                    1,
+                    len(action.assignment_refs),
+                    spec.hidden_size,
+                    spec.expert_count,
+                )
+                if action.kind is MoeRectActionKind.GATE
+                else (
+                    (1, 32, 1, 16)
+                    if wgrad
+                    else (1, 1, max(1, spec.hidden_size), max(1, output_width))
+                )
             )
             add_bind(action.id, (activation,), destination)
             add_record("compute", RelocatableRecord(action.id, RecordOpcode.MATMUL, (

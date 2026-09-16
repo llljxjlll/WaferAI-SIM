@@ -391,7 +391,7 @@ class FlexibleMoeProductionTest(unittest.TestCase):
             replace(result, manifest=forged_manifest).validate_against(plan, spec)
 
     def test_representative_multi_die_shapes_materialize_exact_dte_closure(self) -> None:
-        for rows, columns in ((1, 2), (2, 1), (2, 2), (2, 3), (3, 2)):
+        for rows, columns in ((1, 2), (1, 3), (2, 1), (2, 2), (2, 3), (3, 2)):
             for mode in FlexibleMoeMode:
                 with self.subTest(rows=rows, columns=columns, mode=mode):
                     spec = build_round_robin_flexible_moe_spec(
@@ -453,12 +453,12 @@ class FlexibleMoeProductionTest(unittest.TestCase):
     def test_balanced_2x3_manifest_canonical_is_unchanged_by_hot_fan_in(self) -> None:
         expected = {
             FlexibleMoeMode.INFERENCE: (
-                "linked_program_manifest_d716424efc14a6b7",
-                "9d3e769dd10269e2d4bc865734de52b11cd550f010b0daee2a42b9ab5ddb2411",
+                "linked_program_manifest_0bb1d2f372dedbdf",
+                "78d7f1021da1d71fe3b9465fc29cec71a2349c8fd100cb2919ac099fa89b8305",
             ),
             FlexibleMoeMode.TRAIN: (
-                "linked_program_manifest_1932a864547a01b5",
-                "9d936cdb470bfd56715bd5b8271239fa0451e0e753a670edb1af299c0d336bdf",
+                "linked_program_manifest_b567039c0e7762b0",
+                "6da438378e1b5440dc112ef14775af7f325b60f653c7c77f32f913197c5c698b",
             ),
         }
         for mode in FlexibleMoeMode:
@@ -514,7 +514,7 @@ class FlexibleMoeProductionTest(unittest.TestCase):
         default = lower_link_flexible_moe_production(plan, spec)
         self.assertEqual(
             default.manifest.id,
-            "linked_program_manifest_94ab147f7b90418b",
+            "linked_program_manifest_83a2b365e94b860e",
         )
         default_regions = tuple(
             (item.name, item.value, item.size_bytes)
