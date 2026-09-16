@@ -1,0 +1,298 @@
+{
+  "canonical_shape_count": 100,
+  "covered_case_receipts": {
+    "10x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/10x1/case_evidence.json",
+      "sha256": "89d9a8e25e3fd8984e40be30821001d56eb936eb9ba8403eb4640c40a6c71837"
+    },
+    "10x10": {
+      "case_evidence": "/tmp/p3-3-moe-m1-freeze-shard-c-3x3-10x10/10x10/case_evidence.json",
+      "sha256": "eee9cee4258f82f4ab519f46cdb6dc4394237c81de1c6a60b4d25c2c3b3ac8b8"
+    },
+    "1x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/1x1/case_evidence.json",
+      "sha256": "c885eea05ef73ec6633d55043551ce2be367f38b9d04ee906d5b50aaf929a7f0"
+    },
+    "1x10": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra5-87d868c5/1x10/case_evidence.json",
+      "sha256": "76501ccdf8cc8f9e5d64112cb36bac380d0a4f42588b892c2dfef7c60332ed76"
+    },
+    "1x3": {
+      "case_evidence": "/tmp/p3-3-moe-full-model-two-fresh-final-1x1-1x3/1x3/case_evidence.json",
+      "sha256": "50a9efc0b2937b27af8d7dcbc10fda75d0c258918014e440e0991fd0e847c612"
+    },
+    "1x4": {
+      "case_evidence": "/tmp/p3-3-moe-m1-freeze-shard-a-1x4-4x1-2x2/1x4/case_evidence.json",
+      "sha256": "a3479124d9794e5742d3e4881c081a198b8fa4f6738ffd1aa021e88ba4730e14"
+    },
+    "1x5": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra-87d868c5/1x5/case_evidence.json",
+      "sha256": "fde670e1aa5955bcaa5f5e36687b8425fb1a8f5df7e70ffb0522817792b6d34f"
+    },
+    "1x6": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra-87d868c5/1x6/case_evidence.json",
+      "sha256": "329dd6fd3234e89f40b4fbb93e8eee6d77081bc0e03cff09951f6ad056267cc8"
+    },
+    "1x7": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra2-87d868c5/1x7/case_evidence.json",
+      "sha256": "3868810298657d048d6db88b475011d274df45fae98e58de6c7535e433de8ffa"
+    },
+    "1x8": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra5-87d868c5/1x8/case_evidence.json",
+      "sha256": "58701fc93854fd5f7b5b6d47b64e0a430540e7a7b6ec5b0dfd38ce506be88d9d"
+    },
+    "1x9": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra5-87d868c5/1x9/case_evidence.json",
+      "sha256": "5a971993a29442af15f486fac01f5b6d7bee184dbd2facff599e32badbab67b6"
+    },
+    "2x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/2x1/case_evidence.json",
+      "sha256": "e44b1261b642eea55d39b8aff59492c5f9015f117d2762eed0b8c3588ff196dd"
+    },
+    "2x2": {
+      "case_evidence": "/tmp/p3-3-moe-m1-freeze-shard-a-1x4-4x1-2x2/2x2/case_evidence.json",
+      "sha256": "3e272f7e2f5603ab6dc3dc5081fefd83f4c1b472a123b98ca1d6525a8d4200e6"
+    },
+    "2x3": {
+      "case_evidence": "/tmp/p3-3-moe-m1-freeze-shard-b-v3-2x3-3x2/2x3/case_evidence.json",
+      "sha256": "978bea8ecc07a598f0bfa88aff2129ecef986d9b2fdfe642fda5194526f37aa2"
+    },
+    "2x4": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra-87d868c5/2x4/case_evidence.json",
+      "sha256": "16db995956eaec076737954e17f9c8ac02934879a315faee52152ffe4aa46bd6"
+    },
+    "2x5": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra4-87d868c5/2x5/case_evidence.json",
+      "sha256": "e33b71d98e42c080987870b5c014fa79ad99a6be479f95f86bac8cac2b8ca8cb"
+    },
+    "2x6": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra4-87d868c5/2x6/case_evidence.json",
+      "sha256": "54afbd8fc29276153612039a685ba5a55e21e1c438e04021a0fa8fef5da8a01b"
+    },
+    "2x7": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra6-87d868c5/2x7/case_evidence.json",
+      "sha256": "92fab46297c66f18b9c1d6ed1e541a175ac8f7ba5a39c9f786c9a47497b065dd"
+    },
+    "3x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/3x1/case_evidence.json",
+      "sha256": "3172bd681aef8534a8e6b7785b9bf7daa5ccd85648617a9546f6db5cd2bf4a93"
+    },
+    "3x2": {
+      "case_evidence": "/tmp/p3-3-moe-m1-freeze-shard-b-v3-2x3-3x2/3x2/case_evidence.json",
+      "sha256": "464d9c76ee958a91b1efc6161d2edf382e8bb31b36b0e34de39ee557eee7e3b0"
+    },
+    "3x3": {
+      "case_evidence": "/tmp/p3-3-moe-m1-freeze-shard-c-3x3-10x10/3x3/case_evidence.json",
+      "sha256": "a4c8335858f8db82326df0371f8bb075ea248bb0f6d87001dca1dafc9b0905ba"
+    },
+    "3x4": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra3-87d868c5/3x4/case_evidence.json",
+      "sha256": "f0e0facc0a7abbc045aef7f54b2378fd286d8fc06aff34dd819d4a34c186293c"
+    },
+    "3x5": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra6-87d868c5/3x5/case_evidence.json",
+      "sha256": "ecf9859f3e80fd7fce5928409193ea3e7b542fc47120f790cffa48640d54684c"
+    },
+    "4x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/4x1/case_evidence.json",
+      "sha256": "daa699676a601a72257d5e3b4692540363e3ed6bd31c3d7f7bea22009c7eb446"
+    },
+    "4x2": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra-87d868c5/4x2/case_evidence.json",
+      "sha256": "9d6accb87bfca66ca1513f2be5ccd4e1167f53eaf256f9788a3eb65252fd75a6"
+    },
+    "4x3": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra3-87d868c5/4x3/case_evidence.json",
+      "sha256": "9de2d84077ca95eebf61b7f1b4d58ef9e03bef9db603574667001003c4c4acb9"
+    },
+    "5x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/5x1/case_evidence.json",
+      "sha256": "b3214f41e60a373e4221e7a490d4b157955fcdfa56126f053e0b524890af8d15"
+    },
+    "5x2": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra4-87d868c5/5x2/case_evidence.json",
+      "sha256": "bf0ffc36e046af709e2ca4cdbce8216e1654a37af981588a08b5f5e8e04eb4d2"
+    },
+    "5x3": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra6-87d868c5/5x3/case_evidence.json",
+      "sha256": "f48ab7301472d0cdedb6a38dcad1f531e24a4439cb8692ccb857dfafbc91050d"
+    },
+    "6x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/6x1/case_evidence.json",
+      "sha256": "6a2356e7c01e272c6e21b4457996a06d4bf9bc6d1cf24eea072c41ecc5acd451"
+    },
+    "6x2": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra4-87d868c5/6x2/case_evidence.json",
+      "sha256": "a31b7f5671b2a3d3b6b12af756673fd27cd7023eecc7c390c8319888a98098b3"
+    },
+    "7x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/7x1/case_evidence.json",
+      "sha256": "c757c3f2acd0c5d505683886b573df8b8f22a4bf20c6792e2298e33f61a0e952"
+    },
+    "7x2": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-extra6-87d868c5/7x2/case_evidence.json",
+      "sha256": "78af400c0f205497eddc73d888016ca523e37fef7394e14994ee8f41926d1d5d"
+    },
+    "8x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/8x1/case_evidence.json",
+      "sha256": "8f2ef58ea878e3ff6581c9bfea1a552b171a3956a0bc6bfa671b5cbdcb260cb6"
+    },
+    "9x1": {
+      "case_evidence": "/tmp/p5-m3-moe-resident-100-87d868c5/shard-00/9x1/case_evidence.json",
+      "sha256": "67fb7ea23a1b8e0afa186bdbef7dd6dd16933d5948dcc39938ab71c72751f968"
+    }
+  },
+  "documented_case_receipt_count": 35,
+  "schema_version": "moe-resident-uncovered-release-plan-v1",
+  "shard_count": 7,
+  "source_driver": "/tmp/moe-m1-87d868c5-freeze/llm/test/frontend/integration/run_moe_full_model_native_mesh_matrix.py",
+  "uncovered_count": 65,
+  "uncovered_shapes": [
+    "1x2",
+    "2x8",
+    "2x9",
+    "2x10",
+    "3x6",
+    "3x7",
+    "3x8",
+    "3x9",
+    "3x10",
+    "4x4",
+    "4x5",
+    "4x6",
+    "4x7",
+    "4x8",
+    "4x9",
+    "4x10",
+    "5x4",
+    "5x5",
+    "5x6",
+    "5x7",
+    "5x8",
+    "5x9",
+    "5x10",
+    "6x3",
+    "6x4",
+    "6x5",
+    "6x6",
+    "6x7",
+    "6x8",
+    "6x9",
+    "6x10",
+    "7x3",
+    "7x4",
+    "7x5",
+    "7x6",
+    "7x7",
+    "7x8",
+    "7x9",
+    "7x10",
+    "8x2",
+    "8x3",
+    "8x4",
+    "8x5",
+    "8x6",
+    "8x7",
+    "8x8",
+    "8x9",
+    "8x10",
+    "9x2",
+    "9x3",
+    "9x4",
+    "9x5",
+    "9x6",
+    "9x7",
+    "9x8",
+    "9x9",
+    "9x10",
+    "10x2",
+    "10x3",
+    "10x4",
+    "10x5",
+    "10x6",
+    "10x7",
+    "10x8",
+    "10x9"
+  ],
+  "uncovered_shards": {
+    "0": [
+      "1x2",
+      "3x9",
+      "4x9",
+      "5x9",
+      "6x8",
+      "7x7",
+      "8x5",
+      "9x3",
+      "9x10",
+      "10x8"
+    ],
+    "1": [
+      "2x8",
+      "3x10",
+      "4x10",
+      "5x10",
+      "6x9",
+      "7x8",
+      "8x6",
+      "9x4",
+      "10x2",
+      "10x9"
+    ],
+    "2": [
+      "2x9",
+      "4x4",
+      "5x4",
+      "6x3",
+      "6x10",
+      "7x9",
+      "8x7",
+      "9x5",
+      "10x3"
+    ],
+    "3": [
+      "2x10",
+      "4x5",
+      "5x5",
+      "6x4",
+      "7x3",
+      "7x10",
+      "8x8",
+      "9x6",
+      "10x4"
+    ],
+    "4": [
+      "3x6",
+      "4x6",
+      "5x6",
+      "6x5",
+      "7x4",
+      "8x2",
+      "8x9",
+      "9x7",
+      "10x5"
+    ],
+    "5": [
+      "3x7",
+      "4x7",
+      "5x7",
+      "6x6",
+      "7x5",
+      "8x3",
+      "8x10",
+      "9x8",
+      "10x6"
+    ],
+    "6": [
+      "3x8",
+      "4x8",
+      "5x8",
+      "6x7",
+      "7x6",
+      "8x4",
+      "9x2",
+      "9x9",
+      "10x7"
+    ]
+  }
+}
