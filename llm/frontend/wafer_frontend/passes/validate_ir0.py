@@ -53,6 +53,7 @@ from ..schema.persistent_state import (
     PersistentStateLifetime,
     StateKind,
 )
+from ..schema.gemm_input_dx_workload import GemmInputDxWorkload
 from ..schema.stage3_profile import Stage3ProfileMode
 from ..schema.moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
@@ -225,12 +226,45 @@ class DenseIR0Validator:
             if value.producer is None:
                 _fail("partial value requires a row-parallel GEMM producer", f"{value_path}.producer")
             producer = nodes[value.producer]
-            if (
-                producer.kind is not OpKind.GEMM
-                or not isinstance(producer.workload, GemmWorkload)
-                or producer.workload.partition is not GemmPartition.ROW_PARALLEL
-            ):
-                _fail("partial value requires a row-parallel GEMM producer", f"{value_path}.producer")
+            row_parallel_forward = (
+                producer.kind is OpKind.GEMM
+                and isinstance(producer.workload, GemmWorkload)
+                and producer.workload.partition is GemmPartition.ROW_PARALLEL
+            )
+            reverse_column_dx = False
+            if (producer.kind is OpKind.GEMM_INPUT_DX
+                    and producer.phase is OpPhase.DGRAD
+                    and isinstance(producer.workload, GemmInputDxWorkload)):
+                forward = nodes.get(producer.workload.source_forward_op_ref)
+                tp = sizes[MeshAxisName.TP]
+                state_by_id = {state.id: state for state in graph.persistent_states}
+                source = state_by_id.get(producer.workload.source_parameter_state_ref)
+                accesses = tuple(access for access in graph.state_accesses
+                                 if access.node_ref == producer.id)
+                reverse_column_dx = (
+                    forward is not None
+                    and forward.kind is OpKind.GEMM
+                    and forward.phase is OpPhase.FWD
+                    and isinstance(forward.workload, GemmWorkload)
+                    and forward.workload.partition is GemmPartition.COLUMN_PARALLEL
+                    and producer.inputs[0] == forward.inputs[1]
+                    and value.shape == values[forward.inputs[0]].shape
+                    and source is not None
+                    and source.identity.tensor_ref == forward.inputs[1]
+                    and source.identity.shard_index == 0
+                    and len(accesses) == tp
+                    and {access.rank for access in accesses} == set(range(tp))
+                    and all(
+                        access.mode is StateAccessMode.READ
+                        and (state := state_by_id.get(access.state_ref)) is not None
+                        and state.identity.tensor_ref == forward.inputs[1]
+                        and state.identity.shard_index == access.rank
+                        for access in accesses
+                    )
+                )
+            if not (row_parallel_forward or reverse_column_dx):
+                _fail("partial value requires a row-parallel GEMM producer or source-backed column GEMM dX",
+                      f"{value_path}.producer")
             if len(value.consumers) != 1:
                 _fail("partial value must have exactly one reduction consumer", f"{value_path}.consumers")
             consumer = nodes[value.consumers[0]]
@@ -541,12 +575,12 @@ class DenseIR0Validator:
             instance is None
             or instance.role is not LogicalRole.TRAIN
             or instance.replicas != 1
-            or (instance.parallel.tp, instance.parallel.dp,
-                instance.parallel.pp, instance.parallel.ep) != (1, 1, 1, 1)
-            or instance.parallel.sp
+            or instance.parallel.tp < 1
+            or (instance.parallel.dp, instance.parallel.pp,
+                instance.parallel.ep) != (1, 1, 1)
             or graph.train is None
         ):
-            _fail("complete Dense backward source requires one TP1/DP1 TRAIN instance",
+            _fail("complete Dense backward source requires one TP/DP1 TRAIN instance",
                   f"{path}.instances")
         forward = tuple(node for node in graph.nodes
                         if node.phase is OpPhase.FWD)
@@ -572,50 +606,99 @@ class DenseIR0Validator:
             _fail("complete Dense backward omits or fabricates a backbone reverse",
                   f"{path}.nodes")
         states = {state.id: state for state in graph.persistent_states}
+        tp = instance.parallel.tp
+        state_by_weight_rank = {}
+        for state in graph.persistent_states:
+            weight = state.identity.tensor_ref
+            rank = state.identity.shard_index
+            if (weight is None or not 0 <= rank < tp
+                    or (weight, rank) in state_by_weight_rank):
+                _fail("complete Dense parameter states need one unique shard per TP rank",
+                      f"{path}.persistent_states")
+            state_by_weight_rank[weight, rank] = state
+        weights = {weight for weight, _ in state_by_weight_rank}
+        if not weights or set(state_by_weight_rank) != {
+            (weight, rank) for weight in weights for rank in range(tp)
+        }:
+            _fail("complete Dense parameter states omit a TP shard",
+                  f"{path}.persistent_states")
+        node_by_id = {node.id: node for node in graph.nodes}
+        if len(node_by_id) != len(graph.nodes):
+            _fail("complete Dense backward duplicates a logical node",
+                  f"{path}.nodes")
         updates = tuple(node for node in graph.nodes
                         if node.kind is OpKind.OPTIMIZER_UPDATE)
-        if graph.producer_pass in ("full_dense_training_sgd_source",
-                                   "full_dense_training_two_step_source"):
-            values_by_ref = {value.id: value for value in graph.values}
-            by_weight = {state.identity.tensor_ref: state for state in states.values()}
-            if len(updates) != len(states) * len(steps) or any(
-                state.identity.kind is not StateKind.TRAINABLE_PARAMETER
-                or state.access is not PersistentStateAccess.READ_WRITE
-                for state in states.values()
-            ) or any(
-                node.phase is not OpPhase.UPDATE
-                or node.inputs != (weight_ref, (
-                    f"wgrad::{weight_ref}::tp0.output"
-                    if len(steps) == 1 else
-                    f"wgrad::{weight_ref}::tp0.output::{node.id.rsplit('::', 1)[-1]}"))
-                or by_weight[weight_ref].identity.tensor_ref != weight_ref
-                or len(node.outputs) != 1
-                or values_by_ref[node.outputs[0]].dtype is not DType.FP16
-                for node in updates
-                for weight_ref in node.inputs[:1]
-                if weight_ref in by_weight
-            ) or {node.inputs[0] for node in updates} != set(by_weight) or (
-                len(steps) == 2 and {
-                    (node.inputs[0], node.id.rsplit("::", 1)[-1])
-                    for node in updates
-                } != {(ref, f"step{step}")
-                      for ref in by_weight for step in steps}
-            ):
+        optimized = graph.producer_pass in (
+            "full_dense_training_sgd_source",
+            "full_dense_training_two_step_source",
+        )
+        if optimized:
+            expected_updates = {
+                f"sgd_update::{weight}::tp{rank}{suffix}": (
+                    weight, rank, suffix,
+                )
+                for weight in weights for rank in range(tp)
+                for suffix in (("::step0", "::step1") if len(steps) == 2 else ("",))
+            }
+            if ({node.id for node in updates} != set(expected_updates)
+                    or len(updates) != len(expected_updates)
+                    or any(
+                        state.identity.kind is not StateKind.TRAINABLE_PARAMETER
+                        or state.access is not PersistentStateAccess.READ_WRITE
+                        for state in states.values()
+                    )):
                 _fail("complete Dense SGD must update each trainable state from its own FP32 WGRAD exactly once",
                       f"{path}.nodes")
+            values_by_ref = {value.id: value for value in graph.values}
+            access_by_node = {}
+            for access in graph.state_accesses:
+                access_by_node.setdefault(access.node_ref, []).append(access)
+            for update in updates:
+                weight, rank, suffix = expected_updates[update.id]
+                gradient_ref = f"wgrad::{weight}::tp{rank}.output{suffix}"
+                state = state_by_weight_rank[weight, rank]
+                if (update.phase is not OpPhase.UPDATE
+                        or update.inputs != (weight, gradient_ref)
+                        or len(update.outputs) != 1
+                        or update.outputs[0] not in values_by_ref
+                        or values_by_ref[update.outputs[0]].dtype is not DType.FP16
+                        or gradient_ref not in values_by_ref
+                        or values_by_ref[gradient_ref].dtype is not DType.FP32
+                        or access_by_node.get(update.id) != [StateAccess.create(
+                            node_ref=update.id, state_ref=state.id,
+                            mode=StateAccessMode.READ_WRITE, rank=rank,
+                        )]):
+                    _fail("complete Dense SGD must update each trainable state from its own FP32 WGRAD exactly once",
+                          f"{path}.nodes")
         elif updates:
             _fail("backward-only source cannot contain SGD updates", f"{path}.nodes")
         expected_wgrad = {
-            f"wgrad::{state.identity.tensor_ref}::tp0{suffix}"
-            for state in states.values()
+            f"wgrad::{weight}::tp{rank}{suffix}": (weight, rank)
+            for weight in weights for rank in range(tp)
             for suffix in (("::step0", "::step1") if len(steps) == 2 else ("",))
         }
-        actual_wgrad = {
-            node.id for node in graph.nodes if node.phase is OpPhase.WGRAD
-        }
-        if expected_wgrad != actual_wgrad:
+        actual_wgrad = tuple(node for node in graph.nodes
+                             if node.phase is OpPhase.WGRAD)
+        if (len(actual_wgrad) != len(expected_wgrad)
+                or {node.id for node in actual_wgrad} != set(expected_wgrad)):
             _fail("complete Dense backward omits or duplicates a parameter WGRAD",
                   f"{path}.nodes")
+        access_by_node = {}
+        for access in graph.state_accesses:
+            access_by_node.setdefault(access.node_ref, []).append(access)
+        for wgrad in actual_wgrad:
+            weight, rank = expected_wgrad[wgrad.id]
+            state = state_by_weight_rank[weight, rank]
+            # The source WGRAD and its SGD must carry the same physical shard.
+            # A GEMM/NORM derivative can read that state directly; embedding
+            # uses the parameter as an explicit source operand.
+            direct = access_by_node.get(wgrad.id, ())
+            if ((tp > 1 or wgrad.kind is OpKind.EMBEDDING_TABLE_WGRAD or direct)
+                    and (len(direct) != 1 or direct[0] != StateAccess.create(
+                        node_ref=wgrad.id, state_ref=state.id,
+                        mode=StateAccessMode.READ, rank=rank))):
+                _fail("complete Dense WGRAD reads the wrong TP parameter shard",
+                      f"{path}.state_accesses")
         values = {value.id: value for value in graph.values}
         if any(values[ref].dtype is not DType.FP16
                for node in graph.nodes if node.phase is OpPhase.DGRAD
@@ -647,16 +730,19 @@ class DenseIR0Validator:
             state_by_weight = {state.identity.tensor_ref: state
                                for state in graph.persistent_states}
             expected_version = {
-                (f"sgd_update::{weight}::tp0::step0", node.id)
+                (f"sgd_update::{weight}::tp{rank}::step0", node.id)
                 for node in forward if node.id.endswith("::step1")
                 for weight in node.inputs
                 if (weight in state_by_weight and node.kind in (
                     OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING))
+                for rank in range(tp)
             }
+            version_edges = tuple(edge for edge in control
+                                  if edge.source_node.startswith("sgd_update::"))
             actual_version = {(edge.source_node, edge.destination_node)
-                              for edge in control
-                              if edge.source_node.startswith("sgd_update::")}
-            if actual_version != expected_version:
+                              for edge in version_edges}
+            if (len(version_edges) != len(expected_version)
+                    or actual_version != expected_version):
                 _fail("step0 SGD STORE must control every matching step1 parameter LOAD",
                       f"{path}.edges")
         elif len(control) != 1:
@@ -1054,58 +1140,98 @@ class DenseIR0Validator:
         ):
             _fail("complete Dense backward requires exact read-only source parameters",
                   f"{path}.persistent_states")
-        state_by_tensor = {
-            state.identity.tensor_ref: state.id for state in states.values()
-        }
+        tp = next(iter(axis_sizes.values())).get(MeshAxisName.TP)
+        if tp is None or tp < 1 or any(
+            axes.get(MeshAxisName.TP) != tp for axes in axis_sizes.values()
+        ):
+            _fail("complete Dense backward requires consistent TP geometry",
+                  f"{path}.persistent_states")
+        state_by_tensor_rank = {}
+        for state in states.values():
+            weight = state.identity.tensor_ref
+            rank = state.identity.shard_index
+            if weight is None or rank >= tp or (weight, rank) in state_by_tensor_rank:
+                _fail("parameter declaration has duplicate or invalid TP shard",
+                      f"{path}.persistent_states")
+            state_by_tensor_rank[weight, rank] = state.id
+        weights = {weight for weight, _ in state_by_tensor_rank}
+        if set(state_by_tensor_rank) != {
+            (weight, rank) for weight in weights for rank in range(tp)
+        }:
+            _fail("parameter declaration omits a TP shard",
+                  f"{path}.persistent_states")
         expected: list[StateAccess] = []
         for node in graph.nodes:
-            tp = axis_sizes[node.mesh_ref].get(MeshAxisName.TP)
-            if tp != 1:
-                _fail("initial complete Dense backward state source requires TP1",
-                      f"{path}.persistent_states")
             if (
                 node.phase is OpPhase.FWD
                 and node.kind in (OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING)
                 and len(node.inputs) == 2
             ):
-                state_ref = state_by_tensor.get(node.inputs[1])
-                if state_ref is None:
+                weight = node.inputs[1]
+                if weight not in weights:
                     _fail("forward parameter lacks its source declaration",
                           f"{path}.state_accesses")
-                expected.append(StateAccess.create(
-                    node_ref=node.id, state_ref=state_ref,
-                    mode=StateAccessMode.READ, rank=0,
-                ))
+                for rank in range(tp):
+                    expected.append(StateAccess.create(
+                        node_ref=node.id,
+                        state_ref=state_by_tensor_rank[weight, rank],
+                        mode=StateAccessMode.READ, rank=rank,
+                    ))
             elif node.kind is OpKind.GEMM_INPUT_DX:
-                state_ref = node.workload.source_parameter_state_ref
-                if state_ref not in states:
+                weight = node.inputs[0]
+                if weight not in weights:
                     _fail("GEMM dX parameter source is undeclared",
                           f"{path}.state_accesses")
-                expected.append(StateAccess.create(
-                    node_ref=node.id, state_ref=state_ref,
-                    mode=StateAccessMode.READ, rank=0,
-                ))
+                if node.workload.source_parameter_state_ref != state_by_tensor_rank[weight, 0]:
+                    _fail("GEMM dX must bind the authentic rank0 parameter source",
+                          f"{path}.state_accesses")
+                for rank in range(tp):
+                    expected.append(StateAccess.create(
+                        node_ref=node.id, state_ref=state_by_tensor_rank[weight, rank],
+                        mode=StateAccessMode.READ, rank=rank,
+                    ))
+            elif node.phase is OpPhase.WGRAD:
+                rank_tag = node.id.rsplit("::tp", 1)
+                if len(rank_tag) != 2 or not rank_tag[1].split("::", 1)[0].isdigit():
+                    _fail("parameter WGRAD lacks a TP shard tag",
+                          f"{path}.state_accesses")
+                rank = int(rank_tag[1].split("::", 1)[0])
+                weight = node.id.removeprefix("wgrad::").rsplit("::tp", 1)[0]
+                state_ref = state_by_tensor_rank.get((weight, rank))
+                if (node.kind is OpKind.EMBEDDING_TABLE_WGRAD
+                        and node.inputs[1] != weight):
+                    _fail("embedding WGRAD reads a wrong parameter source",
+                          f"{path}.state_accesses")
+                if (node.kind is OpKind.GEMM_WEIGHT_WGRAD
+                        and node.workload.source_parameter_state_ref != state_ref):
+                    _fail("GEMM WGRAD binds a wrong TP source declaration",
+                          f"{path}.state_accesses")
+                if state_ref is None:
+                    _fail("WGRAD parameter source is undeclared",
+                          f"{path}.state_accesses")
+                # Original TP1 GEMM/NORM WGRAD derived the StateABI from its
+                # source node; TP>1 requires an explicit per-rank READ.
+                if (tp > 1 or node.kind is OpKind.EMBEDDING_TABLE_WGRAD
+                        or any(access.node_ref == node.id
+                               for access in graph.state_accesses)):
+                    expected.append(StateAccess.create(
+                        node_ref=node.id, state_ref=state_ref,
+                        mode=StateAccessMode.READ, rank=rank,
+                    ))
             elif node.kind is OpKind.OPTIMIZER_UPDATE and (
                 graph.producer_pass in ("full_dense_training_sgd_source",
                                         "full_dense_training_two_step_source")
             ):
-                state_ref = state_by_tensor.get(node.inputs[0])
-                if state_ref is None:
-                    _fail("SGD source lacks its trainable parameter state",
-                          f"{path}.state_accesses")
-                expected.append(StateAccess.create(
-                    node_ref=node.id, state_ref=state_ref,
-                    mode=StateAccessMode.READ_WRITE, rank=0,
-                ))
-            elif node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
-                state_ref = state_by_tensor.get(node.inputs[1])
-                if state_ref is None:
-                    _fail("embedding WGRAD source is undeclared",
-                          f"{path}.state_accesses")
-                expected.append(StateAccess.create(
-                    node_ref=node.id, state_ref=state_ref,
-                    mode=StateAccessMode.READ, rank=0,
-                ))
+                weight = node.inputs[0]
+                for rank in range(tp):
+                    expected_id = f"sgd_update::{weight}::tp{rank}"
+                    if node.id != expected_id and not node.id.startswith(expected_id + "::step"):
+                        continue
+                    expected.append(StateAccess.create(
+                        node_ref=node.id,
+                        state_ref=state_by_tensor_rank[weight, rank],
+                        mode=StateAccessMode.READ_WRITE, rank=rank,
+                    ))
         expected_tuple = tuple(sorted(
             expected,
             key=lambda item: (item.node_ref, item.state_ref, item.rank, item.id),
@@ -1291,10 +1417,20 @@ class DenseIR0Validator:
             or loss_gradient.dtype is not DType.FP32
             or logits_gradient.dtype is not DType.FP16
             or loss_gradient.producer is not None
-            or not all(
-                _is_replicated(value)
-                for value in (logits, labels, loss_gradient, logits_gradient)
-            )
+            or (not all(_is_replicated(value)
+                        for value in (logits, labels, loss_gradient, logits_gradient))
+                and not (
+                    logits.sharding.dim_map == (MeshAxisName.TP, None)
+                    and labels.sharding.dim_map == (MeshAxisName.TP,)
+                    and loss_gradient.sharding.dim_map == (MeshAxisName.TP,)
+                    and logits_gradient.sharding.dim_map == (MeshAxisName.TP, None)
+                    and all(not value.sharding.partial
+                            for value in (logits, labels, loss_gradient, logits_gradient))
+                    and len({value.sharding.mesh_ref for value in
+                             (logits, labels, loss_gradient, logits_gradient)}) == 1
+                    and len({local_shapes[value.id][0] for value in
+                             (logits, labels, loss_gradient, logits_gradient)}) == 1
+                ))
         ):
             _fail("cross entropy backward tensor boundary is not exact", path)
 
@@ -1317,8 +1453,22 @@ class DenseIR0Validator:
             _fail("SGD update operator/effect contract is not exact", path)
         weight, gradient = (values[ref] for ref in node.inputs)
         updated = values[node.outputs[0]]
+        full_dense_tp = node.id.startswith(f"sgd_update::{weight.id}::tp")
+        rank_tag = node.id.removeprefix(f"sgd_update::{weight.id}::tp").split("::", 1)[0]
+        tp_rank = int(rank_tag) if full_dense_tp and rank_tag.isdigit() else None
+        shard_update = (
+            tp_rank is not None
+            and node.effects.alias_set == f"trainable:{weight.id}:tp{tp_rank}"
+            and updated.alias_set == node.effects.alias_set
+            and weight.sharding == gradient.sharding == updated.sharding
+            and not weight.sharding.partial
+        )
+        legacy_update = (
+            node.effects.alias_set == f"trainable:{weight.id}"
+            and all(_is_replicated(value) for value in (weight, gradient, updated))
+        )
         if (
-            node.effects.alias_set != f"trainable:{weight.id}"
+            not (legacy_update or shard_update)
             or updated.alias_set != node.effects.alias_set
             or workload.logical_weight_shape != weight.shape
             or workload.rank_weight_shape != local_shapes[weight.id]
@@ -1331,7 +1481,6 @@ class DenseIR0Validator:
             or workload.updated_weight_dtype is not updated.dtype
             or weight.producer is not None
             or updated.consumers
-            or not all(_is_replicated(value) for value in (weight, gradient, updated))
         ):
             _fail("SGD weight/gradient/update boundary is not exact", path)
 
