@@ -146,6 +146,8 @@ Define_string_opt("--program-sequence", g_flag_program_sequence,
 Define_string_opt("--program-io-sequence", g_flag_program_io_sequence,
                   std::string{},
                   "comma-separated ProgramIo sidecars for --program-sequence");
+Define_bool_opt("--moe-forward-sequence", g_flag_moe_forward_sequence, false,
+                "two EP1 MoE forward programs only; no backward or SGD claim");
 Define_string_opt("--dense-adamw-paged-runtime",
                   g_flag_dense_adamw_paged_runtime, std::string{},
                   "source-signed per-StateABI external DMA for two Dense AdamW steps");
@@ -687,6 +689,74 @@ void ValidateDenseTrainingStateContinuity(
     }
 }
 
+struct MoeForwardProgramWitness {
+    std::set<std::string> route_state_refs;
+    std::size_t trainable_states = 0;
+    std::size_t records = 0;
+};
+
+MoeForwardProgramWitness ValidateMoeForwardProgram(
+    const std::string &manifest_text,
+    const std::vector<DenseSequenceKvRange> &ranges) {
+    const frontend::LinkedProgramManifestDto manifest =
+        frontend::ProgramArtifactFinalizer::Parse(manifest_text);
+    const std::map<std::string, std::size_t> required_fragments{
+        {"coarse_lowering", 20}, {"state_dma_lowering", 21},
+        {"moe_full_train_router_lowering", 2},
+        {"moe_full_train_route_freeze_lowering", 2},
+        {"moe_full_train_dispatch_lowering", 2},
+        {"moe_full_train_expert_lowering", 2},
+        {"moe_full_train_combine_lowering", 2},
+    };
+    const std::map<Opcode, std::size_t> required_records{
+        {Opcode::SRAM_ALLOC_AT, 57}, {Opcode::SRAM_FREE, 57},
+        {Opcode::SRAM_BIND, 32}, {Opcode::LSU_LOAD, 21},
+        {Opcode::MATMUL, 13}, {Opcode::RMSNORM, 5},
+        {Opcode::RESIDUAL, 4}, {Opcode::DTE_ISSUE, 4},
+        {Opcode::DTE_WAIT, 4}, {Opcode::ATTENTION_EXACT, 2},
+        {Opcode::SWIGLU, 2}, {Opcode::MOE_SCORE_WEIGHTED_FORWARD, 2},
+        {Opcode::ROPE_QK_EXACT, 2}, {Opcode::EMBEDDING_LOOKUP, 1},
+        {Opcode::CROSS_ENTROPY_FORWARD, 1},
+    };
+    std::map<std::string, std::size_t> fragments;
+    std::map<Opcode, std::size_t> records;
+    std::map<std::string, frontend::StateKindDto> states;
+    for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
+        const frontend::CommandFragmentDto *fragment =
+            std::get_if<frontend::CommandFragmentDto>(&linked);
+        if (fragment == nullptr)
+            fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
+        ++fragments[fragment->producer_pass];
+        for (const frontend::StateAbiDto &state : fragment->state_abi) {
+            const auto [it, inserted] = states.emplace(state.id, state.kind);
+            if (!inserted && it->second != state.kind)
+                throw std::runtime_error(
+                    "MoE forward sequence has conflicting StateABI kind");
+        }
+        for (const auto &stream : fragment->core_streams)
+            for (const auto &record : stream.records) ++records[record.opcode];
+    }
+    MoeForwardProgramWitness result;
+    result.records = 207;
+    for (const auto &[ref, kind] : states) {
+        if (kind == frontend::StateKindDto::MOE_STATIC_ROUTE)
+            result.route_state_refs.insert(ref);
+        else if (kind == frontend::StateKindDto::TRAINABLE_PARAMETER)
+            ++result.trainable_states;
+        else
+            throw std::runtime_error(
+                "MoE forward sequence has optimizer or unsupported StateABI");
+    }
+    if (manifest.producer_pass != "manifest_linker" ||
+        fragments != required_fragments || records != required_records ||
+        result.trainable_states != 19 || ranges.size() != 19 ||
+        result.route_state_refs.size() != 2 ||
+        manifest.core_streams.size() != 1)
+        throw std::runtime_error(
+            "MoE forward sequence requires exact EP1 two-layer forward-only records and states");
+    return result;
+}
+
 struct DenseTrainingProgramWitness {
     std::size_t matmul_records = 0;
     std::size_t sgd_records = 0;
@@ -1172,7 +1242,8 @@ int sc_main(int argc, char *argv[]) {
                               !g_flag_linked_manifest_sequence.empty() ||
                               !g_flag_program_io_sequence.empty() ||
                               adamw_paged || inference_paged ||
-                              moe_inference_paged;
+                              moe_inference_paged ||
+                              g_flag_moe_forward_sequence;
     if (sequence_any &&
         (g_flag_program_sequence.empty() ||
          g_flag_linked_manifest_sequence.empty() ||
@@ -1184,6 +1255,13 @@ int sc_main(int argc, char *argv[]) {
         return 2;
     }
     const bool sequence_mode = sequence_any;
+    const bool moe_forward_sequence = g_flag_moe_forward_sequence;
+    if (moe_forward_sequence &&
+        (adamw_paged || inference_paged || moe_inference_paged ||
+         !g_flag_external_dma_binding.empty())) {
+        LOG_ERROR(CONFIG) << "MoE forward-only sequence forbids pager and external DMA";
+        return 2;
+    }
     const bool external_dma_requested =
         !g_flag_external_dma_binding.empty();
     if (external_dma_requested && !sequence_mode) {
@@ -1570,6 +1648,7 @@ int sc_main(int argc, char *argv[]) {
     std::vector<DenseTrainingProgramWitness>
         sequence_training_witnesses;
     bool dense_training_sequence = false;
+    std::vector<MoeForwardProgramWitness> sequence_moe_forward_witnesses;
     std::vector<frontend::program_io::ResolvedContract>
         sequence_program_io_resolved;
     std::optional<p5_probe::Spec> p5_memory_probe_spec;
@@ -1606,6 +1685,7 @@ int sc_main(int argc, char *argv[]) {
                     (!adamw_paged &&
                      sidecar_paths.size() != program_paths.size()) ||
                     (adamw_paged && program_paths.size() != 2) ||
+                    (moe_forward_sequence && program_paths.size() != 2) ||
                     (inference_paged && program_paths.size() != 3) ||
                     (moe_inference_paged && program_paths.size() != 3))
                     throw std::runtime_error(
@@ -1636,9 +1716,17 @@ int sc_main(int argc, char *argv[]) {
                             throw std::runtime_error(
                                 "Program sequence must contain exactly one "
                                 "supported persistent-state family");
-                        dense_training_sequence = !training_ranges.empty();
+                        dense_training_sequence = !training_ranges.empty() &&
+                                                  !moe_forward_sequence;
                     }
-                    if (dense_training_sequence) {
+                    if (moe_forward_sequence) {
+                        if (!kv_ranges.empty() || training_ranges.empty())
+                            throw std::runtime_error(
+                                "MoE forward-only sequence state family changed");
+                        sequence_training_state_ranges.push_back(training_ranges);
+                        sequence_moe_forward_witnesses.push_back(
+                            ValidateMoeForwardProgram(manifest, training_ranges));
+                    } else if (dense_training_sequence) {
                         if (!kv_ranges.empty() || training_ranges.empty())
                             throw std::runtime_error(
                                 "Dense training sequence state family changed");
@@ -1656,6 +1744,14 @@ int sc_main(int argc, char *argv[]) {
                         const std::string sidecar = ReadRegularTextFile(
                             "Dense sequence ProgramIo sidecar",
                             sidecar_paths[index]);
+                        if (moe_forward_sequence) {
+                            const nlohmann::json io = nlohmann::json::parse(sidecar);
+                            if (!io.is_object() ||
+                                io.value("producer_pass", std::string{}) !=
+                                    "source_bound_full_moe_route_program_io")
+                                throw std::runtime_error(
+                                    "MoE forward sequence requires source-bound route ProgramIO");
+                        }
                         sequence_program_io_resolved.push_back(
                             frontend::program_io::ParseAndResolve(
                                 sidecar, manifest,
@@ -1676,7 +1772,16 @@ int sc_main(int argc, char *argv[]) {
                     dense_training_sequence)
                     throw std::runtime_error(
                         "paged inference DMA requires actual three-segment KV sequence");
-                if (dense_training_sequence)
+                if (moe_forward_sequence) {
+                    ValidateDenseTrainingStateContinuity(
+                        sequence_training_state_ranges);
+                    if (sequence_manifest_texts[0] == sequence_manifest_texts[1] ||
+                        sequence_program_bytes[0] == sequence_program_bytes[1] ||
+                        sequence_moe_forward_witnesses[0].route_state_refs ==
+                            sequence_moe_forward_witnesses[1].route_state_refs)
+                        throw std::runtime_error(
+                            "MoE forward sequence replayed the first source/route/program");
+                } else if (dense_training_sequence)
                     ValidateDenseTrainingStateContinuity(
                         sequence_training_state_ranges);
                 else
@@ -2018,7 +2123,8 @@ int sc_main(int argc, char *argv[]) {
             sidecar_stream >> sidecar_json;
             const auto schema = sidecar_json.at("schema_version").get<std::string>();
             const uint64_t die_count = schema ==
-                "wafer_frontend.moe_inference_paged_runtime/v4alpha1" ? 9 :
+                "wafer_frontend.moe_inference_paged_runtime/v5alpha1" ? 100 :
+                schema == "wafer_frontend.moe_inference_paged_runtime/v4alpha1" ? 9 :
                 schema == "wafer_frontend.moe_inference_paged_runtime/v3alpha1" ? 6 :
                 schema == "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
             if (DIE_X <= 0 || DIE_Y <= 0 || DIE_COUNT != static_cast<int>(die_count) ||
@@ -2057,7 +2163,7 @@ int sc_main(int argc, char *argv[]) {
                       << moe_inference_mid_program_pager->WeightPageCount()
                       << " kv_pages=4 lsu_gates="
                       << moe_inference_mid_program_pager->ExpectedEvents()
-                      << " hbm_capacity_per_die=1024"
+                      << " hbm_capacity_per_die=" << (die_count == 100 ? 2048 : 1024)
                       << " workspace_end=464 highest_relative_state_end=960"
                       << " pass=1" << std::endl;
         } catch (const std::exception &error) {
@@ -2336,7 +2442,15 @@ int sc_main(int argc, char *argv[]) {
                 << " lsu_loads="
                 << sequence_program_witnesses[expected].lsu_load_records
                 << " status=done" << std::endl;
-            if (dense_training_sequence) {
+            if (moe_forward_sequence) {
+                const auto &witness = sequence_moe_forward_witnesses[expected];
+                std::cout << "[MOE_FORWARD_SEQUENCE_STEP] index=" << expected
+                          << " records=" << witness.records
+                          << " trainable_states=" << witness.trainable_states
+                          << " route_states=" << witness.route_state_refs.size()
+                          << " backward=0 sgd=0 functional=0 pass=1"
+                          << std::endl;
+            } else if (dense_training_sequence) {
                 if (adamw_paged) {
                     const std::string current =
                         adamw_mid_program_pager->AuthorityDigest();
