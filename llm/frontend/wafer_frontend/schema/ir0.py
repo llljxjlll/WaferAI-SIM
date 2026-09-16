@@ -1235,16 +1235,24 @@ class SgdUpdateWorkload:
             and self.rank_gradient_shape
             == self.rank_updated_weight_shape
             == self.rank_weight_shape
-            == self.logical_weight_shape
+            and len(self.rank_weight_shape) == len(self.logical_weight_shape)
+            and all(logical % rank == 0 for logical, rank in zip(
+                self.logical_weight_shape, self.rank_weight_shape, strict=True
+            ))
+            and sum(
+                logical != rank for logical, rank in zip(
+                    self.logical_weight_shape, self.rank_weight_shape, strict=True
+                )
+            ) <= 1
         ):
             raise SchemaError(
-                "S2-Lite SGD requires replicated equal weight/gradient shapes",
+                "SGD requires equal FP16/FP32 rank weight/gradient/update shards",
                 path=path,
             )
         validate_uint64(self.element_count, f"{path}.element_count")
-        if self.element_count != math.prod(self.logical_weight_shape):
+        if self.element_count != math.prod(self.rank_weight_shape):
             raise SchemaError(
-                "must equal the logical weight element count",
+                "must equal the rank-local weight element count",
                 path=f"{path}.element_count",
             )
         if (
@@ -2107,12 +2115,22 @@ class IR0:
                                       path=f"{path}.nodes[{index}].kind")
                 operands = tuple(value_index[ref] for ref in
                                  (*node.inputs, *node.outputs))
+                instance = instance_index[node.instance_id]
+                mesh = next(item for item in instance.meshes
+                            if item.id == node.mesh_ref)
+                axis_sizes = {axis.name: axis.size for axis in mesh.axes}
+                rank_shapes = tuple(tuple(
+                    extent // axis_sizes[axis] if axis is not None else extent
+                    for extent, axis in zip(
+                        value.shape, value.sharding.dim_map, strict=True
+                    )
+                ) for value in operands)
                 workload = node.workload
                 if node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
                     assert isinstance(workload, EmbeddingTableWgradWorkload)
-                    shape = ((workload.logical_rows,),
+                    shape = ((workload.rank_rows,),
                              (workload.vocab_rows, workload.hidden_size),
-                             (workload.logical_rows, workload.hidden_size),
+                             (workload.rank_rows, workload.hidden_size),
                              (workload.vocab_rows, workload.hidden_size))
                     dtypes = (DType.INT32, DType.FP16, DType.FP16, DType.FP32)
                     if operands[0].producer is not None:
@@ -2120,8 +2138,8 @@ class IR0:
                                           path=f"{path}.nodes[{index}].inputs[0]")
                 elif node.kind is OpKind.NORM_GAMMA_WGRAD:
                     assert isinstance(workload, NormGammaWgradWorkload)
-                    shape = ((workload.logical_rows, workload.hidden_size),
-                             (workload.logical_rows, workload.hidden_size),
+                    shape = ((workload.rank_rows, workload.hidden_size),
+                             (workload.rank_rows, workload.hidden_size),
                              (workload.hidden_size,))
                     dtypes = (DType.FP16, DType.FP16, DType.FP32)
                 else:
@@ -2129,7 +2147,7 @@ class IR0:
                     shape = ((workload.k, workload.m),
                              (workload.k, workload.n), (workload.m, workload.n))
                     dtypes = (DType.FP16, DType.FP16, DType.FP32)
-                if (tuple(value.shape for value in operands) != shape
+                if (rank_shapes != shape
                         or tuple(value.dtype for value in operands) != dtypes
                         or operands[-2].producer is None
                         or operands[-1].producer != node.id):
@@ -2143,8 +2161,17 @@ class IR0:
                 assert isinstance(workload, GemmInputDxWorkload)
                 operands = tuple(value_index[ref] for ref in
                                  (*node.inputs, *node.outputs))
-                if (tuple(value.shape for value in operands)
-                        != ((workload.m,workload.n),
+                instance = instance_index[node.instance_id]
+                mesh = next(item for item in instance.meshes
+                            if item.id == node.mesh_ref)
+                axis_sizes = {axis.name: axis.size for axis in mesh.axes}
+                rank_shapes = tuple(tuple(
+                    extent // axis_sizes[axis] if axis is not None else extent
+                    for extent, axis in zip(
+                        value.shape, value.sharding.dim_map, strict=True
+                    )
+                ) for value in operands)
+                if (rank_shapes != ((workload.m,workload.n),
                             (workload.k,workload.n),
                             (workload.k,workload.m))
                         or tuple(value.dtype for value in operands)
@@ -2223,11 +2250,11 @@ class IR0:
                 if node.kind is OpKind.MOE_ROUTER:
                     specs = (((m,h),DType.FP16),
                              *((((h,e),DType.FP16),) * e),
-                             ((m,e),DType.FP32))
+                             ((m,e),DType.FP16))
                 elif node.kind is OpKind.MOE_ROUTE_FREEZE:
-                    specs = (((m,e),DType.FP32),((m,),DType.INT32))
+                    specs = (((m,e),DType.FP16),((m,5),DType.INT32))
                 elif node.kind is OpKind.MOE_DISPATCH:
-                    specs = (((m,h),DType.FP16),((m,),DType.INT32),
+                    specs = (((m,h),DType.FP16),((m,5),DType.INT32),
                              *(((n,h),DType.FP16) for n in
                                workload.expert_histogram))
                 elif node.kind is OpKind.MOE_EXPERT_FORWARD:
@@ -2238,7 +2265,7 @@ class IR0:
                 else:
                     specs = (*(((n,h),DType.FP16) for n in
                                workload.expert_histogram),
-                             ((m,),DType.INT32),((m,h),DType.FP16))
+                             ((m,5),DType.INT32),((m,h),DType.FP16))
                 actual = tuple((value_index[ref].shape,value_index[ref].dtype)
                                for ref in (*node.inputs,*node.outputs))
                 if actual != specs:
@@ -2458,8 +2485,21 @@ class IR0:
                        != (workload.k,workload.n,workload.m)
                     or len(source.inputs) != 2 or len(source.outputs) != 1
                     or source.inputs[1] != node.inputs[0]
-                    or value_index[source.inputs[0]].shape
-                       != (workload.k,workload.m)
+                    or tuple(
+                        extent // next(
+                            axis.size for instance in self.instances
+                            if instance.id == node.instance_id
+                            for mesh in instance.meshes
+                            if mesh.id == node.mesh_ref
+                            for axis in mesh.axes
+                            if axis.name is sharding_axis
+                        ) if sharding_axis is not None else extent
+                        for extent, sharding_axis in zip(
+                            value_index[source.inputs[0]].shape,
+                            value_index[source.inputs[0]].sharding.dim_map,
+                            strict=True,
+                        )
+                    ) != (workload.k,workload.m)
                     or upstream.shape != value_index[source.outputs[0]].shape
                     or not expected_upstream_producers
                     or actual_upstream_producers != expected_upstream_producers
