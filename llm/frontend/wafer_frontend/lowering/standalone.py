@@ -1,4 +1,4 @@
-"""Deterministic lowering for one planned DIRECT standalone AllGather."""
+"""Deterministic lowering for planned DIRECT standalone collectives."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from ..schema.artifact_manifest import (
     canonical_plan_barrier_event_symbol,
 )
 from ..schema.global_action import GlobalAction, LogicalCoreRef
+from ..schema.ir0 import CollectiveKind
 from ..schema.ir2 import (
     BufferBinding,
     BufferUseRole,
@@ -42,7 +43,7 @@ from .coarse import (
     _view_addend_for_use,
 )
 from .context import LoweringContext
-from .isa_region import _runtime_symbol, _transport_symbols
+from .isa_region import _reduce_record, _runtime_symbol, _token_symbol, _transport_symbols
 
 
 _PRODUCER_PASS = "standalone_collective_lowering"
@@ -185,6 +186,8 @@ def _transport_record(
     action: GlobalAction,
     schedule_id: str,
     bindings: dict[str, BufferBinding],
+    *,
+    waited_recv: bool = False,
 ) -> tuple[
     RelocatableRecord,
     tuple[RuntimeSymbol, ...],
@@ -219,6 +222,7 @@ def _transport_record(
         binding=binding,
         kind=ProgramSymbolKind.ABSOLUTE_ADDRESS,
     )
+    token = _token_symbol(action) if waited_recv and not is_send else None
     if is_send:
         record = RelocatableRecord(
             action.id,
@@ -256,13 +260,16 @@ def _transport_record(
             RecordOpcode.DTE_RECV,
             (
                 RecordOperand.literal("mode", 0),
-                RecordOperand.literal("completion", 1),
+                RecordOperand.literal("completion", 0 if token is not None else 1),
                 RecordOperand.literal("datatype", 0),
                 RecordOperand.literal("reduce_op", 0),
                 RecordOperand.runtime(
                     "fsm_id", RuntimeOperandField.DTE_FSM, fsm.id
                 ),
-                RecordOperand.literal("token", 0),
+                (
+                    RecordOperand.runtime("token", RuntimeOperandField.DTE_TOKEN, token.id)
+                    if token is not None else RecordOperand.literal("token", 0)
+                ),
                 RecordOperand.literal("length_bytes", action.bytes),
                 RecordOperand.address(
                     "destination_address",
@@ -285,13 +292,17 @@ def _transport_record(
             (
                 RuntimeRelocation(0, RuntimeOperandField.DTE_FSM, fsm.id),
                 RuntimeRelocation(0, RuntimeOperandField.PEER_CORE, peer.id),
+                *(
+                    (RuntimeRelocation(0, RuntimeOperandField.DTE_TOKEN, token.id),)
+                    if token is not None else ()
+                ),
             ),
             key=lambda item: _RUNTIME_FIELD_ORDER[item.field],
         )
     )
     return (
         record,
-        (fsm, peer),
+        (fsm, peer, *((token,) if token is not None else ())),
         address,
         runtime_relocations,
         AddressRelocation(
@@ -396,7 +407,7 @@ def _barrier_records(
 
 
 class NaiveStandaloneCollectiveLowering:
-    """Translate one already-selected DIRECT AllGather plan without replanning."""
+    """Translate one already-selected DIRECT standalone plan without replanning."""
 
     def __init__(self, *, validate_output: bool = True) -> None:
         self._validate_output = validate_output
@@ -449,9 +460,14 @@ class NaiveStandaloneCollectiveLowering:
         plan.validate_against(context.ir1, "plan")
         if plan.algorithm is not CollectiveAlgorithm.DIRECT:
             raise SchemaError(
-                "standalone lowering supports only the already-planned DIRECT AllGather",
+                "standalone lowering supports only already-planned DIRECT collectives",
                 path="plan.algorithm",
             )
+        node = next(node for node in context.ir1.nodes if node.id == plan.op_id)
+        collective = node.workload.collective
+        if collective not in (CollectiveKind.ALL_GATHER, CollectiveKind.REDUCE_SCATTER):
+            raise SchemaError("unsupported standalone collective", path="plan.op_id")
+        is_reduce_scatter = collective is CollectiveKind.REDUCE_SCATTER
         expected_actions = _exact_plan_actions(plan, context)
         if actions != expected_actions:
             raise SchemaError(
@@ -465,6 +481,8 @@ class NaiveStandaloneCollectiveLowering:
             SemanticTaskKind.BARRIER,
             SemanticTaskKind.TRANSIT,
         }
+        if is_reduce_scatter:
+            allowed.update((SemanticTaskKind.WAIT, SemanticTaskKind.REDUCE))
         if any(
             action.task_kind not in allowed
             or action.lowering is not RegionLowering.STRICT_ACTIONS
@@ -479,7 +497,7 @@ class NaiveStandaloneCollectiveLowering:
             for action in actions
         ):
             raise SchemaError(
-                "DIRECT AllGather actions must be strict local-copy/transport/barrier actions with coreless TRANSIT",
+                "DIRECT collective actions must have strict lowering and executable cores except coreless TRANSIT",
                 path="actions",
             )
 
@@ -493,30 +511,49 @@ class NaiveStandaloneCollectiveLowering:
             for action in executable
             if action.task_kind is SemanticTaskKind.BARRIER
         )
-        if not barrier_actions:
-            raise SchemaError(
-                "DIRECT AllGather requires PLAN barrier actions", path="actions"
+        if not barrier_actions and not is_reduce_scatter:
+            raise SchemaError("DIRECT AllGather requires PLAN barrier actions", path="actions")
+        barrier_participants: tuple[GlobalAction, ...] = ()
+        if barrier_actions:
+            barrier = barrier_actions[0].sync.barrier
+            if barrier is None or any(
+                action.sync is None or action.sync.barrier != barrier
+                for action in barrier_actions
+            ):
+                raise SchemaError("all ranks must preserve one exact PLAN barrier contract", path="actions")
+            barrier_by_rank = {
+                action.origin_ref.rank: action for action in barrier_actions
+            }
+            if set(barrier_by_rank) != set(barrier.participant_ranks):
+                raise SchemaError("barrier actions must exactly cover participant ranks", path="actions")
+            barrier_participants = tuple(
+                barrier_by_rank[rank] for rank in barrier.participant_ranks
             )
-        barrier = barrier_actions[0].sync.barrier
-        if barrier is None or any(
-            action.sync is None or action.sync.barrier != barrier
-            for action in barrier_actions
-        ):
-            raise SchemaError(
-                "all ranks must preserve one exact PLAN barrier contract",
-                path="actions",
-            )
-        barrier_by_rank = {
-            action.origin_ref.rank: action for action in barrier_actions
-        }
-        if set(barrier_by_rank) != set(barrier.participant_ranks):
-            raise SchemaError(
-                "barrier actions must exactly cover participant ranks",
-                path="actions",
-            )
-        barrier_participants = tuple(
-            barrier_by_rank[rank] for rank in barrier.participant_ranks
-        )
+
+        recv_by_wait: dict[str, GlobalAction] = {}
+        if is_reduce_scatter:
+            receives = tuple(a for a in executable if a.task_kind is SemanticTaskKind.RECV)
+            waits = tuple(a for a in executable if a.task_kind is SemanticTaskKind.WAIT)
+            consumed: set[str] = set()
+            for wait in waits:
+                matches = tuple(
+                    recv for recv in receives
+                    if recv.id in wait.deps
+                    and recv.logical_core == wait.logical_core
+                    and recv.origin_ref.rank == wait.origin_ref.rank
+                    and recv.sync is not None and wait.sync is not None
+                    and recv.sync.completion_event == wait.sync.wait_event
+                    and recv.runtime_binding is not None
+                    and wait.runtime_binding is not None
+                    and recv.runtime_binding.token_symbol is not None
+                    and recv.runtime_binding.token_symbol == wait.runtime_binding.token_symbol
+                )
+                if len(matches) != 1 or matches[0].id in consumed:
+                    raise SchemaError("RS WAIT must pair with one same-rank RECV token", path="actions")
+                recv_by_wait[wait.id] = matches[0]
+                consumed.add(matches[0].id)
+            if consumed != {recv.id for recv in receives}:
+                raise SchemaError("every RS RECV requires exactly one WAIT", path="actions")
 
         schedules = {
             schedule.id: schedule for schedule in context.schedule_set.schedules
@@ -577,11 +614,31 @@ class NaiveStandaloneCollectiveLowering:
                         emitted_runtime,
                         emitted_address,
                         used_binding,
-                    ) = _transport_record(action, schedule.id, bindings)
+                    ) = _transport_record(
+                        action, schedule.id, bindings,
+                        waited_recv=is_reduce_scatter and action.task_kind is SemanticTaskKind.RECV,
+                    )
                     emitted = (record,)
                     action_program = (program_symbol,)
                     emitted_addresses = (emitted_address,)
                     used_bindings = (used_binding,)
+                elif action.task_kind is SemanticTaskKind.WAIT:
+                    token = _token_symbol(recv_by_wait[action.id])
+                    emitted = (
+                        RelocatableRecord(
+                            action.id, RecordOpcode.DTE_WAIT,
+                            (RecordOperand.runtime("token", RuntimeOperandField.DTE_TOKEN, token.id),),
+                        ),
+                    )
+                    action_runtime = (token,)
+                    action_program = ()
+                    emitted_runtime = (RuntimeRelocation(0, RuntimeOperandField.DTE_TOKEN, token.id),)
+                elif action.task_kind is SemanticTaskKind.REDUCE:
+                    record, action_program, emitted_addresses, used_bindings = _reduce_record(
+                        action, schedule.id, bindings,
+                    )
+                    emitted = (record,)
+                    action_runtime = ()
                 else:
                     emitted, action_runtime = _barrier_records(
                         context.global_dag.id,
