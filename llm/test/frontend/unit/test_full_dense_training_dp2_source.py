@@ -8,6 +8,7 @@ import unittest
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes.flexible_dense_train import build_flexible_dense_train_plan
 from llm.frontend.wafer_frontend.passes.full_dense_training_two_step_ir0 import build_full_dense_training_two_step_ir0
+from llm.frontend.wafer_frontend.passes.full_dense_training_dp2_routes import build_dense_dp2_route_plan
 from llm.frontend.wafer_frontend.passes.load_fabric import hbm_address_spaces_from_data, physical_fabric_from_data
 from llm.frontend.wafer_frontend.passes.placement import place_train_forward_ir0
 from llm.frontend.wafer_frontend.passes.validate_ir0 import DenseIR0Validator
@@ -114,12 +115,13 @@ class FullDenseTrainingDP2SourceTest(unittest.TestCase):
     def test_placement_binds_each_replica_state_to_its_physical_die(self) -> None:
         graph = self.graph
         hardware = _hardware(2, 2)
-        placed = place_train_forward_ir0(graph, PlacementContext.create(
+        context = PlacementContext.create(
             producer_pass="dp2_exact_placement",
             fabric=physical_fabric_from_data(hardware),
             placement=self.plan.source_experiment.placement,
             hbm_address_spaces=hbm_address_spaces_from_data(hardware),
-        ))
+        )
+        placed = place_train_forward_ir0(graph, context)
         self.assertEqual(len(placed.replicas), 2)
         for dp, replica in enumerate(placed.replicas):
             ir1 = replica.graph
@@ -133,6 +135,28 @@ class FullDenseTrainingDP2SourceTest(unittest.TestCase):
             self.assertEqual(len(manifest.bindings), 30)
             self.assertEqual(sum(node.kind is OpKind.OPTIMIZER_UPDATE
                                  for node in ir1.nodes), 60)
+        routes = build_dense_dp2_route_plan(self.plan, placed, context)
+        routes.validate_against(self.plan, placed, context)
+        self.assertEqual(len(routes.gradients), 60)
+        self.assertEqual(
+            tuple(tuple(item.die_id for item in group.placements)
+                  for group in routes.dp_groups),
+            ((0, 2), (1, 3)),
+        )
+        for gradient in routes.gradients:
+            self.assertEqual(gradient.reduce_route.die_path[0],
+                             routes.dp_groups[gradient.tp_shard].placements[1].die_id)
+            self.assertEqual(gradient.reduce_route.die_path[-1],
+                             routes.dp_groups[gradient.tp_shard].placements[0].die_id)
+            self.assertEqual(gradient.broadcast_route.die_path[0],
+                             routes.dp_groups[gradient.tp_shard].placements[0].die_id)
+            self.assertEqual(gradient.broadcast_route.die_path[-1],
+                             routes.dp_groups[gradient.tp_shard].placements[1].die_id)
+        first = routes.gradients[0]
+        with self.assertRaisesRegex(SchemaError, "gradient route/source/owner/bytes"):
+            replace(routes, gradients=(
+                replace(first, gradient_bytes=2048), *routes.gradients[1:],
+            )).validate_against(self.plan, placed, context)
 
 
 if __name__ == "__main__":
