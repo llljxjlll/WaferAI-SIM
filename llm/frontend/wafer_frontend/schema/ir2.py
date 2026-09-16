@@ -6820,7 +6820,8 @@ class IntraDieSchedule:
                 and task.reduction.output_dtype is DType.FP32
                 and task.reduction.input_ranks == (0, 1)
                 and task.dtype is DType.FP32
-                and task.bytes == 2048
+                and task.bytes > 0
+                and task.bytes % 4 == 0
             )
             expected_dtype = DType.FP32 if fp32_dp2 else DType.FP16
             if any(binding.dtype is not expected_dtype for binding in inputs + outputs):

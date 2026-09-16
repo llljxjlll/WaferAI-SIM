@@ -2563,9 +2563,34 @@ class IR0:
                     "node and persistent state must use the same mesh",
                     path=access_path,
                 )
-            if access.rank != declaration.identity.shard_index:
+            instance = instance_index[declaration.identity.instance_ref]
+            mesh = mesh_index[declaration.identity.mesh_ref]
+            exact_dp2_replica = (
+                self.producer_pass in (
+                    "full_dense_training_backward_dp2_source",
+                    "full_dense_training_sgd_dp2_source",
+                    "full_dense_training_two_step_dp2_source",
+                )
+                and self.job is JobKind.TRAIN
+                and len(self.instances) == 1
+                and instance.role is LogicalRole.TRAIN
+                and instance.replicas == 1
+                and (instance.parallel.tp, instance.parallel.dp,
+                     instance.parallel.pp, instance.parallel.ep) == (2, 2, 1, 1)
+                and tuple((axis.name, axis.size) for axis in mesh.axes) == (
+                    (MeshAxisName.TP, 2), (MeshAxisName.DP, 2),
+                )
+                and declaration.identity.kind in (
+                    StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER,
+                )
+                and access.rank in (
+                    declaration.identity.shard_index,
+                    declaration.identity.shard_index + 2,
+                )
+            )
+            if access.rank != declaration.identity.shard_index and not exact_dp2_replica:
                 raise SchemaError(
-                    "access rank must equal the state shard_index",
+                    "access rank must equal the state shard_index or its exact TP2/DP2 replica",
                     path=f"{access_path}.rank",
                 )
             if access.mode not in allowed_modes[declaration.access]:

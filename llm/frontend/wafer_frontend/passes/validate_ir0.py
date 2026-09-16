@@ -221,6 +221,31 @@ class DenseIR0Validator:
             if not value.sharding.partial:
                 continue
             value_path = f"{path}.values[{index}]"
+            if (graph.producer_pass == "full_dense_training_two_step_dp2_source"
+                    and value.sharding.partial == (MeshAxisName.DP,)):
+                producer = nodes.get(value.producer)
+                consumers = tuple(nodes[ref] for ref in value.consumers)
+                if (
+                    value.dtype is not DType.FP32
+                    or producer is None
+                    or producer.phase is not OpPhase.WGRAD
+                    or producer.kind not in (
+                        OpKind.GEMM_WEIGHT_WGRAD,
+                        OpKind.EMBEDDING_TABLE_WGRAD,
+                        OpKind.NORM_GAMMA_WGRAD,
+                    )
+                    or producer.outputs != (value.id,)
+                    or len(consumers) != 1
+                    or consumers[0].kind is not OpKind.COLLECTIVE
+                    or not isinstance(consumers[0].workload, CollectiveWorkload)
+                    or consumers[0].workload.collective is not CollectiveKind.ALL_REDUCE
+                    or consumers[0].workload.mesh_axes != (MeshAxisName.DP,)
+                    or consumers[0].workload.role is not CollectiveRole.GRADIENT
+                    or consumers[0].inputs != (value.id,)
+                ):
+                    _fail("DP2 partial FP32 WGRAD must flow directly into its named DP SUM AllReduce",
+                          f"{value_path}.consumers")
+                continue
             if value.sharding.partial != (MeshAxisName.TP,):
                 _fail("Dense MVP partial values must be partial only over TP", f"{value_path}.sharding.partial")
             if value.producer is None:
@@ -237,6 +262,9 @@ class DenseIR0Validator:
                     and isinstance(producer.workload, GemmInputDxWorkload)):
                 forward = nodes.get(producer.workload.source_forward_op_ref)
                 tp = axis_sizes[value.sharding.mesh_ref][MeshAxisName.TP]
+                dp = (axis_sizes[value.sharding.mesh_ref].get(MeshAxisName.DP, 1)
+                      if graph.producer_pass == "full_dense_training_two_step_dp2_source"
+                      else 1)
                 state_by_id = {state.id: state for state in graph.persistent_states}
                 source = state_by_id.get(producer.workload.source_parameter_state_ref)
                 accesses = tuple(access for access in graph.state_accesses
@@ -252,13 +280,13 @@ class DenseIR0Validator:
                     and source is not None
                     and source.identity.tensor_ref == forward.inputs[1]
                     and source.identity.shard_index == 0
-                    and len(accesses) == tp
-                    and {access.rank for access in accesses} == set(range(tp))
+                    and len(accesses) == tp * dp
+                    and {access.rank for access in accesses} == set(range(tp * dp))
                     and all(
                         access.mode is StateAccessMode.READ
                         and (state := state_by_id.get(access.state_ref)) is not None
                         and state.identity.tensor_ref == forward.inputs[1]
-                        and state.identity.shard_index == access.rank
+                        and state.identity.shard_index == access.rank % tp
                         for access in accesses
                     )
                 )
@@ -327,7 +355,10 @@ class DenseIR0Validator:
                 )
             elif node.kind is OpKind.COLLECTIVE:
                 DenseIR0Validator._validate_collective(
-                    node, values, local_shapes, axis_sizes[node.mesh_ref], node_path
+                    node, values, local_shapes, axis_sizes[node.mesh_ref], node_path,
+                    allow_dp_gradient_all_reduce=(
+                        graph.producer_pass == "full_dense_training_two_step_dp2_source"
+                    ),
                 )
             elif node.kind is OpKind.EMBEDDING:
                 DenseIR0Validator._validate_embedding(
@@ -518,7 +549,8 @@ class DenseIR0Validator:
             _fail("unsupported Dense job kind", f"{path}.job")
         if graph.producer_pass in ("full_dense_training_backward_source",
                                    "full_dense_training_sgd_source",
-                                   "full_dense_training_two_step_source"):
+                                   "full_dense_training_two_step_source",
+                                   "full_dense_training_two_step_dp2_source"):
             DenseIR0Validator._validate_full_dense_backward_job_contract(
                 graph, path
             )
@@ -570,6 +602,7 @@ class DenseIR0Validator:
     def _validate_full_dense_backward_job_contract(
         graph: IR0, path: str
     ) -> None:
+        dp2 = graph.producer_pass == "full_dense_training_two_step_dp2_source"
         instance = graph.instances[0] if len(graph.instances) == 1 else None
         if (
             instance is None
@@ -577,7 +610,7 @@ class DenseIR0Validator:
             or instance.replicas != 1
             or instance.parallel.tp < 1
             or (instance.parallel.dp, instance.parallel.pp,
-                instance.parallel.ep) != (1, 1, 1)
+                instance.parallel.ep) != (2 if dp2 else 1, 1, 1)
             or graph.train is None
         ):
             _fail("complete Dense backward source requires one TP/DP1 TRAIN instance",
@@ -588,7 +621,10 @@ class DenseIR0Validator:
                            if node.kind is OpKind.CE_FORWARD)
         ce_backward = tuple(node for node in graph.nodes
                             if node.kind is OpKind.CE_BACKWARD)
-        steps = (0, 1) if graph.producer_pass == "full_dense_training_two_step_source" else (0,)
+        steps = (0, 1) if graph.producer_pass in (
+            "full_dense_training_two_step_source",
+            "full_dense_training_two_step_dp2_source",
+        ) else (0,)
         if len(ce_forward) != len(steps) or len(ce_backward) != len(steps):
             _fail("complete Dense backward requires one CE forward/backward per step",
                   f"{path}.nodes")
@@ -631,6 +667,7 @@ class DenseIR0Validator:
         optimized = graph.producer_pass in (
             "full_dense_training_sgd_source",
             "full_dense_training_two_step_source",
+            "full_dense_training_two_step_dp2_source",
         )
         if optimized:
             expected_updates = {
@@ -655,8 +692,9 @@ class DenseIR0Validator:
                 access_by_node.setdefault(access.node_ref, []).append(access)
             for update in updates:
                 weight, rank, suffix = expected_updates[update.id]
-                gradient_ref = f"wgrad::{weight}::tp{rank}.output{suffix}"
                 state = state_by_weight_rank[weight, rank]
+                gradient_ref = (f"dp_sync::{state.id}::tp{rank}.output{suffix}"
+                                if dp2 else f"wgrad::{weight}::tp{rank}.output{suffix}")
                 if (update.phase is not OpPhase.UPDATE
                         or update.inputs != (weight, gradient_ref)
                         or len(update.outputs) != 1
@@ -666,8 +704,8 @@ class DenseIR0Validator:
                         or values_by_ref[gradient_ref].dtype is not DType.FP32
                         or access_by_node.get(update.id) != [StateAccess.create(
                             node_ref=update.id, state_ref=state.id,
-                            mode=StateAccessMode.READ_WRITE, rank=rank,
-                        )]):
+                            mode=StateAccessMode.READ_WRITE, rank=physical_rank,
+                        ) for physical_rank in range(rank, tp * (2 if dp2 else 1), tp)]):
                     _fail("complete Dense SGD must update each trainable state from its own FP32 WGRAD exactly once",
                           f"{path}.nodes")
         elif updates:
@@ -678,7 +716,10 @@ class DenseIR0Validator:
             for suffix in (("::step0", "::step1") if len(steps) == 2 else ("",))
         }
         actual_wgrad = tuple(node for node in graph.nodes
-                             if node.phase is OpPhase.WGRAD)
+                             if node.phase is OpPhase.WGRAD
+                             and node.kind in (OpKind.GEMM_WEIGHT_WGRAD,
+                                               OpKind.EMBEDDING_TABLE_WGRAD,
+                                               OpKind.NORM_GAMMA_WGRAD))
         if (len(actual_wgrad) != len(expected_wgrad)
                 or {node.id for node in actual_wgrad} != set(expected_wgrad)):
             _fail("complete Dense backward omits or duplicates a parameter WGRAD",
@@ -718,11 +759,38 @@ class DenseIR0Validator:
                 _fail("complete Dense embedding WGRAD binds a wrong parameter",
                       f"{path}.nodes")
             direct = access_by_node.get(wgrad.id, ())
-            if direct and (len(direct) != 1 or direct[0] != StateAccess.create(
+            if direct and direct != [StateAccess.create(
                     node_ref=wgrad.id, state_ref=state.id,
-                    mode=StateAccessMode.READ, rank=rank)):
+                    mode=StateAccessMode.READ, rank=physical_rank,
+                ) for physical_rank in range(rank, tp * (2 if dp2 else 1), tp)]:
                 _fail("complete Dense WGRAD reads the wrong TP parameter shard",
                       f"{path}.state_accesses")
+        if dp2:
+            expected_sync = {
+                f"dp_sync::{state.id}::tp{rank}::step{step}": (
+                    f"wgrad::{weight}::tp{rank}.output::step{step}",
+                    f"dp_sync::{state.id}::tp{rank}.output::step{step}",
+                )
+                for (weight, rank), state in state_by_weight_rank.items()
+                for step in steps
+            }
+            actual_sync = tuple(node for node in graph.nodes
+                                if node.kind is OpKind.COLLECTIVE
+                                and node.phase is OpPhase.WGRAD
+                                and isinstance(node.workload, CollectiveWorkload)
+                                and node.workload.mesh_axes == (MeshAxisName.DP,))
+            if (len(actual_sync) != len(expected_sync)
+                    or {node.id for node in actual_sync} != set(expected_sync)
+                    or any(node.inputs != (expected_sync[node.id][0],)
+                           or node.outputs != (expected_sync[node.id][1],)
+                           or node.workload.collective is not CollectiveKind.ALL_REDUCE
+                           or node.workload.reduce_op is not ReduceOp.SUM
+                           or node.workload.role is not CollectiveRole.GRADIENT
+                           or node.workload.participant_count != 2
+                           or access_by_node.get(node.id)
+                           for node in actual_sync)):
+                _fail("DP2 requires one real FP32 SUM of both replica WGRADs before each SGD",
+                      f"{path}.nodes")
         values = {value.id: value for value in graph.values}
         if any(values[ref].dtype is not DType.FP16
                for node in graph.nodes if node.phase is OpPhase.DGRAD
@@ -909,7 +977,8 @@ class DenseIR0Validator:
     ) -> None:
         if graph.producer_pass in ("full_dense_training_backward_source",
                                    "full_dense_training_sgd_source",
-                                   "full_dense_training_two_step_source"):
+                                   "full_dense_training_two_step_source",
+                                   "full_dense_training_two_step_dp2_source"):
             DenseIR0Validator._validate_full_dense_backward_persistent_states(
                 graph, values, axis_sizes, path
             )
@@ -1146,19 +1215,22 @@ class DenseIR0Validator:
         axis_sizes: dict[str, dict[MeshAxisName, int]],
         path: str,
     ) -> None:
+        dp = 2 if graph.producer_pass == "full_dense_training_two_step_dp2_source" else 1
         states = {state.id: state for state in graph.persistent_states}
         if (
             not states
             or any(state.identity.kind is not (
                        StateKind.TRAINABLE_PARAMETER
                        if graph.producer_pass in ("full_dense_training_sgd_source",
-                                              "full_dense_training_two_step_source")
+                                              "full_dense_training_two_step_source",
+                                              "full_dense_training_two_step_dp2_source")
                        else StateKind.PARAMETER)
                    or state.identity.tensor_ref is None
                    or state.access is not (
                        PersistentStateAccess.READ_WRITE
                        if graph.producer_pass in ("full_dense_training_sgd_source",
-                                              "full_dense_training_two_step_source")
+                                              "full_dense_training_two_step_source",
+                                              "full_dense_training_two_step_dp2_source")
                        else PersistentStateAccess.READ_ONLY)
                    for state in states.values())
         ):
@@ -1195,10 +1267,10 @@ class DenseIR0Validator:
                 if weight not in weights:
                     _fail("forward parameter lacks its source declaration",
                           f"{path}.state_accesses")
-                for rank in range(tp):
+                for rank in range(tp * dp):
                     expected.append(StateAccess.create(
                         node_ref=node.id,
-                        state_ref=state_by_tensor_rank[weight, rank],
+                        state_ref=state_by_tensor_rank[weight, rank % tp],
                         mode=StateAccessMode.READ, rank=rank,
                     ))
             elif node.kind is OpKind.GEMM_INPUT_DX:
@@ -1209,12 +1281,16 @@ class DenseIR0Validator:
                 if node.workload.source_parameter_state_ref != state_by_tensor_rank[weight, 0]:
                     _fail("GEMM dX must bind the authentic rank0 parameter source",
                           f"{path}.state_accesses")
-                for rank in range(tp):
+                for rank in range(tp * dp):
                     expected.append(StateAccess.create(
-                        node_ref=node.id, state_ref=state_by_tensor_rank[weight, rank],
+                        node_ref=node.id, state_ref=state_by_tensor_rank[weight, rank % tp],
                         mode=StateAccessMode.READ, rank=rank,
                     ))
-            elif node.phase is OpPhase.WGRAD:
+            elif node.phase is OpPhase.WGRAD and node.kind in (
+                OpKind.GEMM_WEIGHT_WGRAD,
+                OpKind.EMBEDDING_TABLE_WGRAD,
+                OpKind.NORM_GAMMA_WGRAD,
+            ):
                 rank_tag = node.id.rsplit("::tp", 1)
                 if len(rank_tag) != 2 or not rank_tag[1].split("::", 1)[0].isdigit():
                     _fail("parameter WGRAD lacks a TP shard tag",
@@ -1239,24 +1315,27 @@ class DenseIR0Validator:
                 if ((tp == 1 and node.kind is OpKind.EMBEDDING_TABLE_WGRAD)
                         or any(access.node_ref == node.id
                                for access in graph.state_accesses)):
-                    expected.append(StateAccess.create(
-                        node_ref=node.id, state_ref=state_ref,
-                        mode=StateAccessMode.READ, rank=rank,
-                    ))
+                    for physical_rank in range(rank, tp * dp, tp):
+                        expected.append(StateAccess.create(
+                            node_ref=node.id, state_ref=state_ref,
+                            mode=StateAccessMode.READ, rank=physical_rank,
+                        ))
             elif node.kind is OpKind.OPTIMIZER_UPDATE and (
                 graph.producer_pass in ("full_dense_training_sgd_source",
-                                        "full_dense_training_two_step_source")
+                                        "full_dense_training_two_step_source",
+                                        "full_dense_training_two_step_dp2_source")
             ):
                 weight = node.inputs[0]
                 for rank in range(tp):
                     expected_id = f"sgd_update::{weight}::tp{rank}"
                     if node.id != expected_id and not node.id.startswith(expected_id + "::step"):
                         continue
-                    expected.append(StateAccess.create(
-                        node_ref=node.id,
-                        state_ref=state_by_tensor_rank[weight, rank],
-                        mode=StateAccessMode.READ_WRITE, rank=rank,
-                    ))
+                    for physical_rank in range(rank, tp * dp, tp):
+                        expected.append(StateAccess.create(
+                            node_ref=node.id,
+                            state_ref=state_by_tensor_rank[weight, rank],
+                            mode=StateAccessMode.READ_WRITE, rank=physical_rank,
+                        ))
         expected_tuple = tuple(sorted(
             expected,
             key=lambda item: (item.node_ref, item.state_ref, item.rank, item.id),
@@ -2005,6 +2084,8 @@ class DenseIR0Validator:
         local_shapes: dict[str, tuple[int, ...]],
         axis_sizes: dict[MeshAxisName, int],
         path: str,
+        *,
+        allow_dp_gradient_all_reduce: bool = False,
     ) -> None:
         _require_pure(node, path)
         if node.impl_ref != "collective_derived" or len(node.inputs) != 1 or len(node.outputs) != 1:
@@ -2017,6 +2098,43 @@ class DenseIR0Validator:
             _fail("collective input/output logical shape and dtype must match", f"{path}.workload")
         if workload.input_layout != input_value.logical_layout or workload.output_layout != output_value.logical_layout:
             _fail("collective workload layouts must exactly match TensorValue layouts", f"{path}.workload.input_layout")
+        if (allow_dp_gradient_all_reduce
+                and workload.collective is CollectiveKind.ALL_REDUCE):
+            dp = axis_sizes.get(MeshAxisName.DP)
+            if (
+                node.phase is not OpPhase.WGRAD
+                or dp != 2
+                or workload.mesh_axes != (MeshAxisName.DP,)
+                or workload.reduction_mesh_axes != (MeshAxisName.DP,)
+                or workload.participant_count != dp
+                or workload.role is not CollectiveRole.GRADIENT
+                or workload.reduce_op is not ReduceOp.SUM
+                or input_value.dtype is not DType.FP32
+                or input_value.sharding.partial != (MeshAxisName.DP,)
+                or output_value.sharding.partial
+                or input_value.sharding.dim_map != output_value.sharding.dim_map
+                or workload.scatter_tensor_axis is not None
+                or workload.gather_tensor_axis is not None
+                or local_shapes[input_value.id] != local_shapes[output_value.id]
+            ):
+                _fail("DP2 gradient AllReduce must consume FP32 DP-partial WGRAD and produce one synchronized value",
+                      f"{path}.workload")
+            # DP reduces the same local TP shard across replicas.  The
+            # TensorValue global shape contains *all* TP shards and cannot
+            # be billed as this DP collective's logical tensor.
+            rank_bytes = prod(local_shapes[input_value.id]) * _DTYPE_BYTES[DType.FP32]
+            logical_bytes = rank_bytes
+            rank_payload_bytes = 2 * (dp - 1) * rank_bytes // dp
+            if (
+                workload.logical_tensor_bytes != logical_bytes
+                or workload.rank_input_bytes != rank_bytes
+                or workload.rank_output_bytes != rank_bytes
+                or workload.rank_logical_payload_bytes != rank_payload_bytes
+                or workload.group_logical_payload_bytes != rank_payload_bytes * dp
+            ):
+                _fail("DP2 gradient AllReduce payload bytes must derive from actual FP32 WGRAD shape",
+                      f"{path}.workload.logical_tensor_bytes")
+            return
         if workload.role is not CollectiveRole.ACTIVATION:
             _fail("Dense forward collective role must be ACTIVATION", f"{path}.workload.role")
         if workload.mesh_axes != (MeshAxisName.TP,):
