@@ -43,6 +43,9 @@ class MoeFullTrainingBlockWorkloadTest(unittest.TestCase):
             self.trace.token_count, model.hidden_size,
             model.intermediate_size, model.num_experts,
             self.trace.expert_token_counts, self.trace.expert_by_token,
+            tuple(item.slot_index for item in sorted(
+                self.unit.spec.trace.assignments,
+                key=lambda item: item.token_index)),
         )
 
     def test_frozen_two_expert_full_three_projection_work(self):
@@ -86,6 +89,7 @@ class MoeFullTrainingBlockWorkloadTest(unittest.TestCase):
             replace(original, expert=None),
             replace(original, expert_histogram=(4, 0)),
             replace(original, frozen_expert_by_token=(0, 0, 0, 1)),
+            replace(original, frozen_slot_by_token=(0, 0, 0, 0)),
         ):
             with self.assertRaises(SchemaError):
                 forged.validate()

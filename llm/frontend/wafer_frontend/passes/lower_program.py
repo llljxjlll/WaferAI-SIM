@@ -185,6 +185,9 @@ def _lower_fragments(
         if action.op_kind is OpKind.MOE_ROUTE_FREEZE:
             from ..lowering.moe_full_train_route_freeze import lower_moe_route_freeze
             fragment = lower_moe_route_freeze(action, context)
+        elif action.op_kind is OpKind.MOE_DISPATCH:
+            from ..lowering.moe_full_train_dispatch import lower_moe_dispatch
+            fragment = lower_moe_dispatch(action, context)
         elif action.op_kind is OpKind.MOE_ROUTER:
             from ..lowering.moe_full_train_router import lower_moe_router_score_fragment
             schedule = next((item for item in context.schedule_set.schedules

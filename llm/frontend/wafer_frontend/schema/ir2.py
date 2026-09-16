@@ -7073,14 +7073,15 @@ class IntraDieSchedule:
         route_freeze_tasks = {
             task.id for task in dag.tasks
             if task.kind is SemanticTaskKind.COMP
-            and task.op_kind is OpKind.MOE_ROUTE_FREEZE
+            and task.op_kind in (OpKind.MOE_ROUTE_FREEZE,
+                                 OpKind.MOE_DISPATCH)
         }
         expected_runtime_tasks = {
             task.id for task in dag.tasks if task.kind in runtime_kinds
         } | route_freeze_tasks
         if set(runtime) != expected_runtime_tasks:
             raise SchemaError(
-                "runtime bindings must exactly cover transport/barrier and MoE route-freeze tasks",
+                "runtime bindings must exactly cover transport/barrier and MoE local-copy tasks",
                 path=f"{path}.runtime_bindings",
             )
         for task in dag.tasks:
@@ -7091,7 +7092,7 @@ class IntraDieSchedule:
                         or binding.event_symbol is not None
                         or binding.token_symbol is None):
                     raise SchemaError(
-                        "MoE route-freeze requires one local copy token and no flow/event",
+                        "MoE local copy requires one token and no flow/event",
                         path=f"{path}.runtime_bindings",
                     )
             if task.kind in runtime_kinds:

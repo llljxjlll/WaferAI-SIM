@@ -41,6 +41,7 @@ class MoeFullTrainingBlockWorkload:
     expert_count: int
     expert_histogram: tuple[int, ...]
     frozen_expert_by_token: tuple[int, ...]
+    frozen_slot_by_token: tuple[int, ...]
     input_dtype: DType = DType.FP16
     route_dtype: DType = DType.INT32
     expert_output_dtype: DType = DType.FP16
@@ -72,6 +73,16 @@ class MoeFullTrainingBlockWorkload:
                     for expert in range(self.expert_count))):
             raise SchemaError("frozen source trace must route every token to exactly one expert",
                               path=f"{path}.frozen_expert_by_token")
+        if (type(self.frozen_slot_by_token) is not tuple
+                or len(self.frozen_slot_by_token) != self.token_count
+                or any(type(slot) is not int or slot < 0
+                       for slot in self.frozen_slot_by_token)
+                or any(sorted(self.frozen_slot_by_token[token]
+                              for token, expert in enumerate(self.frozen_expert_by_token)
+                              if expert == rank) != list(range(count))
+                       for rank, count in enumerate(self.expert_histogram))):
+            raise SchemaError("frozen source slots must be a complete per-expert permutation",
+                              path=f"{path}.frozen_slot_by_token")
         if (self.kind is MoeForwardBlockKind.EXPERT
                 and (type(self.expert) is not int
                      or not 0 <= self.expert < self.expert_count)):

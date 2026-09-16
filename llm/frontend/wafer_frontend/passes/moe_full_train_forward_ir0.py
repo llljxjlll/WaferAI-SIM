@@ -244,6 +244,8 @@ def _source_moe_operation_workload(
         step, layer, expert, trace.token_count,
         model.hidden_size, model.intermediate_size,
         model.num_experts, trace.expert_token_counts, trace.expert_by_token,
+        tuple(item.slot_index for item in sorted(
+            unit.spec.trace.assignments, key=lambda item: item.token_index)),
     )
     result.validate()
     return result

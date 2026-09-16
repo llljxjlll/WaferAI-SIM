@@ -185,10 +185,11 @@ def _operand_role(
 ) -> tuple[BufferUseRole, int]:
     if (action is not None
             and action.task_kind is SemanticTaskKind.COMP
-            and action.op_kind is OpKind.MOE_ROUTE_FREEZE
+            and action.op_kind in (OpKind.MOE_ROUTE_FREEZE, OpKind.MOE_DISPATCH)
             and opcode is RecordOpcode.DTE_ISSUE):
         if operand_id is SemanticOperandId.SOURCE_ADDRESS:
-            return BufferUseRole.COMP_INPUT, 1
+            return BufferUseRole.COMP_INPUT, (
+                1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
         if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
             return BufferUseRole.COMP_OUTPUT, 0
     if opcode is RecordOpcode.SRAM_BIND:

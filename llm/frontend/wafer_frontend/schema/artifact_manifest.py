@@ -4401,6 +4401,77 @@ class CommandFragment:
                     raise SchemaError("route-freeze must copy exact INT32 five-field table",
                                       path=f"{path}.buffer_abi")
             elif (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_DISPATCH):
+                compute = action.compute
+                if (self.producer_pass != "moe_full_train_dispatch_lowering"
+                        or self.kind is not FragmentKind.COARSE
+                        or compute is None or compute.impl_ref != "moe_dispatch"
+                        or type(compute.workload) is not MoeFullTrainingBlockWorkload
+                        or compute.workload.kind is not MoeForwardBlockKind.DISPATCH
+                        or compute.workload.expert_count != 1
+                        or compute.workload.frozen_expert_by_token
+                           != (0,) * compute.workload.token_count
+                        or compute.workload.frozen_slot_by_token
+                           != tuple(range(compute.workload.token_count))
+                        or len(indices) != 2
+                        or tuple(records[index].opcode for index in indices)
+                           != (RecordOpcode.DTE_ISSUE, RecordOpcode.DTE_WAIT)
+                        or action.runtime_binding is None
+                        or action.runtime_binding.token_symbol is None):
+                    raise SchemaError("EP1 dispatch requires signed identity slot DTE copy",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                issue, wait = (records[index] for index in indices)
+                payload = compute.workload.token_count * compute.workload.hidden_size * 2
+                token = issue.operands[1].symbol_ref
+                token_symbol = runtime_symbols.get(token)
+                if (issue.operands[0].literal_value != 0
+                        or issue.operands[2].literal_value != payload * 8
+                        or issue.operands[3].literal_value != payload
+                        or issue.operands[4].literal_value != 0
+                        or wait.operands[0].symbol_ref != token
+                        or token_symbol is None
+                        or token_symbol.kind is not RuntimeSymbolKind.DTE_TOKEN
+                        or token_symbol.source_ref
+                           != action.runtime_binding.token_symbol):
+                    raise SchemaError("dispatch DTE payload/token differs from signed route",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                by_use = {(use.role, use.operand_index): use
+                          for use in action.buffer_uses}
+                if (len(by_use) != 3
+                        or set(by_use) != {
+                            (BufferUseRole.COMP_INPUT, 0),
+                            (BufferUseRole.COMP_INPUT, 1),
+                            (BufferUseRole.COMP_OUTPUT, 0),
+                        }):
+                    raise SchemaError("dispatch buffer roles are incomplete",
+                                      path=f"{path}.buffer_abi")
+                local_abis = {}
+                for key, use in by_use.items():
+                    matches = tuple(abi for abi in self.buffer_abi
+                                    if (abi.schedule_id, abi.binding_id)
+                                    == (action.source.schedule_id, use.binding_id))
+                    if len(matches) != 1:
+                        raise SchemaError("dispatch lacks exact BufferABI",
+                                          path=f"{path}.buffer_abi")
+                    local_abis[key] = matches[0]
+                source = local_abis[(BufferUseRole.COMP_INPUT, 0)]
+                route = local_abis[(BufferUseRole.COMP_INPUT, 1)]
+                output = local_abis[(BufferUseRole.COMP_OUTPUT, 0)]
+                if (source.dtype is not DType.FP16
+                        or route.dtype is not DType.INT32
+                        or output.dtype is not DType.FP16
+                        or route.tensor_slice.shape != (compute.workload.token_count, 5)
+                        or route.size_bytes != 20 * compute.workload.token_count
+                        or source.tensor_slice.shape != (
+                            compute.workload.token_count, compute.workload.hidden_size)
+                        or output.tensor_slice.shape != source.tensor_slice.shape
+                        or source.size_bytes != payload
+                        or output.size_bytes != payload
+                        or source.logical_core != output.logical_core
+                        or source.region_ref != output.region_ref):
+                    raise SchemaError("dispatch must copy exact EP1 FP16 identity slots",
+                                      path=f"{path}.buffer_abi")
+            elif (action.task_kind is SemanticTaskKind.COMP
                     and action.op_kind is OpKind.MOE_ROUTER):
                 compute = action.compute
                 if (self.producer_pass != "moe_full_train_router_lowering"
@@ -5554,10 +5625,11 @@ def _address_operand_role(
 ) -> tuple[BufferUseRole, int]:
     if (action is not None
             and action.task_kind is SemanticTaskKind.COMP
-            and action.op_kind is OpKind.MOE_ROUTE_FREEZE
+            and action.op_kind in (OpKind.MOE_ROUTE_FREEZE, OpKind.MOE_DISPATCH)
             and opcode is RecordOpcode.DTE_ISSUE):
         if operand_id is SemanticOperandId.SOURCE_ADDRESS:
-            return BufferUseRole.COMP_INPUT, 1
+            return BufferUseRole.COMP_INPUT, (
+                1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
         if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
             return BufferUseRole.COMP_OUTPUT, 0
     if opcode is RecordOpcode.SRAM_BIND:
@@ -7415,10 +7487,12 @@ class LinkedProgramManifest:
             action: GlobalAction,
         ) -> tuple[BufferUseRole, int]:
             if (action.task_kind is SemanticTaskKind.COMP
-                    and action.op_kind is OpKind.MOE_ROUTE_FREEZE
+                    and action.op_kind in (OpKind.MOE_ROUTE_FREEZE,
+                                           OpKind.MOE_DISPATCH)
                     and opcode is RecordOpcode.DTE_ISSUE):
                 if operand_id is SemanticOperandId.SOURCE_ADDRESS:
-                    return BufferUseRole.COMP_INPUT, 1
+                    return BufferUseRole.COMP_INPUT, (
+                        1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
                 if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
                     return BufferUseRole.COMP_OUTPUT, 0
             if opcode is RecordOpcode.SRAM_BIND:
