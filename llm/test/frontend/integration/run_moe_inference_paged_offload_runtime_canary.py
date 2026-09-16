@@ -48,6 +48,7 @@ from llm.test.frontend.unit.test_moe_full_model_compile_sequence import _legacy_
 from llm.test.frontend.unit.test_workload_materialization import _capability
 
 from .flexible_mesh_release_hardware import specialize_p5_large_release_hardware
+from .run_dense_sequence_runtime_canary import _bind_native_hardware_to_fabric
 from .run_moe_full_model_sequence_runtime_canary import (
     build_full_model_program_io, prove_full_model_dataflow,
 )
@@ -369,6 +370,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         program_io_paths.append(paged_io_path)
         source_digests.append(canonical_digest(original))
     hardware = json.loads(specialize_p5_large_release_hardware(1, 2))
+    native_core_grid = _bind_native_hardware_to_fabric(hardware, source_fabric)
+    if native_core_grid != (2, 2):
+        raise RuntimeError("MoE low-HBM native/Fabric Die core grid must be 2x2")
     hardware["memory"]["sram_size"] = 131072
     hardware["memory"]["sram"]["capacity_bytes"] = 131072
     access = ["compute", "dte", "lsu", "legacy", "noc_rx"]
@@ -441,6 +445,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         **actual[0],
         "paired_fresh_runs":2,
         "mesh":"1x2","ep":2,"active_die_ids":[0,1],
+        "frontend_core_grid":list(source_fabric.dies[0].noc_grid),
+        "native_core_grid":list(native_core_grid),
         "resident_rejection_code":resident_rejection,
         "resident_rejection_detail":resident_rejection_detail,
         "hbm_capacity_bytes_per_die":1024,
