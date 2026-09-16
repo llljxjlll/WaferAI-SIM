@@ -2018,7 +2018,8 @@ int sc_main(int argc, char *argv[]) {
             sidecar_stream >> sidecar_json;
             const auto schema = sidecar_json.at("schema_version").get<std::string>();
             const uint64_t die_count = schema ==
-                "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
+                "wafer_frontend.moe_inference_paged_runtime/v3alpha1" ? 6 :
+                schema == "wafer_frontend.moe_inference_paged_runtime/v2alpha1" ? 4 : 2;
             if (DIE_X <= 0 || DIE_Y <= 0 || DIE_COUNT != static_cast<int>(die_count) ||
                 DIE_X * DIE_Y != static_cast<int>(die_count))
                 throw std::runtime_error("paged MoE inference physical Die mesh differs from EP");
@@ -2525,11 +2526,11 @@ int sc_main(int argc, char *argv[]) {
                 stats.hbm_read_bytes != writes)
                 throw std::runtime_error(
                     "full MoE inference shared DMA/StateABI drain disagreed with signed byte oracle");
-            if (moe_inference_mid_program_pager->ActiveDieCount() == 4) {
+            if (moe_inference_mid_program_pager->ActiveDieCount() >= 4) {
                 if (moe_inference_mid_program_pager->AdmissionWaitedEvents() == 0 ||
                     moe_inference_mid_program_pager->AdmissionWaitCycles() == 0)
                     throw std::runtime_error(
-                        "four EP cores did not exercise bounded two-request DMA admission");
+                        "multi-Die EP cores did not exercise bounded two-request DMA admission");
                 std::cout << "[MOE_INFERENCE_PAGED_ADMISSION_DRAIN] waited_events="
                           << moe_inference_mid_program_pager->AdmissionWaitedEvents()
                           << " wait_cycles="
