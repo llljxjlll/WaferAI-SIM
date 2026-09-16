@@ -42,7 +42,7 @@ class MoeFullTrainForwardIr0Test(unittest.TestCase):
             phase, original_dense=self.forward, sequence=self.sequence,
         )
         self.assertEqual(len(phase.graph.nodes),32)
-        self.assertEqual(len(phase.graph.persistent_states),27)
+        self.assertEqual(len(phase.graph.persistent_states),29)
         self.assertEqual(len(phase.ep_state_owners),16)
         self.assertEqual(len(phase.shared_source_state_refs),11)
         self.assertEqual(len(phase.removed_dense_op_refs),6)
@@ -65,7 +65,7 @@ class MoeFullTrainForwardIr0Test(unittest.TestCase):
         self.assertEqual({owner.ep_owner for owner in phase.ep_state_owners}, {0})
         self.assertEqual(len(phase.removed_dense_op_refs), 6)
         self.assertEqual(len(phase.shared_source_state_refs), 11)
-        self.assertEqual(len(phase.graph.persistent_states), 19)
+        self.assertEqual(len(phase.graph.persistent_states), 21)
         for layer in (0, 1):
             prefix = f"T0.layer{layer}."
             nodes = {node.id: node for node in phase.graph.nodes}

@@ -129,6 +129,11 @@ class MoeFullTrainForwardValidator:
                 node_ref=weight.consumers[0], state_ref=state.id,
                 mode=StateAccessMode.READ,rank=owner.tp_shard,
             ))
+        for layer, state_ref in enumerate(phase.route_state_refs):
+            expected_accesses.add(StateAccess.create(
+                node_ref=f"{graph.instances[0].id}.layer{layer}.moe.route_freeze",
+                state_ref=state_ref, mode=StateAccessMode.READ, rank=0,
+            ))
         if set(graph.state_accesses) != expected_accesses:
             raise SchemaError("source shared/EP forward parameter READ StateAccess mapping drifted",
                               path=f"{path}.state_accesses")

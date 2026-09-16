@@ -60,6 +60,7 @@ class FullMoeForwardIr0Phase:
     removed_dense_state_refs: tuple[str, ...]
     shared_source_state_refs: tuple[tuple[str, str], ...]
     ep_state_owners: tuple[MoeForwardEpStateOwner, ...]
+    route_state_refs: tuple[str, ...]
     step: int
 
     def validate(self) -> None:
@@ -77,6 +78,9 @@ class FullMoeForwardIr0Phase:
                 or any(new not in states for old, new in self.shared_source_state_refs)
                 or ep_degree not in (1, 2)
                 or len(self.ep_state_owners) != expected_ep_owners
+                or len(self.route_state_refs) != 2
+                or len(set(self.route_state_refs)) != 2
+                or any(ref not in states for ref in self.route_state_refs)
                 or {owner.source_state_decl_ref for owner in self.ep_state_owners}
                 != {owner.source_state_decl_ref for owner in self.ep_state_owners
                     if owner.source_state_decl_ref in states}
@@ -85,6 +89,32 @@ class FullMoeForwardIr0Phase:
                        for owner in self.ep_state_owners)):
             raise SchemaError("MoE source op/state removal or EP physical owner lost",
                               path="full_moe_forward_ir0")
+        values = {value.id: value for value in self.graph.values}
+        accesses = self.graph.state_accesses
+        instance = self.graph.instances[0]
+        for layer, state_ref in enumerate(self.route_state_refs):
+            state = states[state_ref]
+            route_ref = f"{instance.id}.layer{layer}.moe.route_table_source"
+            route = values.get(route_ref)
+            matched = tuple(access for access in accesses
+                            if access.state_ref == state_ref)
+            if (route is None
+                    or state.identity.kind is not StateKind.MOE_STATIC_ROUTE
+                    or state.identity.instance_ref != instance.id
+                    or state.identity.mesh_ref != instance.meshes[0].id
+                    or state.identity.layer_index != layer
+                    or state.identity.generation != self.step
+                    or state.identity.tensor_ref != route_ref
+                    or state.shape != route.shape
+                    or state.layout != route.logical_layout
+                    or route.producer is not None
+                    or route.consumers != (f"{instance.id}.layer{layer}.moe.route_freeze",)
+                    or len(matched) != 1
+                    or matched[0].node_ref != route.consumers[0]
+                    or matched[0].mode is not StateAccessMode.READ
+                    or matched[0].rank != 0):
+                raise SchemaError("static route HBM state must feed exact layer freeze",
+                                  path=f"full_moe_forward_ir0.route_state[{layer}]")
 
     def validate_against(self, dense: IR0,
                          sequence: MoeCompileSequence) -> None:
@@ -291,6 +321,7 @@ def build_moe_full_train_forward_ir0(
     removed_ops, removed_values, removed_states = set(), set(), set()
     states = list(dense_forward.persistent_states)
     owner_bindings: list[MoeForwardEpStateOwner] = []
+    route_state_refs: list[str] = []
     new_nodes: list[LogicalNode] = []
     new_values: list[TensorValue] = []
     altered_values: dict[str, TensorValue] = {}
@@ -397,8 +428,27 @@ def build_moe_full_train_forward_ir0(
         route_scores = add_value(prefix+"moe.router_scores",
                                  (tokens,model.num_experts), DType.FP16,
                                  router_ref, (freeze_ref,))
+        route_source = add_value(prefix+"moe.route_table_source",
+                                 (tokens,5), DType.INT32, None, (freeze_ref,))
         route = add_value(prefix+"moe.route_ids", (tokens,5), DType.INT32,
                           freeze_ref, (dispatch_ref, combine_ref))
+        route_identity = PersistentStateIdentity.create(
+            kind=StateKind.MOE_STATIC_ROUTE, instance_ref=initial.id, mesh_ref=mesh.id,
+            request_ref=sequence.materialization.request.case_id,
+            layer_index=layer, tensor_ref=route_source.id, shard_index=0,
+            generation=step,
+        )
+        route_state = PersistentStateDecl.create(
+            identity=route_identity, shape=route_source.shape, dtype=DType.INT32,
+            layout=route_source.logical_layout, lifetime=PersistentStateLifetime.STEP,
+            access=PersistentStateAccess.READ_ONLY,
+        )
+        states.append(route_state)
+        route_state_refs.append(route_state.id)
+        new_accesses.append(StateAccess.create(
+            node_ref=freeze_ref, state_ref=route_state.id,
+            mode=StateAccessMode.READ, rank=0,
+        ))
         router_weights = []
         for rank in range(ep_degree):
             weight = add_value(prefix+f"moe.router.weight.ep{rank}",
@@ -465,7 +515,7 @@ def build_moe_full_train_forward_ir0(
              (norm.id,*(weight.id for weight in router_weights)),
              (route_scores.id,)),
             (MoeForwardBlockKind.ROUTE_FREEZE,freeze_ref,
-             (route_scores.id,), (route.id,)),
+             (route_scores.id,route_source.id), (route.id,)),
             (MoeForwardBlockKind.DISPATCH,dispatch_ref,
              (norm.id,route.id), tuple(value.id for value in dispatches)),
             (MoeForwardBlockKind.COMBINE,combine_ref,
@@ -532,7 +582,8 @@ def build_moe_full_train_forward_ir0(
         tuple(unit.route_trace_ref for unit in sequence.units
               if unit.step == 0),
         tuple(sorted(removed_ops)),tuple(sorted(removed_states)),
-        tuple(sorted(old_to_new.items())),tuple(owner_bindings),step,
+        tuple(sorted(old_to_new.items())),tuple(owner_bindings),
+        tuple(route_state_refs),step,
     )
     result.validate()
     result.validate_against(dense_forward,sequence)

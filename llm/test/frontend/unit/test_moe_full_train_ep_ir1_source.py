@@ -110,7 +110,7 @@ class MoeFullTrainEpIr1SourceTest(unittest.TestCase):
         self.assertTrue(all(proof.physical_die==1 and proof.tp_shard==0
                             for proof in proofs))
         self.assertEqual(len(self.candidate.physical_ir1.
-                             persistent_state_manifest.bindings),27)
+                             persistent_state_manifest.bindings),29)
         actual_rank0_die=next(placement.die_id for placement in
                     self.placement.physical_group.placements
                     if placement.rank==0)

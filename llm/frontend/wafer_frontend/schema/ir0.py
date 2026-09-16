@@ -1645,7 +1645,7 @@ class LogicalNode:
         source_moe = {
             OpKind.MOE_ROUTER: (MoeForwardBlockKind.ROUTER,
                                 1+self.workload.expert_count,1),
-            OpKind.MOE_ROUTE_FREEZE: (MoeForwardBlockKind.ROUTE_FREEZE,1,1),
+            OpKind.MOE_ROUTE_FREEZE: (MoeForwardBlockKind.ROUTE_FREEZE,2,1),
             OpKind.MOE_DISPATCH: (MoeForwardBlockKind.DISPATCH,2,
                                   self.workload.expert_count),
             OpKind.MOE_EXPERT_FORWARD: (MoeForwardBlockKind.EXPERT,4,1),
@@ -2252,7 +2252,8 @@ class IR0:
                              *((((h,e),DType.FP16),) * e),
                              ((m,e),DType.FP16))
                 elif node.kind is OpKind.MOE_ROUTE_FREEZE:
-                    specs = (((m,e),DType.FP16),((m,5),DType.INT32))
+                    specs = (((m,e),DType.FP16),((m,5),DType.INT32),
+                             ((m,5),DType.INT32))
                 elif node.kind is OpKind.MOE_DISPATCH:
                     specs = (((m,h),DType.FP16),((m,5),DType.INT32),
                              *(((n,h),DType.FP16) for n in

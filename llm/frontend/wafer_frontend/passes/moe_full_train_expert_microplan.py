@@ -13,7 +13,8 @@ from ..schema.artifact_manifest import RecordOpcode
 from ..schema.common import DType, stable_artifact_id
 from ..schema.global_action import GlobalAction
 from ..schema.ir0 import OpKind
-from ..schema.ir2 import BufferBinding, BufferUseRole, IntraDieSchedule, SemanticTaskKind
+from ..schema.ir2 import BufferBinding, BufferOwnership, BufferUseRole, IntraDieSchedule, SemanticTaskKind
+from ..schema.ir1 import IR1
 from ..schema.moe_full_training_block_workload import MoeForwardBlockKind, MoeFullTrainingBlockWorkload
 
 
@@ -35,6 +36,7 @@ class MoeExpertNativeOp:
 class MoeExpertNativePlan:
     source_action_id: str
     source_schedule_id: str
+    source_ir1_ref: str
     source_operation_ref: str
     source_route_trace_digest: str
     logical_core_die: int
@@ -42,18 +44,25 @@ class MoeExpertNativePlan:
     runtime_core_id: int
     concat_scratch_bytes: int
     activated_scratch_bytes: int
+    scratch_region_ref: str
+    concat_region_offset_bytes: int
+    activated_region_offset_bytes: int
+    scratch_ownership: BufferOwnership
+    core_order_index: int
     operations: tuple[MoeExpertNativeOp, ...]
     id: str
 
 
 def plan_moe_expert_native_forward(
-    action: GlobalAction, schedule: IntraDieSchedule,
+    action: GlobalAction, schedule: IntraDieSchedule, ir1: IR1,
 ) -> MoeExpertNativePlan:
     """Derive four real operations from one scheduled physical expert.
 
     The two scratch roots are explicit requirements for N6 allocation; no
     source weight or public output is silently reused as scratch storage.
     """
+    if type(ir1) is not IR1:
+        raise SchemaError("expert scratch needs physical IR1 hardware", path="ir1")
     if (action.task_kind is not SemanticTaskKind.COMP
             or action.op_kind is not OpKind.MOE_EXPERT_FORWARD
             or action.compute is None
@@ -62,7 +71,8 @@ def plan_moe_expert_native_forward(
             or action.compute.workload.kind is not MoeForwardBlockKind.EXPERT
             or action.logical_core is None
             or action.source.schedule_id != schedule.id
-            or action.logical_core.die_id != schedule.die_id):
+            or action.logical_core.die_id != schedule.die_id
+            or action.core_order_index is None):
         raise SchemaError("requires one scheduled physical MoE expert COMP", path="action")
     workload = action.compute.workload
     workload.validate("action.compute.workload")
@@ -107,6 +117,40 @@ def plan_moe_expert_native_forward(
     concat = f"{action.id}:gate_up_concat"
     activated = f"{action.id}:swiglu_activated"
     projection_bytes = 2*m*i
+    region_refs = {binding.region_ref for binding in selected}
+    if len(region_refs) != 1:
+        raise SchemaError("expert operands need one physical SRAM region",
+                          path="action.buffer_uses")
+    region_ref = next(iter(region_refs))
+    die = next((die for die in ir1.fabric.dies
+                if die.id == action.logical_core.die_id), None)
+    core = (next((core for core in die.cores
+                  if core.local_core_id == action.logical_core.local_core_id
+                  and core.runtime_core_id == runtime_core_id), None)
+            if die is not None else None)
+    profile = (next((profile for profile in ir1.fabric.sram_profiles
+                     if profile.id == core.sram_profile_ref), None)
+               if core is not None else None)
+    region = (next((region for region in profile.regions
+                    if region.id == region_ref), None)
+              if profile is not None else None)
+    if region is None:
+        raise SchemaError("expert scratch region is absent from actual physical core",
+                          path="ir1.fabric")
+    active = tuple(binding for binding in schedule.buffer_bindings
+                   if binding.core_id == runtime_core_id
+                   and binding.region_ref == region_ref)
+    high = max(binding.region_offset_bytes + binding.size_bytes
+               for binding in active)
+    alignment = profile.allocation_alignment_bytes
+    concat_offset = (high + alignment - 1) // alignment * alignment
+    activated_offset = (concat_offset + 2*projection_bytes + alignment - 1) // alignment * alignment
+    scratch_end = activated_offset + projection_bytes
+    if (scratch_end > region.size_bytes
+            or region.base_bytes + scratch_end > profile.capacity_bytes
+            or region.base_bytes + scratch_end > (1 << 16)):
+        raise SchemaError("two distinct expert scratch roots exceed physical SRAM",
+                          path="ir1.fabric.sram_profiles")
     operations = (
         MoeExpertNativeOp("gate", RecordOpcode.MATMUL, (1,m,h,i), activation.id,
                           gate.id, concat, 2*m*h, 2*h*i, projection_bytes, 0),
@@ -121,7 +165,9 @@ def plan_moe_expert_native_forward(
     # cannot change a binding while retaining the old signed schedule id.
     action.validate("action")
     schedule.validate("schedule")
+    ir1.validate("ir1")
     semantic = dict(source_action_id=action.id, source_schedule_id=schedule.id,
+                    source_ir1_ref=ir1.id,
                     source_operation_ref=workload.source_operation_ref,
                     source_route_trace_digest=workload.source_route_trace_digest,
                     logical_core_die=action.logical_core.die_id,
@@ -129,6 +175,11 @@ def plan_moe_expert_native_forward(
                     runtime_core_id=runtime_core_id,
                     concat_scratch_bytes=2*projection_bytes,
                     activated_scratch_bytes=projection_bytes,
+                    scratch_region_ref=region_ref,
+                    concat_region_offset_bytes=concat_offset,
+                    activated_region_offset_bytes=activated_offset,
+                    scratch_ownership=BufferOwnership.OWNED,
+                    core_order_index=action.core_order_index,
                     operations=operations)
     return MoeExpertNativePlan(**semantic, id=stable_artifact_id(
         "moe_expert_native_plan", semantic, schema_version="moe_expert_native_plan/v1"))

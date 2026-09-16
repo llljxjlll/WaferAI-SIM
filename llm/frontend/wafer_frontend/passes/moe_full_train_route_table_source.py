@@ -73,9 +73,12 @@ def build_moe_full_train_route_table_source(
         trace = traces.get((unit.step, unit.layer))
         route_ref = f"{prefix}.layer{unit.layer}.moe.route_ids"
         value = values.get(route_ref)
+        state_source = values.get(f"{prefix}.layer{unit.layer}.moe.route_table_source")
         assignments = tuple(sorted(unit.spec.trace.assignments,
                                    key=lambda item: item.token_index))
-        if (trace is None or value is None
+        if (trace is None or value is None or state_source is None
+                or state_source.shape != value.shape
+                or state_source.dtype is not DType.INT32
                 or unit.route_trace_ref != trace.id
                 or unit.route_trace_digest != canonical_digest(trace)
                 or value.shape != (trace.token_count, 5)

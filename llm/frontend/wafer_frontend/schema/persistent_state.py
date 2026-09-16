@@ -38,6 +38,7 @@ class StateKind(str, Enum):
     PARAMETER = "parameter"
     TRAINABLE_PARAMETER = "trainable_parameter"
     ACTIVATION = "activation"
+    MOE_STATIC_ROUTE = "moe_static_route"
     KV_KEY = "kv_key"
     KV_VALUE = "kv_value"
     OPTIMIZER_RESERVED = "optimizer_reserved"
@@ -220,6 +221,11 @@ class PersistentStateIdentity:
                     "parameter/optimizer state cannot carry request or layer fields",
                     path=path,
                 )
+        elif self.kind is StateKind.MOE_STATIC_ROUTE:
+            if (self.request_ref is None or self.layer_index is None
+                    or self.tensor_ref is None):
+                raise SchemaError("static MoE route needs request, layer and source tensor",
+                                  path=path)
         else:
             if self.request_ref is None or self.layer_index is None:
                 raise SchemaError("KV state requires request_ref and layer_index", path=path)
@@ -327,9 +333,18 @@ class PersistentStateDecl:
                     "AdamW state kind requires FP32 tensors or an INT32 scalar step",
                     path=path,
                 )
+        elif self.identity.kind is StateKind.MOE_STATIC_ROUTE:
+            if (self.dtype is not DType.INT32 or len(self.shape) != 2
+                    or self.shape[1] != 5
+                    or not self.layout.startswith("MoE_")
+                    or not self.layout.endswith(".moe.route_table_source")):
+                raise SchemaError(
+                    "static MoE route needs five INT32 fields per token",
+                    path=f"{path}.dtype",
+                )
         elif self.dtype is DType.INT32:
             raise SchemaError(
-                "INT32 persistent state is reserved for AdamW step",
+                "INT32 persistent state is reserved for AdamW step or static MoE route",
                 path=f"{path}.dtype",
             )
         if self.identity.kind is StateKind.PARAMETER:
@@ -348,6 +363,12 @@ class PersistentStateDecl:
                 raise SchemaError(
                     "trainable parameter must be PERSISTENT and READ_WRITE",
                     path=path,
+                )
+        elif self.identity.kind is StateKind.MOE_STATIC_ROUTE:
+            if (self.lifetime is not PersistentStateLifetime.STEP
+                    or self.access is not PersistentStateAccess.READ_ONLY):
+                raise SchemaError(
+                    "static MoE route must be STEP and READ_ONLY", path=path
                 )
         elif self.identity.kind in (StateKind.KV_KEY, StateKind.KV_VALUE):
             if (

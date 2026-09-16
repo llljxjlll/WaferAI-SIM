@@ -94,7 +94,7 @@ def _physical_ep_state_manifest(
     bindings=tuple(HbmBinding.create(
         state_ref=home.declaration_ref,die_id=home.die_id,
         address=home.physical_address,size_bytes=home.tensor_size,
-    ) for home in (*layout.shared,*layout.ep))
+    ) for home in (*layout.shared,*layout.ep,*layout.routes))
     return PersistentStateManifest.create(
         address_spaces=context.hbm_address_spaces,
         declarations=phase.graph.persistent_states,bindings=bindings,

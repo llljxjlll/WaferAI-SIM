@@ -167,7 +167,7 @@ class MoeFullTrainEpPlacementTest(unittest.TestCase):
         self.assertEqual(placement.physical_group.embedding.routes, ())
         self.assertEqual(len(placement.hbm_layout.shared), 11)
         self.assertEqual(len(placement.hbm_layout.ep), 8)
-        self.assertEqual(len(placement.persistent_state_manifest.bindings), 19)
+        self.assertEqual(len(placement.persistent_state_manifest.bindings), 21)
         from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
             build_moe_ep_placed_ir1_candidate,
         )
@@ -195,11 +195,11 @@ class MoeFullTrainEpPlacementTest(unittest.TestCase):
         self.assertEqual(len(placement.physical_group.embedding.routes),2)
         self.assertEqual((len(placement.hbm_layout.shared),
                           len(placement.hbm_layout.ep)),(11,16))
-        self.assertEqual(len(placement.persistent_state_manifest.declarations),27)
-        self.assertEqual(len(placement.persistent_state_manifest.bindings),27)
+        self.assertEqual(len(placement.persistent_state_manifest.declarations),29)
+        self.assertEqual(len(placement.persistent_state_manifest.bindings),29)
         self.assertEqual({die:sum(binding.die_id==die for binding in
                           placement.persistent_state_manifest.bindings)
-                          for die in (0,1)},{0:19,1:8})
+                          for die in (0,1)},{0:21,1:8})
         homes=placement.hbm_layout.ep
         for layer in (0,1):
             for die in (0,1):

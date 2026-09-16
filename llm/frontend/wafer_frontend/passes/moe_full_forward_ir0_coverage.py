@@ -43,12 +43,13 @@ def require_moe_full_forward_ir0_coverage(
         expert_nodes = tuple(nodes.get(prefix+f"moe.expert{expert}")
                              for expert in range(request.model.num_experts))
         route = values.get(prefix+"moe.route_ids")
+        route_source = values.get(prefix+"moe.route_table_source")
         score = values.get(prefix+"moe.router_scores")
         combined = values.get(prefix+"moe.combine_out")
         trace = next((trace for trace in
                       sequence.materialization.logical_graph.route_traces
                       if (trace.step,trace.layer)==(step,layer)),None)
-        if (None in (router,freeze,dispatch,combine,residual,route,score,
+        if (None in (router,freeze,dispatch,combine,residual,route,route_source,score,
                      combined,trace) or any(node is None for node in
                                              expert_nodes)):
             raise SchemaError("shared router/dispatch/expert/combine/residual layer incomplete",
@@ -63,7 +64,11 @@ def require_moe_full_forward_ir0_coverage(
                 or norm.consumers != (router.id,dispatch.id)
                 or router.inputs != (norm.id,*expected_router_weights)
                 or router.outputs != (score.id,)
-                or freeze.inputs != (score.id,)
+                or freeze.inputs != (score.id,route_source.id)
+                or route_source.shape != route.shape
+                or route_source.dtype is not DType.INT32
+                or route_source.producer is not None
+                or route_source.consumers != (freeze.id,)
                 or freeze.outputs != (route.id,)
                 or route.dtype is not DType.INT32
                 or route.shape != (trace.token_count, 5)
