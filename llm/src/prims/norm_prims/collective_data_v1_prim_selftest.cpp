@@ -58,7 +58,7 @@ void Append(std::vector<uint8_t> *target,
 
 sram::Config TestConfig() {
     sram::Config config;
-    config.capacity_bytes = 1024;
+    config.capacity_bytes = 2048;
     config.allocation_alignment_bytes = 1;
     config.bank_count = 4;
     config.bank_interleave_bytes = 16;
@@ -95,7 +95,7 @@ struct CollectiveDataV1PrimBench final : sc_module {
     CoreHWConfig *hardware = nullptr;
 
     explicit CollectiveDataV1PrimBench(sc_module_name name)
-        : sc_module(name), storage(1024, true), regions(TestConfig()),
+        : sc_module(name), storage(2048, true), regions(TestConfig()),
           access("collective_data_v1_access", regions, storage) {
         hardware = new CoreHWConfig(
             0, nullptr, nullptr, new VectorConfig(2, 1), "", 0, 128);
@@ -360,6 +360,52 @@ struct CollectiveDataV1PrimBench final : sc_module {
               }), "V3 rejects a stride below the logical input length");
     }
 
+    void TestDp2Fp32RealShardExtents(TaskCoreContext &context) {
+        for (const uint64_t bytes : {32, 64, 128, 256, 384, 512}) {
+            const uint64_t stride = ((bytes + 63) / 64) * 64;
+            std::vector<uint8_t> physical(2 * stride, 0x55);
+            const auto replica0 = Fp32({0x3f800000u}); // 1.0
+            const auto replica1 = Fp32({0x40000000u}); // 2.0
+            for (uint64_t element = 0; element < bytes / 4; ++element) {
+                std::copy(replica0.begin(), replica0.end(),
+                          physical.begin() + element * 4);
+                std::copy(replica1.begin(), replica1.end(),
+                          physical.begin() + stride + element * 4);
+            }
+            Seed(0x100, physical);
+            Collective_data_v1_prim prim;
+            prim.mode = CollectiveDataV1PrimMode::REDUCE;
+            prim.key = {};
+            prim.source_address_bytes = 0x100;
+            prim.destination_address_bytes = 0x100 + 2 * stride;
+            prim.length_bytes = bytes;
+            prim.input_count = 2;
+            prim.input_stride_bytes = stride;
+            prim.dtype = CollDType::FP32;
+            prim.output_dtype = CollDType::FP32;
+            prim.reduce_op = CollReduceOp::SUM;
+            const auto wire = prim.serialize();
+            Collective_data_v1_prim decoded;
+            decoded.deserialize(wire);
+            // Tight spacing is V1's implicit stride (encoded as zero); only
+            // physical padding needs the explicit V3 rank-stride wire.
+            Check(decoded.input_stride_bytes == (stride > bytes ? stride : 0) &&
+                      wire[0].range(23, 16).to_uint64() ==
+                          (stride > bytes ? kCollectiveDataV3StrideWireVersion
+                                          : kCollectiveDataV1PrimWireVersion) &&
+                      decoded.length_bytes == bytes &&
+                      decoded.input_count == 2,
+                  "DP2 FP32 source-derived gradient bytes/stride survive native wire");
+            (void)decoded.taskCoreDefault(context);
+            std::vector<uint8_t> expected;
+            const auto three = Fp32({0x40400000u});
+            for (uint64_t element = 0; element < bytes / 4; ++element)
+                Append(&expected, three);
+            Check(storage.Read(prim.destination_address_bytes, bytes) == expected,
+                  "DP2 FP32 native SUM reads both real rank shards, not padding");
+        }
+    }
+
     void TestWrappingAndN1(TaskCoreContext &context) {
         std::vector<uint8_t> source;
         Append(&source, Le64(std::numeric_limits<uint64_t>::max()));
@@ -434,6 +480,7 @@ struct CollectiveDataV1PrimBench final : sc_module {
         TestLocalFp16(context);
         TestLocalFp32(context);
         TestPhysicalRankStride(context);
+        TestDp2Fp32RealShardExtents(context);
         TestWrappingAndN1(context);
         TestFailureAtomicity(context);
         Check(access.outstanding() == 0,
