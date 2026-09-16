@@ -281,6 +281,39 @@ def main() -> None:
                 or "[DRAIN] d2d_link_residual=0" not in content):
             raise RuntimeError(f"step{step} native CE backward audit failed")
         receipts[step]["npusim_log_sha256"] = _sha(log)
+    sequence_log_sha256 = None
+    if args.router_sgd:
+        sequence_log = output / "router_sgd_partial_sequence.npusim.log"
+        _run([
+            str(npusim),
+            "--program-sequence", ",".join(str(output / f"step{step}.npup")
+                                            for step in (0, 1)),
+            "--linked-manifest-sequence", ",".join(
+                str(output / f"step{step}.linked.json") for step in (0, 1)),
+            "--program-io-sequence", ",".join(
+                str(output / f"step{step}.program_io.json") for step in (0, 1)),
+            "--moe-router-sgd-partial-sequence",
+            "--hardware-config", str(hardware_path),
+            "--simulation-config", str(simulation),
+            "--mapping-config", str(mapping), "--trace-window", "1000000",
+        ], cwd=npusim.parent, log=sequence_log)
+        content = sequence_log.read_text()
+        required = (
+            "[MOE_ROUTER_SGD_PARTIAL_STATE] version=0 bytes=952",
+            "[MOE_ROUTER_SGD_PARTIAL_STATE] version=1 bytes=952",
+            "[MOE_ROUTER_SGD_PARTIAL_STATE] version=2 bytes=952",
+            "[MOE_ROUTER_SGD_PARTIAL_INPUT] index=1 prior_store_completed=1 same_hbm_state=1",
+            "[MOE_ROUTER_SGD_PARTIAL_SEQUENCE_STEP] index=0 input_version=0 output_version=1 trainable_states=19 route_states=2 records=254 sgd=1 store=1",
+            "[MOE_ROUTER_SGD_PARTIAL_SEQUENCE_STEP] index=1 input_version=1 output_version=2 trainable_states=19 route_states=2 records=254 sgd=1 store=1",
+            "[DENSE_SEQUENCE_DRAIN] segments=2 one_shot=1",
+            "lsu_hbm_write_bytes=16",
+        )
+        if (any(content.count(marker) != 1 for marker in required)
+                or content.count("[TRAIN_SGD]") != 2
+                or "[CREDIT] data_balanced=1 ctrl_balanced=1" not in content
+                or "[DRAIN] d2d_link_residual=0" not in content):
+            raise RuntimeError("MoE router SGD partial native sequence audit failed")
+        sequence_log_sha256 = _sha(sequence_log)
     repo = Path(__file__).resolve().parents[4]
     source_files = (
         "llm/frontend/wafer_frontend/passes/moe_full_train_ce_backward_ir0.py",
@@ -315,6 +348,7 @@ def main() -> None:
                 "head_backward_physical_partial" if args.head_backward else
                 "ce_backward_physical_partial"),
         full_training_gate="closed", steps=receipts,
+        router_sgd_partial_sequence_log_sha256=sequence_log_sha256,
         finalizer_sha256=_sha(finalizer), resolver_sha256=_sha(resolver),
         npusim_sha256=_sha(npusim), hardware_sha256=_sha(hardware_path),
         simulation_sha256=_sha(simulation),
