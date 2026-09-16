@@ -508,6 +508,7 @@ StateKindDto ParseStateKind(const Json &value, const std::string &path) {
     if (raw == "optimizer_moment1") return StateKindDto::OPTIMIZER_MOMENT1;
     if (raw == "optimizer_moment2") return StateKindDto::OPTIMIZER_MOMENT2;
     if (raw == "optimizer_step") return StateKindDto::OPTIMIZER_STEP;
+    if (raw == "moe_static_route") return StateKindDto::MOE_STATIC_ROUTE;
     Fail(path, "unknown StateKind");
 }
 
@@ -701,8 +702,9 @@ StateAbiDto ParseStateAbi(const Json &value, const std::string &path) {
     if ((adamw_state && (result.dtype != required_optimizer_dtype ||
                          (result.kind == StateKindDto::OPTIMIZER_STEP &&
                           result.shape != std::vector<uint64_t>{1}))) ||
-        (!adamw_state && result.dtype == BufferDTypeDto::INT32))
-        Fail(path + ".dtype", "only AdamW step StateABI may be an INT32 scalar");
+        (!adamw_state && result.kind != StateKindDto::MOE_STATIC_ROUTE &&
+         result.dtype == BufferDTypeDto::INT32))
+        Fail(path + ".dtype", "INT32 StateABI needs AdamW step or MoE static route");
     result.layout = String(Field(value, "layout"), path + ".layout");
     result.die_id = U64(Field(value, "die_id"), path + ".die_id");
     result.address = U64(Field(value, "address"), path + ".address");
@@ -746,6 +748,12 @@ StateAbiDto ParseStateAbi(const Json &value, const std::string &path) {
             result.access != StateAccessDto::READ_WRITE)
             Fail(path,
                  "trainable parameter must be PERSISTENT and READ_WRITE");
+    } else if (result.kind == StateKindDto::MOE_STATIC_ROUTE) {
+        if (result.lifetime != StateLifetimeDto::STEP ||
+            result.access != StateAccessDto::READ_ONLY ||
+            result.dtype != BufferDTypeDto::INT32 ||
+            result.shape.size() != 2 || result.shape[1] != 5)
+            Fail(path, "MoE static route StateABI must be STEP/READ_ONLY/INT32[K,5]");
     } else if (result.kind == StateKindDto::ACTIVATION) {
         if (result.lifetime != StateLifetimeDto::STEP ||
             result.access != StateAccessDto::READ_WRITE ||
@@ -3657,7 +3665,8 @@ std::set<std::string> ValidateActionSequence(
     bool moe_calibration_link,
     bool flexible_dense_backward_link,
     bool unfused_link,
-    const std::set<std::string> &moe_terminal_labels) {
+    const std::set<std::string> &moe_terminal_labels,
+    const std::set<std::string> &moe_expert_actions) {
     std::set<std::string> completed;
     std::set<std::string> allocated_once;
     std::set<std::string> freed_once;
@@ -3717,6 +3726,22 @@ std::set<std::string> ValidateActionSequence(
             !action_allocated_labels.empty() &&
             action_allocated_labels.size() <= 2)
             valid_body = true;
+        else if (moe_expert_actions.count(action) == 1 &&
+                 suffix == cursor + 8 &&
+                 records[cursor]->opcode == Opcode::SRAM_BIND &&
+                 records[cursor + 1]->opcode == Opcode::MATMUL &&
+                 records[cursor + 2]->opcode == Opcode::SRAM_BIND &&
+                 records[cursor + 3]->opcode == Opcode::MATMUL &&
+                 records[cursor + 4]->opcode == Opcode::SRAM_BIND &&
+                 records[cursor + 5]->opcode == Opcode::SWIGLU &&
+                 records[cursor + 6]->opcode == Opcode::SRAM_BIND &&
+                 records[cursor + 7]->opcode == Opcode::MATMUL) {
+            for (std::size_t pair = 0; pair < 4; ++pair)
+                if (records[cursor + 2*pair]->operands.empty() ||
+                    LiteralU64(records[cursor + 2*pair]->operands[0], path) != 1)
+                    Fail(path, "MoE expert pair requires one SRAM_BIND input");
+            valid_body = true;
+        }
         else if (s3_lite_backward_link && suffix == cursor + 3 &&
             records[cursor]->opcode == Opcode::SRAM_BIND &&
             records[cursor + 1]->opcode == Opcode::SGD_UPDATE &&
@@ -7207,9 +7232,10 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                                [](const StateAbiDto &item) { return item.id; });
             for (const StateAbiDto &abi : fragment.state_abi) {
                 if (abi.dtype == BufferDTypeDto::INT32 &&
-                    abi.kind != StateKindDto::OPTIMIZER_STEP)
+                    abi.kind != StateKindDto::OPTIMIZER_STEP &&
+                    abi.kind != StateKindDto::MOE_STATIC_ROUTE)
                     Fail("command_fragment.state_abi",
-                         "only the AdamW step StateABI may be INT32");
+                         "INT32 StateABI needs AdamW step or MoE static route");
                 const auto previous = known_state_abi.find(abi.id);
                 if (previous != known_state_abi.end() &&
                     !SameStateAbi(*previous->second, abi))
@@ -8216,6 +8242,21 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         };
         std::vector<LocalNocUse> local_noc_uses;
 
+        const std::set<std::string> moe_expert_actions = [&]() {
+            std::set<std::string> result;
+            for (const LinkedFragmentDto &linked : manifest.fragments) {
+                const CommandFragmentDto &fragment = Leaf(linked);
+                if (fragment.producer_pass != "moe_full_train_expert_lowering")
+                    continue;
+                if (!std::holds_alternative<CommandFragmentDto>(linked) ||
+                    fragment.kind != FragmentKindDto::COARSE ||
+                    fragment.claimed_action_ids.size() != 1 ||
+                    !result.insert(fragment.claimed_action_ids.front()).second)
+                    Fail("linked_program_manifest.fragments",
+                         "MoE expert producer must claim one unique coarse action");
+            }
+            return result;
+        }();
         for (std::size_t core_index = 0; core_index < pending.size(); ++core_index) {
             const LinkedCoreStreamDto &linked = *pending[core_index].linked;
             ProgramCore core;
@@ -8429,7 +8470,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         moe_calibration_link,
                         flexible_dense_backward_link,
                         unfused_link,
-                        moe_terminal_labels);
+                        moe_terminal_labels,
+                        moe_expert_actions);
                 }();
             std::size_t persistent_tape_allocations = 0;
             for (std::size_t index = 0; index < source_records.size(); ++index) {
@@ -8638,6 +8680,19 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                      "BufferABI dtype does not match the record operand ABI");
             const ProgramSymbolDefinitionDto &definition =
                 *symbols.at(relocation->symbol_ref).definition;
+            const bool strided_reduce_source =
+                record.opcode == Opcode::LOCAL_REDUCE &&
+                binding.operand_id == SemanticOperandId::SOURCE_ADDRESS &&
+                abis.size() > 1 &&
+                LiteralU64(record.operands[8], "LOCAL_REDUCE.input_stride_bytes") >
+                    CheckedMultiply(
+                        LiteralU64(record.operands[7], "LOCAL_REDUCE.element_count"),
+                        LiteralU64(record.operands[0], "LOCAL_REDUCE.input_dtype") == 1
+                            ? 4 : 2,
+                        "LOCAL_REDUCE.input_bytes");
+            const uint64_t reduce_stride = strided_reduce_source
+                ? LiteralU64(record.operands[8], "LOCAL_REDUCE.input_stride_bytes")
+                : 0;
             const ProgramSymbolDefinitionDto *region = nullptr;
             uint64_t next_offset = abis.front()->region_offset_bytes;
             const uint64_t span_offset = next_offset;
@@ -8672,11 +8727,15 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     Fail("linked_program_manifest.address_operand_bindings",
                          "one address operand cannot span multiple regions");
                 region = found_region;
-                if (next_offset > std::numeric_limits<uint64_t>::max() -
-                                      abi->size_bytes)
+                const uint64_t advance = strided_reduce_source &&
+                    index + 1 < abis.size() ? reduce_stride : abi->size_bytes;
+                if (strided_reduce_source && abi->size_bytes > reduce_stride)
+                    Fail("linked_program_manifest.address_operand_bindings",
+                         "LOCAL_REDUCE strided source BufferABI overlaps its next rank");
+                if (next_offset > std::numeric_limits<uint64_t>::max() - advance)
                     Fail("linked_program_manifest.address_operand_bindings",
                          "BufferABI span overflows uint64");
-                next_offset += abi->size_bytes;
+                next_offset += advance;
                 DenseViewSpan view = DenseRowMajorViewSpan(
                     abi->tensor_slice, binding.tensor_slices[index], abi->dtype,
                     "linked_program_manifest.address_operand_bindings.tensor_slices");
@@ -8899,6 +8958,30 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                 uint64_t expected_addend = 0;
                 if (abis.size() == 1) {
                     expected_addend = views.front().addend;
+                    constexpr std::string_view kConcatSuffix = ":gate_up_concat";
+                    const std::string &value_id = abis.front()->value_id;
+                    const bool second_expert_projection =
+                        owner_fragment != fragments.end() &&
+                        owner_fragment->second->producer_pass ==
+                            "moe_full_train_expert_lowering" &&
+                        record.opcode == Opcode::MATMUL &&
+                        binding.operand_id ==
+                            SemanticOperandId::COMPUTE_OUTPUT_ADDRESS &&
+                        value_id.size() >= kConcatSuffix.size() &&
+                        value_id.compare(value_id.size() - kConcatSuffix.size(),
+                                         kConcatSuffix.size(), kConcatSuffix) == 0 &&
+                        abis.front()->size_bytes % 2 == 0 &&
+                        std::count_if(
+                            stream->second->records.begin(),
+                            stream->second->records.begin() +
+                                static_cast<std::ptrdiff_t>(binding.fragment_record_index),
+                            [&](const RelocatableRecordDto &item) {
+                                return item.source_global_action_id ==
+                                           record.source_global_action_id &&
+                                       item.opcode == Opcode::MATMUL;
+                            }) == 1;
+                    if (second_expert_projection)
+                        expected_addend = abis.front()->size_bytes / 2;
                 } else {
                     if (record.opcode != Opcode::LOCAL_REDUCE ||
                         binding.operand_id != SemanticOperandId::SOURCE_ADDRESS ||
@@ -8931,10 +9014,16 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         record.operands[6], "LOCAL_REDUCE.input_count");
                     const uint64_t input_stride = LiteralU64(
                         record.operands[8], "LOCAL_REDUCE.input_stride_bytes");
+                    const uint64_t input_bytes = CheckedMultiply(
+                        LiteralU64(record.operands[7], "LOCAL_REDUCE.element_count"),
+                        LiteralU64(record.operands[0], "LOCAL_REDUCE.input_dtype") == 1
+                            ? 4 : 2,
+                        "LOCAL_REDUCE.input_bytes");
                     if (input_count != abis.size() ||
+                        input_stride < input_bytes ||
                         std::any_of(views.begin(), views.end(),
                                     [&](const DenseViewSpan &view) {
-                                        return view.length != input_stride;
+                                        return view.length != input_bytes;
                                     }) ||
                         access_bytes != span_size)
                         Fail("linked_program_manifest.address_operand_bindings",

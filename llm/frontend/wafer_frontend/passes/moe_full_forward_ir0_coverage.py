@@ -74,13 +74,14 @@ def require_moe_full_forward_ir0_coverage(
                 or route.shape != (trace.token_count, 5)
                 or dispatch.inputs != (norm.id,route.id)
                 or dispatch.outputs != expected_dispatches
-                or combine.inputs != (*expected_expert_out,route.id)
+                or combine.inputs != (*expected_expert_out,route.id,score.id)
                 or combine.outputs != (combined.id,)
                 or residual.inputs[1] != combined.id
                 or combined.dtype is not DType.FP16
                 or combined.producer != combine.id
                 or combined.consumers != (residual.id,)
-                or score.dtype is not DType.FP16):
+                or score.dtype is not DType.FP16
+                or score.consumers != (freeze.id,combine.id)):
             raise SchemaError("real hidden→router/dispatch→combine→residual DATA chain broke",
                               path=f"moe_full_forward_coverage.layer{layer}")
         for expert, expert_node in enumerate(expert_nodes):

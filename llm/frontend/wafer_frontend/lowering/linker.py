@@ -192,6 +192,24 @@ def _operand_role(
                 1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
         if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
             return BufferUseRole.COMP_OUTPUT, 0
+    if (action is not None and action.op_kind is OpKind.MOE_COMBINE):
+        if opcode is RecordOpcode.SRAM_BIND:
+            if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
+                return BufferUseRole.COMP_OUTPUT, 0
+            start = int(SemanticOperandId.SRAM_BIND_INPUT_0)
+            index = int(operand_id) - start
+            if 0 <= index < 3:
+                return BufferUseRole.COMP_INPUT, (1, 2, 0)[index]
+        if opcode is RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD:
+            roles = {
+                SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS: 1,
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS: 2,
+                SemanticOperandId.COMPUTE_DATA_ADDRESS: 0,
+            }
+            if operand_id in roles:
+                return BufferUseRole.COMP_INPUT, roles[operand_id]
+            if operand_id is SemanticOperandId.COMPUTE_OUTPUT_ADDRESS:
+                return BufferUseRole.COMP_OUTPUT, 0
     if opcode is RecordOpcode.SRAM_BIND:
         if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
             return (BufferUseRole.COMP_OUTPUT, 0)
@@ -652,6 +670,9 @@ def _runtime_definitions(
             copies = tuple(
                 action for action in endpoint_actions.values()
                 if action.task_kind is SemanticTaskKind.LOCAL_COPY
+                or (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind in (OpKind.MOE_ROUTE_FREEZE,
+                                           OpKind.MOE_DISPATCH))
             )
             if len(recvs) == 1 and len(waits) == 1 and len(endpoint_actions) == 2:
                 source, destination = recvs[0], waits[0]
@@ -659,7 +680,7 @@ def _runtime_definitions(
                 source, destination = copies[0], None
             else:
                 raise SchemaError(
-                    "DTE token must bind one RECV/WAIT pair or one LOCAL_COPY",
+                    "DTE token must bind one RECV/WAIT pair or one signed local copy",
                     path="fragments",
                 )
             definition = RuntimeSymbolDefinition(

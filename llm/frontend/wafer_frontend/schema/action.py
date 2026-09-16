@@ -287,7 +287,7 @@ def canonical_compute_operand_roles(
                 ("expert_output",))
     if op_kind is OpKind.MOE_COMBINE:
         return ((*tuple(f"expert{rank}_output" for rank in range(workload.expert_count)),
-                 "route_ids"), ("combined_output",))
+                 "route_ids", "route_scores"), ("combined_output",))
     if op_kind is OpKind.GEMM:
         return ("lhs", "rhs"), (("partial",) if tiled else ("output",))
     if op_kind is OpKind.EMBEDDING:

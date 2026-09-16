@@ -145,6 +145,7 @@ enum class StateKindDto {
     OPTIMIZER_MOMENT1,
     OPTIMIZER_MOMENT2,
     OPTIMIZER_STEP,
+    MOE_STATIC_ROUTE,
 };
 enum class StateLifetimeDto { STEP, PERSISTENT };
 enum class StateAccessDto { READ_ONLY, READ_WRITE, RESERVED };

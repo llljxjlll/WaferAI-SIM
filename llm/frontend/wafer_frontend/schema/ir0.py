@@ -1650,7 +1650,7 @@ class LogicalNode:
                                   self.workload.expert_count),
             OpKind.MOE_EXPERT_FORWARD: (MoeForwardBlockKind.EXPERT,4,1),
             OpKind.MOE_COMBINE: (MoeForwardBlockKind.COMBINE,
-                                  self.workload.expert_count+1,1),
+                                  self.workload.expert_count+2,1),
         } if type(self.workload) is MoeFullTrainingBlockWorkload else {}
         if self.kind in source_moe:
             source_kind, input_count, output_count = source_moe[self.kind]
@@ -2266,7 +2266,8 @@ class IR0:
                 else:
                     specs = (*(((n,h),DType.FP16) for n in
                                workload.expert_histogram),
-                             ((m,5),DType.INT32),((m,h),DType.FP16))
+                             ((m,5),DType.INT32),((m,e),DType.FP16),
+                             ((m,h),DType.FP16))
                 actual = tuple((value_index[ref].shape,value_index[ref].dtype)
                                for ref in (*node.inputs,*node.outputs))
                 if actual != specs:

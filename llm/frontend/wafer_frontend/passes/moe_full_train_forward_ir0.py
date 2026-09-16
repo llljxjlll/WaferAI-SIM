@@ -429,7 +429,7 @@ def build_moe_full_train_forward_ir0(
         tokens = dense_forward.profile.prefill_tokens
         route_scores = add_value(prefix+"moe.router_scores",
                                  (tokens,model.num_experts), DType.FP16,
-                                 router_ref, (freeze_ref,))
+                                 router_ref, (freeze_ref, combine_ref))
         route_source = add_value(prefix+"moe.route_table_source",
                                  (tokens,5), DType.INT32, None, (freeze_ref,))
         route = add_value(prefix+"moe.route_ids", (tokens,5), DType.INT32,
@@ -521,7 +521,8 @@ def build_moe_full_train_forward_ir0(
             (MoeForwardBlockKind.DISPATCH,dispatch_ref,
              (norm.id,route.id), tuple(value.id for value in dispatches)),
             (MoeForwardBlockKind.COMBINE,combine_ref,
-             (*[value.id for value in expert_outputs],route.id),(combine.id,)),
+             (*[value.id for value in expert_outputs], route.id,
+              route_scores.id), (combine.id,)),
         )
         for kind, node_ref, inputs, outputs in sources:
             new_nodes.append(LogicalNode(

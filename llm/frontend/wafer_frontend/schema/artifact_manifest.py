@@ -4472,6 +4472,95 @@ class CommandFragment:
                     raise SchemaError("dispatch must copy exact EP1 FP16 identity slots",
                                       path=f"{path}.buffer_abi")
             elif (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_COMBINE):
+                compute = action.compute
+                if (self.producer_pass != "moe_full_train_combine_lowering"
+                        or self.kind is not FragmentKind.COARSE
+                        or compute is None or compute.impl_ref != "moe_combine"
+                        or type(compute.workload) is not MoeFullTrainingBlockWorkload
+                        or compute.workload.kind is not MoeForwardBlockKind.COMBINE
+                        or compute.workload.expert_count != 1
+                        or compute.workload.frozen_expert_by_token
+                           != (0,) * compute.workload.token_count
+                        or compute.workload.frozen_slot_by_token
+                           != tuple(range(compute.workload.token_count))
+                        or len(indices) != 2
+                        or tuple(records[index].opcode for index in indices)
+                           != (RecordOpcode.SRAM_BIND,
+                               RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD)):
+                    raise SchemaError("EP1 combine requires exact weighted router opcode pair",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                uses = {(use.role, use.operand_index): use
+                        for use in action.buffer_uses}
+                if set(uses) != {(BufferUseRole.COMP_INPUT, index)
+                                 for index in range(3)} | {
+                                     (BufferUseRole.COMP_OUTPUT, 0)}:
+                    raise SchemaError("weighted combine lacks route/score/expert operands",
+                                      path=f"{path}.buffer_abi")
+                abis = {abi.binding_id: abi for abi in self.buffer_abi}
+                if len(abis) != 4 or set(abis) != {
+                        use.binding_id for use in uses.values()}:
+                    raise SchemaError("weighted combine needs four exact BufferABIs",
+                                      path=f"{path}.buffer_abi")
+                returned, route, score = (
+                    abis[uses[(BufferUseRole.COMP_INPUT, index)].binding_id]
+                    for index in range(3))
+                output = abis[uses[(BufferUseRole.COMP_OUTPUT, 0)].binding_id]
+                m = compute.workload.token_count
+                h = compute.workload.hidden_size
+                if (route.dtype is not DType.INT32
+                        or route.tensor_slice.shape != (m, 5)
+                        or route.size_bytes != 20*m
+                        or score.dtype is not DType.FP16
+                        or score.tensor_slice.shape != (m, 1)
+                        or score.size_bytes != 2*m
+                        or any(abi.dtype is not DType.FP16
+                               for abi in (returned, output))
+                        or returned.tensor_slice.shape != (m, h)
+                        or output.tensor_slice.shape != (m, h)
+                        or returned.size_bytes != 2*m*h
+                        or output.size_bytes != 2*m*h
+                        or len({abi.storage_id for abi in
+                                (route, score, returned, output)}) != 4):
+                    raise SchemaError("weighted combine physical FP16/INT32 extents drifted",
+                                      path=f"{path}.buffer_abi")
+                bind, weighted = (records[index] for index in indices)
+                if (bind.operands[0].literal_value != 3
+                        or tuple(operand.literal_value for operand in
+                                 weighted.operands[:4]) != (2, 1, 1, 1)
+                        or tuple(operand.literal_value for operand in
+                                 weighted.operands[-4:]) != (m, h, 1, 20*m)):
+                    raise SchemaError("weighted combine opcode literals differ from source",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                relocation_index = {(item.record_index, item.operand_id): item
+                                    for item in stream.address_relocations}
+                expected = (
+                    *((indices[0], SemanticOperandId(
+                        int(SemanticOperandId.SRAM_BIND_INPUT_0)+index),
+                       ProgramSymbolKind.SRAM_LABEL, abi.storage_id)
+                      for index, abi in enumerate((route, score, returned))),
+                    (indices[0], SemanticOperandId.SRAM_BIND_OUTPUT,
+                     ProgramSymbolKind.SRAM_LABEL, output.storage_id),
+                    (indices[1], SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, route.binding_id),
+                    (indices[1], SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, score.binding_id),
+                    (indices[1], SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, returned.binding_id),
+                    (indices[1], SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, output.binding_id),
+                )
+                for record_index, operand_id, kind, source_ref in expected:
+                    relocation = relocation_index.get((record_index, operand_id))
+                    symbol = (program_symbols.get(relocation.symbol_ref)
+                              if relocation is not None else None)
+                    if (relocation is None or symbol is None
+                            or symbol.kind is not kind
+                            or symbol.source_ref != source_ref
+                            or relocation.addend != 0):
+                        raise SchemaError("weighted combine address differs from signed route/score/return ABI",
+                                          path=f"{path}.core_streams[{stream_index}].address_relocations")
+            elif (action.task_kind is SemanticTaskKind.COMP
                     and action.op_kind is OpKind.MOE_ROUTER):
                 compute = action.compute
                 if (self.producer_pass != "moe_full_train_router_lowering"
@@ -5632,6 +5721,23 @@ def _address_operand_role(
                 1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
         if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
             return BufferUseRole.COMP_OUTPUT, 0
+    if action is not None and action.op_kind is OpKind.MOE_COMBINE:
+        if opcode is RecordOpcode.SRAM_BIND:
+            if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
+                return BufferUseRole.COMP_OUTPUT, 0
+            index = int(operand_id) - int(SemanticOperandId.SRAM_BIND_INPUT_0)
+            if 0 <= index < 3:
+                return BufferUseRole.COMP_INPUT, (1, 2, 0)[index]
+        if opcode is RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD:
+            roles = {
+                SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS: 1,
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS: 2,
+                SemanticOperandId.COMPUTE_DATA_ADDRESS: 0,
+            }
+            if operand_id in roles:
+                return BufferUseRole.COMP_INPUT, roles[operand_id]
+            if operand_id is SemanticOperandId.COMPUTE_OUTPUT_ADDRESS:
+                return BufferUseRole.COMP_OUTPUT, 0
     if opcode is RecordOpcode.SRAM_BIND:
         if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
             return BufferUseRole.COMP_OUTPUT, 0
@@ -7495,6 +7601,23 @@ class LinkedProgramManifest:
                         1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
                 if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
                     return BufferUseRole.COMP_OUTPUT, 0
+            if action.op_kind is OpKind.MOE_COMBINE:
+                if opcode is RecordOpcode.SRAM_BIND:
+                    if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
+                        return BufferUseRole.COMP_OUTPUT, 0
+                    index = int(operand_id) - int(SemanticOperandId.SRAM_BIND_INPUT_0)
+                    if 0 <= index < 3:
+                        return BufferUseRole.COMP_INPUT, (1, 2, 0)[index]
+                if opcode is RecordOpcode.MOE_SCORE_WEIGHTED_FORWARD:
+                    roles = {
+                        SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS: 1,
+                        SemanticOperandId.COMPUTE_INPUT_ADDRESS: 2,
+                        SemanticOperandId.COMPUTE_DATA_ADDRESS: 0,
+                    }
+                    if operand_id in roles:
+                        return BufferUseRole.COMP_INPUT, roles[operand_id]
+                    if operand_id is SemanticOperandId.COMPUTE_OUTPUT_ADDRESS:
+                        return BufferUseRole.COMP_OUTPUT, 0
             if opcode is RecordOpcode.SRAM_BIND:
                 if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
                     return (BufferUseRole.COMP_OUTPUT, 0)
