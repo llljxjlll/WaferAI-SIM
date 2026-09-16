@@ -43,7 +43,7 @@ _MOE_FORWARD_KINDS = {
 @dataclass(frozen=True, slots=True)
 class MoeForwardEpStateOwner:
     source_state_decl_ref: str
-    source_e2e_state_version0_ref: str
+    source_e2e_state_ref: str
     source_e2e_parameter_view_ref: str
     source_e2e_parameter_name: str
     ep_owner: int
@@ -145,9 +145,9 @@ class FullMoeForwardIr0Phase:
                               path="full_moe_forward_ir0.units")
         for owner in self.ep_state_owners:
             state = states[owner.source_state_decl_ref]
-            origin = source_states.get(owner.source_e2e_state_version0_ref)
+            origin = source_states.get(owner.source_e2e_state_ref)
             view = source_views.get(owner.source_e2e_parameter_view_ref)
-            if (origin is None or origin.version != 0
+            if (origin is None or origin.version != self.step
                     or origin.kind is not E2EStateKind.PARAMETER
                     or origin.logical_name != owner.source_e2e_parameter_name
                     or view is None or view.state_ref != origin.id
@@ -163,7 +163,28 @@ class FullMoeForwardIr0Phase:
             unit = units[origin.layer]
             group = next((group for group in unit.parameter_bindings
                           if owner.source_e2e_parameter_name in group.parameter_refs),None)
+            previous_unit = next((unit for unit in sequence.units
+                                  if (unit.step, unit.layer) ==
+                                     (self.step - 1, origin.layer)), None)
+            previous_group = (next((item for item in
+                                   previous_unit.parameter_bindings
+                                   if owner.source_e2e_parameter_name in
+                                   item.parameter_refs), None)
+                              if previous_unit is not None else None)
+            position = (group.parameter_refs.index(
+                owner.source_e2e_parameter_name) if group is not None else -1)
+            previous_position = (previous_group.parameter_refs.index(
+                owner.source_e2e_parameter_name)
+                                 if previous_group is not None else -1)
             if (group is None or group.expert != origin.expert
+                    or origin.id != group.input_parameter_state_refs[position]
+                    or (self.step == 0 and origin.producer_op_id is not None)
+                    or (self.step == 1 and
+                        (previous_group is None or
+                         previous_group.output_parameter_state_refs[
+                             previous_position] != origin.id or
+                         previous_group.sgd_operation_refs[
+                             previous_position] != origin.producer_op_id))
                     or (origin.expert is not None and
                         owner.ep_owner != origin.expert)):
                 raise SchemaError("expert owner/parameter group differs",
@@ -256,12 +277,13 @@ def build_moe_full_train_forward_ir0(
 ) -> FullMoeForwardIr0Phase:
     """Replace exactly both original Dense MLPs and preserve both residuals.
 
-    Step1 must read parameter version1 through the final optimizer timeline;
-    callers cannot label this standalone step0 forward graph as two-step TRAIN.
+    Step1 binds P2 version1 parameter lineage, but a forward phase alone
+    cannot prove an executed optimizer or complete two-step TRAIN timeline.
     """
     dense_forward.validate("dense_forward")
     sequence.validate("moe_sequence")
-    if (step != 0 or dense_forward.producer_pass != "train_forward_expand"
+    if (type(step) is not int or step not in (0, 1)
+            or dense_forward.producer_pass != "train_forward_expand"
             or dense_forward.job is not JobKind.TRAIN
             or len(dense_forward.instances) != 1
             or dense_forward.instances[0].parallel.tp != 1
@@ -278,7 +300,7 @@ def build_moe_full_train_forward_ir0(
             or sequence.materialization.request.steps.training is None
             or sequence.materialization.request.steps.training.sequence_length
                 != dense_forward.profile.prefill_tokens):
-        raise SchemaError("requires true TP1→EP1/EP2 two-layer step0 TRAIN source with identical rows",
+        raise SchemaError("requires true TP1→EP1/EP2 two-layer step0/step1 TRAIN source with identical rows",
                           path="moe_full_train_forward_ir0.source")
     model = sequence.materialization.request.model
     vocab = dense_forward.values
@@ -362,9 +384,27 @@ def build_moe_full_train_forward_ir0(
                       owner_ranks: tuple[int, ...],
                       read_node_ref: str, template: PersistentStateDecl,
                       layer: int) -> None:
-        source = source_versions.get((logical_name, 0))
-        if source is None or source.producer_op_id is not None:
-            raise SchemaError("source owner lacks version0 parameter",
+        source = source_versions.get((logical_name, step))
+        previous_unit = next((unit for unit in sequence.units
+                              if (unit.step, unit.layer) == (step - 1, layer)), None)
+        current_unit = next(unit for unit in sequence.units
+                            if (unit.step, unit.layer) == (step, layer))
+        group = next((group for group in current_unit.parameter_bindings
+                      if logical_name in group.parameter_refs), None)
+        if (source is None or group is None
+                or source.id != group.input_parameter_state_refs[
+                    group.parameter_refs.index(logical_name)]
+                or (step == 0 and source.producer_op_id is not None)
+                or (step == 1 and (previous_unit is None
+                    or source.producer_op_id is None
+                    or not any(logical_name in previous.parameter_refs
+                               and previous.output_parameter_state_refs[
+                                   previous.parameter_refs.index(logical_name)] == source.id
+                               and previous.sgd_operation_refs[
+                                   previous.parameter_refs.index(logical_name)]
+                                   == source.producer_op_id
+                               for previous in previous_unit.parameter_bindings)))):
+            raise SchemaError("source owner lacks exact step-version parameter",
                               path=f"moe_full_train_forward_ir0.{logical_name}")
         for owner in owner_ranks:
             view = source_parameter_views.get((source.id, owner))
@@ -583,7 +623,7 @@ def build_moe_full_train_forward_ir0(
     result = FullMoeForwardIr0Phase(
         ir0,dense_forward.id,sequence.id,
         tuple(unit.route_trace_ref for unit in sequence.units
-              if unit.step == 0),
+              if unit.step == step),
         tuple(sorted(removed_ops)),tuple(sorted(removed_states)),
         tuple(sorted(old_to_new.items())),tuple(owner_bindings),
         tuple(route_state_refs),step,

@@ -137,14 +137,14 @@ class MoeFullTrainHbmLayout:
                   for owner in phase.ep_state_owners}
         for home in self.ep:
             owner = owners[home.declaration_ref]
-            if (home.original_e2e_state_ref != owner.source_e2e_state_version0_ref
+            if (home.original_e2e_state_ref != owner.source_e2e_state_ref
                     or home.source_parameter_name !=
                        states[home.declaration_ref].identity.tensor_ref
                     or home.die_id != owner.ep_owner):
                 raise SchemaError("real E2E EP tensor owner lost in HBM placement",
                                   path=f"moe_full_train_hbm_layout.ep[{home.declaration_ref}]")
             unit = next(unit for unit in sequence.units
-                        if (unit.step,unit.layer) == (0,home.source_layer))
+                        if (unit.step,unit.layer) == (phase.step,home.source_layer))
             group = next(group for group in unit.parameter_bindings
                          if owner.source_e2e_parameter_name in group.parameter_refs)
             source = [abi for fragment in unit.linked_manifest.fragments
@@ -215,10 +215,10 @@ def build_moe_full_train_hbm_layout(
         state = states[owner.source_state_decl_ref]
         origin = next(origin for origin in
                       sequence.materialization.logical_graph.state_versions
-                      if origin.id == owner.source_e2e_state_version0_ref)
+                      if origin.id == owner.source_e2e_state_ref)
         layer = origin.layer
         unit = next(unit for unit in sequence.units
-                    if (unit.step,unit.layer)==(0,layer))
+                    if (unit.step,unit.layer)==(phase.step,layer))
         group = next(group for group in unit.parameter_bindings
                      if owner.source_e2e_parameter_name in group.parameter_refs)
         matched = [abi for fragment in unit.linked_manifest.fragments

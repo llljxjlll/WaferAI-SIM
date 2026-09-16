@@ -30,8 +30,8 @@ class MoeFullTrainForwardValidator:
         phase.validate_against(original_dense,sequence)
         graph = phase.graph
         path = "moe_full_forward_validator"
-        if graph.job is not JobKind.TRAIN or phase.step != 0:
-            raise SchemaError("only bounded step0 forward TRAIN source is supported",
+        if graph.job is not JobKind.TRAIN or phase.step not in (0, 1):
+            raise SchemaError("only bounded step0/step1 forward TRAIN source is supported",
                               path=path)
         _validate_dependency_dag(graph,path)
         axes = {mesh.id:{axis.name:axis.size for axis in mesh.axes}

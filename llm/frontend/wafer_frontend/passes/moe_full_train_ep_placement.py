@@ -43,7 +43,7 @@ class MoeFullTrainEpPlacement:
                  context: PlacementContext) -> None:
         phase.validate_against(original_dense,sequence)
         context.validate("moe_full_train_ep.context")
-        _require_source_memory_and_sram(sequence,context)
+        _require_source_memory_and_sram(phase,sequence,context)
         self.physical_group.validate("moe_full_train_ep.physical_group")
         self.hbm_layout.validate(phase,dense_manifest,sequence)
         self.persistent_state_manifest.validate("moe_full_train_ep.state_manifest")
@@ -102,7 +102,8 @@ def _physical_ep_state_manifest(
 
 
 def _require_source_memory_and_sram(
-    sequence: MoeCompileSequence,context: PlacementContext,
+    phase: FullMoeForwardIr0Phase, sequence: MoeCompileSequence,
+    context: PlacementContext,
 ) -> None:
     """Compare actual NpuSim region/high HBM address with P2 preflight limits."""
     memory=sequence.materialization.memory_plan
@@ -122,7 +123,7 @@ def _require_source_memory_and_sram(
                 for die in context.fabric.dies for core in die.cores)
     physical_peak=max(definition.value+_SRAM_REGION_SHIFT+
                       definition.size_bytes
-                      for unit in sequence.units if unit.step==0
+                      for unit in sequence.units if unit.step==phase.step
                       for definition in
                           unit.linked_manifest.program_symbol_definitions
                       if definition.symbol.kind is ProgramSymbolKind.SRAM_REGION)
@@ -189,7 +190,7 @@ def build_moe_full_train_ep_placement(
 ) -> MoeFullTrainEpPlacement:
     phase.validate_against(original_dense,sequence)
     context.validate("moe_full_train_ep.context")
-    _require_source_memory_and_sram(sequence,context)
+    _require_source_memory_and_sram(phase,sequence,context)
     group=_physical_ep_group(phase,context)
     layout=build_moe_full_train_hbm_layout(
         phase, original_dense=original_dense,

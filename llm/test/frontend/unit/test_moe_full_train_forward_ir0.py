@@ -203,10 +203,17 @@ class MoeFullTrainForwardIr0Test(unittest.TestCase):
                 )
 
     def test_step1_requires_version1_real_parameter_reads(self):
-        with self.assertRaisesRegex(SchemaError,
-                                    "two-layer step0 TRAIN"):
+        phase = build_moe_full_train_forward_ir0(
+            self.forward, self.sequence, step=1,
+        )
+        states = {state.id: state for state in
+                  self.sequence.materialization.logical_graph.state_versions}
+        self.assertEqual(phase.step, 1)
+        self.assertEqual({states[owner.source_e2e_state_ref].version
+                          for owner in phase.ep_state_owners}, {1})
+        with self.assertRaisesRegex(SchemaError, "step0/step1 TRAIN"):
             build_moe_full_train_forward_ir0(
-                self.forward,self.sequence,step=1,
+                self.forward, self.sequence, step=2,
             )
 
     def test_both_layers_require_exact_frozen_route_operation_identity(self):

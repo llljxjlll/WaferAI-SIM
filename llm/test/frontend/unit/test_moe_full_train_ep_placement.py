@@ -38,7 +38,7 @@ from llm.frontend.wafer_frontend.passes.moe_full_model_compile_sequence import (
 )
 
 
-def build_single_die_moe_train_physical_source(fixture):
+def build_single_die_moe_train_physical_source(fixture, *, step=0):
     request = _request(WorkloadFamily.MOE_TRAINING, rows=1, columns=1)
     semantic = request._semantic_key()
     semantic["memory"] = replace(request.memory, allow_sram_spill=False)
@@ -53,7 +53,7 @@ def build_single_die_moe_train_physical_source(fixture):
         ),
         source_rank_policy="rank0_shared_spine",
     )
-    phase = build_moe_full_train_forward_ir0(fixture.dense, sequence)
+    phase = build_moe_full_train_forward_ir0(fixture.dense, sequence, step=step)
     fabric = physical_fabric_from_data(
         minimal_hardware(1, 1, sram_bytes=131072),
     )

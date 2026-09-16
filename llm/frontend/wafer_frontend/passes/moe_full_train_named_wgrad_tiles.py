@@ -151,7 +151,7 @@ def _derive(
                     unit.route_trace_digest,
                     unit.operation_binding.expert_backward_operation_refs[expert],
                     action.id,home.original_abi_ref,home.slice_offset,
-                    owner.source_e2e_state_version0_ref,native,
+                    owner.source_e2e_state_ref,native,
                 )
                 tiles.append(tile)
                 total+=tile.logical_flops

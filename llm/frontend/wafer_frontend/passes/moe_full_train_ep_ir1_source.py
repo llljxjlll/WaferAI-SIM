@@ -20,7 +20,7 @@ from .placement import _physical_instance,_physical_node
 @dataclass(frozen=True,slots=True)
 class MoeEpPlacedStateOwnerProof:
     declaration_ref: str
-    e2e_state_version0_ref: str
+    e2e_state_ref: str
     e2e_tensor_view_ref: str
     e2e_ep_rank: int
     tp_shard: int
@@ -91,7 +91,7 @@ class MoeEpPlacedIr1SourceCandidate:
             home=homes[ref]
             state=states[ref]
             binding=bindings[ref]
-            if (proof.e2e_state_version0_ref!=owner.source_e2e_state_version0_ref
+            if (proof.e2e_state_ref!=owner.source_e2e_state_ref
                     or proof.e2e_tensor_view_ref!=owner.source_e2e_parameter_view_ref
                     or proof.e2e_ep_rank!=owner.ep_owner
                     or proof.tp_shard!=owner.tp_shard
@@ -138,7 +138,7 @@ def build_moe_ep_placed_ir1_candidate(
     bindings={item.state_ref:item for item in
               placement.persistent_state_manifest.bindings}
     proofs=tuple(MoeEpPlacedStateOwnerProof(
-        owner.source_state_decl_ref,owner.source_e2e_state_version0_ref,
+        owner.source_state_decl_ref,owner.source_e2e_state_ref,
         owner.source_e2e_parameter_view_ref,owner.ep_owner,owner.tp_shard,
         bindings[owner.source_state_decl_ref].die_id,
         bindings[owner.source_state_decl_ref].id,
