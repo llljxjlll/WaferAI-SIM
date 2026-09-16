@@ -27,6 +27,12 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_head_backward_ir0 import 
 from llm.frontend.wafer_frontend.passes.moe_full_train_shared_reverse_ir0 import (
     append_moe_full_train_shared_reverse_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_combine_backward_ir0 import (
+    append_moe_full_train_combine_backward_ir0,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_router_wgrad_ir0 import (
+    append_moe_full_train_router_wgrad_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -72,6 +78,8 @@ def main() -> None:
     parser.add_argument("--npusim", type=Path, required=True)
     parser.add_argument("--head-backward", action="store_true")
     parser.add_argument("--shared-reverse", action="store_true")
+    parser.add_argument("--combine-backward", action="store_true")
+    parser.add_argument("--router-wgrad", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -86,10 +94,14 @@ def main() -> None:
         )
         native_context = physical
         source = append_moe_full_train_ce_backward_ir0(phase)
-        if args.head_backward or args.shared_reverse:
+        if args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad:
             source = append_moe_full_train_head_backward_ir0(source)
-        if args.shared_reverse:
+        if args.shared_reverse or args.combine_backward or args.router_wgrad:
             source = append_moe_full_train_shared_reverse_ir0(source)
+        if args.combine_backward or args.router_wgrad:
+            source = append_moe_full_train_combine_backward_ir0(source)
+        if args.router_wgrad:
+            source = append_moe_full_train_router_wgrad_ir0(source)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
@@ -121,7 +133,9 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != (58 if args.shared_reverse else
+        if len(leaves) != (60 if args.router_wgrad else
+                           59 if args.combine_backward else
+                           58 if args.shared_reverse else
                            55 if args.head_backward else 52):
             raise RuntimeError("reverse path physical leaf count drifted")
         manifest = NaiveManifestLinker().link(context, leaves)
@@ -133,12 +147,13 @@ def main() -> None:
         opcodes = [record.opcode for fragment in manifest.fragments
                    for stream in fragment.core_streams for record in stream.records]
         if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
-                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != int(args.head_backward or args.shared_reverse)
-                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != int(args.head_backward or args.shared_reverse)
-                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse)
-                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse)
-                or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse)):
-            raise RuntimeError("linked program lacks exact CE/LM-head reverse records")
+                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (2 if args.router_wgrad else int(args.head_backward or args.shared_reverse or args.combine_backward))
+                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad)
+                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad)
+                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad)
+                or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad)
+                or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad)):
+            raise RuntimeError(f"linked program reverse opcode counts: {[(item.name, opcodes.count(item)) for item in set(opcodes)]}")
         linked = output / f"step{step}.linked.json"
         artifact = output / f"step{step}.npup"
         sidecar = output / f"step{step}.program_io.json"
@@ -191,10 +206,11 @@ def main() -> None:
             leaves=len(leaves), records=sum(len(stream.records)
                 for stream in manifest.core_streams),
             ce_backward_records=opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD),
-            head_wgrad_records=opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING),
+            wgrad_records=opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING),
             head_dx_records=opcodes.count(RecordOpcode.GEMM_DX_TIMING),
             final_norm_dx_records=opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING),
             dcombined_records=opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING),
+            combine_backward_records=opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD),
             dloss_seed_abi=dloss[0].id,
         ))
     assert native_context is not None
@@ -240,6 +256,16 @@ def main() -> None:
         "llm/frontend/wafer_frontend/passes/moe_full_train_ce_backward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_head_backward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_shared_reverse_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_combine_backward_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_router_wgrad_ir0.py",
+        "llm/frontend/wafer_frontend/schema/moe_combine_backward_workload.py",
+        "llm/frontend/wafer_frontend/schema/ir0.py",
+        "llm/frontend/wafer_frontend/schema/ir1.py",
+        "llm/frontend/wafer_frontend/schema/action.py",
+        "llm/frontend/wafer_frontend/schema/artifact_manifest.py",
+        "llm/frontend/wafer_frontend/lowering/moe_full_train_combine_backward.py",
+        "llm/frontend/wafer_frontend/lowering/linker.py",
+        "llm/frontend/wafer_frontend/passes/lower_program.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_forward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_ep_ir1_source.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_ep_placement.py",
@@ -251,7 +277,9 @@ def main() -> None:
     source_sha256 = {name: _sha(repo / name) for name in source_files}
     (output / "receipt.json").write_text(json.dumps(dict(
         source_file_sha256=source_sha256,
-        status=("shared_dcombined_physical_partial" if args.shared_reverse else
+        status=("router_wgrad_physical_partial" if args.router_wgrad else
+                "combine_backward_physical_partial" if args.combine_backward else
+                "shared_dcombined_physical_partial" if args.shared_reverse else
                 "head_backward_physical_partial" if args.head_backward else
                 "ce_backward_physical_partial"),
         full_training_gate="closed", steps=receipts,

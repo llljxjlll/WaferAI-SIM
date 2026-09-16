@@ -57,6 +57,7 @@ from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
 )
+from .moe_combine_backward_workload import MoeCombineBackwardWorkload
 from .moe_full_training_block_workload import (
     MoeForwardBlockKind, MoeFullTrainingBlockWorkload,
 )
@@ -1280,6 +1281,9 @@ _COMPUTE_OPCODE_BY_IMPL_REF = {
     "swiglu_backward_timing": (
         OpKind.SWIGLU_BACKWARD, RecordOpcode.SWIGLU_BACKWARD_TIMING,
     ),
+    "moe_combine_backward": (
+        OpKind.MOE_COMBINE_BACKWARD, RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD,
+    ),
     # Router impl_ref/IR0 typed operation awaits genuinely bound early P2
     # source and shared dCombined physical producer; public records may be
     # tested independently but cannot be passed off as E2E training actions.
@@ -1365,6 +1369,22 @@ def _fixed_compute_literals(
     path: str,
 ) -> dict[str, int]:
     workload = compute.workload
+    if opcode is RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD:
+        if (type(workload) is not MoeCombineBackwardWorkload
+                or len(compute.inputs) != 4
+                or len(compute.outputs) != 2):
+            raise SchemaError("0x28 requires real route/score/expert/dCombined "
+                              "and dScore/dExpert", path=path)
+        workload.validate(path=f"{path}.workload")
+        return {
+            "route_datatype": 2, "score_datatype": 1,
+            "expert_datatype": 1, "upstream_datatype": 1,
+            "dscore_datatype": 1, "dexpert_datatype": 1,
+            "rank_rows": workload.token_count,
+            "hidden_size": workload.hidden_size,
+            "expert_count": workload.expert_count,
+            "route_bytes": workload.route_bytes,
+        }
     if opcode is RecordOpcode.ROPE_QK_EXACT:
         if (
             type(workload) is not RopeQkWorkload
@@ -2259,7 +2279,8 @@ def _compute_record_abi(
         )
     if len(compute.outputs) != (
         5 if opcode is RecordOpcode.ADAMW_UPDATE
-        else 2 if opcode is RecordOpcode.RESIDUAL_BACKWARD_TIMING else 1
+        else 2 if opcode in (RecordOpcode.RESIDUAL_BACKWARD_TIMING,
+                             RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) else 1
     ):
         raise SchemaError(
             "Dense compute ABI output arity differs from its public opcode",
@@ -2270,6 +2291,7 @@ def _compute_record_abi(
     if opcode in _FIXED_COMPUTE_OPCODES:
         _fixed_compute_literals(compute, opcode, path=path)
         has_data_input = opcode in (
+            RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD,
             RecordOpcode.EMBEDDING_LOOKUP,
             RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
             RecordOpcode.NORM_GAMMA_WGRAD_TIMING,
@@ -2289,7 +2311,8 @@ def _compute_record_abi(
             RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING,
         )
         bind_input_count = (
-            6 if opcode is RecordOpcode.ADAMW_UPDATE
+            4 if opcode is RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD
+            else 6 if opcode is RecordOpcode.ADAMW_UPDATE
             else 3 if has_aux_input
             else 2 if has_data_input
             else 1
@@ -5726,6 +5749,30 @@ def _address_operand_role(
                 1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
         if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
             return BufferUseRole.COMP_OUTPUT, 0
+    if action is not None and action.op_kind is OpKind.MOE_COMBINE_BACKWARD:
+        if opcode is RecordOpcode.SRAM_BIND:
+            if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
+                return BufferUseRole.COMP_OUTPUT, 0
+            index = int(operand_id) - int(SemanticOperandId.SRAM_BIND_INPUT_0)
+            if 0 <= index < 4:
+                return BufferUseRole.COMP_INPUT, index
+        if opcode is RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD:
+            roles = {
+                SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 0),
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 1),
+                SemanticOperandId.COMPUTE_DATA_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 2),
+                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 3),
+                SemanticOperandId.COMPUTE_AUX_ADDRESS:
+                    (BufferUseRole.COMP_OUTPUT, 0),
+                SemanticOperandId.COMPUTE_ROUTER_DEXPERT_ADDRESS:
+                    (BufferUseRole.COMP_OUTPUT, 1),
+            }
+            if operand_id in roles:
+                return roles[operand_id]
     if action is not None and action.op_kind is OpKind.MOE_COMBINE:
         if opcode is RecordOpcode.SRAM_BIND:
             if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
@@ -7608,6 +7655,30 @@ class LinkedProgramManifest:
                         1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
                 if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
                     return BufferUseRole.COMP_OUTPUT, 0
+            if action.op_kind is OpKind.MOE_COMBINE_BACKWARD:
+                if opcode is RecordOpcode.SRAM_BIND:
+                    if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
+                        return BufferUseRole.COMP_OUTPUT, 0
+                    index = int(operand_id) - int(SemanticOperandId.SRAM_BIND_INPUT_0)
+                    if 0 <= index < 4:
+                        return BufferUseRole.COMP_INPUT, index
+                if opcode is RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD:
+                    roles = {
+                        SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS:
+                            (BufferUseRole.COMP_INPUT, 0),
+                        SemanticOperandId.COMPUTE_INPUT_ADDRESS:
+                            (BufferUseRole.COMP_INPUT, 1),
+                        SemanticOperandId.COMPUTE_DATA_ADDRESS:
+                            (BufferUseRole.COMP_INPUT, 2),
+                        SemanticOperandId.COMPUTE_OUTPUT_ADDRESS:
+                            (BufferUseRole.COMP_INPUT, 3),
+                        SemanticOperandId.COMPUTE_AUX_ADDRESS:
+                            (BufferUseRole.COMP_OUTPUT, 0),
+                        SemanticOperandId.COMPUTE_ROUTER_DEXPERT_ADDRESS:
+                            (BufferUseRole.COMP_OUTPUT, 1),
+                    }
+                    if operand_id in roles:
+                        return roles[operand_id]
             if action.op_kind is OpKind.MOE_COMBINE:
                 if opcode is RecordOpcode.SRAM_BIND:
                     if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:

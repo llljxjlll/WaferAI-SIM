@@ -192,6 +192,31 @@ def _operand_role(
                 1 if action.op_kind is OpKind.MOE_ROUTE_FREEZE else 0)
         if operand_id is SemanticOperandId.DESTINATION_ADDRESS:
             return BufferUseRole.COMP_OUTPUT, 0
+    if (action is not None
+            and action.op_kind is OpKind.MOE_COMBINE_BACKWARD):
+        if opcode is RecordOpcode.SRAM_BIND:
+            if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:
+                return BufferUseRole.COMP_OUTPUT, 0
+            index = int(operand_id) - int(SemanticOperandId.SRAM_BIND_INPUT_0)
+            if 0 <= index < 4:
+                return BufferUseRole.COMP_INPUT, index
+        if opcode is RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD:
+            roles = {
+                SemanticOperandId.COMPUTE_ROUTE_TABLE_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 0),
+                SemanticOperandId.COMPUTE_INPUT_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 1),
+                SemanticOperandId.COMPUTE_DATA_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 2),
+                SemanticOperandId.COMPUTE_OUTPUT_ADDRESS:
+                    (BufferUseRole.COMP_INPUT, 3),
+                SemanticOperandId.COMPUTE_AUX_ADDRESS:
+                    (BufferUseRole.COMP_OUTPUT, 0),
+                SemanticOperandId.COMPUTE_ROUTER_DEXPERT_ADDRESS:
+                    (BufferUseRole.COMP_OUTPUT, 1),
+            }
+            if operand_id in roles:
+                return roles[operand_id]
     if (action is not None and action.op_kind is OpKind.MOE_COMBINE):
         if opcode is RecordOpcode.SRAM_BIND:
             if operand_id is SemanticOperandId.SRAM_BIND_OUTPUT:

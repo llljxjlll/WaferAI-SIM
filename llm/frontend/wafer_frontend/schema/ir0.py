@@ -27,6 +27,7 @@ from .moe_training_ir0_workloads import (
     EmbeddingTableWgradWorkload,
     NormGammaWgradWorkload,
 )
+from .moe_combine_backward_workload import MoeCombineBackwardWorkload
 from .moe_full_training_block_workload import (
     MoeForwardBlockKind,
     MoeFullTrainingBlockWorkload,
@@ -77,6 +78,7 @@ class OpKind(str, Enum):
     MOE_DISPATCH = "moe_dispatch"
     MOE_EXPERT_FORWARD = "moe_expert_forward"
     MOE_COMBINE = "moe_combine"
+    MOE_COMBINE_BACKWARD = "moe_combine_backward"
     ROPE = "rope"
     SAMPLING = "sampling"
     CE_FORWARD = "ce_forward"
@@ -1505,6 +1507,7 @@ NodeWorkload = (
     | ResidualBackwardWorkload
     | SwiGluBackwardWorkload
     | MoeFullTrainingBlockWorkload
+    | MoeCombineBackwardWorkload
     | RopeQkWorkload
     | GreedySampleWorkload
     | CrossEntropyForwardWorkload
@@ -1598,6 +1601,7 @@ class LogicalNode:
             OpKind.MOE_DISPATCH: MoeFullTrainingBlockWorkload,
             OpKind.MOE_EXPERT_FORWARD: MoeFullTrainingBlockWorkload,
             OpKind.MOE_COMBINE: MoeFullTrainingBlockWorkload,
+            OpKind.MOE_COMBINE_BACKWARD: MoeCombineBackwardWorkload,
             OpKind.ROPE: RopeQkWorkload,
             OpKind.SAMPLING: GreedySampleWorkload,
             OpKind.CE_FORWARD: CrossEntropyForwardWorkload,
@@ -1640,6 +1644,17 @@ class LogicalNode:
                     or self.effects != NodeEffects(EffectKind.PURE, None, None)):
                 raise SchemaError(
                     "native GEMM dX needs FP16 weight/dY/dX, FP32 accumulation and pure DGRAD phase",
+                    path=path,
+                )
+        if self.kind is OpKind.MOE_COMBINE_BACKWARD:
+            if (self.phase is not OpPhase.DGRAD
+                    or self.impl_ref != "moe_combine_backward"
+                    or len(self.inputs) != 4 or len(self.outputs) != 2
+                    or self.math.accumulation_dtype is not DType.FP32
+                    or self.effects != NodeEffects(EffectKind.PURE, None, None)):
+                raise SchemaError(
+                    "0x28 requires exact route/score/expert/dCombined, "
+                    "dScore/dExpert, and pure DGRAD",
                     path=path,
                 )
         source_moe = {
@@ -2273,6 +2288,56 @@ class IR0:
                 if actual != specs:
                     raise SchemaError("MoE source node route/three expert projections or FP32 router tensor shape differs from physical model",
                                       path=f"{path}.nodes[{index}].inputs")
+            if node.kind is OpKind.MOE_COMBINE_BACKWARD:
+                if self.job is not JobKind.TRAIN:
+                    raise SchemaError("0x28 requires TRAIN job",
+                                      path=f"{path}.nodes[{index}].kind")
+                workload = node.workload
+                assert isinstance(workload, MoeCombineBackwardWorkload)
+                forward = node_index.get(workload.source_forward_op_ref)
+                if (forward is None or forward.kind is not OpKind.MOE_COMBINE
+                        or forward.phase is not OpPhase.FWD
+                        or forward.instance_id != node.instance_id
+                        or forward.mesh_ref != node.mesh_ref
+                        or forward.workload.step != workload.step
+                        or forward.workload.layer != workload.layer
+                        or forward.workload.source_route_trace_digest !=
+                           workload.source_route_trace_digest
+                        or forward.workload.token_count != workload.token_count
+                        or forward.workload.hidden_size != workload.hidden_size
+                        or forward.workload.expert_count != workload.expert_count
+                        or workload.expert_count != 1
+                        or node.inputs[:3] != (
+                            forward.inputs[-2], forward.inputs[-1],
+                            forward.inputs[0])
+                        or node.inputs[3] not in value_index
+                        or value_index[node.inputs[3]].producer is None
+                        or node.stage != forward.stage):
+                    raise SchemaError("0x28 must bind same source combine "
+                                      "route/score/expert and real upstream",
+                                      path=f"{path}.nodes[{index}].inputs")
+                upstream = value_index[node.inputs[3]]
+                producer = node_index.get(upstream.producer)
+                if (producer is None
+                        or producer.kind is not OpKind.RESIDUAL_BACKWARD
+                        or upstream.id not in producer.outputs
+                        or upstream.id != producer.outputs[-1]
+                        or upstream.shape != (workload.token_count,
+                                              workload.hidden_size)):
+                    raise SchemaError("0x28 dCombined requires layer residual "
+                                      "physical reverse producer",
+                                      path=f"{path}.nodes[{index}].inputs")
+                m, h, e = (workload.token_count, workload.hidden_size,
+                           workload.expert_count)
+                specs = (((m, 5), DType.INT32), ((m, e), DType.FP16),
+                         ((m, h), DType.FP16), ((m, h), DType.FP16),
+                         ((m, e), DType.FP16), ((m, h), DType.FP16))
+                actual = tuple((value_index[ref].shape, value_index[ref].dtype)
+                               for ref in (*node.inputs, *node.outputs))
+                if actual != specs:
+                    raise SchemaError("0x28 route/score/expert/dCombined "
+                                      "operand extents differ",
+                                      path=f"{path}.nodes[{index}].inputs")
             workload_profile = getattr(node.workload, "profile", None)
             if (
                 multiple_profiles
@@ -2407,7 +2472,8 @@ class IR0:
             source = nodes_by_ref.get(workload.source_forward_op_ref)
             parameter = state_index.get(workload.source_parameter_state_ref)
             if (source is None or source.phase is not OpPhase.FWD
-                    or source.kind not in (OpKind.GEMM, OpKind.MOE_EXPERT_FORWARD)
+                    or source.kind not in (OpKind.GEMM, OpKind.MOE_EXPERT_FORWARD,
+                                           OpKind.MOE_ROUTER)
                     or parameter is None
                     # A scoped CE/head backward may differentiate a read-only
                     # source parameter; only a TRAINABLE state can later be
@@ -2428,6 +2494,24 @@ class IR0:
                     "GEMM FP32 WGRAD must reference a real forward parameter read and matching FP16 weight",
                     path=f"{path}.nodes[{index}].workload",
                 )
+            if source.kind is OpKind.MOE_ROUTER:
+                upstream = value_index[node.inputs[1]]
+                backward = nodes_by_ref.get(upstream.producer)
+                if (source.workload.expert_count != 1
+                        or source.workload.token_count != workload.k
+                        or source.workload.hidden_size != workload.m
+                        or source.inputs[0] != node.inputs[0]
+                        or backward is None
+                        or backward.kind is not OpKind.MOE_COMBINE_BACKWARD
+                        or backward.workload.step != source.workload.step
+                        or backward.workload.layer != source.workload.layer
+                        or backward.outputs[0] != upstream.id
+                        or upstream.shape != (workload.k, workload.n)):
+                    raise SchemaError(
+                        "router 0x25 requires real activation and native "
+                        "0x28 dScore from same step/layer",
+                        path=f"{path}.nodes[{index}].inputs",
+                    )
             if (source.kind is OpKind.GEMM
                     and source.workload.rank_shape[0] != workload.k):
                 raise SchemaError(

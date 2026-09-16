@@ -185,6 +185,11 @@ def _lower_fragments(
         if action.op_kind is OpKind.MOE_ROUTE_FREEZE:
             from ..lowering.moe_full_train_route_freeze import lower_moe_route_freeze
             fragment = lower_moe_route_freeze(action, context)
+        elif action.op_kind is OpKind.MOE_COMBINE_BACKWARD:
+            from ..lowering.moe_full_train_combine_backward import (
+                lower_moe_combine_backward,
+            )
+            fragment = lower_moe_combine_backward(action, context)
         elif action.op_kind is OpKind.MOE_COMBINE:
             from ..lowering.moe_full_train_combine import lower_moe_weighted_combine
             fragment = lower_moe_weighted_combine(action, context)
