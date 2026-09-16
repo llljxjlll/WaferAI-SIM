@@ -72,7 +72,7 @@ def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[st
         "dram_config_sha256": _sha(dram_config),
         "driver_sha256": _sha(Path(__file__).resolve()),
         "runner_sha256": _sha(Path(__file__).resolve().parent / "run_dense_sequence_runtime_canary.py"),
-        "shapes": shapes,
+        "shapes": list(shapes),
         "shard_index": args.shard_index,
         "shard_count": args.shard_count,
         "tool_sha256": {name: _sha(path) for name, path in sorted(paths.items())},

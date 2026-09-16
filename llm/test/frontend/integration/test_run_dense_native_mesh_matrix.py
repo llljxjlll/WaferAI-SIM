@@ -232,6 +232,8 @@ class NativeMatrixAuditTest(unittest.TestCase):
             runner = Path(driver.__file__).parent / "run_dense_sequence_runtime_canary.py"
             self.assertEqual(binding["runner_sha256"], hashlib.sha256(runner.read_bytes()).hexdigest())
             self.assertEqual(binding["schema_version"], "dense-native-mesh-matrix-binding-v3")
+            self.assertEqual(binding["shapes"], ["1x4"])
+            self.assertEqual(json.loads(json.dumps(binding)), binding)
             self.assertEqual(binding["dram_config_sha256"], hashlib.sha256((Path(driver.__file__).resolve().parents[4] / "DRAMSys/configs/hbm2-example.json").read_bytes()).hexdigest())
 
 
