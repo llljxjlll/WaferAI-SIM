@@ -400,6 +400,8 @@ ManifestInputKindDto ParseInputKind(const Json &value,
     if (raw == "ir1") return ManifestInputKindDto::IR1;
     if (raw == "fusion_plan") return ManifestInputKindDto::FUSION_PLAN;
     if (raw == "standalone_plan") return ManifestInputKindDto::STANDALONE_PLAN;
+    if (raw == "dense_dp2_route_plan")
+        return ManifestInputKindDto::DENSE_DP2_ROUTE_PLAN;
     if (raw == "ir2_projection") return ManifestInputKindDto::IR2_PROJECTION;
     if (raw == "schedule_set") return ManifestInputKindDto::SCHEDULE_SET;
     if (raw == "global_action_dag") return ManifestInputKindDto::GLOBAL_ACTION_DAG;
@@ -1296,6 +1298,8 @@ std::string_view InputKindKey(ManifestInputKindDto kind) {
     case ManifestInputKindDto::IR1: return "ir1";
     case ManifestInputKindDto::FUSION_PLAN: return "fusion_plan";
     case ManifestInputKindDto::STANDALONE_PLAN: return "standalone_plan";
+    case ManifestInputKindDto::DENSE_DP2_ROUTE_PLAN:
+        return "dense_dp2_route_plan";
     case ManifestInputKindDto::IR2_PROJECTION: return "ir2_projection";
     case ManifestInputKindDto::SCHEDULE_SET: return "schedule_set";
     case ManifestInputKindDto::GLOBAL_ACTION_DAG: return "global_action_dag";
@@ -5076,6 +5080,9 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             }
         }
         std::size_t standalone_fragment_count = 0;
+        std::size_t dp2_gradient_fragment_count = 0;
+        std::map<std::string, std::pair<std::size_t, std::size_t>>
+            dp2_gradient_fragments_by_dag;
         std::set<std::string> rooted_local_dag_ids;
         std::vector<std::vector<Opcode>> rooted_overlay_sequences;
         std::size_t rooted_overlay_claims = 0;
@@ -5279,8 +5286,23 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         fragment.source_global_dag_id);
                 }
             }
-            if (fragment.kind == FragmentKindDto::STANDALONE_COLLECTIVE)
+            if (fragment.producer_pass == "dense_dp_gradient_lowering") {
+                if (!train_link ||
+                    fragment.kind != FragmentKindDto::STANDALONE_COLLECTIVE ||
+                    (fragment.claimed_action_ids.size() != 3 &&
+                     fragment.claimed_action_ids.size() != 5))
+                    Fail("linked_program_manifest.fragments",
+                         "DP2 gradient fragments require train lineage and exact physical rank actions");
+                ++dp2_gradient_fragment_count;
+                auto &counts =
+                    dp2_gradient_fragments_by_dag[fragment.source_global_dag_id];
+                if (fragment.claimed_action_ids.size() == 5)
+                    ++counts.first;
+                else
+                    ++counts.second;
+            } else if (fragment.kind == FragmentKindDto::STANDALONE_COLLECTIVE) {
                 ++standalone_fragment_count;
+            }
             expected_inputs.emplace(
                 ManifestInputKindDto::COMMAND_FRAGMENT, fragment.id,
                 kCommandFragmentSchemaVersion);
@@ -6856,6 +6878,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                      "DP4 MoE production quotient changed");
         }
         std::size_t standalone_digest_count = 0;
+        std::size_t dp2_route_digest_count = 0;
         for (const ManifestInputDigestDto &digest : manifest.input_digests) {
             if (digest.kind == ManifestInputKindDto::STANDALONE_PLAN) {
                 ++standalone_digest_count;
@@ -6865,8 +6888,40 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                          "standalone plan schema version mismatch");
                 expected_inputs.emplace(digest.kind, digest.artifact_id,
                                         digest.schema_version);
+            } else if (digest.kind ==
+                       ManifestInputKindDto::DENSE_DP2_ROUTE_PLAN) {
+                ++dp2_route_digest_count;
+                if (!train_link ||
+                    digest.schema_version !=
+                        "wafer_frontend.dense_dp2_route_plan/v1alpha1" ||
+                    digest.artifact_id.rfind("dense_dp2_route_plan_", 0) != 0)
+                    Fail("linked_program_manifest.input_digests",
+                         "DP2 gradient route anchor has no exact train source/schema identity");
+                expected_inputs.emplace(digest.kind, digest.artifact_id,
+                                        digest.schema_version);
             }
         }
+        if ((dp2_gradient_fragment_count == 0 && dp2_route_digest_count != 0) ||
+            (dp2_gradient_fragment_count != 0 &&
+             (dp2_route_digest_count != 1 ||
+              dp2_gradient_fragment_count != 120 ||
+              dp2_gradient_fragments_by_dag.size() != 2 ||
+              !std::any_of(
+                  dp2_gradient_fragments_by_dag.begin(),
+                  dp2_gradient_fragments_by_dag.end(),
+                  [](const auto &entry) {
+                      return entry.second.first == 60 &&
+                             entry.second.second == 0;
+                  }) ||
+              !std::any_of(
+                  dp2_gradient_fragments_by_dag.begin(),
+                  dp2_gradient_fragments_by_dag.end(),
+                  [](const auto &entry) {
+                      return entry.second.first == 0 &&
+                             entry.second.second == 60;
+                  }))))
+            Fail("linked_program_manifest.input_digests",
+                 "DP2 route trust anchor must match exactly both 60-gradient physical replica programs");
         if (standalone_digest_count != standalone_fragment_count)
             Fail("linked_program_manifest.input_digests",
                  "standalone plan trust anchors must bijectively match standalone fragments");

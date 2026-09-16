@@ -90,6 +90,7 @@ enum class ManifestInputKindDto {
     IR1,
     FUSION_PLAN,
     STANDALONE_PLAN,
+    DENSE_DP2_ROUTE_PLAN,
     IR2_PROJECTION,
     SCHEDULE_SET,
     GLOBAL_ACTION_DAG,
