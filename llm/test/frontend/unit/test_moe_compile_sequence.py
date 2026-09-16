@@ -215,6 +215,16 @@ class MoeCompileSequenceTest(unittest.TestCase):
                                for record in stream.records
                                if record.opcode is RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING)
                 self.assertEqual(len(native), 3)
+                backward_binds = tuple(stream.records[index - 1]
+                    for fragment in unit.linked_manifest.fragments
+                    for stream in fragment.core_streams
+                    for index, record in enumerate(stream.records)
+                    if record.opcode is RecordOpcode.SWIGLU_BACKWARD_TIMING)
+                self.assertEqual(len(backward_binds), 1)
+                self.assertEqual(backward_binds[0].opcode, RecordOpcode.SRAM_BIND)
+                self.assertEqual(next(operand.literal_value
+                    for operand in backward_binds[0].operands
+                    if operand.name == "input_count"), 2)
         unit = sequence.units[0]
         native_ref = next(record.source_global_action_id
                           for fragment in unit.linked_manifest.fragments

@@ -810,7 +810,8 @@ def lower_link_flexible_moe_multi(
                  (SemanticOperandId.COMPUTE_OUTPUT_ADDRESS, absolute(activated_grad), 0)))
             # Distinct derivative primitive: gate/up forward values and
             # upstream dActivated feed physical gate/up gradients, SFU/vec>0.
-            add_bind(action, (forward_concat,), gate_up_grad, source_action_id=swiglu_id)
+            add_bind(action, (forward_concat, activated_grad), gate_up_grad,
+                     source_action_id=swiglu_id)
             view("compute", core, SemanticOperandId.COMPUTE_INPUT_ADDRESS,
                  forward_concat, 0, 2 * intermediate_bytes)
             view("compute", core, SemanticOperandId.COMPUTE_DATA_ADDRESS,
