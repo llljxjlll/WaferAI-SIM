@@ -185,6 +185,17 @@ def _lower_fragments(
         if action.op_kind is OpKind.MOE_ROUTE_FREEZE:
             from ..lowering.moe_full_train_route_freeze import lower_moe_route_freeze
             fragment = lower_moe_route_freeze(action, context)
+        elif action.op_kind is OpKind.MOE_ROUTER:
+            from ..lowering.moe_full_train_router import lower_moe_router_score_fragment
+            schedule = next((item for item in context.schedule_set.schedules
+                             if item.id == action.source.schedule_id), None)
+            if schedule is None:
+                raise SchemaError("router action lacks its physical schedule",
+                                  path=f"source.global_dag.actions[{action_index}]")
+            fragment = lower_moe_router_score_fragment(
+                action, schedule, context.ir1,
+                source_global_dag_id=context.global_dag.id,
+            )
         elif action.op_kind is OpKind.MOE_EXPERT_FORWARD:
             from ..lowering.moe_full_train_expert import lower_moe_expert_record_fragment
             schedule = next((item for item in context.schedule_set.schedules

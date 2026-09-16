@@ -4401,6 +4401,77 @@ class CommandFragment:
                     raise SchemaError("route-freeze must copy exact INT32 five-field table",
                                       path=f"{path}.buffer_abi")
             elif (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_ROUTER):
+                compute = action.compute
+                if (self.producer_pass != "moe_full_train_router_lowering"
+                        or self.kind is not FragmentKind.COARSE
+                        or compute is None or compute.impl_ref != "moe_router"
+                        or type(compute.workload) is not MoeFullTrainingBlockWorkload
+                        or compute.workload.kind is not MoeForwardBlockKind.ROUTER
+                        or compute.workload.expert_count != 1
+                        or len(indices) != 2
+                        or tuple(records[index].opcode for index in indices)
+                           != (RecordOpcode.SRAM_BIND, RecordOpcode.MATMUL)):
+                    raise SchemaError("EP1 router requires exact score MATMUL pair",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                uses = {(use.role, use.operand_index): use
+                        for use in action.buffer_uses}
+                if set(uses) != {(BufferUseRole.COMP_INPUT, 0),
+                                 (BufferUseRole.COMP_INPUT, 1),
+                                 (BufferUseRole.COMP_OUTPUT, 0)}:
+                    raise SchemaError("router physical operands are not exact",
+                                      path=f"{path}.buffer_abi")
+                abis = {abi.binding_id: abi for abi in self.buffer_abi}
+                if len(abis) != 3 or set(abis) != {
+                        use.binding_id for use in uses.values()}:
+                    raise SchemaError("router needs three exact source BufferABIs",
+                                      path=f"{path}.buffer_abi")
+                activation, weight = (abis[uses[(BufferUseRole.COMP_INPUT, i)].binding_id]
+                                      for i in range(2))
+                output = abis[uses[(BufferUseRole.COMP_OUTPUT, 0)].binding_id]
+                m = compute.workload.token_count
+                h = compute.workload.hidden_size
+                if (activation.tensor_slice.shape != (m, h)
+                        or weight.tensor_slice.shape != (h, 1)
+                        or output.tensor_slice.shape != (m, 1)
+                        or tuple(abi.size_bytes for abi in (activation, weight, output))
+                           != (2*m*h, 2*h, 2*m)
+                        or any(abi.dtype is not DType.FP16
+                               for abi in (activation, weight, output))
+                        or len({abi.storage_id for abi in (activation, weight, output)}) != 3):
+                    raise SchemaError("router FP16 score ABI differs from workload",
+                                      path=f"{path}.buffer_abi")
+                bind, matmul = (records[index] for index in indices)
+                if (bind.operands[0].literal_value != 1
+                        or matmul.operands[0].literal_value != 1
+                        or matmul.operands[-1].literal_value != (1, m, h, 1)):
+                    raise SchemaError("router score MATMUL parameters differ from source",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                relocation_index = {(item.record_index, item.operand_id): item
+                                    for item in stream.address_relocations}
+                expected = (
+                    (indices[0], SemanticOperandId.SRAM_BIND_INPUT_0,
+                     ProgramSymbolKind.SRAM_LABEL, activation.storage_id),
+                    (indices[0], SemanticOperandId.SRAM_BIND_OUTPUT,
+                     ProgramSymbolKind.SRAM_LABEL, output.storage_id),
+                    (indices[1], SemanticOperandId.COMPUTE_INPUT_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, activation.binding_id),
+                    (indices[1], SemanticOperandId.COMPUTE_DATA_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, weight.binding_id),
+                    (indices[1], SemanticOperandId.COMPUTE_OUTPUT_ADDRESS,
+                     ProgramSymbolKind.ABSOLUTE_ADDRESS, output.binding_id),
+                )
+                for record_index, operand_id, kind, source_ref in expected:
+                    relocation = relocation_index.get((record_index, operand_id))
+                    symbol = (program_symbols.get(relocation.symbol_ref)
+                              if relocation is not None else None)
+                    if (relocation is None or symbol is None
+                            or symbol.kind is not kind
+                            or symbol.source_ref != source_ref
+                            or relocation.addend != 0):
+                        raise SchemaError("router score address differs from exact source ABI",
+                                          path=f"{path}.core_streams[{stream_index}].address_relocations")
+            elif (action.task_kind is SemanticTaskKind.COMP
                     and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
                 compute = action.compute
                 if (self.producer_pass != "moe_full_train_expert_lowering"
