@@ -18,6 +18,9 @@ from llm.frontend.wafer_frontend.schema.full_moe_shared_train_requirements impor
 from llm.test.frontend.unit.test_full_training_timeline_linker import (
     FullTrainingTimelineLinkerTest,
 )
+from llm.frontend.wafer_frontend.passes.moe_compile_sequence import compile_moe_sequence
+from llm.frontend.wafer_frontend.schema.workload_run import WorkloadFamily
+from llm.test.frontend.unit.test_moe_compile_sequence import _manifest
 
 
 class FullMoeSharedTrainRequirementsTest(unittest.TestCase):
@@ -31,6 +34,30 @@ class FullMoeSharedTrainRequirementsTest(unittest.TestCase):
         cls.requirements = build_full_moe_shared_train_requirements(
             cls.source.forward.plan, cls.dense, cls.source.moe,
         )
+
+    def test_single_die_expert_and_router_source_owners_remain_exact(self) -> None:
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING, rows=1, columns=1),
+            source_rank_policy="rank0_shared_spine",
+        )
+        req = build_full_moe_shared_train_requirements(
+            self.source.forward.plan, self.dense, sequence,
+        )
+        self.assertEqual(len(req.moe_parameter_requirements), 16)
+        self.assertEqual(len(req.shared_dense_parameter_state_refs), 11)
+        self.assertEqual({entry.owner_rank for entry in req.moe_parameter_requirements}, {0})
+        self.assertEqual(len([entry for entry in req.moe_parameter_requirements
+                              if entry.expert is None]), 4)
+        self.assertFalse(req.source_ir0_replacement_materialized)
+        with self.assertRaisesRegex(SchemaError, "displaced Dense MLP HBM state"):
+            require_moe_shared_train_no_dense_mlp(
+                self.source.backward.manifest,
+                self.source.forward.plan, self.dense, sequence, req,
+            )
+        with self.assertRaisesRegex(SchemaError, "replacement or parameter lineage"):
+            replace(req, source_ir0_replacement_materialized=True).validate_against(
+                self.source.forward.plan, self.dense, sequence,
+            )
 
     def test_exact_mlp_operation_and_state_replacement_not_double_computation(self) -> None:
         req = self.requirements

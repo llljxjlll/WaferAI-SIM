@@ -112,8 +112,10 @@ def build_full_moe_shared_train_requirements(
             != (model.V, model.H, model.I, model.L, model.NH, model.KVH,
                 model.DH, model.max_position_embeddings, DType.FP16)
             or (request.parallel.tp, request.parallel.dp, request.parallel.pp,
-                request.parallel.ep) != (1, 1, 1, 2)
-            or request.mesh.rank_count != 2 or dense_plan.spec.mesh.rank_count != 1
+                request.parallel.ep) != (1, 1, 1, request.mesh.rank_count)
+            or request.mesh.rank_count not in (1, 2)
+            or other.num_experts != request.mesh.rank_count
+            or dense_plan.spec.mesh.rank_count != 1
             or any(unit.source_rank_policy != "rank0_shared_spine"
                    for unit in moe.units)):
         raise SchemaError("Dense source identity/sequence or MoE TRAIN model/mesh differs",
@@ -163,7 +165,7 @@ def build_full_moe_shared_train_requirements(
                 count = 1 if group.expert is None else 3
                 if (len(group.parameter_refs) != count
                         or len(group.production_parameter_state_refs) !=
-                           (2 if group.expert is None else 1)):
+                           (request.mesh.rank_count if group.expert is None else 1)):
                     raise SchemaError("router replicated gate or expert fused homes absent",
                                       path=f"full_moe_shared_train_source.layer{layer}.step{step}")
                 state_abis = {abi.state_ref: abi for fragment
@@ -172,7 +174,8 @@ def build_full_moe_shared_train_requirements(
                               in group.production_parameter_state_refs}
                 if (set(state_abis) != set(group.production_parameter_state_refs)
                         or {abi.die_id for abi in state_abis.values()} !=
-                           ({0, 1} if group.expert is None else {group.expert})):
+                           (set(range(request.mesh.rank_count))
+                            if group.expert is None else {group.expert})):
                     raise SchemaError("gate replicas/expert state HBM ownership differ",
                                       path=f"full_moe_shared_train_source.layer{layer}.step{step}")
                 zero = group.expert is not None and (
@@ -240,7 +243,7 @@ def build_full_moe_shared_train_requirements(
                 in shared_bindings} != set(shared)
             or len(paths) != dense.steps * len(shared)
             or len(parameters) != dense.steps * model.L *
-                (2 + 3 * other.num_experts)
+                (request.mesh.rank_count + 3 * other.num_experts)
             or len({(entry.step, entry.layer, entry.source_parameter_ref,
                      entry.owner_rank)
                     for entry in parameters}) != len(parameters)):
