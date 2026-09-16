@@ -1203,6 +1203,15 @@ def lower_link_flexible_moe_multi(
     all_program_symbols = tuple(sorted({item.id: item for item in (
         *region_by_ref.values(), *label_by_buffer.values(), *absolute_by_buffer.values(), *hbm_by_state.values(),
     )}.values(), key=lambda item: item.id))
+    state_symbol_ids = {
+        relocation.symbol_ref
+        for core in cores for relocation in address_relocs["state"][core]
+    }
+    region_symbol_ids = {item.id for item in region_by_ref.values()}
+    state_program_symbols = tuple(
+        item for item in all_program_symbols
+        if item.id in state_symbol_ids or item.id in region_symbol_ids
+    )
     compute_symbol_ids = {
         relocation.symbol_ref for core in cores for relocation in address_relocs["compute"][core]
     }
@@ -1219,7 +1228,8 @@ def lower_link_flexible_moe_multi(
             core, tuple(records["state"][core]), (),
             tuple(sorted(address_relocs["state"][core], key=lambda item: (item.record_index, int(item.operand_id)))),
         ) for core in cores),
-        runtime_symbols=(), program_symbols=all_program_symbols, buffer_abi=buffers, state_abi=state_abis,
+        runtime_symbols=(), program_symbols=state_program_symbols,
+        buffer_abi=buffers, state_abi=state_abis,
     )
     compute_fragment = CommandFragment.create(
         producer_pass=_LOWERING_PASS, source_global_dag_id=plan.id, kind=FragmentKind.COARSE,
@@ -1288,11 +1298,20 @@ def lower_link_flexible_moe_multi(
             definitions.append(ProgramSymbolDefinition(absolute_by_buffer[abi.id], f"flexible_moe_r{rank}_abs_{index}", base + abi.region_offset_bytes, abi.size_bytes, (core,)))
     for index, state in enumerate(state_abis):
         definitions.append(ProgramSymbolDefinition(hbm_by_state[state.id], f"flexible_moe_hbm_{index}", state.address, state.size_bytes, (core_by_rank[state.die_id],)))
-    definitions = tuple(sorted(definitions, key=lambda item: item.symbol.id))
+    declared_program_ids = {
+        symbol.id for fragment in fragments for symbol in fragment.program_symbols
+    }
+    definitions = tuple(sorted(
+        (item for item in definitions if item.symbol.id in declared_program_ids),
+        key=lambda item: item.symbol.id,
+    ))
 
     symbol_fragments = {
         symbol.id: tuple(fragment.id for fragment in fragments if symbol in fragment.program_symbols)
-        for symbol in all_program_symbols
+        for symbol in {
+            symbol.id: symbol
+            for fragment in fragments for symbol in fragment.program_symbols
+        }.values()
     }
     interfaces = []
     event_credits = tuple(

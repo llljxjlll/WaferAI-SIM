@@ -1,4 +1,4 @@
-"""Run the two-layer 1x2 MoE Prefill -> Decode -> Decode full model in one instance."""
+"""Run a rectangular MoE Prefill -> Decode -> Decode full model in one instance."""
 
 from __future__ import annotations
 
@@ -39,14 +39,222 @@ from llm.test.frontend.flexible_mesh_fixtures import minimal_hardware
 from llm.test.frontend.unit._fixtures import valid_hbm_address_spaces
 from llm.test.frontend.unit.test_moe_compile_sequence import _manifest
 from llm.test.frontend.unit.test_moe_full_model_compile_sequence import _legacy_template
-from llm.frontend.wafer_frontend.passes.load_fabric import physical_fabric_from_data
+from llm.frontend.wafer_frontend.passes.load_fabric import (
+    SIMULATOR_PACKET_PAYLOAD_BYTES, physical_fabric_from_data,
+)
 
 from .flexible_mesh_release_hardware import specialize_p5_large_release_hardware
-from .run_dense_sequence_runtime_canary import _run
+from .run_dense_sequence_runtime_canary import (
+    _bind_native_hardware_to_fabric, _run,
+)
 
 
 _ROOT = Path(__file__).resolve().parents[4]
 _LINKER_SCHEMA = "wafer_frontend.moe_full_model_region_linker/v1alpha1"
+
+
+def _executable_core_bindings(sequence, rank_count: int) -> dict[int, int]:
+    """Return one common rank-to-native-core binding for all three segments."""
+    expected_ranks = set(range(rank_count))
+    common = None
+    for index, segment in enumerate(sequence.segments):
+        bindings = segment.executable_manifest.core_bindings
+        current = {
+            item.logical_core.die_id: item.runtime_core_id
+            for item in bindings
+            if item.logical_core.local_core_id == 0
+        }
+        if (len(current) != len(bindings) or set(current) != expected_ranks
+                or len(set(current.values())) != rank_count):
+            raise RuntimeError(
+                f"segment {index} executable core bindings do not cover the mesh exactly"
+            )
+        if common is None:
+            common = current
+        elif current != common:
+            raise RuntimeError("full-model segment executable core bindings disagree")
+    if common is None:
+        raise RuntimeError("full-model sequence has no executable segments")
+    return common
+
+
+def _flow_link_expectations(flows, rows: int, columns: int):
+    """Accumulate exact X-first native packet and handshake hops for every flow."""
+    rank_count = rows * columns
+    links: dict[tuple[int, int, str], list[int]] = {}
+    for flow in flows:
+        source = flow.source_rank
+        destination = flow.destination_rank
+        if (not 0 <= source < rank_count or not 0 <= destination < rank_count
+                or source == destination or flow.logical_bytes <= 0):
+            raise RuntimeError(f"invalid remote MoE flow {flow.id}")
+        packets = (
+            flow.logical_bytes + SIMULATOR_PACKET_PAYLOAD_BYTES - 1
+        ) // SIMULATOR_PACKET_PAYLOAD_BYTES
+        current = source
+        source_x, source_y = source % columns, source // columns
+        destination_x, destination_y = (
+            destination % columns, destination // columns
+        )
+        while source_x != destination_x:
+            step = 1 if source_x < destination_x else -1
+            next_rank = current + step
+            direction = "E" if step > 0 else "W"
+            counts = links.setdefault((current, next_rank, direction), [0, 0])
+            counts[0] += 1
+            counts[1] += packets
+            current = next_rank
+            source_x += step
+        while source_y != destination_y:
+            step = 1 if source_y < destination_y else -1
+            next_rank = current + step * columns
+            direction = "N" if step > 0 else "S"
+            counts = links.setdefault((current, next_rank, direction), [0, 0])
+            counts[0] += 1
+            counts[1] += packets
+            current = next_rank
+            source_y += step
+        if current != destination:
+            raise RuntimeError(f"failed to route expected MoE flow {flow.id}")
+    return {key: tuple(value) for key, value in links.items()}
+
+
+def _audit_native_runtime(
+    stdout: str,
+    *,
+    sequence,
+    expected_flows,
+    expert_records_by_core: dict[int, tuple[int, int]],
+    core_bindings: dict[int, int],
+    rows: int,
+    columns: int,
+) -> tuple[tuple[str, str, str], ...]:
+    """Fail closed on the full sequence, native cores, and routed D2D traffic."""
+    segment_markers = re.findall(
+        r"\[DENSE_SEQUENCE_SEGMENT\] index=(\d+) status=done final=(\d+)", stdout
+    )
+    probes = re.findall(
+        r"\[DENSE_SEQUENCE_PROGRAM_IO\] index=(\d+) probes=(\d+) pass=(\d+)",
+        stdout,
+    )
+    drains = re.findall(
+        r"\[DENSE_SEQUENCE_DRAIN\] segments=(\d+) one_shot=(\d+)", stdout
+    )
+    kv = tuple(re.findall(
+        r"\[DENSE_SEQUENCE_KV\] index=(\d+) bytes=(\d+) digest=([0-9a-f]{64}) pass=1",
+        stdout,
+    ))
+    if (segment_markers != [("0", "0"), ("1", "0"), ("2", "1")]
+            or probes != [("0", "1", "1"), ("1", "1", "1"), ("2", "1", "1")]
+            or drains != [("3", "1")]
+            or tuple((index, int(size)) for index, size, _ in kv)
+            != (("0", 128), ("1", 192), ("2", 256))):
+        raise RuntimeError("full-model sequence/KV closure failed")
+
+    links_expected = _flow_link_expectations(expected_flows, rows, columns)
+    expected_request_hops = sum(counts[0] for counts in links_expected.values())
+    expected_packet_hops = sum(counts[1] for counts in links_expected.values())
+    d2d_data = re.findall(
+        r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", stdout
+    )
+    d2d_type = re.findall(
+        r"\[D2D_TYPE\] request_in=(\d+) request_out=(\d+) "
+        r"ack_in=(\d+) ack_out=(\d+) data_in=(\d+) data_out=(\d+)",
+        stdout,
+    )
+    expected_type = tuple(map(str, (
+        expected_request_hops, expected_request_hops,
+        2 * expected_request_hops, 2 * expected_request_hops,
+        expected_packet_hops, expected_packet_hops,
+    )))
+    if (d2d_data != [(str(expected_packet_hops), str(expected_packet_hops))]
+            or d2d_type != [expected_type]):
+        raise RuntimeError(
+            "native aggregate D2D traffic differs from all expected MoE flow hops"
+        )
+    link_pattern = re.compile(
+        r"\[D2D_LINK\] idx=(\d+) die(\d+)->die(\d+) dir=([EWNS]) "
+        r"req_in=(\d+) req_out=(\d+) ack_in=(\d+) ack_out=(\d+) "
+        r"data_in=(\d+) data_out=(\d+)\."
+    )
+    links_actual = {}
+    for match in link_pattern.finditer(stdout):
+        _, source, destination, direction, *raw_counts = match.groups()
+        key = (int(source), int(destination), direction)
+        if key in links_actual:
+            raise RuntimeError(f"duplicate native D2D link evidence: {key}")
+        links_actual[key] = tuple(map(int, raw_counts))
+    expected_rows = {
+        key: (requests, requests, 2 * requests, 2 * requests, packets, packets)
+        for key, (requests, packets) in links_expected.items()
+    }
+    if links_actual != expected_rows:
+        raise RuntimeError(
+            f"native directed D2D flow closure differs: "
+            f"expected={expected_rows!r} actual={links_actual!r}"
+        )
+
+    expected_cores = set(core_bindings.values())
+    memory_pattern = re.compile(
+        r"\[PROGRAM_MEMORY\] core=(\d+) lsu_issued=(\d+) lsu_completed=(\d+) "
+        r"[^\n]*lsu_residual=(\d+) dte_residual=(\d+)"
+    )
+    memory_rows = tuple(tuple(map(int, match.groups()))
+                        for match in memory_pattern.finditer(stdout))
+    if (len(memory_rows) != len(expected_cores)
+            or {row[0] for row in memory_rows} != expected_cores
+            or any(issued <= 0 or completed != issued or lsu or dte
+                   for _, issued, completed, lsu, dte in memory_rows)):
+        raise RuntimeError(
+            f"PROGRAM_MEMORY does not close every executable core: {memory_rows!r}"
+        )
+    p2p = tuple(
+        (int(core), int(residual))
+        for core, residual in re.findall(
+            r"\[P5 P2P DRAIN\] core=(\d+) residual=(\d+)", stdout
+        )
+    )
+    if (len(p2p) != len(expected_cores) or {core for core, _ in p2p} != expected_cores
+            or any(residual for _, residual in p2p)):
+        raise RuntimeError(f"P2P drain does not close every executable core: {p2p!r}")
+
+    for core, (expected_matmuls, expected_swiglus) in expert_records_by_core.items():
+        matmuls = len(re.findall(
+            rf"Core {core} start compute primitive Matmul_f\.", stdout
+        ))
+        swiglus = len(re.findall(
+            rf"Core {core} start compute primitive swiglu_forward\.", stdout
+        ))
+        if matmuls != expected_matmuls or swiglus != expected_swiglus:
+            raise RuntimeError(
+                f"remote expert core {core} compute differs: "
+                f"expected={(expected_matmuls, expected_swiglus)} "
+                f"actual={(matmuls, swiglus)}"
+            )
+
+    bridge_transfers = 2 * sum(
+        len(segment.moe_unit_refs) for segment in sequence.segments
+    )
+    bridge_core = core_bindings[0]
+    bridge_stats = re.findall(
+        rf"\[DTE_STATS\] core={bridge_core} issued=(\d+) completed=(\d+) "
+        r".*pending=(\d+) active=(\d+) inflight=(\d+)", stdout
+    )
+    drain_markers = (
+        "[P5 P2P TIMING DRAIN] residual=0",
+        "[DRAIN] router_residual=0",
+        "[DRAIN] d2d_link_residual=0",
+        "[CREDIT] data_balanced=1 ctrl_balanced=1",
+    )
+    expected_bridge = tuple(map(str, (
+        bridge_transfers, bridge_transfers, 0, 0, 0,
+    )))
+    if (bridge_stats != [expected_bridge]
+            or any(stdout.count(marker) != 1 for marker in drain_markers)
+            or stdout.count("[SIM_RESULT]") != 1
+            or "[PROTO_WAIT]" in stdout or "[D2D_BEHA]" in stdout):
+        raise RuntimeError("full-model native completion/drain closure failed")
+    return kv
 
 
 def prove_full_model_dataflow(segment, units) -> None:
@@ -396,13 +604,20 @@ def build_full_model_program_io(segment, artifact_sha256: str) -> ProgramIoContr
 
 
 def run(args: argparse.Namespace) -> None:
-    materialization = _manifest(WorkloadFamily.MOE_INFERENCE)
-    fabric = physical_fabric_from_data(minimal_hardware(2, 1, sram_bytes=65536))
+    rows, columns = (int(item) for item in args.mesh_size.split("x"))
+    rank_count = rows * columns
+    materialization = _manifest(
+        WorkloadFamily.MOE_INFERENCE, rows=rows, columns=columns,
+    )
+    fabric = physical_fabric_from_data(
+        minimal_hardware(columns, rows, sram_bytes=65536)
+    )
     spaces = valid_hbm_address_spaces(fabric)
     sequence = compile_moe_full_model_inference_sequence(
         materialization, _legacy_template(), fabric,
         hbm_address_spaces=spaces,
     )
+    core_bindings = _executable_core_bindings(sequence, rank_count)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifests = []
@@ -411,56 +626,98 @@ def run(args: argparse.Namespace) -> None:
     artifact_digests = []
     units_by_id = {unit.id: unit for unit in sequence.moe_blocks.units}
     expected_flows = []
-    expected_remote_experts = 0
+    expert_records = {
+        core_bindings[rank]: [0, 0] for rank in range(1, rank_count)
+    }
     for index, segment in enumerate(sequence.segments):
         units = tuple(units_by_id[ref] for ref in segment.moe_unit_refs)
         prove_full_model_dataflow(segment, units)
         expected_flows.extend(
             flow for unit in units for flow in unit.plan.flows
-            if flow.stage in (MoeRectFlowStage.DISPATCH, MoeRectFlowStage.COMBINE)
+            if (flow.stage in (MoeRectFlowStage.DISPATCH, MoeRectFlowStage.COMBINE)
+                and flow.source_rank != flow.destination_rank)
         )
-        expected_remote_experts += sum(
-            3 if action.kind is MoeRectActionKind.EXPERT_FORWARD
-            and action.rank == 1 and action.assignment_refs else 0
-            for unit in units for action in unit.plan.actions
-        )
+        for unit in units:
+            for action in unit.plan.actions:
+                if (action.kind is MoeRectActionKind.EXPERT_FORWARD
+                        and action.rank != 0 and action.assignment_refs):
+                    counts = expert_records[core_bindings[action.rank]]
+                    counts[0] += 3
+                    counts[1] += 1
         path = output / f"segment_{index}.linked.json"
         artifact = output / f"segment_{index}.npup"
         report = output / f"segment_{index}.finalizer.json"
-        path.write_text(canonical_json(segment.executable_manifest), encoding="utf-8")
-        _run((str(args.finalizer.resolve()), "--input", str(path), "--output", str(artifact), "--report", str(report)), cwd=output, timeout=120)
+        path.write_text(
+            canonical_json(segment.executable_manifest), encoding="utf-8"
+        )
+        _run((
+            str(args.finalizer.resolve()), "--input", str(path),
+            "--output", str(artifact), "--report", str(report),
+        ), cwd=output, timeout=120)
         summary = json.loads(report.read_text(encoding="utf-8"))
         sha = hashlib.sha256(artifact.read_bytes()).hexdigest()
         if (summary.get("artifact_sha256") != sha
-                or summary.get("linked_manifest_id") != segment.executable_manifest.id
-                or summary.get("linked_manifest_digest") != segment.executable_manifest_digest):
+                or summary.get("linked_manifest_id")
+                != segment.executable_manifest.id
+                or summary.get("linked_manifest_digest")
+                != segment.executable_manifest_digest):
             raise RuntimeError(f"segment {index} finalizer closure failed")
         contract = build_full_model_program_io(segment, sha)
-        if len(contract.output_probes) != 1 or contract.output_probes[0].target.value_id != "P0.logits":
-            raise RuntimeError("each MoE full-model segment must physically probe LM logits")
+        if (len(contract.output_probes) != 1
+                or contract.output_probes[0].target.value_id != "P0.logits"):
+            raise RuntimeError(
+                "each MoE full-model segment must physically probe LM logits"
+            )
         sidecar = output / f"segment_{index}.program_io.json"
         sidecar.write_text(canonical_json(contract), encoding="utf-8")
         manifests.append(path)
         artifacts.append(artifact)
         sidecars.append(sidecar)
         artifact_digests.append(sha)
-    hardware = json.loads(specialize_p5_large_release_hardware(1, 2))
+
+    hardware = json.loads(
+        specialize_p5_large_release_hardware(rows, columns)
+    )
+    _bind_native_hardware_to_fabric(hardware, fabric)
     hardware["memory"]["sram_size"] = 131072
     hardware["memory"]["sram"]["capacity_bytes"] = 131072
     access = ["compute", "dte", "lsu", "legacy", "noc_rx"]
     hardware["memory"]["sram"]["regions"] = [
-        {"name": name, "base_bytes": base, "size_bytes": size, "allocator": "block", "spillable": name == "input", "access": access}
-        for name, base, size in (("sram", 0, 4096), ("input", 4096, 36864), ("comm", 40960, 36864))
+        {
+            "name": name,
+            "base_bytes": base,
+            "size_bytes": size,
+            "allocator": "block",
+            "spillable": name == "input",
+            "access": access,
+        }
+        for name, base, size in (
+            ("sram", 0, 4096),
+            ("input", 4096, 36864),
+            ("comm", 40960, 36864),
+        )
     ]
+    spaces_by_die = {space.die_id: space for space in spaces}
     for stack in hardware["memory_system"]["hbm_stacks"]:
-        stack["capacity_bytes"] = spaces[stack["compute_die_id"]].size_bytes
+        stack["capacity_bytes"] = spaces_by_die[
+            stack["compute_die_id"]
+        ].size_bytes
     hardware["memory_system"]["address_policy"]["home_ranges"] = [
-        {"die_id": item.die_id, "base": item.base_address, "size_bytes": item.size_bytes}
+        {
+            "die_id": item.die_id,
+            "base": item.base_address,
+            "size_bytes": item.size_bytes,
+        }
         for item in spaces
     ]
-    hardware["memory_system"]["address_policy"]["stack_interleave_bytes"] = spaces[0].size_bytes
+    hardware["memory_system"]["address_policy"][
+        "stack_interleave_bytes"
+    ] = spaces[0].size_bytes
     hardware_path = output / "hardware.json"
-    hardware_path.write_text(json.dumps(hardware, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    hardware_path.write_text(
+        json.dumps(hardware, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
     mapping_path = output / "mapping.spec"
     mapping_path.write_text("0:0\n", encoding="utf-8")
     stdout = _run((
@@ -474,49 +731,38 @@ def run(args: argparse.Namespace) -> None:
         "--trace-window", "1000000",
     ), cwd=output, timeout=args.timeout)
     (output / "npusim.stdout.txt").write_text(stdout, encoding="utf-8")
-    segment_markers = re.findall(r"\[DENSE_SEQUENCE_SEGMENT\] index=(\d+) status=done final=(\d+)", stdout)
-    probes = re.findall(r"\[DENSE_SEQUENCE_PROGRAM_IO\] index=(\d+) probes=(\d+) pass=(\d+)", stdout)
-    drains = re.findall(r"\[DENSE_SEQUENCE_DRAIN\] segments=(\d+) one_shot=(\d+)", stdout)
-    kv = re.findall(r"\[DENSE_SEQUENCE_KV\] index=(\d+) bytes=(\d+) digest=([0-9a-f]{64}) pass=1", stdout)
-    total = len(expected_flows)
-    outward = sum(flow.source_rank == 0 and flow.destination_rank == 1 for flow in expected_flows)
-    inward = sum(flow.source_rank == 1 and flow.destination_rank == 0 for flow in expected_flows)
-    d2d = re.search(r"\[D2D_DATA\] in_pkts=(\d+) out_pkts=(\d+)", stdout)
-    east = re.search(r"\[D2D_LINK\] idx=0 die0->die1 .*data_in=(\d+) data_out=(\d+)", stdout)
-    west = re.search(r"\[D2D_LINK\] idx=1 die1->die0 .*data_in=(\d+) data_out=(\d+)", stdout)
-    bridge_transfers = 2 * sum(len(segment.moe_unit_refs) for segment in sequence.segments)
-    bridge_stats = re.search(r"\[DTE_STATS\] core=0 issued=(\d+) completed=(\d+) .*pending=(\d+) active=(\d+) inflight=(\d+)", stdout)
-    expert_logs = len(re.findall(r"Core 16 start compute primitive Matmul_f\.", stdout))
-    expert_swiglus = len(re.findall(r"Core 16 start compute primitive swiglu_forward\.", stdout))
-    memory_residual = re.findall(r"\[PROGRAM_MEMORY\] core=(\d+) .*lsu_residual=(\d+) dte_residual=(\d+)", stdout)
-    drained = all(marker in stdout for marker in (
-        "[P5 P2P DRAIN] core=0 residual=0",
-        "[P5 P2P DRAIN] core=16 residual=0",
-        "[P5 P2P TIMING DRAIN] residual=0",
-        "[DRAIN] router_residual=0",
-        "[DRAIN] d2d_link_residual=0",
-    ))
-    if (segment_markers != [("0", "0"), ("1", "0"), ("2", "1")]
-            or probes != [("0", "1", "1"), ("1", "1", "1"), ("2", "1", "1")]
-            or drains != [("3", "1")]
-            or tuple((index, int(size)) for index, size, _ in kv) != (("0", 128), ("1", 192), ("2", 256))
-            or d2d is None or tuple(map(int, d2d.groups())) != (total, total)
-            or east is None or tuple(map(int, east.groups())) != (outward, outward)
-            or west is None or tuple(map(int, west.groups())) != (inward, inward)
-            or bridge_stats is None or tuple(map(int, bridge_stats.groups())) != (bridge_transfers, bridge_transfers, 0, 0, 0)
-            or expert_logs != expected_remote_experts
-            or expert_swiglus != expected_remote_experts // 3
-            or memory_residual != [("0", "0", "0"), ("16", "0", "0")]
-            or not drained
-            or stdout.count("[SIM_RESULT]") != 1):
-        raise RuntimeError("full-model same-instance sequence closure failed")
-    print(f"MoE full-model runtime canary PASS mesh=1x2 ep=2 layers=2 sequence={sequence.digest} artifacts={','.join(artifact_digests)} kv={','.join(x[2] for x in kv)}")
-
+    kv = _audit_native_runtime(
+        stdout,
+        sequence=sequence,
+        expected_flows=tuple(expected_flows),
+        expert_records_by_core={
+            core: tuple(counts) for core, counts in expert_records.items()
+        },
+        core_bindings=core_bindings,
+        rows=rows,
+        columns=columns,
+    )
+    print(
+        f"MoE full-model runtime canary PASS mesh={args.mesh_size} "
+        f"ep={rank_count} layers=2 sequence={sequence.digest} "
+        f"artifacts={','.join(artifact_digests)} "
+        f"kv={','.join(item[2] for item in kv)}"
+    )
 
 def _parse_args() -> argparse.Namespace:
     build = _ROOT / "build-debug-final"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=build / "moe-full-model-runtime-canary")
+    parser.add_argument(
+        "--mesh-size",
+        choices=tuple(
+            f"{rows}x{columns}"
+            for rows in range(1, 11)
+            for columns in range(1, 11)
+        ),
+        default="1x2",
+        help="physical MoE EP mesh within the 1..10 release envelope",
+    )
     parser.add_argument("--finalizer", type=Path, default=build / "npusim_program_finalizer")
     parser.add_argument("--npusim", type=Path, default=build / "npusim")
     parser.add_argument("--simulation", type=Path, default=_ROOT / "llm/test/program/p5_behavioral_simulation.json")
