@@ -1,4 +1,4 @@
-"""Construct real 1×2 EP2 two-layer MoE forward TRAIN IR0 from shared Dense.
+"""Construct real TP1/EP1-or-EP2 two-layer MoE forward TRAIN IR0 from shared Dense.
 
 This replaces the old Dense gate/up/SwiGLU/down values and physical state
 declarations; it does not add backward, source projection, or executable
@@ -66,6 +66,8 @@ class FullMoeForwardIr0Phase:
         self.graph.validate("full_moe_forward_ir0")
         nodes = {node.id: node for node in self.graph.nodes}
         states = {state.id: state for state in self.graph.persistent_states}
+        ep_degree = self.graph.instances[0].parallel.ep
+        expected_ep_owners = 2 * (ep_degree + 3 * ep_degree)
         if (set(self.removed_dense_op_refs) & nodes.keys()
                 or set(self.removed_dense_state_refs) & states.keys()
                 or len(self.source_route_trace_refs) != 2
@@ -73,11 +75,13 @@ class FullMoeForwardIr0Phase:
                 or len({old for old, new in self.shared_source_state_refs}) != 11
                 or len({new for old, new in self.shared_source_state_refs}) != 11
                 or any(new not in states for old, new in self.shared_source_state_refs)
-                or len(self.ep_state_owners) != 16
+                or ep_degree not in (1, 2)
+                or len(self.ep_state_owners) != expected_ep_owners
                 or {owner.source_state_decl_ref for owner in self.ep_state_owners}
                 != {owner.source_state_decl_ref for owner in self.ep_state_owners
                     if owner.source_state_decl_ref in states}
-                or any(owner.tp_shard != 0 or owner.ep_owner not in (0, 1)
+                or any(owner.tp_shard != 0
+                       or not 0 <= owner.ep_owner < ep_degree
                        for owner in self.ep_state_owners)):
             raise SchemaError("MoE source op/state removal or EP physical owner lost",
                               path="full_moe_forward_ir0")
@@ -231,15 +235,18 @@ def build_moe_full_train_forward_ir0(
             or dense_forward.instances[0].parallel.tp != 1
             or dense_forward.instances[0].parallel.ep != 1
             or len(dense_forward.instances[0].meshes) != 1
-            or sequence.materialization.request.mesh.rank_count != 2
-            or sequence.materialization.request.parallel.ep != 2
+            or sequence.materialization.request.mesh.rank_count not in (1, 2)
+            or sequence.materialization.request.parallel.ep
+                != sequence.materialization.request.mesh.rank_count
+            or sequence.materialization.request.model.num_experts
+                != sequence.materialization.request.mesh.rank_count
             or sequence.materialization.request.parallel.tp != 1
             or sequence.materialization.request.model.num_layers != 2
             or len({(unit.step, unit.layer) for unit in sequence.units}) != 4
             or sequence.materialization.request.steps.training is None
             or sequence.materialization.request.steps.training.sequence_length
                 != dense_forward.profile.prefill_tokens):
-        raise SchemaError("requires true TP1→EP2 two-layer step0 TRAIN source with identical rows",
+        raise SchemaError("requires true TP1→EP1/EP2 two-layer step0 TRAIN source with identical rows",
                           path="moe_full_train_forward_ir0.source")
     model = sequence.materialization.request.model
     vocab = dense_forward.values
@@ -272,9 +279,12 @@ def build_moe_full_train_forward_ir0(
     if any(axis.name is MeshAxisName.EP for axis in mesh.axes):
         raise SchemaError("original Dense mesh already carries EP",
                           path="moe_full_train_forward_ir0.mesh")
+    ep_degree = sequence.materialization.request.parallel.ep
     instance = replace(
-        initial, parallel=replace(initial.parallel, ep=2),
-        meshes=(DeviceMesh(mesh.id, (*mesh.axes, MeshAxis(MeshAxisName.EP, 2))),),
+        initial, parallel=replace(initial.parallel, ep=ep_degree),
+        meshes=(DeviceMesh(mesh.id, (
+            *mesh.axes, MeshAxis(MeshAxisName.EP, ep_degree)
+        )),),
     )
     old_nodes = {node.id: node for node in dense_forward.nodes}
     old_values = {value.id: value for value in dense_forward.values}
@@ -390,7 +400,7 @@ def build_moe_full_train_forward_ir0(
         route = add_value(prefix+"moe.route_ids", (tokens,), DType.INT32,
                           freeze_ref, (dispatch_ref, combine_ref))
         router_weights = []
-        for rank in (0,1):
+        for rank in range(ep_degree):
             weight = add_value(prefix+f"moe.router.weight.ep{rank}",
                                (hidden,model.num_experts), DType.FP16,
                                None,(router_ref,))
@@ -452,7 +462,7 @@ def build_moe_full_train_forward_ir0(
         )
         sources = (
             (MoeForwardBlockKind.ROUTER, router_ref,
-             (norm.id,router_weights[0].id,router_weights[1].id),
+             (norm.id,*(weight.id for weight in router_weights)),
              (route_scores.id,)),
             (MoeForwardBlockKind.ROUTE_FREEZE,freeze_ref,
              (route_scores.id,), (route.id,)),

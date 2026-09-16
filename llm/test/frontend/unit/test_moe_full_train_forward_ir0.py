@@ -6,6 +6,11 @@ import unittest
 from llm.frontend.wafer_frontend.errors import (
     SchemaError, UnsupportedFeatureError,
 )
+from llm.frontend.wafer_frontend.passes.moe_compile_sequence import (
+    compile_moe_sequence,
+)
+from llm.frontend.wafer_frontend.schema.workload_run import WorkloadFamily
+from llm.test.frontend.unit.test_moe_compile_sequence import _manifest
 from llm.frontend.wafer_frontend.passes.moe_full_train_forward_ir0 import (
     _source_moe_operation_workload,
     build_moe_full_train_forward_ir0,
@@ -43,6 +48,52 @@ class MoeFullTrainForwardIr0Test(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedFeatureError,
                                     "typed source phase"):
             DenseIR0Validator.validate(phase.graph)
+
+    def test_true_one_die_two_layer_ep1_forward_source(self):
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING, rows=1, columns=1),
+            source_rank_policy="rank0_shared_spine",
+        )
+        self.assertEqual(len(sequence.units), 4)
+        phase = build_moe_full_train_forward_ir0(self.forward, sequence)
+        MoeFullTrainForwardValidator.validate(
+            phase, original_dense=self.forward, sequence=sequence,
+        )
+        self.assertEqual(phase.graph.instances[0].parallel.ep, 1)
+        self.assertEqual(len(phase.ep_state_owners), 8)
+        self.assertEqual({owner.ep_owner for owner in phase.ep_state_owners}, {0})
+        self.assertEqual(len(phase.removed_dense_op_refs), 6)
+        self.assertEqual(len(phase.shared_source_state_refs), 11)
+        self.assertEqual(len(phase.graph.persistent_states), 19)
+        for layer in (0, 1):
+            prefix = f"T0.layer{layer}."
+            nodes = {node.id: node for node in phase.graph.nodes}
+            self.assertNotIn(prefix + "gate_up", nodes)
+            self.assertNotIn(prefix + "swiglu", nodes)
+            self.assertNotIn(prefix + "down", nodes)
+            self.assertEqual(
+                nodes[prefix + "residual2"].inputs[1],
+                prefix + "moe.combine_out",
+            )
+            self.assertEqual(
+                nodes[prefix + "moe.router"].inputs,
+                (prefix + "norm2_out", prefix + "moe.router.weight.ep0"),
+            )
+        with self.assertRaisesRegex(UnsupportedFeatureError, "typed source phase"):
+            DenseIR0Validator.validate(phase.graph)
+
+    def test_ep1_router_rejects_missing_or_phantom_gate_replica(self):
+        sequence = compile_moe_sequence(
+            _manifest(WorkloadFamily.MOE_TRAINING, rows=1, columns=1),
+            source_rank_policy="rank0_shared_spine",
+        )
+        phase = build_moe_full_train_forward_ir0(self.forward, sequence)
+        router = next(node for node in phase.graph.nodes
+                      if node.id == "T0.layer0.moe.router")
+        for inputs in (router.inputs[:1], (*router.inputs, router.inputs[1] + ".phantom")):
+            with self.subTest(inputs=inputs), self.assertRaisesRegex(
+                    SchemaError, "operand arity"):
+                replace(router, inputs=inputs).validate("ep1_router")
 
     def test_dropping_any_layer_or_expert_owner_fails(self):
         phase = build_moe_full_train_forward_ir0(self.forward,self.sequence)

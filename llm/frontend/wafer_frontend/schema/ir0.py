@@ -1635,7 +1635,8 @@ class LogicalNode:
                     path=path,
                 )
         source_moe = {
-            OpKind.MOE_ROUTER: (MoeForwardBlockKind.ROUTER,3,1),
+            OpKind.MOE_ROUTER: (MoeForwardBlockKind.ROUTER,
+                                1+self.workload.expert_count,1),
             OpKind.MOE_ROUTE_FREEZE: (MoeForwardBlockKind.ROUTE_FREEZE,1,1),
             OpKind.MOE_DISPATCH: (MoeForwardBlockKind.DISPATCH,2,
                                   self.workload.expert_count),
@@ -2221,7 +2222,7 @@ class IR0:
                            workload.expert_count,workload.intermediate_size)
                 if node.kind is OpKind.MOE_ROUTER:
                     specs = (((m,h),DType.FP16),
-                             *((((h,e),DType.FP16),) * 2),
+                             *((((h,e),DType.FP16),) * e),
                              ((m,e),DType.FP32))
                 elif node.kind is OpKind.MOE_ROUTE_FREEZE:
                     specs = (((m,e),DType.FP32),((m,),DType.INT32))
@@ -2352,11 +2353,11 @@ class IR0:
                 )
             if (declaration.identity.ep_owner_rank is not None
                     and (instance.parallel.tp != 1
-                         or instance.parallel.ep != 2
+                         or instance.parallel.ep not in (1, 2)
                          or declaration.identity.ep_owner_rank
                             >= instance.parallel.ep)):
                 raise SchemaError(
-                    "source EP state owner requires explicit TP1/EP2 mesh rank",
+                    "source EP state owner requires explicit TP1/EP1-or-EP2 mesh rank",
                     path=f"{state_path}.identity.ep_owner_rank",
                 )
             tensor_ref = declaration.identity.tensor_ref
