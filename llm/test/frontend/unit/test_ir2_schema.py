@@ -1851,37 +1851,52 @@ class IR2SchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(SchemaError, "same core"):
             moved.validate_against(dag, ir1)
 
-    def test_dp2_fp32_reduce_accepts_real_64_byte_gradient_and_rejects_wrong_stride(self) -> None:
+    def test_dp2_fp32_reduce_accepts_real_shard_extents_and_rejects_wrong_stride(self) -> None:
         ir1, original_dag, original_schedule = valid_reduce_case()
         task = original_dag.tasks[0]
-        dag = recreate_dag(
-            original_dag,
-            tasks=(replace(
-                task, bytes=64, dtype=DType.FP32,
-                reduction=replace(task.reduction,
-                                  input_dtype=DType.FP32,
-                                  output_dtype=DType.FP32),
-            ),),
-            values=tuple(replace(value, dtype=DType.FP32)
-                         for value in original_dag.values),
-        )
-        bindings = tuple(replace(
-            binding, dtype=DType.FP32, size_bytes=64,
-            region_offset_bytes=rank * 64,
-        ) for rank, binding in enumerate(original_schedule.buffer_bindings))
-        schedule = recreate_schedule(
-            original_schedule, dag_id=dag.id, buffer_bindings=bindings,
-        )
-        schedule.validate_against(dag, ir1)
-        incorrect_stride = recreate_schedule(
-            schedule, buffer_bindings=(
-                bindings[0],
-                replace(bindings[1], region_offset_bytes=192, banks=(3,)),
-                bindings[2],
-            ),
-        )
-        with self.assertRaisesRegex(SchemaError, "rank-ordered physical-alignment-stride"):
-            incorrect_stride.validate_against(dag, ir1)
+        for size_bytes in (32, 64, 128, 256, 384, 512):
+            with self.subTest(size_bytes=size_bytes):
+                shape = (size_bytes // 4,)
+                physical_stride = (size_bytes + 63) // 64 * 64
+                dag = recreate_dag(
+                    original_dag,
+                    tasks=(replace(
+                        task, bytes=size_bytes, dtype=DType.FP32, shape=shape,
+                        tensor_slice=TensorSlice("reduce_out", (0,), shape),
+                        reduction=replace(task.reduction,
+                                          input_dtype=DType.FP32,
+                                          output_dtype=DType.FP32),
+                    ),),
+                    values=tuple(replace(value, dtype=DType.FP32, shape=shape)
+                                 for value in original_dag.values),
+                )
+                bindings = tuple(replace(
+                    binding, dtype=DType.FP32, size_bytes=size_bytes,
+                    region_offset_bytes=rank * physical_stride,
+                    tensor_slice=TensorSlice(binding.value_id, (0,), shape),
+                    banks=tuple(sorted({(stripe // 64) % 4 for stripe in range(
+                        rank * physical_stride,
+                        rank * physical_stride + size_bytes,
+                        64,
+                    )})),
+                ) for rank, binding in enumerate(original_schedule.buffer_bindings))
+                uses = tuple(replace(use, tensor_slice=bindings[rank].tensor_slice)
+                             for rank, use in enumerate(original_schedule.task_buffer_uses))
+                schedule = recreate_schedule(
+                    original_schedule, dag_id=dag.id,
+                    buffer_bindings=bindings, task_buffer_uses=uses,
+                )
+                schedule.validate_against(dag, ir1)
+                if size_bytes == 64:
+                    incorrect_stride = recreate_schedule(
+                        schedule, buffer_bindings=(
+                            bindings[0],
+                            replace(bindings[1], region_offset_bytes=192, banks=(3,)),
+                            bindings[2],
+                        ),
+                    )
+                    with self.assertRaisesRegex(SchemaError, "rank-ordered physical-alignment-stride"):
+                        incorrect_stride.validate_against(dag, ir1)
 
     def test_local_reduce_exact_staging_contract(self) -> None:
         ir1, dag, schedule = valid_reduce_case()
