@@ -2351,7 +2351,6 @@ int sc_main(int argc, char *argv[]) {
         full_adamw_pager;
     std::unique_ptr<external_memory::DenseInferenceMidProgramPager>
         inference_mid_program_pager;
-    bool inference_rect_paged = false;
     std::unique_ptr<external_memory::MoeInferenceMidProgramPager>
         moe_inference_mid_program_pager;
     std::unique_ptr<external_memory::MoeFullTrainMidProgramPager>
@@ -2471,14 +2470,11 @@ int sc_main(int argc, char *argv[]) {
                     "paged Dense inference requires distributed HBM runtime");
             std::map<std::pair<uint64_t, uint64_t>, HBMBackend *> backends;
             std::vector<uint64_t> runtime_cores;
-            for (uint64_t die = 0; die < 4; ++die) {
+            for (uint64_t die = 0; die < static_cast<uint64_t>(DIE_COUNT); ++die) {
                 auto *physical = monitor->hbmRuntime->Find(die, 0);
-                if (physical == nullptr || !physical->backend) {
-                    if (die == 0)
-                        throw std::runtime_error(
-                            "paged Dense inference requires physical die0 HBM backend");
-                    break;
-                }
+                if (physical == nullptr || !physical->backend)
+                    throw std::runtime_error(
+                        "paged Dense inference requires one physical HBM backend per Die");
                 const uint64_t core = die * 4;
                 if (monitor->workerCores[core] == nullptr ||
                     !monitor->workerCores[core]->lsu_memory)
@@ -2488,10 +2484,9 @@ int sc_main(int argc, char *argv[]) {
                                  physical->backend.get());
                 runtime_cores.push_back(core);
             }
-            if (backends.size() != 1 && backends.size() != 4)
+            if (backends.size() != static_cast<size_t>(DIE_COUNT))
                 throw std::runtime_error(
-                    "paged Dense inference requires exactly one or four HBM homes");
-            inference_rect_paged = backends.size() == 4;
+                    "paged Dense inference physical HBM backend closure incomplete");
             inference_mid_program_pager = std::make_unique<
                 external_memory::DenseInferenceMidProgramPager>(
                     "dense_inference_mid_program_pager",
@@ -2503,12 +2498,17 @@ int sc_main(int argc, char *argv[]) {
                     inference_mid_program_pager.get());
             std::cout << "[DENSE_INFERENCE_PAGED_BINDING] source="
                       << inference_mid_program_pager->SourceRef()
-                      << " parameter_states=" << (inference_rect_paged ? 60 : 15)
-                      << " kv_pages=" << (inference_rect_paged ? 16 : 4)
-                      << " events=" << (inference_rect_paged ? 260 : 65)
-                      << " hbm_capacity_per_die=12288 weight_slot_base=1600"
+                      << " parameter_states="
+                      << inference_mid_program_pager->WeightPageCount()
+                      << " kv_pages="
+                      << inference_mid_program_pager->KvPageCount()
+                      << " events="
+                      << inference_mid_program_pager->ExpectedEvents()
+                      << " hbm_capacity_per_die="
+                      << inference_mid_program_pager->HbmCapacityBytesPerDie()
+                      << " weight_slot_base=1600"
                       << " highest_state_end="
-                      << (inference_rect_paged ? 11328 : 10560)
+                      << inference_mid_program_pager->HighestPagedEndBytesPerDie()
                       << " pass=1" << std::endl;
         } catch (const std::exception &error) {
             LOG_ERROR(CONFIG) << "Dense inference paged DMA binding failed: "
@@ -2899,7 +2899,8 @@ int sc_main(int argc, char *argv[]) {
                 if (inference_paged)
                     std::cout << "[DENSE_INFERENCE_PAGED_EXTERNAL_PROGRAM_IO]"
                               << " index=" << expected
-                              << " kv_probes=" << (inference_rect_paged ? 16 : 4)
+                              << " kv_probes="
+                              << inference_mid_program_pager->KvPageCount()
                               << " kv_bytes="
                               << inference_mid_program_pager->KvAuthorityBytes()
                               << " pending="
@@ -3160,10 +3161,14 @@ int sc_main(int argc, char *argv[]) {
         }
         if (inference_paged) {
             const auto &stats = inference_mid_program_pager->Stats();
-            const uint64_t expected_events = inference_rect_paged ? 260 : 65;
-            const uint64_t expected_probes = inference_rect_paged ? 48 : 12;
-            const uint64_t expected_reads = inference_rect_paged ? 334592 : 162112;
-            const uint64_t expected_writes = inference_rect_paged ? 15360 : 1920;
+            const uint64_t expected_events =
+                inference_mid_program_pager->ExpectedEvents();
+            const uint64_t expected_probes =
+                3 * inference_mid_program_pager->KvPageCount();
+            const uint64_t expected_reads =
+                inference_mid_program_pager->ExpectedReadBytes();
+            const uint64_t expected_writes =
+                inference_mid_program_pager->ExpectedWriteBytes();
             if (inference_mid_program_pager->CompletedEvents() != expected_events ||
                 inference_mid_program_pager->ExternalKvProbes() != expected_probes ||
                 inference_mid_program_pager->Pending() != 0 ||

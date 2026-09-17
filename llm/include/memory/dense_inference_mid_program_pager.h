@@ -42,7 +42,7 @@ struct DenseInferencePagerEvent {
     std::string connection_ref;
 };
 
-// Source-signed Prefill/Decode/Decode runtime for 1x1 and TP4 rectangles.
+// Source-signed Prefill/Decode/Decode runtime for 1x1, TP4 and TP6 rectangles.
 // Each Die has one time-multiplexed weight slot and four stable KV slots.
 class DenseInferenceMidProgramPager {
 public:
@@ -63,6 +63,14 @@ public:
     std::string ProbeInitialKvAuthority() const;
 
     uint64_t CompletedEvents() const { return completed_events_; }
+    uint64_t ExpectedEvents() const { return events_.size(); }
+    uint64_t ActiveDieCount() const { return weight_pinned_.size(); }
+    uint64_t WeightPageCount() const { return weights_.size(); }
+    uint64_t KvPageCount() const { return kv_pages_.size(); }
+    uint64_t ExpectedReadBytes() const { return expected_read_bytes_; }
+    uint64_t ExpectedWriteBytes() const { return expected_write_bytes_; }
+    uint64_t HighestPagedEndBytesPerDie() const { return highest_paged_end_bytes_; }
+    uint64_t HbmCapacityBytesPerDie() const { return hbm_capacity_bytes_per_die_; }
     uint64_t ExternalKvProbes() const { return external_kv_probes_; }
     uint64_t Pending() const;
     uint64_t Pinned() const;
@@ -93,6 +101,10 @@ private:
     std::map<uint64_t, std::vector<uint64_t>> event_indices_by_core_;
     std::map<uint64_t, uint64_t> next_event_by_core_;
     uint64_t dirty_ = 0;
+    uint64_t expected_read_bytes_ = 0;
+    uint64_t expected_write_bytes_ = 0;
+    uint64_t highest_paged_end_bytes_ = 0;
+    uint64_t hbm_capacity_bytes_per_die_ = 0;
     uint64_t completed_events_ = 0;
     uint64_t external_kv_probes_ = 0;
     uint64_t kv_bytes_ = 0;

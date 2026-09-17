@@ -130,24 +130,34 @@ def build_dense_inference_rect_physical_source(
     sequence, *, hbm_capacity_bytes: int = 12288,
     external_capacity_bytes: int = 131072,
 ) -> PhysicalInferenceOffloadSource:
-    """Declare all 76 real TP4 StateABIs as signed physical external sources."""
+    """Declare linked TP4/TP6 StateABIs as signed physical external sources."""
 
     sequence.validate()
     resident = sequence.materialization
     active = tuple(resident.placement.active_die_ids)
-    if (len(active) != 4 or set(active) != {0, 1, 2, 3}
-            or (resident.request.mesh.rows, resident.request.mesh.columns)
-            not in ((1, 4), (2, 2), (4, 1))
-            or hbm_capacity_bytes <= 0 or external_capacity_bytes <= 0):
-        raise SchemaError("requires a physical four-Die rectangle and bounded homes",
+    tp4 = len(active) == 4 and set(active) == {0, 1, 2, 3} and (
+        resident.request.mesh.rows, resident.request.mesh.columns
+    ) in ((1, 4), (2, 2), (4, 1))
+    tp6 = len(active) == 6 and resident.request.parallel.tp == 6 and (
+        resident.request.mesh.rows * resident.request.mesh.columns >= 6
+    ) and max(active) < resident.request.mesh.rows * resident.request.mesh.columns
+    if (not (tp4 or tp6) or hbm_capacity_bytes <= 0
+            or external_capacity_bytes <= 0):
+        raise SchemaError("requires a physical TP4 or TP6 rectangle and bounded homes",
                           path="physical_source.mesh")
+    die_count = len(active)
+    parameter_bytes = 26944 if tp4 else 40416
+    kv_bytes = 1536 if tp4 else 3072
+    logical_parameter_bytes_expected = 14416 if tp4 else 19536
+    kv_page_capacity = 384 if tp4 else 768
+    kv_version_sizes = (256, 320, 384) if tp4 else (576, 672, 768)
     home = {
         int(item.location_ref.removeprefix("die:")): item
         for item in resident.memory_plan.capacities
         if item.tier is MemoryTier.HBM and item.location_ref.startswith("die:")
     }
-    if set(home) != set(active):
-        raise SchemaError("resident source lacks exact four HBM owners",
+    if not set(active).issubset(home):
+        raise SchemaError("resident source lacks active HBM owners",
                           path="physical_source.capacities")
     hbm = tuple(MemoryTierCapacity.create(
         tier=MemoryTier.HBM, location_ref=f"die:{die}",
@@ -184,7 +194,7 @@ def build_dense_inference_rect_physical_source(
     )
     if (_useful_graph_digest(generic) != _useful_graph_digest(resident)
             or generic.placement != resident.placement):
-        raise SchemaError("offload changed useful graph or four-Die placement",
+        raise SchemaError("offload changed useful graph or active-Die placement",
                           path="physical_source.offload")
     linked = tuple(segment.linked_manifest for segment in sequence.segments)
     if len(linked) != 3:
@@ -195,8 +205,10 @@ def build_dense_inference_rect_physical_source(
         (abi.die_id, abi.kind, abi.address): abi
         for abi in table.values()
     } for table in by_step)
-    if any(len(table) != 76 for table in by_step) or any(len(table) != 76 for table in by_key):
-        raise SchemaError("physical TP4 requires 76 unique linked StateABIs per segment",
+    if any(len(table) != 19 * die_count for table in by_step) or any(
+        len(table) != 19 * die_count for table in by_key
+    ):
+        raise SchemaError("physical TP requires 19 unique linked StateABIs per active Die",
                           path="physical_source.state_abi")
     if set(by_key[0]) != set(by_key[1]) or set(by_key[0]) != set(by_key[2]):
         raise SchemaError("three linked segments changed physical state inventory",
@@ -208,12 +220,12 @@ def build_dense_inference_rect_physical_source(
         for item in resident.state_inventory
         if item.object_kind in (MemoryObjectKind.PARAMETER, MemoryObjectKind.KV)
     }
-    if len(owner) != 8 or set(rank_by_die) != set(active):
+    if len(owner) != 2 * die_count or set(rank_by_die) != set(active):
         raise SchemaError("P3 rank-local parameter/KV owners are not one-to-one",
                           path="physical_source.rank_owners")
     logical_parameter_bytes = {owner[(MemoryObjectKind.PARAMETER, rank_by_die[d])].size_bytes
                                for d in active}
-    if logical_parameter_bytes != {14416}:
+    if logical_parameter_bytes != {logical_parameter_bytes_expected}:
         raise SchemaError("P3 logical rank-local parameter aggregate changed",
                           path="physical_source.p3_parameters")
     for die in active:
@@ -227,19 +239,21 @@ def build_dense_inference_rect_physical_source(
              if d == die and kind in _KV), key=lambda item: item.address,
         )
         if len(weights) != 15 or len(kvs) != 4 or (
-            sum(item.size_bytes for item in weights) != 26944
-            or sum(item.size_bytes for item in kvs) != 1536
-            or owner[(MemoryObjectKind.KV, rank_by_die[die])].size_bytes != 1536
+            sum(item.size_bytes for item in weights) != parameter_bytes
+            or sum(item.size_bytes for item in kvs) != kv_bytes
+            or owner[(MemoryObjectKind.KV, rank_by_die[die])].size_bytes != kv_bytes
         ):
-            raise SchemaError("physical parameter/KV bytes differ from true TP4 ABIs",
+            raise SchemaError("physical parameter/KV bytes differ from true linked ABIs",
                               path=f"physical_source.die[{die}]")
         cursor = weights[0].address
         for abi in weights:
-            if abi.address != cursor:
-                raise SchemaError("physical weights are not a contiguous linked source",
+            if abi.address < cursor or (tp4 and abi.address != cursor):
+                raise SchemaError("physical weights overlap or violate TP4 contiguous source",
                                   path=f"physical_source.die[{die}]")
-            cursor += abi.size_bytes
-        if tuple(item.address for item in kvs) != tuple(cursor + 384 * i for i in range(4)):
+            cursor = abi.address + abi.size_bytes
+        kv_source_base = kvs[0].address
+        if (kv_source_base < cursor or tuple(item.address for item in kvs) !=
+                tuple(kv_source_base + kv_page_capacity * i for i in range(4))):
             raise SchemaError("KV source homes lack four stable versioned pages",
                               path=f"physical_source.die[{die}]")
         for key, latest in by_key[2].items():
@@ -257,7 +271,7 @@ def build_dense_inference_rect_physical_source(
                     raise SchemaError("parameter source physical bytes changed",
                                       path=f"physical_source.die[{die}]")
             elif latest.kind in _KV:
-                if tuple(item.size_bytes for item in chain) != (256, 320, 384):
+                if tuple(item.size_bytes for item in chain) != kv_version_sizes:
                     raise SchemaError("KV physical page version growth changed",
                                       path=f"physical_source.die[{die}]")
             else:
@@ -343,8 +357,10 @@ def build_dense_inference_rect_physical_source(
             source_version_ref=version.id,
             external_allocation_ref=allocations[request_item.id].id,
         ))
-    if len(declarations) != 76 or sum(item.physical_bytes for item in declarations) != 113920:
-        raise SchemaError("physical external 60 weight+16 KV declarations incomplete",
+    expected_bytes = die_count * (parameter_bytes + kv_bytes)
+    if (len(declarations) != 19 * die_count or
+            sum(item.physical_bytes for item in declarations) != expected_bytes):
+        raise SchemaError("physical external parameter/KV declarations incomplete",
                           path="physical_source.declarations")
     return PhysicalInferenceOffloadSource(
         resident_materialization_digest=resident.digest,
@@ -353,9 +369,9 @@ def build_dense_inference_rect_physical_source(
         declarations=tuple(declarations), external_manifest=manifest,
         hbm_capacities=hbm, external_capacity=external,
         resident_rejection=resident_rejection,
-        p3_parameter_bytes_per_die=14416,
-        physical_parameter_bytes_per_die=26944,
-        physical_kv_bytes_per_die=1536,
+        p3_parameter_bytes_per_die=logical_parameter_bytes_expected,
+        physical_parameter_bytes_per_die=parameter_bytes,
+        physical_kv_bytes_per_die=kv_bytes,
     )
 
 

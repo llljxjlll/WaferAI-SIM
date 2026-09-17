@@ -240,6 +240,103 @@ FabricConfig ParseRectFabric(const Json &value, uint64_t rows,
     return result;
 }
 
+FabricConfig ParseTp6Fabric(const Json &value, uint64_t rows,
+                            uint64_t columns,
+                            const std::set<uint64_t> &active) {
+    Exact(value, {"schema_version", "producer_pass", "id",
+                  "external_capacities", "hbm_capacities", "links",
+                  "connections"});
+    if (String(value, "schema_version") !=
+            "wafer_frontend.external_memory_fabric/v1alpha2" ||
+        String(value, "producer_pass") != "external_memory_fabric_builder" ||
+        !value.at("external_capacities").is_array() ||
+        !value.at("hbm_capacities").is_array() ||
+        !value.at("links").is_array() ||
+        !value.at("connections").is_array() ||
+        value.at("external_capacities").size() != 1 ||
+        value.at("hbm_capacities").size() != 6 ||
+        value.at("links").size() != 1 ||
+        value.at("connections").size() != 6)
+        Fail("requires one external authority and six physical HBM homes");
+    const auto &external = value.at("external_capacities")[0];
+    Exact(external, {"id", "tier", "location_ref", "base_address",
+                     "capacity_bytes", "alignment_bytes"});
+    if (String(external, "tier") != "external" ||
+        String(external, "location_ref") != "host:0" ||
+        Number(external, "base_address") != 0 ||
+        Number(external, "capacity_bytes") != 1048576 ||
+        Number(external, "alignment_bytes") != 64)
+        Fail("TP6 external capacity identity changed");
+    FabricConfig result;
+    result.external_capacities.push_back(
+        {String(external, "id"), "host:0", 0, 1048576});
+    std::set<uint64_t> hbm_dies, connection_dies;
+    for (const auto &hbm : value.at("hbm_capacities")) {
+        Exact(hbm, {"id", "tier", "location_ref", "base_address",
+                    "capacity_bytes", "alignment_bytes"});
+        const std::string location = String(hbm, "location_ref");
+        if (String(hbm, "tier") != "hbm" ||
+            location.rfind("die:", 0) != 0 ||
+            Number(hbm, "base_address") != 0 ||
+            Number(hbm, "capacity_bytes") != 18432 ||
+            Number(hbm, "alignment_bytes") != 64)
+            Fail("TP6 HBM capacity identity changed");
+        const uint64_t die = std::stoull(location.substr(4));
+        if (!active.count(die) || !hbm_dies.insert(die).second)
+            Fail("TP6 HBM owner is not an active physical Die");
+        result.hbm_capacities.push_back(
+            {String(hbm, "id"), die, 0, 18432});
+    }
+    for (const auto &link : value.at("links")) {
+        Exact(link, {"id", "external_capacity_ref", "ingress_die_id",
+                     "bytes_per_cycle", "latency_cycles", "queue_depth",
+                     "max_outstanding", "duplex"});
+        if (Number(link, "ingress_die_id") != 0 ||
+            String(link, "external_capacity_ref") != String(external, "id") ||
+            Number(link, "bytes_per_cycle") != 256 ||
+            Number(link, "latency_cycles") != 2 ||
+            Number(link, "queue_depth") != 6 ||
+            Number(link, "max_outstanding") != 6 ||
+            String(link, "duplex") != "half_duplex_shared")
+            Fail("TP6 shared external ingress changed");
+        result.links.push_back({String(link, "id"), String(external, "id"),
+                                0, 256, 2, 6, 6});
+    }
+    for (const auto &connection : value.at("connections")) {
+        Exact(connection, {"id", "link_ref", "hbm_capacity_ref",
+                           "target_die_id", "route_die_ids",
+                           "route_latency_cycles", "route_bytes_per_cycle"});
+        const uint64_t die = Number(connection, "target_die_id");
+        if (!active.count(die) || !connection_dies.insert(die).second ||
+            !connection.at("route_die_ids").is_array())
+            Fail("TP6 connection does not target one active Die");
+        std::vector<uint64_t> route, expected{0};
+        for (const auto &hop : connection.at("route_die_ids"))
+            route.push_back(hop.get<uint64_t>());
+        const uint64_t target_row = die / columns;
+        const uint64_t target_column = die % columns;
+        for (uint64_t column = 1; column <= target_column; ++column)
+            expected.push_back(column);
+        for (uint64_t row = 1; row <= target_row; ++row)
+            expected.push_back(row * columns + target_column);
+        const bool direct = die == 0;
+        if (route != expected ||
+            Number(connection, "route_latency_cycles") != route.size() - 1 ||
+            (direct ? !connection.at("route_bytes_per_cycle").is_null()
+                    : Number(connection, "route_bytes_per_cycle") != 256))
+            Fail("TP6 external route is not signed shortest Manhattan path");
+        result.connections.push_back(
+            {String(connection, "id"), String(connection, "link_ref"),
+             String(connection, "hbm_capacity_ref"), die, route,
+             route.size() - 1, direct ? std::nullopt
+                                      : std::optional<uint64_t>(256)});
+    }
+    if (hbm_dies != active || connection_dies != active)
+        Fail("TP6 fabric does not cover six active Dies exactly");
+    ValidateFabricConfig(result);
+    return result;
+}
+
 uint64_t ExpectedKvPageBytes(uint64_t segment) {
     if (segment > 2) Fail("KV segment exceeds Prefill+2Decode");
     return 128 + 32 * segment;
@@ -259,50 +356,87 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
     sc_core::sc_time cycle_time)
     : cycle_time_(cycle_time) {
     const Json contract = ReadJson(sidecar);
-    if (String(contract, "schema_version") ==
+    const bool tp6 = String(contract, "schema_version") ==
+                     "wafer_frontend.dense_inference_paged_runtime/v1alpha3";
+    if (tp6 || String(contract, "schema_version") ==
             "wafer_frontend.dense_inference_paged_runtime/v1alpha2") {
-        Exact(contract, {"schema_version", "producer_pass", "id",
-                         "physical_source_digest",
-                         "external_materialization_digest",
-                         "linked_manifest_ids", "linked_manifest_digests",
-                         "mesh_rows", "mesh_columns",
-                         "hbm_capacity_bytes_per_die",
-                         "weight_slot_base_bytes_per_die",
-                         "parameter_state_bytes", "kv_capacity_bytes",
-                         "highest_paged_end_bytes_per_die", "fabric",
-                         "spans", "events", "external_seed_hex"});
+        if (tp6)
+            Exact(contract, {"schema_version", "producer_pass", "id",
+                             "physical_source_digest",
+                             "external_materialization_digest",
+                             "linked_manifest_ids", "linked_manifest_digests",
+                             "mesh_rows", "mesh_columns", "active_die_ids",
+                             "hbm_capacity_bytes_per_die",
+                             "weight_slot_base_bytes_per_die",
+                             "parameter_state_bytes", "kv_capacity_bytes",
+                             "highest_paged_end_bytes_per_die", "fabric",
+                             "spans", "events", "external_seed_hex"});
+        else
+            Exact(contract, {"schema_version", "producer_pass", "id",
+                             "physical_source_digest",
+                             "external_materialization_digest",
+                             "linked_manifest_ids", "linked_manifest_digests",
+                             "mesh_rows", "mesh_columns",
+                             "hbm_capacity_bytes_per_die",
+                             "weight_slot_base_bytes_per_die",
+                             "parameter_state_bytes", "kv_capacity_bytes",
+                             "highest_paged_end_bytes_per_die", "fabric",
+                             "spans", "events", "external_seed_hex"});
         const uint64_t rows = Number(contract, "mesh_rows");
         const uint64_t columns = Number(contract, "mesh_columns");
-        if (String(contract, "producer_pass") !=
-                "dense_inference_rect_paged_runtime" ||
-            String(contract, "id") !=
-                "dense_inference_rect_paged_runtime_" +
-                    DigestWithoutId(contract).substr(0, 20) ||
-            !((rows == 1 && columns == 4) ||
-              (rows == 2 && columns == 2) ||
-              (rows == 4 && columns == 1)) ||
-            Number(contract, "hbm_capacity_bytes_per_die") != 12288 ||
+        std::set<uint64_t> active;
+        if (tp6) {
+            const auto &raw_active = contract.at("active_die_ids");
+            if (!raw_active.is_array() || raw_active.size() != 6)
+                Fail("TP6 sidecar requires six active physical Dies");
+            for (const auto &die : raw_active)
+                if (!active.insert(die.get<uint64_t>()).second)
+                    Fail("TP6 active physical Die identity repeats");
+            if (!active.count(0) || *active.rbegin() >= rows * columns)
+                Fail("TP6 active Dies lie outside physical mesh");
+        } else {
+            active = {0, 1, 2, 3};
+        }
+        const uint64_t die_count = tp6 ? 6 : 4;
+        const uint64_t hbm_capacity = tp6 ? 18432 : 12288;
+        const uint64_t parameter_bytes = tp6 ? 40416 : 26944;
+        const uint64_t kv_capacity_per_die = tp6 ? 3072 : 1536;
+        const uint64_t kv_page_capacity = tp6 ? 768 : 384;
+        const uint64_t kv_slot_base = tp6 ? 14016 : 9792;
+        const uint64_t paged_end = tp6 ? 17088 : 11328;
+        const std::string producer = tp6 ?
+            "dense_inference_tp6_paged_runtime" :
+            "dense_inference_rect_paged_runtime";
+        if (String(contract, "producer_pass") != producer ||
+            String(contract, "id") != producer + "_" +
+                DigestWithoutId(contract).substr(0, 20) ||
+            (tp6 ? !(rows >= 1 && rows <= 10 && columns >= 1 &&
+                      columns <= 10 && rows * columns >= 6)
+                 : !((rows == 1 && columns == 4) ||
+                      (rows == 2 && columns == 2) ||
+                      (rows == 4 && columns == 1))) ||
+            Number(contract, "hbm_capacity_bytes_per_die") != hbm_capacity ||
             Number(contract, "weight_slot_base_bytes_per_die") != 1600 ||
-            Number(contract, "parameter_state_bytes") != 107776 ||
-            Number(contract, "kv_capacity_bytes") != 6144 ||
-            Number(contract, "highest_paged_end_bytes_per_die") != 11328 ||
+            Number(contract, "parameter_state_bytes") !=
+                die_count * parameter_bytes ||
+            Number(contract, "kv_capacity_bytes") != die_count * kv_capacity_per_die ||
+            Number(contract, "highest_paged_end_bytes_per_die") != paged_end ||
             manifest_texts.size() != 3)
-            Fail("source-signed TP4 rectangular bounded identity changed");
+            Fail("source-signed rectangular bounded identity changed");
         source_ref_ = String(contract, "id");
-        const FabricConfig fabric = ParseRectFabric(contract.at("fabric"),
-                                                    rows, columns);
+        const FabricConfig fabric = tp6 ?
+            ParseTp6Fabric(contract.at("fabric"), rows, columns, active) :
+            ParseRectFabric(contract.at("fabric"), rows, columns);
         external_capacity_ref_ = fabric.external_capacities.front().id;
-        if (backends.size() != 4)
-            Fail("four physical TP4 HBM backends required");
-        for (uint64_t die = 0; die < 4; ++die)
+        for (uint64_t die : active)
             if (!backends.count({die, 0}) || !backends.at({die, 0}))
-                Fail("one physical stack0/channel0 backend per Die required");
+                Fail("one physical stack0/channel0 backend per active Die required");
 
         const auto &raw_spans = contract.at("spans");
         const auto &raw_events = contract.at("events");
-        if (!raw_spans.is_array() || raw_spans.size() != 76 ||
-            !raw_events.is_array() || raw_events.size() != 260)
-            Fail("requires 60 physical weights, 16 KV pages and 260 gates");
+        if (!raw_spans.is_array() || raw_spans.size() != 19 * die_count ||
+            !raw_events.is_array() || raw_events.size() != 65 * die_count)
+            Fail("requires 15 weights, four KV pages and 65 gates per Die");
         std::map<uint64_t, uint64_t> weight_count, kv_count;
         std::map<uint64_t, uint64_t> weight_bytes, kv_bytes;
         std::set<std::pair<uint64_t, uint64_t>> source_homes;
@@ -322,21 +456,23 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
             span.external_address = Number(raw, "external_address");
             span.hbm_address = Number(raw, "hbm_address");
             span.size_bytes = Number(raw, "size_bytes");
-            if (span.die_id > 3 ||
+            if (!active.count(span.die_id) ||
                 !source_homes.emplace(span.die_id,
                                       span.source_hbm_address).second ||
                 !external_homes.insert(span.external_address).second ||
                 span.size_bytes == 0)
                 Fail("rectangular physical span identity repeats");
             if (span.kind == "parameter") {
-                if (span.hbm_address != 1600 || span.size_bytes > 8192)
+                if (span.hbm_address != 1600 ||
+                    span.size_bytes > (tp6 ? 12288 : 8192))
                     Fail("rectangular weight is not a one-slot page");
                 ++weight_count[span.die_id];
                 weight_bytes[span.die_id] += span.size_bytes;
                 weights_.push_back(span);
             } else if (span.kind == "kv_key" || span.kind == "kv_value") {
-                if (span.size_bytes != 384 || span.hbm_address < 9792 ||
-                    span.hbm_address + span.size_bytes > 11328)
+                if (span.size_bytes != kv_page_capacity ||
+                    span.hbm_address < kv_slot_base ||
+                    span.hbm_address + span.size_bytes > paged_end)
                     Fail("rectangular KV page is outside its stable slot");
                 ++kv_count[span.die_id];
                 kv_bytes[span.die_id] += span.size_bytes;
@@ -351,12 +487,13 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
             awaiting_after_load_.emplace(span.runtime_core_id, false);
             next_event_by_core_.emplace(span.runtime_core_id, 0);
         }
-        for (uint64_t die = 0; die < 4; ++die)
+        for (uint64_t die : active)
             if (weight_count[die] != 15 || kv_count[die] != 4 ||
-                weight_bytes[die] != 26944 || kv_bytes[die] != 1536)
+                weight_bytes[die] != parameter_bytes ||
+                kv_bytes[die] != kv_capacity_per_die)
                 Fail("rectangular per-Die 15+4 StateABI coverage changed");
-        if (weight_pinned_.size() != 4)
-            Fail("rectangular spans do not resolve four runtime cores");
+        if (weight_pinned_.size() != die_count)
+            Fail("rectangular spans do not resolve every active runtime core");
 
         const auto &ids = contract.at("linked_manifest_ids");
         const auto &digests = contract.at("linked_manifest_digests");
@@ -366,9 +503,11 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
         for (size_t segment = 0; segment < 3; ++segment) {
             const auto parsed = frontend::ProgramArtifactFinalizer::Parse(
                 manifest_texts[segment]);
-            const std::vector<size_t> expected_records =
-                segment == 0 ? std::vector<size_t>{375, 359, 359, 359}
-                             : std::vector<size_t>{379, 363, 363, 363};
+            const std::vector<size_t> expected_records = tp6 ?
+                (segment == 0 ? std::vector<size_t>{495, 463, 463, 463, 463, 463}
+                              : std::vector<size_t>{499, 467, 467, 467, 467, 467}) :
+                (segment == 0 ? std::vector<size_t>{375, 359, 359, 359}
+                              : std::vector<size_t>{379, 363, 363, 363});
             std::vector<size_t> records;
             std::set<uint64_t> dies, cores;
             for (const auto &stream : parsed.core_streams) {
@@ -385,12 +524,13 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
                     manifest_texts[segment]) !=
                     digests[segment].get<std::string>() ||
                 parsed.producer_pass != "manifest_linker" ||
-                parsed.fragments.size() != (segment ? 196 : 180) ||
-                parsed.core_streams.size() != 4 ||
-                parsed.state_operand_bindings.size() !=
-                    (segment ? 92 : 76) ||
-                dies != std::set<uint64_t>({0, 1, 2, 3}) ||
-                cores.size() != 4 || records != sorted_expected)
+                parsed.fragments.size() != (tp6 ?
+                    (segment ? 292 : 268) : (segment ? 196 : 180)) ||
+                parsed.core_streams.size() != die_count ||
+                parsed.state_operand_bindings.size() != (tp6 ?
+                    (segment ? 138 : 114) : (segment ? 92 : 76)) ||
+                dies != active || cores.size() != die_count ||
+                records != sorted_expected)
                 Fail("production rectangular linked segment shape drifted");
         }
 
@@ -424,7 +564,7 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
             event.lsu_size_bytes = Number(raw, "lsu_size_bytes");
             event.dma_size_bytes = Number(raw, "dma_size_bytes");
             if (event.event_index != index || event.segment_index > 2 ||
-                event.die_id > 3 ||
+                !active.count(event.die_id) ||
                 !next_event_by_core_.count(event.runtime_core_id))
                 Fail("rectangular event identity is outside TP4 timeline");
             const auto span = std::find_if(
@@ -448,12 +588,14 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
                 read_bytes += event.dma_size_bytes;
             } else if (event.kind == "kv_restore_before_load") {
                 role = 1;
-                if (event.dma_size_bytes != 256 + 64 * event.segment_index)
+                if (event.dma_size_bytes != (tp6 ? 576 + 96 * event.segment_index :
+                                                   256 + 64 * event.segment_index))
                     Fail("rectangular KV restore changed its version extent");
                 read_bytes += event.dma_size_bytes;
             } else if (event.kind == "kv_writeback_after_store") {
                 role = 2;
-                if (event.dma_size_bytes != 256 + 64 * event.segment_index)
+                if (event.dma_size_bytes != (tp6 ? 576 + 96 * event.segment_index :
+                                                   256 + 64 * event.segment_index))
                     Fail("rectangular KV writeback changed its version extent");
                 write_bytes += event.dma_size_bytes;
             } else {
@@ -464,16 +606,21 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
             event_indices_by_core_[event.runtime_core_id].push_back(index);
         }
         for (uint64_t segment = 0; segment < 3; ++segment)
-            for (uint64_t die = 0; die < 4; ++die)
+            for (uint64_t die : active)
                 if (counts[{segment, die, 0}] != 15 ||
                     counts[{segment, die, 1}] != (segment ? 4 : 0) ||
                     counts[{segment, die, 2}] != 4)
                     Fail("rectangular per-core segment gate coverage changed");
-        if (read_bytes != 334592 || write_bytes != 15360)
+        if (read_bytes != (tp6 ? 762048 : 334592) ||
+            write_bytes != (tp6 ? 48384 : 15360))
             Fail("rectangular StateABI traffic byte oracle changed");
+        expected_read_bytes_ = read_bytes;
+        expected_write_bytes_ = write_bytes;
+        highest_paged_end_bytes_ = paged_end;
+        hbm_capacity_bytes_per_die_ = hbm_capacity;
 
         const auto seed = Hex(String(contract, "external_seed_hex"));
-        if (seed.size() != 131072)
+        if (seed.size() != (tp6 ? 1048576 : 131072))
             Fail("rectangular external seed capacity changed");
         for (const auto &span : weights_)
             if (std::all_of(seed.begin() + span.external_address,
@@ -493,8 +640,8 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
         runtime_ = std::make_unique<ExternalMemoryRuntimeBridge>(
             name, fabric, std::move(hbm), cycle_time_);
         runtime_->SeedExternal(external_capacity_ref_, 0, seed);
-        kv_page_initial_bytes_ = 256;
-        kv_page_step_bytes_ = 64;
+        kv_page_initial_bytes_ = tp6 ? 576 : 256;
+        kv_page_step_bytes_ = tp6 ? 96 : 64;
         return;
     }
     Exact(contract, {"schema_version", "producer_pass", "id",
@@ -781,6 +928,10 @@ DenseInferenceMidProgramPager::DenseInferenceMidProgramPager(
         name, fabric, std::move(hbm), cycle_time_);
     runtime_->SeedExternal(external_capacity_ref_, 0, parameter_seed);
     runtime_->SeedExternal(external_capacity_ref_, 53568, kv_seed);
+    expected_read_bytes_ = 162112;
+    expected_write_bytes_ = 1920;
+    highest_paged_end_bytes_ = 10560;
+    hbm_capacity_bytes_per_die_ = 12288;
     weight_pinned_.emplace(0, false);
     awaiting_after_load_.emplace(0, false);
     next_event_by_core_.emplace(0, 0);

@@ -8,6 +8,7 @@ from llm.frontend.wafer_frontend.passes.dense_compile_sequence import (
 from llm.frontend.wafer_frontend.passes.dense_inference_rect_physical_source import (
     build_dense_inference_rect_physical_source,
 )
+from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.memory_plan import (
     MemoryObjectKind,
     MemoryTier,
@@ -20,12 +21,13 @@ class DenseInferenceRectPhysicalSourceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         resident, template, fabric = _two_by_two_case()
-        sequence = compile_dense_e2e_sequence(
-            resident,
-            template,
-            fabric,
-            hbm_address_spaces=valid_hbm_address_spaces(fabric),
-        )
+        with builder_validation_session():
+            sequence = compile_dense_e2e_sequence(
+                resident,
+                template,
+                fabric,
+                hbm_address_spaces=valid_hbm_address_spaces(fabric),
+            )
         cls.source = build_dense_inference_rect_physical_source(sequence)
 
     def test_reconciles_all_true_tp4_physical_state_abis(self) -> None:
