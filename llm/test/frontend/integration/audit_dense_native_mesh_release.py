@@ -85,7 +85,7 @@ def audit_release(
     shard_roots: tuple[Path, ...], source_root: Path,
     tools: dict[str, Path], *, profile: str = "mixed",
 ) -> dict[str, Any]:
-    if profile not in ("mixed", "all_dies_scaled"):
+    if profile not in ("mixed", "all_dies_scaled", "all_dies_compact"):
         raise ValueError("unknown Dense release profile")
     source_root = source_root.resolve()
     driver_path = source_root / _DRIVER
@@ -112,12 +112,14 @@ def audit_release(
     source_sha_cache: dict[str, str] = {}
     for root, binding in zip(roots, bindings):
         index = binding["shard_index"]
-        expected_schema = ("dense-native-mesh-matrix-binding-v4"
+        expected_schema = ("dense-native-mesh-matrix-binding-v5"
+                           if profile == "all_dies_compact" else
+                           "dense-native-mesh-matrix-binding-v4"
                            if profile == "all_dies_scaled" else
                            "dense-native-mesh-matrix-binding-v3")
         if (binding.get("schema_version") != expected_schema
                 or binding.get("profile") !=
-                ("all_dies_scaled" if profile == "all_dies_scaled" else None)
+                (profile if profile != "mixed" else None)
                 or binding.get("driver_sha256") != driver_sha
                 or binding.get("runner_sha256") != runner_sha
                 or binding.get("dram_config_sha256") != dram_sha
@@ -136,7 +138,7 @@ def audit_release(
         if actual_dirs != set(shapes):
             raise ValueError(f"shard {index} has missing or extra case directories")
         for shape in shapes:
-            if profile == "all_dies_scaled":
+            if profile in ("all_dies_scaled", "all_dies_compact"):
                 driver.audit_cached_case(root / shape, shape,
                                          all_dies_scaled=True)
             else:
@@ -151,10 +153,12 @@ def audit_release(
     return {
         "schema_version": "dense-native-mesh-release-audit-v1",
         "status": "verified",
-        "profile_scope": ("resident_all_dies_scaled" if profile ==
+        "profile_scope": ("resident_all_dies_scaled_compact_request"
+                          if profile == "all_dies_compact" else
+                          "resident_all_dies_scaled" if profile ==
                           "all_dies_scaled" else
                           "resident_mixed_shape_scaled_and_fixed_tp6"),
-        "full_die_active_accepted": profile == "all_dies_scaled",
+        "full_die_active_accepted": profile != "mixed",
         "source_root": str(source_root),
         "driver_sha256": driver_sha,
         "runner_sha256": runner_sha,
@@ -174,7 +178,8 @@ def main() -> None:
     for name in ("finalizer", "resolver", "npusim", "simulation"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--profile", choices=("mixed", "all_dies_scaled"),
+    parser.add_argument("--profile", choices=("mixed", "all_dies_scaled",
+                                              "all_dies_compact"),
                         default="mixed")
     args = parser.parse_args()
     result = audit_release(

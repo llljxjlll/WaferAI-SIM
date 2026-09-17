@@ -95,6 +95,8 @@ class NativeMatrixAuditTest(unittest.TestCase):
                 audit_fresh(directory, "1x4", all_dies_scaled=True)
         self.assertEqual(_mode(10, 10, all_dies_scaled=True),
                          ("--scaled-all-dies",))
+        self.assertEqual(_mode(10, 10, all_dies_compact=True),
+                         ("--compact-scaled-all-dies",))
 
     def test_old_stride16_profile_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -253,6 +255,12 @@ class NativeMatrixAuditTest(unittest.TestCase):
             self.assertEqual(scaled["schema_version"],
                              "dense-native-mesh-matrix-binding-v4")
             self.assertEqual(scaled["profile"], "all_dies_scaled")
+            args.all_dies_scaled = False
+            args.all_dies_compact = True
+            compact = matrix_binding(args, ("10x10",))
+            self.assertEqual(compact["schema_version"],
+                             "dense-native-mesh-matrix-binding-v5")
+            self.assertEqual(compact["profile"], "all_dies_compact")
             self.assertEqual(binding["shapes"], ["1x4"])
             self.assertEqual(json.loads(json.dumps(binding)), binding)
             self.assertEqual(binding["dram_config_sha256"], hashlib.sha256((Path(driver.__file__).resolve().parents[4] / "DRAMSys/configs/hbm2-example.json").read_bytes()).hexdigest())

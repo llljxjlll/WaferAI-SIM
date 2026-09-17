@@ -68,11 +68,17 @@ def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[st
     if not dram_config.is_file():
         raise ValueError("bound DRAMSys HBM profile is missing")
     all_dies_scaled = bool(getattr(args, "all_dies_scaled", False))
+    all_dies_compact = bool(getattr(args, "all_dies_compact", False))
+    if all_dies_scaled and all_dies_compact:
+        raise ValueError("select one all-Die profile")
     return {
-        "schema_version": ("dense-native-mesh-matrix-binding-v4"
+        "schema_version": ("dense-native-mesh-matrix-binding-v5"
+                           if all_dies_compact else
+                           "dense-native-mesh-matrix-binding-v4"
                            if all_dies_scaled else
                            "dense-native-mesh-matrix-binding-v3"),
-        **({"profile": "all_dies_scaled"} if all_dies_scaled else {}),
+        **({"profile": "all_dies_compact"} if all_dies_compact else
+           {"profile": "all_dies_scaled"} if all_dies_scaled else {}),
         "dram_config_sha256": _sha(dram_config),
         "driver_sha256": _sha(Path(__file__).resolve()),
         "runner_sha256": _sha(Path(__file__).resolve().parent / "run_dense_sequence_runtime_canary.py"),
@@ -139,7 +145,10 @@ def audit_partial_case(
 
 def _mode(
     rows: int, columns: int, *, all_dies_scaled: bool = False,
+    all_dies_compact: bool = False,
 ) -> tuple[str, ...]:
+    if all_dies_compact:
+        return ("--compact-scaled-all-dies",)
     if all_dies_scaled:
         return ("--scaled-all-dies",)
     count = rows * columns
@@ -259,7 +268,9 @@ def run(args: argparse.Namespace) -> None:
     if not shapes:
         raise ValueError("selected matrix shard is empty")
     root = args.output_root.resolve()
-    all_dies_scaled = bool(getattr(args, "all_dies_scaled", False))
+    all_dies_compact = bool(getattr(args, "all_dies_compact", False))
+    all_dies_scaled = bool(getattr(args, "all_dies_scaled", False)
+                           or all_dies_compact)
     binding = matrix_binding(args, shapes)
     binding_path = root / "matrix_binding.json"
     if root.exists():
@@ -302,7 +313,8 @@ def run(args: argparse.Namespace) -> None:
                 "--simulation", str(args.simulation.resolve()),
                 "--timeout", str(args.native_timeout),
                 "--compile-timeout", str(args.compile_timeout),
-                *_mode(rows, columns, all_dies_scaled=all_dies_scaled),
+                *_mode(rows, columns, all_dies_scaled=bool(args.all_dies_scaled),
+                       all_dies_compact=all_dies_compact),
             )
             completed = subprocess.run(
                 command, cwd=Path(__file__).resolve().parents[4],
@@ -346,8 +358,11 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--all-dies-scaled", action="store_true",
-                        help="run the shape-scaled model on every physical Die")
+    profile = parser.add_mutually_exclusive_group()
+    profile.add_argument("--all-dies-scaled", action="store_true",
+                         help="run the shape-scaled model on every physical Die")
+    profile.add_argument("--all-dies-compact", action="store_true",
+                         help="run TP=all Dies with one request per shape")
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)
