@@ -281,7 +281,8 @@ def run(args: argparse.Namespace) -> None:
                 *_mode(rows, columns),
             )
             completed = subprocess.run(
-                command, env=environment, stdout=subprocess.PIPE,
+                command, cwd=Path(__file__).resolve().parents[4],
+                env=environment, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True,
                 timeout=args.process_timeout, check=False,
             )
