@@ -550,7 +550,8 @@ class DenseIR0Validator:
         if graph.producer_pass in ("full_dense_training_backward_source",
                                    "full_dense_training_sgd_source",
                                    "full_dense_training_two_step_source",
-                                   "full_dense_training_two_step_dp2_source"):
+                                   "full_dense_training_two_step_dp2_source",
+                                   "full_dense_training_adamw_source"):
             DenseIR0Validator._validate_full_dense_backward_job_contract(
                 graph, path
             )
@@ -645,6 +646,10 @@ class DenseIR0Validator:
         tp = instance.parallel.tp
         state_by_weight_rank = {}
         for state in graph.persistent_states:
+            if state.identity.kind not in (
+                StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER,
+            ):
+                continue
             weight = state.identity.tensor_ref
             rank = state.identity.shard_index
             if (weight is None or not 0 <= rank < tp
@@ -708,8 +713,36 @@ class DenseIR0Validator:
                         ) for physical_rank in range(rank, tp * (2 if dp2 else 1), tp)]):
                     _fail("complete Dense SGD must update each trainable state from its own FP32 WGRAD exactly once",
                           f"{path}.nodes")
+        elif graph.producer_pass == "full_dense_training_adamw_source":
+            expected_updates = {
+                f"adamw_update::{weight}::tp{rank}": (weight, rank)
+                for weight in weights for rank in range(tp)
+            }
+            values_by_ref = {value.id: value for value in graph.values}
+            access_by_node = {}
+            for access in graph.state_accesses:
+                access_by_node.setdefault(access.node_ref, []).append(access)
+            if (len(updates) != len(expected_updates)
+                    or {node.id for node in updates} != set(expected_updates)
+                    or any(state.identity.kind is not StateKind.TRAINABLE_PARAMETER
+                           or state.access is not PersistentStateAccess.READ_WRITE
+                           for state in state_by_weight_rank.values())):
+                _fail("complete Dense AdamW must update every authentic parameter shard once",
+                      f"{path}.nodes")
+            for update in updates:
+                weight, rank = expected_updates[update.id]
+                gradient_ref = f"wgrad::{weight}::tp{rank}.output"
+                if (type(update.workload) is not AdamwUpdateWorkload
+                        or update.phase is not OpPhase.UPDATE
+                        or update.inputs[:2] != (weight, gradient_ref)
+                        or len(update.inputs) != 6 or len(update.outputs) != 5
+                        or update.workload.step not in (1, 2)
+                        or values_by_ref[gradient_ref].dtype is not DType.FP32
+                        or len(access_by_node.get(update.id, ())) != 5):
+                    _fail("complete Dense AdamW must consume its own real FP32 WGRAD and five states",
+                          f"{path}.nodes")
         elif updates:
-            _fail("backward-only source cannot contain SGD updates", f"{path}.nodes")
+            _fail("backward-only source cannot contain optimizer updates", f"{path}.nodes")
         expected_wgrad = {
             f"wgrad::{weight}::tp{rank}{suffix}": (weight, rank)
             for weight in weights for rank in range(tp)
@@ -981,6 +1014,11 @@ class DenseIR0Validator:
                                    "full_dense_training_two_step_dp2_source"):
             DenseIR0Validator._validate_full_dense_backward_persistent_states(
                 graph, values, axis_sizes, path
+            )
+            return
+        if graph.producer_pass == "full_dense_training_adamw_source":
+            DenseIR0Validator._validate_full_dense_adamw_persistent_states(
+                graph, values, path
             )
             return
         if any(node.kind is OpKind.CE_BACKWARD for node in graph.nodes):
@@ -1349,6 +1387,90 @@ class DenseIR0Validator:
                   f"{path}.persistent_states")
 
     @staticmethod
+    def _validate_full_dense_adamw_persistent_states(
+        graph: IR0,
+        values: dict[str, TensorValue],
+        path: str,
+    ) -> None:
+        """Bind every genuine weight and each master/m/v/step state exactly."""
+        states = {state.id: state for state in graph.persistent_states}
+        trainable = {
+            state.identity.tensor_ref: state
+            for state in states.values()
+            if state.identity.kind is StateKind.TRAINABLE_PARAMETER
+        }
+        updates = tuple(node for node in graph.nodes
+                        if node.kind is OpKind.OPTIMIZER_UPDATE)
+        if (len(trainable) != 15 or len(updates) != 15
+                or len(states) != 75 or len(graph.state_accesses) != 100):
+            _fail("full Dense AdamW needs 15 parameters and exact master/m/v/step states",
+                  f"{path}.persistent_states")
+        expected: list[StateAccess] = []
+        used = set()
+        role_kinds = (
+            StateKind.OPTIMIZER_MASTER,
+            StateKind.OPTIMIZER_MOMENT1,
+            StateKind.OPTIMIZER_MOMENT2,
+            StateKind.OPTIMIZER_STEP,
+        )
+        for node in graph.nodes:
+            if (node.phase is OpPhase.FWD
+                    and node.kind in (OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING)
+                    and len(node.inputs) == 2):
+                weight_ref = node.inputs[1]
+            elif node.kind is OpKind.GEMM_INPUT_DX:
+                weight_ref = node.inputs[0]
+            elif node.kind is OpKind.EMBEDDING_TABLE_WGRAD:
+                weight_ref = node.inputs[1]
+            else:
+                continue
+            state = trainable.get(weight_ref)
+            if state is None:
+                _fail("full Dense AdamW source READ lacks its authentic parameter",
+                      f"{path}.state_accesses")
+            expected.append(StateAccess.create(
+                node_ref=node.id, state_ref=state.id,
+                mode=StateAccessMode.READ, rank=0,
+            ))
+            used.add(state.id)
+        for update in updates:
+            weight = trainable.get(update.inputs[0])
+            if weight is None:
+                _fail("AdamW update weight has no source state", f"{path}.nodes")
+            expected.append(StateAccess.create(
+                node_ref=update.id, state_ref=weight.id,
+                mode=StateAccessMode.READ_WRITE, rank=0,
+            ))
+            used.add(weight.id)
+            for index, kind in enumerate(role_kinds, 2):
+                matches = tuple(state for state in states.values()
+                                if state.identity.kind is kind
+                                and state.identity.tensor_ref == update.inputs[index])
+                state = matches[0] if len(matches) == 1 else None
+                operand = values[update.inputs[index]]
+                if (state is None or state.shape != operand.shape
+                        or state.dtype is not operand.dtype
+                        or state.access is not PersistentStateAccess.READ_WRITE
+                        or state.identity.shard_index != 0):
+                    _fail("AdamW master/m/v/step state is missing or aliases another parameter",
+                          f"{path}.persistent_states")
+                expected.append(StateAccess.create(
+                    node_ref=update.id, state_ref=state.id,
+                    mode=StateAccessMode.READ_WRITE, rank=0,
+                ))
+                used.add(state.id)
+        if used != set(states):
+            _fail("full Dense AdamW leaves an optimizer state unused",
+                  f"{path}.persistent_states")
+        expected_tuple = tuple(sorted(
+            expected, key=lambda item: (item.node_ref, item.state_ref,
+                                        item.rank, item.id),
+        ))
+        if graph.state_accesses != expected_tuple:
+            _fail("full Dense AdamW state READ/UPDATE accesses are not exact",
+                  f"{path}.state_accesses")
+
+    @staticmethod
     def _validate_lite_persistent_states(
         graph: IR0,
         values: dict[str, TensorValue],
@@ -1612,9 +1734,12 @@ class DenseIR0Validator:
             node.effects.alias_set != weight.alias_set
             or len({inputs[index].alias_set for index in (0, 2, 3, 4, 5)}) != 5
             or any(
-                inputs[index].alias_set is None
-                or outputs[index].alias_set != inputs[index].alias_set
-                for index in (0, 2, 3, 4, 5)
+                inputs[input_index].alias_set is None
+                or outputs[output_index].alias_set
+                   != inputs[input_index].alias_set
+                for input_index, output_index in (
+                    (0, 0), (2, 1), (3, 2), (4, 3), (5, 4)
+                )
             )
             or any(
                 item.shape != workload.logical_weight_shape
