@@ -46,6 +46,7 @@ from .ir0 import (
     RopeQkWorkload,
     SwiGluWorkload,
     SgdUpdateWorkload,
+    StateAccess,
 )
 from .gemm_weight_wgrad_workload import GemmWeightWgradWorkload
 from .gemm_input_dx_workload import GemmInputDxWorkload
@@ -1531,6 +1532,15 @@ class FusionPlan:
         state_declarations = (
             {} if state_manifest is None else {item.id: item for item in state_manifest.declarations}
         )
+        parameter_accesses: dict[tuple[str, int, str], list[StateAccess]] = {}
+        if state_manifest is not None:
+            for access in ir1.state_accesses:
+                identity = state_declarations[access.state_ref].identity
+                if (identity.kind in (StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
+                        and identity.tensor_ref is not None):
+                    parameter_accesses.setdefault(
+                        (access.node_ref, access.rank, identity.tensor_ref), [],
+                    ).append(access)
         route_keys = {
             (route.source_rank, route.destination_rank, route.die_path)
             for route in group.embedding.routes
@@ -1600,17 +1610,8 @@ class FusionPlan:
                         )
                     rhs_operand_id = action.compute.inputs[1].value_id
                     if state_manifest is not None:
-                        matching_accesses = tuple(
-                            access
-                            for access in ir1.state_accesses
-                            if access.node_ref == member.id
-                            and access.rank == program.rank
-                            and state_declarations[access.state_ref].identity.kind
-                            in (StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
-                            and state_declarations[
-                                access.state_ref
-                            ].identity.tensor_ref
-                            == member.inputs[1]
+                        matching_accesses = parameter_accesses.get(
+                            (member.id, program.rank, member.inputs[1]), (),
                         )
                         if len(matching_accesses) != 1:
                             raise SchemaError(
