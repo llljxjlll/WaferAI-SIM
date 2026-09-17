@@ -1516,15 +1516,19 @@ def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
         if not value.consumers
     }
     if type(source) in (TrainLinkedProgram, MoeFullTrainForwardLinkedSource):
-        updates = tuple(node for _index, context in _lowering_contexts(source)
-                        for node in context.ir1.nodes
-                        if node.kind is OpKind.OPTIMIZER_UPDATE)
-        if updates:
-            persisted = {node.outputs[0] for node in updates
-                         if len(node.outputs) == 1}
-            if len(persisted) != len(updates):
-                raise SchemaError("each SGD needs an independent persisted output",
-                                  path="source.source.lowering_context.ir1.nodes")
+        persisted: set[str] = set()
+        for _replica_index, context in _lowering_contexts(source):
+            updates = tuple(node for node in context.ir1.nodes
+                            if node.kind is OpKind.OPTIMIZER_UPDATE)
+            local_persisted = {node.outputs[0] for node in updates
+                               if len(node.outputs) == 1}
+            if len(local_persisted) != len(updates):
+                raise SchemaError(
+                    "each SGD needs an independent persisted output within its DP replica",
+                    path="source.source.lowering_context.ir1.nodes",
+                )
+            persisted.update(local_persisted)
+        if persisted:
             return actual - persisted
     if type(source) not in _LITE_TRAIN_SOURCE_TYPES:
         return actual

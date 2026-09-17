@@ -24,6 +24,8 @@ from llm.frontend.wafer_frontend.passes.train_lower_program import lower_train
 from llm.frontend.wafer_frontend.policies.registry import RegistryKind, production_registry
 from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.full_dense_gradient_requirements import build_dense_full_train_requirements
+from llm.frontend.wafer_frontend.lowering.full_dense_gradient_physical_gate import require_exact_dense_parameter_state_inventory
 from llm.frontend.wafer_frontend.schema.n4 import FusionPartitionContext, InterDiePlanningContext
 from llm.frontend.wafer_frontend.schema.n5 import ProjectToIR2Context, IntraDieSchedulingContext
 from llm.frontend.wafer_frontend.schema.n6 import _leaf_fragments
@@ -34,7 +36,7 @@ from llm.test.frontend.unit.test_flexible_dense_train import _hardware, _spec
 
 
 @builder_validation_session()
-def compile_dp2(output: Path) -> dict:
+def compile_dp2(output: Path, *, on_linked=None) -> dict:
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     producer = "dp2_production_n4"
@@ -94,6 +96,13 @@ def compile_dp2(output: Path) -> dict:
     print("NATIVE", [len(replica.fragments) for replica in native.replicas], flush=True)
     linked = link_train(native)
     manifest = linked.manifest
+    requirements = build_dense_full_train_requirements(plan, steps=2)
+    state_inventory = require_exact_dense_parameter_state_inventory(
+        manifest, plan, requirements,
+    )
+    if len(requirements.paths) != 120 or len(state_inventory) != 60:
+        raise RuntimeError("DP2 physical per-owner parameter requirements are incomplete")
+    print("PHYSICAL_STATES", len(state_inventory), "GRADIENT_PATHS", len(requirements.paths), flush=True)
     manifest_file = output / "full_dp2_two_step.linked.json"
     manifest_file.write_text(canonical_json(manifest), encoding="utf-8")
     print("LINKED", len(manifest.fragments), manifest_file, flush=True)
@@ -116,9 +125,8 @@ def compile_dp2(output: Path) -> dict:
         "steps": 2, "layers": 2,
         "source_nodes": len(graph.nodes),
         "source_trainable_state_shards": len(graph.persistent_states),
-        "expected_physical_replica_state_shards": (
-            len(graph.persistent_states) * len(native.replicas)
-        ),
+        "physical_trainable_state_abi": len(state_inventory),
+        "required_step_parameter_gradient_paths": len(requirements.paths),
         "source_dp_gradient_routes": len(planned.dp_gradient_routes.gradients),
         "dp_gradient_tasks": len(projected.dp_projected_tasks.tasks),
         "physical_dies": sorted(active_dies),
@@ -132,6 +140,8 @@ def compile_dp2(output: Path) -> dict:
     (output / "compile_evidence.json").write_text(
         json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8",
     )
+    if on_linked is not None:
+        on_linked(linked, plan, output, receipt)
     return receipt
 
 
