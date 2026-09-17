@@ -8,6 +8,7 @@ from ..errors import SchemaError
 from .common import stable_artifact_id, validate_nonempty, validate_uint64
 from .global_action import GlobalActionDAG
 from .ir0 import (
+    AdamwUpdateWorkload,
     CrossEntropyBackwardWorkload,
     CrossEntropyForwardWorkload,
     OpKind,
@@ -129,13 +130,25 @@ class TrainGlobalActionReplica:
             OpKind.ROPE_BACKWARD, OpKind.RESIDUAL_BACKWARD,
             OpKind.SWIGLU_BACKWARD, OpKind.OPTIMIZER_UPDATE,
         } <= {node.kind for node in graph.nodes}
+        updates = tuple(node for node in graph.nodes
+                        if node.kind is OpKind.OPTIMIZER_UPDATE)
+        adamw = bool(updates) and all(
+            type(node.workload) is AdamwUpdateWorkload for node in updates
+        )
+        state_kinds = ({StateKind.TRAINABLE_PARAMETER,
+                        StateKind.OPTIMIZER_MASTER,
+                        StateKind.OPTIMIZER_MOMENT1,
+                        StateKind.OPTIMIZER_MOMENT2,
+                        StateKind.OPTIMIZER_STEP}
+                       if full_sgd and adamw else
+                       {StateKind.TRAINABLE_PARAMETER} if full_sgd else
+                       {StateKind.PARAMETER})
         if manifest is None or any(
-            declaration.identity.kind is not (
-                StateKind.TRAINABLE_PARAMETER if full_sgd else StateKind.PARAMETER)
+            declaration.identity.kind not in state_kinds
             for declaration in manifest.declarations
         ):
             raise SchemaError(
-                "forward-train GlobalAction requires parameter-only persistent state",
+                "forward-train GlobalAction needs exact parameter/optimizer persistent states",
                 path=f"{path}.scheduled.projected.graph.persistent_state_manifest",
             )
         if {

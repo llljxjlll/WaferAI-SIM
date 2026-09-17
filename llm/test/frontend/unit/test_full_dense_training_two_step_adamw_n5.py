@@ -59,6 +59,7 @@ class FullDenseTwoStepAdamwN5Test(unittest.TestCase):
             producer_pass=producer,
             policy=registry.instantiate(RegistryKind.INTRA_DIE, "naive").selection,
         ))
+        cls.scheduled = scheduled
         cls.ir1 = placed.replicas[0].graph
         cls.projection = projected.replicas[0].projection
         cls.schedule = scheduled.replicas[0].schedule_set.schedules[0]
