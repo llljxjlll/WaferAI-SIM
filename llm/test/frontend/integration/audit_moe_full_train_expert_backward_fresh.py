@@ -21,11 +21,19 @@ TOOLS = {
 EXPECTED_OPCODES = {
     31: 1,  # CROSS_ENTROPY_BACKWARD
     37: 5,  # GEMM_WEIGHT_WGRAD_TIMING
-    38: 4,  # GEMM_DX_TIMING
+    38: 4,  # GEMM_DX_TIMING; router dX adds one
     34: 1,  # SWIGLU_BACKWARD_TIMING
     67: 1,  # LOCAL_REDUCE
     40: 1,  # MOE_SCORE_WEIGHT_BACKWARD
     32: 0,  # SGD_UPDATE
+}
+PROFILES = {
+    "expert_backward": dict(status="expert_backward_physical_partial",
+                            leaves=61, records=293, dx=4, hbm_read=1240,
+                            initializations=98, probes=9),
+    "router_dx": dict(status="router_dx_physical_partial",
+                      leaves=63, records=300, dx=5, hbm_read=1248,
+                      initializations=100, probes=10),
 }
 
 
@@ -38,7 +46,9 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-def audit(freeze: Path, roots: tuple[Path, Path], tools: Path) -> dict:
+def audit(freeze: Path, roots: tuple[Path, Path], tools: Path,
+          profile_name: str = "expert_backward") -> dict:
+    profile = PROFILES[profile_name]
     freeze, tools = freeze.resolve(), tools.resolve()
     roots = tuple(path.resolve() for path in roots)
     require(len(set(roots)) == 2, "Fresh directories must be distinct")
@@ -79,7 +89,7 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path) -> dict:
         require(all(receipt["imported_python_sha256_at_exit"].get(name) == expected
                     for name, expected in receipt["imported_python_sha256_at_entry"].items()),
                 f"fresh{fresh_index} Python source changed during run")
-        require(receipt["status"] == "expert_backward_physical_partial" and
+        require(receipt["status"] == profile["status"] and
                 receipt["full_training_gate"] == "closed" and
                 len(receipt["steps"]) == 2 and
                 receipt["router_sgd_partial_sequence_log_sha256"] is None,
@@ -106,10 +116,10 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path) -> dict:
                        for record in stream["records"]]
             opcodes = Counter(record["opcode"] for record in records)
             require(manifest["id"] == witness["linked"] and
-                    len(records) == witness["records"] == 293 and
-                    all(opcodes[name] == count
+                    len(records) == witness["records"] == profile["records"] and
+                    all(opcodes[name] == (profile["dx"] if name == 38 else count)
                         for name, count in EXPECTED_OPCODES.items()) and
-                    witness["leaves"] == 61,
+                    witness["leaves"] == profile["leaves"],
                     f"fresh{fresh_index} step{step} linked opcode closure drifted")
             io = json.loads(io_path.read_text())
             blobs = {item["id"]: base64.b64decode(item["bytes_base64"])
@@ -119,7 +129,14 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path) -> dict:
                           "backward::T0.layer1.moe.expert0.")]
             nonzero = sum(byte != 0 for item in expert
                           for byte in blobs[item["blob_ref"]])
+            router = [item for item in io["output_probes"]
+                      if item["target"]["value_id"] ==
+                      "backward::T0.layer1.moe.router.input.gradient"]
             require(len(expert) == witness["expert_gradient_probes"] == 4 and
+                    len(router) == int(profile_name == "router_dx") and
+                    all(not any(blobs[item["blob_ref"]]) for item in router) and
+                    len(io["initializations"]) == profile["initializations"] and
+                    len(io["output_probes"]) == profile["probes"] and
                     nonzero == witness["expert_gradient_nonzero_expected_bytes"] == 0 and
                     witness["numeric_gradient_witness"] is False and
                     witness["sgd_records"] == 0 and
@@ -128,7 +145,7 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path) -> dict:
             log = native_log.read_text()
             require(log.count("[PROGRAM_IO] phase=verify") == 1 and
                     log.count("[PROGRAM_MEMORY] core=0") == 1 and
-                    "lsu_hbm_read_bytes=1240 lsu_hbm_write_bytes=0" in log and
+                    f"lsu_hbm_read_bytes={profile['hbm_read']} lsu_hbm_write_bytes=0" in log and
                     "[CREDIT] data_balanced=1 ctrl_balanced=1" in log and
                     "[DRAIN] d2d_link_residual=0" in log,
                     f"fresh{fresh_index} step{step} native drain/IO failed")
@@ -147,7 +164,8 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path) -> dict:
     require(set(case_files[0]) == set(case_files[1]),
             "independent Fresh artifact sets differ")
     return {
-        "status": "pass_partial_only", "full_training_gate": "closed",
+        "status": "pass_partial_only", "profile": profile_name,
+        "full_training_gate": "closed",
         "numeric_gradient_witness": False,
         "source_commit": commit, "native_tool_sha256": frozen_tools,
         "source_file_count": len(bindings[0][0]),
@@ -168,8 +186,10 @@ def main() -> None:
     parser.add_argument("--tools", type=Path, required=True)
     parser.add_argument("--fresh", type=Path, required=True, nargs=2)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--profile", choices=tuple(PROFILES),
+                        default="expert_backward")
     args = parser.parse_args()
-    report = audit(args.freeze, tuple(args.fresh), args.tools)
+    report = audit(args.freeze, tuple(args.fresh), args.tools, args.profile)
     args.report.write_text(json.dumps(report, sort_keys=True, indent=2))
     print(json.dumps({key: value for key, value in report.items()
                       if key != "file_sha256_by_fresh"}, sort_keys=True))
