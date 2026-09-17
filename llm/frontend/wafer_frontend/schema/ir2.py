@@ -1962,6 +1962,8 @@ class IntraDieDAG:
         return result
 
     def validate(self, path: str = "intra_die_dag") -> None:
+        if validation_seen(self, "intra_die_dag"):
+            return
         if self.schema_version != INTRA_DIE_DAG_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -2730,6 +2732,7 @@ class IntraDieDAG:
         expected_id = stable_artifact_id("intra_die_dag", self._semantic_key(), schema_version=INTRA_DIE_DAG_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "intra_die_dag")
 
     def validate_against(
         self,
@@ -5989,6 +5992,8 @@ class IntraDieSchedule:
         return result
 
     def validate(self, path: str = "intra_die_schedule") -> None:
+        if validation_seen(self, "intra_die_schedule"):
+            return
         if self.schema_version != INTRA_DIE_SCHEDULE_SCHEMA_VERSION:
             raise SchemaError("unsupported schema version", path=f"{path}.schema_version")
         validate_nonempty(self.producer_pass, f"{path}.producer_pass")
@@ -6103,6 +6108,7 @@ class IntraDieSchedule:
         expected_id = stable_artifact_id("intra_die_schedule", self._semantic_key(), schema_version=INTRA_DIE_SCHEDULE_SCHEMA_VERSION)
         if self.id != expected_id:
             raise SchemaError(f"unstable artifact id; expected {expected_id!r}", path=f"{path}.id")
+        mark_validation_complete(self, "intra_die_schedule")
 
     def validate_against(
         self,
