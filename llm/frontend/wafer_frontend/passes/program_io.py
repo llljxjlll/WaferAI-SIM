@@ -1097,15 +1097,18 @@ def _semantic_uses(
                         replica_index,
                     )
                 )
-            if action.op_kind is OpKind.MOE_EXPERT_FORWARD:
+            if action.op_kind in (OpKind.MOE_EXPERT_FORWARD,
+                                  OpKind.MOE_EXPERT_BACKWARD):
                 schedule = next((item for item in context.schedule_set.schedules
                                  if item.id == action.source.schedule_id), None)
                 scratch = (tuple(item.binding for item in
                                  schedule.moe_expert_scratch_bindings
                                  if item.task_id == action.source.task_id)
                            if schedule is not None else ())
-                if len(scratch) != 2:
-                    raise SchemaError("expert ProgramIO needs two signed scratch roots",
+                expected_scratch_count = (
+                    2 if action.op_kind is OpKind.MOE_EXPERT_FORWARD else 5)
+                if len(scratch) != expected_scratch_count:
+                    raise SchemaError("expert ProgramIO needs exact signed scratch roots",
                                       path=action_path)
                 for scratch_index, binding in enumerate(scratch):
                     abi = by_binding.get((action.source.schedule_id, binding.id))
