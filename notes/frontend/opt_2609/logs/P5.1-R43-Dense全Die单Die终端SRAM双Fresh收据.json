@@ -1,0 +1,140 @@
+{
+  "full_die_active": true,
+  "native_fresh_count": 2,
+  "observations": [
+    {
+      "active_die_ids": [
+        0
+      ],
+      "core_grid": [
+        2,
+        2
+      ],
+      "d2d_links": [],
+      "d2d_packets": [
+        0,
+        0
+      ],
+      "hardware_sha256": "6fe284e4f69d0753327c2875a1facfee35d32889cd90cadd6ecbfd04119095a5",
+      "kv_bytes": [
+        128,
+        256,
+        384
+      ],
+      "kv_digests": [
+        "38723a2e5e8a17aa7950dc008209944e898f69a7bd10a23c839d341e935fd5ca",
+        "5341e6b2646979a70e57653007a1f310169421ec9bdd9f1a5648f75ade005af1",
+        "a1a4f5721c1c4610af7f71078f3a68c330536d679803b0e0507ee8dc10c5dfca"
+      ],
+      "linked_manifest_sha256": [
+        "72d0ee419726ff20102fbdd304cf3d88ae28be01c4d8cf78df5801704735d7e7",
+        "199b0484aef52ad88c67eabe820c95e6351f25427f6b0408beae39338c6ab390",
+        "5e7f248ccf59cc4bc32ce1c9a5c5ef1875bff2580368bf7bd084aa7d9548a231"
+      ],
+      "makespan_cycles": 17135,
+      "npup_sha256": [
+        "5e7ab0fe40c1df226197e0ff76f29db6d59bf0be73bc82ac3766a16bd242f208",
+        "81020f7b86718eef9191fbdc70cb850f547747cf7d4b9bef773d6336270f53e7",
+        "dca70b909ba205bd3d2c35c506da498a4d835c2b25d729ffc88e63b89c1ec9ac"
+      ],
+      "phase_wall_seconds": {
+        "native_npusim": 0.542,
+        "production_compile": 2.877
+      },
+      "physical_die_ids": [
+        0
+      ],
+      "program_io_sha256": [
+        "c30f0934e97e96c90457463dfa9daca33c46b6825303babc9c7fffcdd5b318b5",
+        "a3b4e0e0609bf54b58a0a0ab5d0bacbb785b3f7efe8a0e19d5f9ad0f32b93c40",
+        "199e4d05f447cf76184f8b91b42935f98f49b820f4a19e6bed469f2db886f7cc"
+      ],
+      "sequence_digest": "9787ad13ce7f52d5db310c330239c81a639ca6edbba2cc29b4e16c6a5831ed0a",
+      "shape": "1x1",
+      "source_request_sha256": "d55bf18b08764aaf32db72f2f21dac9cca36a85e2ccc158dc6b2c0c4d3e76675",
+      "source_tool_binding_sha256": "ebb5e7c2e374c76d0806cde4848efeffd8ff61d416617ce930f843ccf89e8357",
+      "total_wall_seconds": 6.684,
+      "used_cores": [
+        0
+      ],
+      "workload_case_id": "workload_case_855f7a4bedf6d98e"
+    },
+    {
+      "active_die_ids": [
+        0
+      ],
+      "core_grid": [
+        2,
+        2
+      ],
+      "d2d_links": [],
+      "d2d_packets": [
+        0,
+        0
+      ],
+      "hardware_sha256": "6fe284e4f69d0753327c2875a1facfee35d32889cd90cadd6ecbfd04119095a5",
+      "kv_bytes": [
+        128,
+        256,
+        384
+      ],
+      "kv_digests": [
+        "38723a2e5e8a17aa7950dc008209944e898f69a7bd10a23c839d341e935fd5ca",
+        "5341e6b2646979a70e57653007a1f310169421ec9bdd9f1a5648f75ade005af1",
+        "a1a4f5721c1c4610af7f71078f3a68c330536d679803b0e0507ee8dc10c5dfca"
+      ],
+      "linked_manifest_sha256": [
+        "72d0ee419726ff20102fbdd304cf3d88ae28be01c4d8cf78df5801704735d7e7",
+        "199b0484aef52ad88c67eabe820c95e6351f25427f6b0408beae39338c6ab390",
+        "5e7f248ccf59cc4bc32ce1c9a5c5ef1875bff2580368bf7bd084aa7d9548a231"
+      ],
+      "makespan_cycles": 17135,
+      "npup_sha256": [
+        "5e7ab0fe40c1df226197e0ff76f29db6d59bf0be73bc82ac3766a16bd242f208",
+        "81020f7b86718eef9191fbdc70cb850f547747cf7d4b9bef773d6336270f53e7",
+        "dca70b909ba205bd3d2c35c506da498a4d835c2b25d729ffc88e63b89c1ec9ac"
+      ],
+      "phase_wall_seconds": {
+        "native_npusim": 0.55,
+        "production_compile": 2.785
+      },
+      "physical_die_ids": [
+        0
+      ],
+      "program_io_sha256": [
+        "c30f0934e97e96c90457463dfa9daca33c46b6825303babc9c7fffcdd5b318b5",
+        "a3b4e0e0609bf54b58a0a0ab5d0bacbb785b3f7efe8a0e19d5f9ad0f32b93c40",
+        "199e4d05f447cf76184f8b91b42935f98f49b820f4a19e6bed469f2db886f7cc"
+      ],
+      "sequence_digest": "9787ad13ce7f52d5db310c330239c81a639ca6edbba2cc29b4e16c6a5831ed0a",
+      "shape": "1x1",
+      "source_request_sha256": "d55bf18b08764aaf32db72f2f21dac9cca36a85e2ccc158dc6b2c0c4d3e76675",
+      "source_tool_binding_sha256": "ebb5e7c2e374c76d0806cde4848efeffd8ff61d416617ce930f843ccf89e8357",
+      "total_wall_seconds": 6.592,
+      "used_cores": [
+        0
+      ],
+      "workload_case_id": "workload_case_855f7a4bedf6d98e"
+    }
+  ],
+  "raw_receipt_sha256": {
+    "0": "4ce3f1d61fe0f2145f26493e86caf4d713f09a676ac75028fa5e8af24265f0f1",
+    "1": "0509b6d5f1504862e1eab5f41cf9cd9e4018da8330aa632473cf7092238fd29c"
+  },
+  "raw_source_binding_sha256": {
+    "0": "ebb5e7c2e374c76d0806cde4848efeffd8ff61d416617ce930f843ccf89e8357",
+    "1": "ebb5e7c2e374c76d0806cde4848efeffd8ff61d416617ce930f843ccf89e8357"
+  },
+  "schema_version": "dense-terminal-1x1-full-die-audit/v1",
+  "shape": "1x1",
+  "source_commit": "85359f91",
+  "source_file_count": 309,
+  "source_root": "/tmp/p5-dense-terminal-frozen-85359f91",
+  "status": "verified_single_shape",
+  "tool_sha256": {
+    "finalizer": "b25cb94048b9f93fef1da02a879fb4763b8efbd5a207e1aac8a68b47f72814dd",
+    "npusim": "dc11d714ed7a9337351c1f010f53b9c15711fcbc3484e62ccf35e8273003910a",
+    "resolver": "c6a886d4728cc4437e3f6d7680d3868eeaca52fa8d883201355f417679fb8d9a",
+    "simulation": "e15a2296d314e24f2c5953a2c2c46a3faf88d5da06deec786f2b5131420616aa"
+  }
+}
