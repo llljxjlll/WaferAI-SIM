@@ -1300,16 +1300,13 @@ class AdamwUpdateWorkload:
     updated_weight_dtype: DType = DType.FP16
 
     def validate(self, path: str) -> None:
-        _validate_shape(
-            self.logical_weight_shape,
-            f"{path}.logical_weight_shape",
-            expected_rank=2,
-        )
-        _validate_shape(
-            self.rank_weight_shape,
-            f"{path}.rank_weight_shape",
-            expected_rank=2,
-        )
+        _validate_shape(self.logical_weight_shape, f"{path}.logical_weight_shape")
+        _validate_shape(self.rank_weight_shape, f"{path}.rank_weight_shape")
+        if len(self.logical_weight_shape) not in (1, 2):
+            raise SchemaError(
+                "AdamW weight must be a vector or matrix",
+                path=f"{path}.logical_weight_shape",
+            )
         if self.rank_weight_shape != self.logical_weight_shape:
             raise SchemaError(
                 "AdamW rank weight must exactly replicate the logical weight",

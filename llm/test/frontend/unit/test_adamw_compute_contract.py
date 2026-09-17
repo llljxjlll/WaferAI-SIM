@@ -69,6 +69,29 @@ class AdamwComputeContractTests(unittest.TestCase):
             struct.unpack("<Q", struct.pack("<d", 0.01))[0],
         )
 
+    def test_native_element_count_supports_real_vector_gamma(self) -> None:
+        matrix = _compute()
+        vector = replace(matrix, workload=replace(
+            matrix.workload,
+            logical_weight_shape=(32,), rank_weight_shape=(32,),
+        ))
+        vector.validate("adamw.gamma")
+        abi = _compute_record_abi(vector, path="adamw.gamma")
+        self.assertIs(abi.opcode, RecordOpcode.ADAMW_UPDATE)
+        self.assertEqual(
+            _fixed_compute_literals(vector, abi.opcode, path="adamw.gamma")["element_count"],
+            32,
+        )
+        for bad in (
+            replace(vector.workload, logical_weight_shape=(2, 4, 4),
+                    rank_weight_shape=(2, 4, 4)),
+            replace(vector.workload, rank_weight_shape=(1, 32)),
+            replace(vector.workload, element_count=31),
+        ):
+            with self.subTest(workload=bad):
+                with self.assertRaises(SchemaError):
+                    bad.validate("adamw.gamma")
+
     def test_rejects_missing_state_role_or_zero_step_and_wrong_dtype(self) -> None:
         compute = _compute()
         with self.assertRaises(SchemaError):
