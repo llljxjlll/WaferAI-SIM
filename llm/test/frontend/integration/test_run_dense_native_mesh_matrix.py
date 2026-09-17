@@ -19,6 +19,7 @@ from llm.test.frontend.integration.run_dense_native_mesh_matrix import (
     compare_fresh,
     matrix_binding,
     select_shapes,
+    _mode,
 )
 
 
@@ -79,6 +80,21 @@ class NativeMatrixAuditTest(unittest.TestCase):
             compare_fresh(first, second)
             with self.assertRaisesRegex(ValueError, "independent"):
                 compare_fresh(first, dict(second, makespan_cycles=11))
+
+    def test_scaled_profile_requires_every_physical_die(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = _fixture(Path(raw))
+            self.assertEqual(audit_fresh(
+                directory, "1x4", all_dies_scaled=True)["active_die_ids"],
+                [0, 1, 2, 3])
+            receipt = json.loads((directory / "compiled_receipt.json").read_text())
+            receipt["active_die_ids"] = [0, 1, 2]
+            receipt["compiled_core_die_ids"] = [[0, 1, 2]] * 3
+            (directory / "compiled_receipt.json").write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "every physical Die"):
+                audit_fresh(directory, "1x4", all_dies_scaled=True)
+        self.assertEqual(_mode(10, 10, all_dies_scaled=True),
+                         ("--scaled-all-dies",))
 
     def test_old_stride16_profile_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -232,6 +248,11 @@ class NativeMatrixAuditTest(unittest.TestCase):
             runner = Path(driver.__file__).parent / "run_dense_sequence_runtime_canary.py"
             self.assertEqual(binding["runner_sha256"], hashlib.sha256(runner.read_bytes()).hexdigest())
             self.assertEqual(binding["schema_version"], "dense-native-mesh-matrix-binding-v3")
+            args.all_dies_scaled = True
+            scaled = matrix_binding(args, ("10x10",))
+            self.assertEqual(scaled["schema_version"],
+                             "dense-native-mesh-matrix-binding-v4")
+            self.assertEqual(scaled["profile"], "all_dies_scaled")
             self.assertEqual(binding["shapes"], ["1x4"])
             self.assertEqual(json.loads(json.dumps(binding)), binding)
             self.assertEqual(binding["dram_config_sha256"], hashlib.sha256((Path(driver.__file__).resolve().parents[4] / "DRAMSys/configs/hbm2-example.json").read_bytes()).hexdigest())

@@ -67,8 +67,12 @@ def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[st
     dram_config = Path(__file__).resolve().parents[4] / "DRAMSys/configs/hbm2-example.json"
     if not dram_config.is_file():
         raise ValueError("bound DRAMSys HBM profile is missing")
+    all_dies_scaled = bool(getattr(args, "all_dies_scaled", False))
     return {
-        "schema_version": "dense-native-mesh-matrix-binding-v3",
+        "schema_version": ("dense-native-mesh-matrix-binding-v4"
+                           if all_dies_scaled else
+                           "dense-native-mesh-matrix-binding-v3"),
+        **({"profile": "all_dies_scaled"} if all_dies_scaled else {}),
         "dram_config_sha256": _sha(dram_config),
         "driver_sha256": _sha(Path(__file__).resolve()),
         "runner_sha256": _sha(Path(__file__).resolve().parent / "run_dense_sequence_runtime_canary.py"),
@@ -79,13 +83,17 @@ def matrix_binding(args: argparse.Namespace, shapes: tuple[str, ...]) -> dict[st
     }
 
 
-def audit_cached_case(case_root: Path, shape: str) -> dict[str, object]:
+def audit_cached_case(
+    case_root: Path, shape: str, *, all_dies_scaled: bool = False,
+) -> dict[str, object]:
     """Re-open every byte needed by a cached two-fresh case before resume."""
     evidence_path = case_root / "case_evidence.json"
     if not evidence_path.is_file():
         raise ValueError(f"cached {shape} has no case_evidence.json")
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    observed = tuple(audit_fresh(case_root / f"fresh{fresh}", shape) for fresh in (0, 1))
+    observed = tuple(audit_fresh(case_root / f"fresh{fresh}", shape,
+                                 all_dies_scaled=all_dies_scaled)
+                     for fresh in (0, 1))
     compare_fresh(*observed)
     expected = json.loads(json.dumps({"shape": shape, "fresh": list(observed)}))
     if evidence != expected:
@@ -106,11 +114,15 @@ def bind_case_dram_config(case_root: Path) -> None:
         path.symlink_to(expected, target_is_directory=True)
 
 
-def audit_partial_case(case_root: Path, shape: str) -> list[dict[str, object]]:
+def audit_partial_case(
+    case_root: Path, shape: str, *, all_dies_scaled: bool = False,
+) -> list[dict[str, object]]:
     """Resume only a contiguous prefix of complete, reopened native fresh runs."""
     if (case_root / "case_evidence.json").exists():
-        audit_cached_case(case_root, shape)
-        return [audit_fresh(case_root / f"fresh{index}", shape) for index in (0, 1)]
+        audit_cached_case(case_root, shape, all_dies_scaled=all_dies_scaled)
+        return [audit_fresh(case_root / f"fresh{index}", shape,
+                            all_dies_scaled=all_dies_scaled)
+                for index in (0, 1)]
     if (case_root / "fresh1").exists() and not (case_root / "fresh0").exists():
         raise ValueError(f"partial {shape} has fresh1 without fresh0")
     observations = []
@@ -118,13 +130,18 @@ def audit_partial_case(case_root: Path, shape: str) -> list[dict[str, object]]:
         directory = case_root / f"fresh{index}"
         if not directory.exists():
             break
-        observations.append(audit_fresh(directory, shape))
+        observations.append(audit_fresh(
+            directory, shape, all_dies_scaled=all_dies_scaled))
     if len(observations) == 2:
         compare_fresh(*observations)
     return observations
 
 
-def _mode(rows: int, columns: int) -> tuple[str, ...]:
+def _mode(
+    rows: int, columns: int, *, all_dies_scaled: bool = False,
+) -> tuple[str, ...]:
+    if all_dies_scaled:
+        return ("--scaled-all-dies",)
     count = rows * columns
     if count in (2, 3, 5):
         return ("--scaled-all-dies",)
@@ -133,7 +150,9 @@ def _mode(rows: int, columns: int) -> tuple[str, ...]:
     return ()
 
 
-def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
+def audit_fresh(
+    directory: Path, shape: str, *, all_dies_scaled: bool = False,
+) -> dict[str, object]:
     """Audit native execution, full-sequence KV, and true physical placement."""
     rows, columns = _shape(shape)
     receipt = json.loads((directory / "compiled_receipt.json").read_text(encoding="utf-8"))
@@ -148,6 +167,8 @@ def audit_fresh(directory: Path, shape: str) -> dict[str, object]:
         raise ValueError("active Die IDs are invalid")
     if len(set(active)) != len(active):
         raise ValueError("active Die IDs repeat")
+    if all_dies_scaled and active != list(range(rows * columns)):
+        raise ValueError("scaled all-Die profile did not activate every physical Die")
     streams = receipt.get("compiled_core_die_ids")
     if not isinstance(streams, list) or len(streams) != 3 or any(sorted(part) != sorted(active) for part in streams):
         raise ValueError("three native segments do not cover every active Die")
@@ -238,6 +259,7 @@ def run(args: argparse.Namespace) -> None:
     if not shapes:
         raise ValueError("selected matrix shard is empty")
     root = args.output_root.resolve()
+    all_dies_scaled = bool(getattr(args, "all_dies_scaled", False))
     binding = matrix_binding(args, shapes)
     binding_path = root / "matrix_binding.json"
     if root.exists():
@@ -258,11 +280,13 @@ def run(args: argparse.Namespace) -> None:
         case_root = root / shape
         if case_root.exists():
             if (case_root / "case_evidence.json").exists():
-                audit_cached_case(case_root, shape)
+                audit_cached_case(
+                    case_root, shape, all_dies_scaled=all_dies_scaled)
                 completed_shapes.append(shape)
                 print(f"Dense full-sequence native mesh RESUME {shape} verified", flush=True)
                 continue
-            observations = audit_partial_case(case_root, shape)
+            observations = audit_partial_case(
+                case_root, shape, all_dies_scaled=all_dies_scaled)
         else:
             case_root.mkdir()
             observations = []
@@ -278,7 +302,7 @@ def run(args: argparse.Namespace) -> None:
                 "--simulation", str(args.simulation.resolve()),
                 "--timeout", str(args.native_timeout),
                 "--compile-timeout", str(args.compile_timeout),
-                *_mode(rows, columns),
+                *_mode(rows, columns, all_dies_scaled=all_dies_scaled),
             )
             completed = subprocess.run(
                 command, cwd=Path(__file__).resolve().parents[4],
@@ -294,13 +318,15 @@ def run(args: argparse.Namespace) -> None:
                     f"{shape} fresh{fresh} failed with exit {completed.returncode}; "
                     f"see {case_root}"
                 )
-            observations.append(audit_fresh(directory, shape))
+            observations.append(audit_fresh(
+            directory, shape, all_dies_scaled=all_dies_scaled))
         compare_fresh(*observations)
         evidence = {"shape": shape, "fresh": observations}
         (case_root / "case_evidence.json").write_text(
             json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8",
         )
-        audit_cached_case(case_root, shape)
+        audit_cached_case(
+            case_root, shape, all_dies_scaled=all_dies_scaled)
         completed_shapes.append(shape)
         print(f"Dense full-sequence native mesh PASS {shape} two fresh", flush=True)
     (root / "matrix_receipt.json").write_text(json.dumps({
@@ -320,6 +346,8 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--all-dies-scaled", action="store_true",
+                        help="run the shape-scaled model on every physical Die")
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)
