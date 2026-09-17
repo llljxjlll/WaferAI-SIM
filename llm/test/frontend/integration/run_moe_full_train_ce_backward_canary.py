@@ -43,6 +43,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_router_sgd_ir0 import (
 from llm.frontend.wafer_frontend.passes.moe_full_train_expert_backward_ir0 import (
     append_moe_full_train_expert_backward_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_router_dx_ir0 import (
+    append_moe_full_train_router_dx_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -92,7 +95,9 @@ def main() -> None:
     parser.add_argument("--router-wgrad", action="store_true")
     parser.add_argument("--router-sgd", action="store_true")
     parser.add_argument("--expert-backward", action="store_true")
+    parser.add_argument("--router-dx", action="store_true")
     args = parser.parse_args()
+    expert_mode = args.expert_backward or args.router_dx
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     finalizer, resolver, npusim = (args.finalizer.resolve(),
@@ -125,18 +130,20 @@ def main() -> None:
         )
         native_context = physical
         source = append_moe_full_train_ce_backward_ir0(phase)
-        if args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward:
+        if args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode:
             source = append_moe_full_train_head_backward_ir0(source)
-        if args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward:
+        if args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode:
             source = append_moe_full_train_shared_reverse_ir0(source)
-        if args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward:
+        if args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode:
             source = append_moe_full_train_combine_backward_ir0(source)
-        if args.router_wgrad or args.router_sgd or args.expert_backward:
+        if args.router_wgrad or args.router_sgd or expert_mode:
             source = append_moe_full_train_router_wgrad_ir0(source)
         if args.router_sgd:
             source = append_moe_full_train_router_sgd_ir0(source, sequence)
-        if args.expert_backward:
+        if expert_mode:
             source = append_moe_full_train_expert_backward_ir0(source)
+        if args.router_dx:
+            source = append_moe_full_train_router_dx_ir0(source)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
@@ -168,7 +175,7 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != (61 if args.expert_backward else 63 if args.router_sgd else 60 if args.router_wgrad else
+        if len(leaves) != (63 if args.router_dx else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
                            59 if args.combine_backward else
                            58 if args.shared_reverse else
                            55 if args.head_backward else 52):
@@ -182,15 +189,15 @@ def main() -> None:
         opcodes = [record.opcode for fragment in manifest.fragments
                    for stream in fragment.core_streams for record in stream.records]
         if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
-                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (5 if args.expert_backward else 2 if args.router_wgrad or args.router_sgd else int(args.head_backward or args.shared_reverse or args.combine_backward))
-                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != (4 if args.expert_backward else int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd))
-                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward)
-                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward)
-                or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward)
-                or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad or args.router_sgd or args.expert_backward)
+                or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (5 if expert_mode else 2 if args.router_wgrad or args.router_sgd else int(args.head_backward or args.shared_reverse or args.combine_backward))
+                or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != (5 if args.router_dx else 4 if expert_mode else int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd))
+                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
+                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
+                or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
+                or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
                 or opcodes.count(RecordOpcode.SGD_UPDATE) != int(args.router_sgd)
-                or opcodes.count(RecordOpcode.SWIGLU_BACKWARD_TIMING) != int(args.expert_backward)
-                or opcodes.count(RecordOpcode.LOCAL_REDUCE) != int(args.expert_backward)):
+                or opcodes.count(RecordOpcode.SWIGLU_BACKWARD_TIMING) != int(expert_mode)
+                or opcodes.count(RecordOpcode.LOCAL_REDUCE) != int(expert_mode)):
             raise RuntimeError(f"linked program reverse opcode counts: {[(item.name, opcodes.count(item)) for item in set(opcodes)]}")
         linked = output / f"step{step}.linked.json"
         artifact = output / f"step{step}.npup"
@@ -251,7 +258,7 @@ def main() -> None:
         sidecar.write_text(canonical_json(contract))
         expert_probe_count = 0
         expert_probe_nonzero_expected_bytes = 0
-        if args.expert_backward:
+        if expert_mode:
             sidecar_payload = json.loads(sidecar.read_text())
             blobs = {item["id"]: base64.b64decode(item["bytes_base64"])
                      for item in sidecar_payload["blobs"]}
@@ -372,6 +379,7 @@ def main() -> None:
         "llm/frontend/wafer_frontend/passes/moe_full_train_router_wgrad_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_router_sgd_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_expert_backward_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_router_dx_ir0.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_workload.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_record_check.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_scratch.py",
@@ -413,7 +421,8 @@ def main() -> None:
         native_tool_sha256=tool_hashes_at_entry,
         runner_cwd=str(Path.cwd().resolve()),
         native_runtime_cwd=str(npusim.parent),
-        status=("expert_backward_physical_partial" if args.expert_backward else
+        status=("router_dx_physical_partial" if args.router_dx else
+                "expert_backward_physical_partial" if expert_mode else
                 "router_sgd_physical_partial" if args.router_sgd else
                 "router_wgrad_physical_partial" if args.router_wgrad else
                 "combine_backward_physical_partial" if args.combine_backward else
