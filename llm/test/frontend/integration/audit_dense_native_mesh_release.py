@@ -54,8 +54,10 @@ def _frozen_driver(path: Path):
 
 def audit_release(
     shard_roots: tuple[Path, ...], source_root: Path,
-    tools: dict[str, Path],
+    tools: dict[str, Path], *, profile: str = "mixed",
 ) -> dict[str, Any]:
+    if profile not in ("mixed", "all_dies_scaled"):
+        raise ValueError("unknown Dense release profile")
     source_root = source_root.resolve()
     driver_path = source_root / _DRIVER
     runner_path = source_root / _RUNNER
@@ -80,7 +82,12 @@ def audit_release(
     case_sha: dict[str, str] = {}
     for root, binding in zip(roots, bindings):
         index = binding["shard_index"]
-        if (binding.get("schema_version") != "dense-native-mesh-matrix-binding-v3"
+        expected_schema = ("dense-native-mesh-matrix-binding-v4"
+                           if profile == "all_dies_scaled" else
+                           "dense-native-mesh-matrix-binding-v3")
+        if (binding.get("schema_version") != expected_schema
+                or binding.get("profile") !=
+                ("all_dies_scaled" if profile == "all_dies_scaled" else None)
                 or binding.get("driver_sha256") != driver_sha
                 or binding.get("runner_sha256") != runner_sha
                 or binding.get("dram_config_sha256") != dram_sha
@@ -99,7 +106,11 @@ def audit_release(
         if actual_dirs != set(shapes):
             raise ValueError(f"shard {index} has missing or extra case directories")
         for shape in shapes:
-            driver.audit_cached_case(root / shape, shape)
+            if profile == "all_dies_scaled":
+                driver.audit_cached_case(root / shape, shape,
+                                         all_dies_scaled=True)
+            else:
+                driver.audit_cached_case(root / shape, shape)
             case_sha[shape] = _sha(root / shape / "case_evidence.json")
         receipts[str(index)] = _sha(receipt_path)
     if set(case_sha) != set(_SHAPES):
@@ -107,8 +118,10 @@ def audit_release(
     return {
         "schema_version": "dense-native-mesh-release-audit-v1",
         "status": "verified",
-        "profile_scope": "resident_mixed_shape_scaled_and_fixed_tp6",
-        "full_die_active_accepted": False,
+        "profile_scope": ("resident_all_dies_scaled" if profile ==
+                          "all_dies_scaled" else
+                          "resident_mixed_shape_scaled_and_fixed_tp6"),
+        "full_die_active_accepted": profile == "all_dies_scaled",
         "source_root": str(source_root),
         "driver_sha256": driver_sha,
         "runner_sha256": runner_sha,
@@ -128,17 +141,20 @@ def main() -> None:
     for name in ("finalizer", "resolver", "npusim", "simulation"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--profile", choices=("mixed", "all_dies_scaled"),
+                        default="mixed")
     args = parser.parse_args()
     result = audit_release(
         tuple(args.shard_roots), args.source_root,
         {name: getattr(args, name) for name in
          ("finalizer", "resolver", "npusim", "simulation")},
+        profile=args.profile,
     )
     if args.output.exists():
         raise ValueError("release audit output already exists")
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
                            encoding="utf-8")
-    print("Dense resident profile audit PASS 100 cases / 200 Fresh; full-Die matrix pending")
+    print(f"Dense {args.profile} native audit PASS 100 cases / 200 Fresh")
 
 
 if __name__ == "__main__":
