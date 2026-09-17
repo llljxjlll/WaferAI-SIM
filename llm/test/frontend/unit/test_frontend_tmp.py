@@ -82,6 +82,30 @@ class ManagedFrontendTmpTest(unittest.TestCase):
         self.assertTrue(job.exists())
         self.assertTrue(unmarked.exists())
         self.assertNotEqual(self.run_cli('release', str(job)).returncode, 0)
+        self.assertNotEqual(self.run_cli('resume', str(job), '--',
+                                         sys.executable, '-c', 'pass').returncode, 0)
+
+    def test_failed_job_resumes_in_place_then_cleans(self) -> None:
+        self.base[-1] = '1'
+        failed = self.run_cli(
+            'run', '--name', 'resume-case', '--', sys.executable, '-c',
+            "from pathlib import Path; import os; "
+            "Path(os.environ['TMPDIR'], 'checkpoint').write_text('ready'); "
+            "raise SystemExit(3)",
+        )
+        self.assertEqual(failed.returncode, 3, failed.stderr)
+        job = Path(json.loads(failed.stdout.splitlines()[0])['job'])
+        self.assertEqual((job / 'checkpoint').read_text(), 'ready')
+        resumed = self.run_cli(
+            'resume', str(job), '--', sys.executable, '-c',
+            "from pathlib import Path; import os; "
+            "assert Path(os.environ['TMPDIR'], 'checkpoint').read_text() == 'ready'; "
+            "print('RESUMED_IN_PLACE')",
+        )
+        self.assertEqual(resumed.returncode, 0, resumed.stderr)
+        self.assertIn('RESUMED_IN_PLACE', resumed.stdout)
+        self.assertEqual(json.loads(resumed.stdout.splitlines()[0])['job'], str(job))
+        self.assertFalse(job.exists())
 
     def test_native_job_links_dramsys_within_managed_root(self) -> None:
         config = self.parent / 'frozen-dramsys'

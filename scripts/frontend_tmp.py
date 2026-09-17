@@ -160,8 +160,9 @@ def prune(root: Path, *, apply: bool, max_bytes: int, failure_ttl: float) -> dic
                 'over_budget': size - (freed if apply else 0) > max_bytes}
 
 
-def execute(args: argparse.Namespace, root: Path) -> int:
-    if not NAME.fullmatch(args.name):
+def execute(args: argparse.Namespace, root: Path, *,
+            resume_path: Path | None = None) -> int:
+    if resume_path is None and not NAME.fullmatch(args.name):
         raise ValueError('job name must be 1..40 ASCII letters, numbers, _ or -')
     command = list(args.command)
     if command and command[0] == '--':
@@ -169,27 +170,42 @@ def execute(args: argparse.Namespace, root: Path) -> int:
     if not command:
         raise ValueError('run requires an executable after --')
     dramsys_root = None
-    if args.dramsys_root is not None:
+    if getattr(args, 'dramsys_root', None) is not None:
         dramsys_root = args.dramsys_root.resolve(strict=True)
         if not dramsys_root.is_dir():
             raise ValueError('DRAMSys root must be a directory')
-    prune(root, apply=True, max_bytes=args.max_bytes,
-          failure_ttl=args.failure_ttl)
+    if resume_path is None:
+        prune(root, apply=True, max_bytes=args.max_bytes,
+              failure_ttl=args.failure_ttl)
     with locked(root):
         if size_bytes(root) >= args.max_bytes:
             raise ValueError('managed tmp budget exhausted; release evidence or raise explicit budget')
-        path = Path(tempfile.mkdtemp(prefix='job-' + args.name + '-', dir=root))
-        info: dict[str, object] = {
-            'format': 1, 'name': path.name, 'uid': os.getuid(),
-            'kind': args.kind, 'state': 'running', 'created': time.time(),
-            'pid': os.getpid(), 'pid_start': pid_start(os.getpid()),
-            'process_group': None, 'boot_id': boot_id(),
-        }
-        save(path, info)
-        if dramsys_root is not None:
-            # Native NpuSim resolves ../DRAMSys/configs from a nested Fresh cwd.
-            # A symlink keeps the immutable configuration outside the quota.
-            (path / 'DRAMSys').symlink_to(dramsys_root, target_is_directory=True)
+        if resume_path is None:
+            path = Path(tempfile.mkdtemp(prefix='job-' + args.name + '-', dir=root))
+            info: dict[str, object] = {
+                'format': 1, 'name': path.name, 'uid': os.getuid(),
+                'kind': args.kind, 'state': 'running', 'created': time.time(),
+                'pid': os.getpid(), 'pid_start': pid_start(os.getpid()),
+                'process_group': None, 'boot_id': boot_id(),
+            }
+            save(path, info)
+            if dramsys_root is not None:
+                # Native NpuSim resolves ../DRAMSys/configs from a nested Fresh cwd.
+                # A symlink keeps immutable configuration outside the quota.
+                (path / 'DRAMSys').symlink_to(
+                    dramsys_root, target_is_directory=True)
+        else:
+            path = resume_path.absolute()
+            if path.parent.resolve() != root or path.is_symlink():
+                raise ValueError('resume only accepts a direct managed job directory')
+            prior = metadata(path)
+            if (prior is None or prior['state'] not in ('failed', 'running')
+                    or running(prior)):
+                raise ValueError('resume requires one stopped marked job')
+            info = dict(prior, state='running', resumed=time.time(),
+                        pid=os.getpid(), pid_start=pid_start(os.getpid()),
+                        process_group=None, boot_id=boot_id())
+            save(path, info)
     env = dict(os.environ, TMPDIR=str(path), WAFERAI_TEMP_DIR=str(path))
     command = [part.replace('{tmp}', str(path)) for part in command]
     print(json.dumps({'job': str(path), 'command': command}), flush=True)
@@ -224,7 +240,7 @@ def execute(args: argparse.Namespace, root: Path) -> int:
         if code == 0 and (group_alive(info) or size_bytes(root) > args.max_bytes):
             code = 2
         with locked(root):
-            info['state'] = ('held' if code == 0 and args.kind == 'evidence'
+            info['state'] = ('held' if code == 0 and info['kind'] == 'evidence'
                              else 'released' if code == 0 else 'failed')
             info['finished'] = time.time()
             info['pid'] = None
@@ -260,6 +276,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument('--dramsys-root', type=Path,
                      help='link immutable DRAMSys configs for nested native Fresh cwd')
     run.add_argument('command', nargs=argparse.REMAINDER)
+    resume = sub.add_parser('resume', help='rerun in a stopped marked job without copying its evidence')
+    resume.add_argument('job', type=Path)
+    resume.add_argument('command', nargs=argparse.REMAINDER)
     sub.add_parser('prune', help='dry-run by default; only remove managed jobs')
     sub.choices['prune'].add_argument('--apply', action='store_true')
     done = sub.add_parser('release', help='remove a reviewed evidence job')
@@ -273,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
         root = root_ready(args.root)
         if args.operation == 'run':
             return execute(args, root)
+        if args.operation == 'resume':
+            return execute(args, root, resume_path=args.job)
         if args.operation == 'release':
             result = release(root, args.job.absolute(),
                              max_bytes=args.max_bytes, failure_ttl=args.failure_ttl)
