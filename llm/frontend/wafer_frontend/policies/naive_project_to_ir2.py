@@ -8,6 +8,7 @@ import re
 
 from ..errors import SchemaError, UnsupportedFeatureError
 from ..schema.dense_dp_sync_routes import DenseDP2RoutePlan
+from ..schema.dense_adamw_state_version import dense_adamw_two_step_state_access_pairs
 from ..schema.dense_dp_sync_tasks import DenseDP2ProjectedTask, DenseDP2ProjectedTasks
 from ..schema.action import (
     canonical_compute_operand_roles,
@@ -751,6 +752,8 @@ class NaiveProjectToIR2:
             binding_index = {
                 binding.state_ref: binding for binding in manifest.bindings
             }
+            adamw_previous = {new: old for old, new in
+                              dense_adamw_two_step_state_access_pairs(ir1)}
             for access in ir1.state_accesses:
                 declaration = declaration_index[access.state_ref]
                 binding = binding_index[access.state_ref]
@@ -942,7 +945,9 @@ class NaiveProjectToIR2:
                         deps=(
                             target_ids
                             if dma_kind is SemanticTaskKind.DMA_OUT
-                            else ()
+                            else (canonical_state_task_id(
+                                adamw_previous[access.id], SemanticTaskKind.DMA_OUT),)
+                            if access.id in adamw_previous else ()
                         ),
                         dma=DmaContract(
                             state_ref=access.state_ref,

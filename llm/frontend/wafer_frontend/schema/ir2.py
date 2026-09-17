@@ -47,6 +47,7 @@ from .ir0 import (
     state_access_tensor_view,
 )
 from .ir1 import CrossGroupRoute, IR1, MemoryInitiator, PairRoute
+from .dense_adamw_state_version import dense_adamw_two_step_state_access_pairs
 from .persistent_state import (
     PersistentStateAccess,
     PersistentStateDecl,
@@ -2870,6 +2871,8 @@ class IntraDieDAG:
                     SemanticTaskKind.DMA_OUT,
                 ),
             }
+            adamw_previous = {new: old for old, new in
+                              dense_adamw_two_step_state_access_pairs(ir1)}
             for access_index, access in enumerate(expected_local_accesses):
                 declaration = declarations[access.state_ref]
                 if declaration.dtype is DType.INT32:
@@ -2914,6 +2917,16 @@ class IntraDieDAG:
                 )
 
                 dma_tasks = state_tasks_by_access.get(access.id, [])
+                expected_previous = adamw_previous.get(access.id)
+                for dma_task in dma_tasks:
+                    if dma_task.kind is SemanticTaskKind.DMA_IN:
+                        expected_version_dep = (canonical_state_task_id(
+                            expected_previous, SemanticTaskKind.DMA_OUT),) if expected_previous else ()
+                        if dma_task.deps != expected_version_dep:
+                            raise SchemaError(
+                                "AdamW LOAD1 needs exact same-StateABI STORE0 dependency",
+                                path=f"{path}.state_access_ids[{access_index}]",
+                            )
                 if tuple(task.kind for task in dma_tasks) != expected_kinds:
                     raise SchemaError(
                         "DMA_IN/DMA_OUT coverage disagrees with IR-1 access mode",

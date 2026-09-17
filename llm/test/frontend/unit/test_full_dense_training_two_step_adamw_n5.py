@@ -16,7 +16,10 @@ from llm.frontend.wafer_frontend.passes.project_to_ir2 import project_train_forw
 from llm.frontend.wafer_frontend.policies.registry import RegistryKind, production_registry
 from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.ir0 import OpKind, StateAccessMode
-from llm.frontend.wafer_frontend.schema.ir2 import BufferOwnership, SemanticTaskKind
+from llm.frontend.wafer_frontend.schema.dense_adamw_state_version import dense_adamw_two_step_state_access_pairs
+from llm.frontend.wafer_frontend.schema.ir2 import (
+    BufferOwnership, SemanticTaskKind, StateIoOrigin, canonical_state_task_id,
+)
 from llm.frontend.wafer_frontend.schema.n4 import FusionPartitionContext, InterDiePlanningContext
 from llm.frontend.wafer_frontend.schema.n5 import (
     IntraDieSchedulingContext, ProjectToIR2Context,
@@ -63,6 +66,7 @@ class FullDenseTwoStepAdamwN5Test(unittest.TestCase):
         cls.ir1 = placed.replicas[0].graph
         cls.projection = projected.replicas[0].projection
         cls.schedule = scheduled.replicas[0].schedule_set.schedules[0]
+        cls.planned = planned.replicas[0]
 
     def test_150_optimizer_state_writes_have_real_n5_dma_and_aliases(self) -> None:
         dag = self.projection.dags[0]
@@ -74,6 +78,30 @@ class FullDenseTwoStepAdamwN5Test(unittest.TestCase):
         self.assertEqual(sum(task.kind is SemanticTaskKind.DMA_OUT for task in dag.tasks), 150)
         self.assertEqual(sum(binding.ownership is BufferOwnership.ALIASED
                              for binding in self.schedule.buffer_bindings), 150)
+
+    def test_75_source_bound_store0_to_load1_tasks(self) -> None:
+        pairs = dense_adamw_two_step_state_access_pairs(self.ir1)
+        self.assertEqual(len(pairs), 75)
+        task_by_id = {task.id: task for task in self.projection.dags[0].tasks}
+        for old_access, new_access in pairs:
+            store_ref = canonical_state_task_id(old_access, SemanticTaskKind.DMA_OUT)
+            load_ref = canonical_state_task_id(new_access, SemanticTaskKind.DMA_IN)
+            self.assertEqual(task_by_id[load_ref].deps, (store_ref,))
+            self.assertIsInstance(task_by_id[load_ref].origin_ref, StateIoOrigin)
+            self.assertEqual(task_by_id[load_ref].dma.state_ref,
+                             task_by_id[store_ref].dma.state_ref)
+        access = next(item for item in self.ir1.state_accesses
+                      if item.id == pairs[0][1])
+        node0 = next(item for item in self.ir1.nodes
+                     if item.id == next(old.node_ref for old in self.ir1.state_accesses
+                                        if old.id == pairs[0][0]))
+        node1 = next(item for item in self.ir1.nodes if item.id == access.node_ref)
+        forged = replace(self.ir1, edges=tuple(
+            edge for edge in self.ir1.edges
+            if not (edge.source_node == node0.id and edge.destination_node == node1.id)
+        ))
+        with self.assertRaisesRegex(SchemaError, "source update0-to-update1 edge"):
+            dense_adamw_two_step_state_access_pairs(forged)
 
     def test_missing_step_counter_write_or_wrong_owner_fails_closed(self) -> None:
         graph = self.ir1
