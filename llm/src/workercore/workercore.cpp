@@ -2256,6 +2256,50 @@ void WorkerCoreExecutor::worker_core_execute() {
     }
 }
 
+SameDieEventRuntime::SameDieEventRuntime(
+    uint32_t total_cores, uint32_t cores_per_die)
+    : total_cores_(total_cores), cores_per_die_(cores_per_die) {
+    if (total_cores == 0 || total_cores > UINT16_MAX + 1u ||
+        cores_per_die == 0 || total_cores % cores_per_die != 0)
+        throw std::invalid_argument("same-Die EVENT topology is invalid");
+    mailboxes_.reserve(total_cores);
+    wakeups_.reserve(total_cores);
+    for (uint32_t core = 0; core < total_cores; ++core) {
+        mailboxes_.push_back(std::make_unique<EventMailbox>(65536));
+        wakeups_.push_back(std::make_unique<sc_event>());
+    }
+}
+
+void SameDieEventRuntime::Deliver(const EventControlMessage &message) {
+    if (message.source >= total_cores_ ||
+        message.destination >= total_cores_ ||
+        message.source / cores_per_die_ !=
+            message.destination / cores_per_die_)
+        throw std::invalid_argument("same-Die EVENT endpoints are invalid");
+    mailboxes_[message.destination]->Deliver(
+        message, message.destination, total_cores_);
+    wakeups_[message.destination]->notify(SC_ZERO_TIME);
+}
+
+bool SameDieEventRuntime::TryConsume(const EventKey &key, uint32_t count) {
+    if (key.source >= total_cores_ || key.destination >= total_cores_ ||
+        key.source / cores_per_die_ != key.destination / cores_per_die_)
+        throw std::invalid_argument("same-Die EVENT_WAIT endpoints are invalid");
+    return mailboxes_[key.destination]->TryConsume(key, count);
+}
+
+const sc_event &SameDieEventRuntime::Wakeup(uint16_t destination) const {
+    if (destination >= total_cores_)
+        throw std::out_of_range("same-Die EVENT destination is invalid");
+    return *wakeups_[destination];
+}
+
+size_t SameDieEventRuntime::Residual() const noexcept {
+    size_t residual = 0;
+    for (const auto &mailbox : mailboxes_) residual += mailbox->Residual();
+    return residual;
+}
+
 void WorkerCoreExecutor::execute_group_sync(Group_sync_prim *prim) {
     if (prim == nullptr || group_sync_runtime == nullptr)
         throw std::runtime_error(
@@ -2299,8 +2343,19 @@ void WorkerCoreExecutor::execute_event_control(Event_control_prim *prim) {
             prim->count != 1)
             throw std::invalid_argument(
                 "EVENT_SET must originate at the executing core with count=1");
-        send_event_control({prim->source_core, prim->destination_core,
-                            prim->tag});
+        if (same_die_event_runtime &&
+            DieOfGlobal(prim->source_core) ==
+                DieOfGlobal(prim->destination_core)) {
+            // The local event fabric has one cycle of delivery latency and
+            // independent bounded credits. Legacy ACK backpressure cannot
+            // prevent a state-version EVENT_WAIT from observing this SET.
+            wait(CYCLE, SC_NS);
+            same_die_event_runtime->Deliver(
+                {prim->source_core, prim->destination_core, prim->tag});
+        } else {
+            send_event_control({prim->source_core, prim->destination_core,
+                                prim->tag});
+        }
         return;
     }
     if (prim->op != EventControlOp::WAIT ||
@@ -2310,10 +2365,19 @@ void WorkerCoreExecutor::execute_event_control(Event_control_prim *prim) {
             "EVENT_WAIT must target the executing core with nonzero count");
 
     const EventKey key{prim->source_core, prim->destination_core, prim->tag};
+    const bool local = same_die_event_runtime &&
+        DieOfGlobal(prim->source_core) ==
+            DieOfGlobal(prim->destination_core);
     while (true) {
         drain_event_control_queue();
-        if (event_mailbox.TryConsume(key, prim->count)) return;
-        wait(ev_recv_msg_type_[MSG_TYPE::EVENT]);
+        if (local) {
+            if (same_die_event_runtime->TryConsume(key, prim->count)) return;
+            wait(same_die_event_runtime->Wakeup(prim->destination_core) |
+                 ev_recv_msg_type_[MSG_TYPE::EVENT]);
+        } else {
+            if (event_mailbox.TryConsume(key, prim->count)) return;
+            wait(ev_recv_msg_type_[MSG_TYPE::EVENT]);
+        }
     }
 }
 

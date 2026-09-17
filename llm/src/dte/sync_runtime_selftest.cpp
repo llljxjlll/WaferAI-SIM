@@ -9,6 +9,7 @@
 #include "prims/sync_prims.h"
 #include "utils/msg_utils.h"
 #include "utils/router_utils.h"
+#include "workercore/workercore.h"
 
 #include "systemc.h"
 
@@ -104,6 +105,35 @@ struct CollectiveNamespaceProbe : sc_module {
         } catch (const std::exception &exception) {
             error = exception.what();
         }
+    }
+};
+
+struct SameDieEventProbe : sc_module {
+    SameDieEventRuntime runtime{8, 4};
+    bool done = false;
+    sc_time completed = SC_ZERO_TIME;
+    std::string error;
+
+    SC_HAS_PROCESS(SameDieEventProbe);
+    explicit SameDieEventProbe(sc_module_name name) : sc_module(name) {
+        SC_THREAD(Waiter);
+        SC_THREAD(Sender);
+    }
+
+    void Waiter() {
+        try {
+            const EventKey key{1, 2, 0xf0000001u};
+            while (!runtime.TryConsume(key, 1)) wait(runtime.Wakeup(2));
+            completed = sc_time_stamp();
+            done = true;
+        } catch (const std::exception &exception) {
+            error = exception.what();
+        }
+    }
+
+    void Sender() {
+        wait(7, SC_NS);
+        runtime.Deliver({1, 2, 0xf0000001u});
     }
 };
 
@@ -437,6 +467,7 @@ int RunSyncRuntimeSelfTest() {
     CollectiveNamespaceProbe collective_0("group_sync_namespace_coll_0", 0);
     CollectiveNamespaceProbe collective_1("group_sync_namespace_coll_1", 1);
     EventWaitFirstProbe event_wait_first("event_wait_first");
+    SameDieEventProbe same_die_event("same_die_event");
 
     const size_t tree_entries_before = CollectiveTreeEntryCount();
     sc_start();
@@ -460,6 +491,16 @@ int RunSyncRuntimeSelfTest() {
     checks.Check(collective_0.done && collective_1.done &&
                      collective_0.error.empty() && collective_1.error.empty(),
                  "collective and GROUP_SYNC namespaces do not collide");
+    checks.Check(same_die_event.done && same_die_event.error.empty() &&
+                     same_die_event.completed == sc_time(7, SC_NS) &&
+                     same_die_event.runtime.Residual() == 0,
+                 "same-Die EVENT bypass wakes wait-first core and drains");
+    checks.Reject("same-Die EVENT wrong Die", [&] {
+        same_die_event.runtime.Deliver({1, 5, 1});
+    });
+    checks.Reject("same-Die EVENT_WAIT wrong Die", [&] {
+        (void)same_die_event.runtime.TryConsume({1, 5, 1}, 1);
+    });
     checks.Check(event_wait_first.done && event_wait_first.error.empty() &&
                      event_wait_first.waits == 2 &&
                      event_wait_first.completed == sc_time(11, SC_NS) &&

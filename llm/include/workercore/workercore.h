@@ -37,6 +37,7 @@
 #include <optional>
 #include <queue>
 #include <set>
+#include <vector>
 
 struct DteFlowPayloadRound {
     uint64_t payload_bits = 0;
@@ -66,6 +67,23 @@ struct CollectiveEndpointResidualSnapshot {
 };
 
 class WorkerCoreExecutor;
+// A one-cycle, bounded local control fabric for events between cores on the
+// same Die. Remote events keep using the routed control channel.
+class SameDieEventRuntime final {
+public:
+    SameDieEventRuntime(uint32_t total_cores, uint32_t cores_per_die);
+    void Deliver(const EventControlMessage &message);
+    bool TryConsume(const EventKey &key, uint32_t count);
+    const sc_event &Wakeup(uint16_t destination) const;
+    size_t Residual() const noexcept;
+
+private:
+    uint32_t total_cores_;
+    uint32_t cores_per_die_;
+    std::vector<std::unique_ptr<EventMailbox>> mailboxes_;
+    std::vector<std::unique_ptr<sc_event>> wakeups_;
+};
+
 class Group_sync_prim;
 class Event_control_prim;
 class Dte_send_endpoint_prim;
@@ -219,6 +237,7 @@ public:
     std::map<uint16_t, EndpointCoreVectorSession> core_vector_sessions;
 
     std::shared_ptr<GroupSyncRuntime> group_sync_runtime;
+    std::shared_ptr<SameDieEventRuntime> same_die_event_runtime;
     EventControlQueue event_control_queue;
     EventMailbox event_mailbox;
     sc_event ev_event_queue_space;
@@ -459,6 +478,11 @@ public:
             std::make_shared<GroupSyncRuntime>(std::move(registry));
     }
 
+    void ConfigureSameDieEvents(
+        std::shared_ptr<SameDieEventRuntime> runtime) {
+        same_die_event_runtime = std::move(runtime);
+    }
+
     void ConfigureCollectiveProgram(
         std::shared_ptr<const IsaV1CollectiveProgramImage> image,
         std::shared_ptr<CollectiveWaveAdmissionCoordinatorV1> coordinator,
@@ -472,7 +496,9 @@ public:
     size_t CollectiveProgramResidual() const noexcept;
 
     size_t EventResidual() const noexcept {
-        return event_control_queue.Residual() + event_mailbox.Residual();
+        return event_control_queue.Residual() + event_mailbox.Residual() +
+            (cid == 0 && same_die_event_runtime
+                 ? same_die_event_runtime->Residual() : 0);
     }
 
     size_t P2pEndpointResidual() const {

@@ -137,10 +137,14 @@ void Monitor::init() {
     //     sc_gen_unique_name("global-mem-interface"), this->event_engine,
     //     config_name);
 
+    auto same_die_events = std::make_shared<SameDieEventRuntime>(
+        static_cast<uint32_t>(TOTAL_CORES),
+        static_cast<uint32_t>(CORES_PER_DIE));
     for (int i = 0; i < TOTAL_CORES; i++) {
         workerCores[i] =
             new WorkerCore(sc_gen_unique_name("workercore"), i,
                            this->event_engine, GetCoreHWConfigForGlobal(i)->dram_config);
+        workerCores[i]->executor->ConfigureSameDieEvents(same_die_events);
     }
 
     if (auto registry =
