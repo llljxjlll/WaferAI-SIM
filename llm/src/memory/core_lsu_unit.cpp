@@ -3,6 +3,7 @@
 #include "memory/full_dense_adamw_pager.h"
 #include "memory/dense_inference_mid_program_pager.h"
 #include "memory/moe_inference_mid_program_pager.h"
+#include "memory/moe_full_train_mid_program_pager.h"
 
 #include "trace/Event_engine.h"
 
@@ -186,11 +187,15 @@ void CoreLsuUnit::Load(uint64_t hbm_addr, uint64_t sram_addr,
         inference_pager_->BeforeLoad(core_id_, hbm_addr, size_bytes);
     if (moe_inference_pager_)
         moe_inference_pager_->BeforeLoad(core_id_, hbm_addr, size_bytes);
+    if (moe_full_train_pager_)
+        moe_full_train_pager_->BeforeLoad(core_id_, hbm_addr, size_bytes);
     Wait(IssueLoad(hbm_addr, sram_addr, size_bytes));
     if (inference_pager_)
         inference_pager_->AfterLoad(core_id_, hbm_addr, size_bytes);
     if (moe_inference_pager_)
         moe_inference_pager_->AfterLoad(core_id_, hbm_addr, size_bytes);
+    if (moe_full_train_pager_)
+        moe_full_train_pager_->AfterLoad(core_id_, hbm_addr, size_bytes);
 }
 
 void CoreLsuUnit::Store(uint64_t sram_addr, uint64_t hbm_addr,
@@ -206,6 +211,8 @@ void CoreLsuUnit::Store(uint64_t sram_addr, uint64_t hbm_addr,
         inference_pager_->AfterStore(core_id_, hbm_addr, size_bytes);
     if (moe_inference_pager_)
         moe_inference_pager_->AfterStore(core_id_, hbm_addr, size_bytes);
+    if (moe_full_train_pager_)
+        moe_full_train_pager_->AfterStore(core_id_, hbm_addr, size_bytes);
 }
 
 void CoreLsuUnit::Complete(const std::shared_ptr<TokenRecord> &record,

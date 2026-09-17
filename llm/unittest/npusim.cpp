@@ -23,6 +23,7 @@
 #include "memory/full_dense_adamw_pager.h"
 #include "memory/dense_inference_mid_program_pager.h"
 #include "memory/moe_inference_mid_program_pager.h"
+#include "memory/moe_full_train_mid_program_pager.h"
 #include "memory/sram/sram_selftest.h"
 #include "dte/dte_async.h"
 #include "dte/dte_control_core.h"
@@ -167,6 +168,9 @@ Define_string_opt("--dense-adamw-paged-runtime",
 Define_string_opt("--dense-inference-paged-runtime",
                   g_flag_dense_inference_paged_runtime, std::string{},
                   "source-signed blocking parameter/KV DMA for Prefill+2Decode");
+Define_string_opt("--moe-train-paged-runtime",
+                  g_flag_moe_train_paged_runtime, std::string{},
+                  "source-signed 19-parameter two-step MoE SGD blocking external DMA");
 Define_string_opt("--moe-inference-paged-runtime",
                   g_flag_moe_inference_paged_runtime, std::string{},
                   "source-signed blocking full MoE EP2 expert/weight/KV DMA");
@@ -1524,10 +1528,13 @@ int sc_main(int argc, char *argv[]) {
         !g_flag_dense_inference_paged_runtime.empty();
     const bool moe_inference_paged =
         !g_flag_moe_inference_paged_runtime.empty();
+    const bool moe_train_paged =
+        !g_flag_moe_train_paged_runtime.empty();
     if (static_cast<int>(adamw_paged) +
             static_cast<int>(full_adamw_paged) +
             static_cast<int>(inference_paged) +
-            static_cast<int>(moe_inference_paged) > 1) {
+            static_cast<int>(moe_inference_paged) +
+            static_cast<int>(moe_train_paged) > 1) {
         LOG_ERROR(CONFIG) << "only one source-signed mid-program pager may be bound";
         return 2;
     }
@@ -1535,7 +1542,7 @@ int sc_main(int argc, char *argv[]) {
                               !g_flag_linked_manifest_sequence.empty() ||
                               !g_flag_program_io_sequence.empty() ||
                               adamw_paged || inference_paged ||
-                              moe_inference_paged ||
+                              moe_inference_paged || moe_train_paged ||
                               g_flag_moe_forward_sequence ||
                               g_flag_moe_router_sgd_partial_sequence ||
                               g_flag_moe_layer1_sgd_partial_sequence ||
@@ -1568,8 +1575,13 @@ int sc_main(int argc, char *argv[]) {
         LOG_ERROR(CONFIG) << "MoE forward/router/layer1/all SGD partial sequence modes are exclusive";
         return 2;
     }
+    if (moe_train_paged && !moe_all_sgd_partial_sequence) {
+        LOG_ERROR(CONFIG) << "MoE training pager requires all-parameter SGD sequence";
+        return 2;
+    }
     if ((moe_forward_sequence || moe_partial_sgd_sequence) &&
         (adamw_paged || inference_paged || moe_inference_paged ||
+         (moe_train_paged && !moe_all_sgd_partial_sequence) ||
          !g_flag_external_dma_binding.empty())) {
         LOG_ERROR(CONFIG) << "MoE forward-only sequence forbids pager and external DMA";
         return 2;
@@ -1581,8 +1593,8 @@ int sc_main(int argc, char *argv[]) {
             << "--external-dma-binding requires --program-sequence";
         return 2;
     }
-    if ((adamw_paged || inference_paged || moe_inference_paged) &&
-        external_dma_requested) {
+    if ((adamw_paged || inference_paged || moe_inference_paged ||
+         moe_train_paged) && external_dma_requested) {
         LOG_ERROR(CONFIG) << "on-demand paged DMA cannot share an all-state "
                              "startup/final-writeback phase";
         return 2;
@@ -2087,7 +2099,7 @@ int sc_main(int argc, char *argv[]) {
                                 sequence_program_bytes.back()));
                     }
                 }
-                if (moe_partial_sgd_sequence) {
+                if (moe_partial_sgd_sequence && !moe_train_paged) {
                     const auto &ranges = sequence_training_state_ranges.front();
                     const auto &initializations =
                         sequence_program_io_resolved.front().initializations;
@@ -2125,8 +2137,9 @@ int sc_main(int argc, char *argv[]) {
                     throw std::runtime_error(
                         "paged inference DMA requires actual three-segment KV sequence");
                 if (moe_forward_sequence || moe_partial_sgd_sequence) {
-                    ValidateDenseTrainingStateContinuity(
-                        sequence_training_state_ranges);
+                    if (!moe_train_paged)
+                        ValidateDenseTrainingStateContinuity(
+                            sequence_training_state_ranges);
                     if (sequence_manifest_texts[0] == sequence_manifest_texts[1] ||
                         sequence_program_bytes[0] == sequence_program_bytes[1] ||
                         sequence_moe_forward_witnesses[0].route_state_refs ==
@@ -2341,6 +2354,8 @@ int sc_main(int argc, char *argv[]) {
     bool inference_rect_paged = false;
     std::unique_ptr<external_memory::MoeInferenceMidProgramPager>
         moe_inference_mid_program_pager;
+    std::unique_ptr<external_memory::MoeFullTrainMidProgramPager>
+        moe_full_train_mid_program_pager;
     std::unique_ptr<ExternalDmaStartupCoordinator>
         external_dma_coordinator;
     if (external_dma_program.has_value()) {
@@ -2573,6 +2588,38 @@ int sc_main(int argc, char *argv[]) {
         }
     }
 
+    if (moe_train_paged) {
+        try {
+            if (DIE_COUNT != 1 || monitor->hbmRuntime == nullptr ||
+                monitor->workerCores[0] == nullptr ||
+                !monitor->workerCores[0]->lsu_memory)
+                throw std::runtime_error(
+                    "paged full MoE training requires one physical Die/core0 LSU");
+            auto *physical = monitor->hbmRuntime->Find(0, 0);
+            if (!physical || !physical->backend)
+                throw std::runtime_error("paged MoE training requires die0 HBM backend");
+            std::map<external_memory::HbmEndpoint, HBMBackend *> backends{
+                {{0, 0}, physical->backend.get()}};
+            moe_full_train_mid_program_pager = std::make_unique<
+                external_memory::MoeFullTrainMidProgramPager>(
+                    "moe_full_train_mid_program_pager",
+                    std::filesystem::path(g_flag_moe_train_paged_runtime),
+                    sequence_manifest_texts, std::move(backends),
+                    sc_time(CYCLE, SC_NS));
+            monitor->workerCores[0]->lsu_memory->SetMoeFullTrainPager(
+                moe_full_train_mid_program_pager.get());
+            std::cout << "[MOE_TRAIN_PAGED_BINDING] source="
+                      << moe_full_train_mid_program_pager->SourceRef()
+                      << " state_abi=19 events=130 hbm_capacity=2560"
+                      << " external_capacity=2048 slot_bytes=128 pass=1"
+                      << std::endl;
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG) << "MoE full training paged DMA binding failed: "
+                              << error.what();
+            return 2;
+        }
+    }
+
     std::optional<p5_probe::Applied> p5_memory_probe_applied;
     if (p5_memory_probe_spec.has_value()) {
         try {
@@ -2722,7 +2769,9 @@ int sc_main(int argc, char *argv[]) {
 
     std::optional<std::string> dense_training_state_digest;
     if (sequence_mode && moe_partial_sgd_sequence) {
-        dense_training_state_digest = moe_all_sgd_partial_sequence
+        dense_training_state_digest = moe_train_paged
+            ? moe_full_train_mid_program_pager->AuthorityDigest()
+            : moe_all_sgd_partial_sequence
             ? PrintMoeAllSgdPartialStateBoundary(
                   *monitor->hbmRuntime, 0,
                   sequence_training_state_ranges.front(), std::nullopt)
@@ -2808,6 +2857,8 @@ int sc_main(int argc, char *argv[]) {
             if (sequence_helper->completed_segments() != expected + 1)
                 throw std::runtime_error(
                     "Dense sequence paused outside an exact segment boundary");
+            if (moe_train_paged)
+                moe_full_train_mid_program_pager->CompleteStep(expected);
             if (adamw_paged) {
                 adamw_mid_program_pager->CompleteStep(expected);
                 std::cout << "[DENSE_ADAMW_EXTERNAL_PROGRAM_IO] index="
@@ -2881,7 +2932,9 @@ int sc_main(int argc, char *argv[]) {
                           << std::endl;
             } else if (moe_partial_sgd_sequence) {
                 const auto before = *dense_training_state_digest;
-                dense_training_state_digest = moe_all_sgd_partial_sequence
+                dense_training_state_digest = moe_train_paged
+                    ? moe_full_train_mid_program_pager->AuthorityDigest()
+                    : moe_all_sgd_partial_sequence
                     ? PrintMoeAllSgdPartialStateBoundary(
                           *monitor->hbmRuntime, expected + 1,
                           sequence_training_state_ranges[expected],
@@ -2997,6 +3050,14 @@ int sc_main(int argc, char *argv[]) {
                         sequence_program_io_resolved[expected + 1],
                         *sequence_program_io_bindings, true);
                 if (moe_partial_sgd_sequence) {
+                    if (moe_train_paged) {
+                        if (moe_full_train_mid_program_pager->AuthorityDigest() !=
+                            *dense_training_state_digest)
+                            throw std::runtime_error("MoE external authority version changed before next step");
+                        std::cout << "[MOE_TRAIN_PAGED_INPUT] index=" << expected + 1
+                                  << " prior_writeback_completed=1 authority=external digest="
+                                  << *dense_training_state_digest << " pass=1" << std::endl;
+                    } else {
                     const DenseSequenceBoundary next_input =
                         ReadDenseStateBoundary(
                             *monitor->hbmRuntime,
@@ -3012,6 +3073,7 @@ int sc_main(int argc, char *argv[]) {
                               << expected + 1 << " prior_store_completed=1"
                               << " same_hbm_state=1 digest="
                               << next_input.digest << " pass=1" << std::endl;
+                    }
                 }
             }
         }
@@ -3050,6 +3112,28 @@ int sc_main(int argc, char *argv[]) {
                 << " hbm_read_bytes=" << execution->stats.hbm_read_bytes
                 << " hbm_write_bytes=" << execution->stats.hbm_write_bytes
                 << " pending=0" << std::endl;
+        }
+        if (moe_train_paged) {
+            const auto &stats = moe_full_train_mid_program_pager->Stats();
+            if (moe_full_train_mid_program_pager->CompletedEvents() != 130 ||
+                moe_full_train_mid_program_pager->RouteLoads() != 4 ||
+                moe_full_train_mid_program_pager->Pending() != 0 ||
+                stats.submitted_requests != 130 ||
+                stats.completed_requests != 130 ||
+                stats.failed_requests != 0 ||
+                stats.external_read_bytes != 4864 ||
+                stats.hbm_write_bytes != 4864 ||
+                stats.external_write_bytes != 1904 ||
+                stats.hbm_read_bytes != 1904)
+                throw std::runtime_error("paged MoE SGD physical DMA drain differs from 19-state oracle");
+            std::cout << "[MOE_TRAIN_PAGED_DMA_DRAIN] events=130 submitted="
+                      << stats.submitted_requests << " completed="
+                      << stats.completed_requests << " external_read_bytes="
+                      << stats.external_read_bytes << " external_write_bytes="
+                      << stats.external_write_bytes << " hbm_read_bytes="
+                      << stats.hbm_read_bytes << " hbm_write_bytes="
+                      << stats.hbm_write_bytes
+                      << " pending=0 pass=1" << std::endl;
         }
         if (adamw_paged) {
             const auto &stats = adamw_mid_program_pager->Stats();
