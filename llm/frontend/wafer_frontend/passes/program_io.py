@@ -27,6 +27,7 @@ from ..schema.global_action import ActionBufferUse, GlobalAction, LogicalCoreRef
 from ..schema.flexible_dense_backward import FlexibleDenseBackwardLinkedProgram
 from ..schema.dense_adamw_linked import DenseAdamwLinkedProgram
 from ..schema.ir0 import (
+    AdamwUpdateWorkload,
     CrossEntropyBackwardWorkload,
     CrossEntropyForwardWorkload,
     OpKind,
@@ -1520,11 +1521,18 @@ def _terminal_value_ids(source: LinkedProgramSource) -> set[str]:
         for _replica_index, context in _lowering_contexts(source):
             updates = tuple(node for node in context.ir1.nodes
                             if node.kind is OpKind.OPTIMIZER_UPDATE)
-            local_persisted = {node.outputs[0] for node in updates
-                               if len(node.outputs) == 1}
-            if len(local_persisted) != len(updates):
+            expected_outputs = sum(
+                5 if type(getattr(node, "workload", None)) is AdamwUpdateWorkload else 1
+                for node in updates
+            )
+            local_persisted = {
+                output for node in updates for output in node.outputs
+                if len(node.outputs) == (
+                    5 if type(getattr(node, "workload", None)) is AdamwUpdateWorkload else 1)
+            }
+            if len(local_persisted) != expected_outputs:
                 raise SchemaError(
-                    "each SGD needs an independent persisted output within its DP replica",
+                    "each SGD needs an independent persisted output within its DP replica; AdamW needs five",
                     path="source.source.lowering_context.ir1.nodes",
                 )
             persisted.update(local_persisted)
