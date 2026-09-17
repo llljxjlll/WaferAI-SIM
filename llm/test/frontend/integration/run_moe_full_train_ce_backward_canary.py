@@ -12,6 +12,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import struct
+import subprocess
+import sys
 
 from llm.frontend.wafer_frontend.lowering.context import LoweringContext
 from llm.frontend.wafer_frontend.lowering.linker import NaiveManifestLinker
@@ -95,6 +97,25 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=False)
     finalizer, resolver, npusim = (args.finalizer.resolve(),
                                    args.resolver.resolve(), args.npusim.resolve())
+    repo_root = Path(__file__).resolve().parents[4]
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
+    source_tree_clean_at_entry = not subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=repo_root, text=True).strip()
+    def imported_python_hashes() -> dict[str, str]:
+        result = {}
+        for module in tuple(sys.modules.values()):
+            source_path = getattr(module, "__file__", None)
+            if not source_path or not source_path.endswith(".py"):
+                continue
+            path = Path(source_path).resolve()
+            if path.is_relative_to(repo_root) and path.is_file():
+                result[str(path.relative_to(repo_root))] = _sha(path)
+        return dict(sorted(result.items()))
+    imported_at_entry = imported_python_hashes()
+    tool_hashes_at_entry = {"finalizer": _sha(finalizer),
+                            "resolver": _sha(resolver), "npusim": _sha(npusim)}
     Fixture.setUpClass()
     receipts = []
     native_context = None
@@ -342,7 +363,7 @@ def main() -> None:
                 or "[DRAIN] d2d_link_residual=0" not in content):
             raise RuntimeError("MoE router SGD partial native sequence audit failed")
         sequence_log_sha256 = _sha(sequence_log)
-    repo = Path(__file__).resolve().parents[4]
+    repo = repo_root
     source_files = (
         "llm/frontend/wafer_frontend/passes/moe_full_train_ce_backward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_head_backward_ir0.py",
@@ -359,6 +380,7 @@ def main() -> None:
         "llm/frontend/wafer_frontend/schema/moe_combine_backward_workload.py",
         "llm/frontend/wafer_frontend/schema/ir0.py",
         "llm/frontend/wafer_frontend/schema/ir1.py",
+        "llm/frontend/wafer_frontend/schema/ir2.py",
         "llm/frontend/wafer_frontend/schema/action.py",
         "llm/frontend/wafer_frontend/schema/artifact_manifest.py",
         "llm/frontend/wafer_frontend/lowering/moe_full_train_combine_backward.py",
@@ -374,8 +396,23 @@ def main() -> None:
         "llm/unittest/npusim.cpp",
     )
     source_sha256 = {name: _sha(repo / name) for name in source_files}
+    imported_at_exit = imported_python_hashes()
+    if any(imported_at_exit.get(name) != digest
+           for name, digest in imported_at_entry.items()):
+        raise RuntimeError("imported Python source drifted during native run")
+    tool_hashes_at_exit = {"finalizer": _sha(finalizer),
+                           "resolver": _sha(resolver), "npusim": _sha(npusim)}
+    if tool_hashes_at_exit != tool_hashes_at_entry:
+        raise RuntimeError("native tool bytes drifted during run")
     (output / "receipt.json").write_text(json.dumps(dict(
         source_file_sha256=source_sha256,
+        source_commit=source_commit,
+        source_tree_clean_at_entry=source_tree_clean_at_entry,
+        imported_python_sha256_at_entry=imported_at_entry,
+        imported_python_sha256_at_exit=imported_at_exit,
+        native_tool_sha256=tool_hashes_at_entry,
+        runner_cwd=str(Path.cwd().resolve()),
+        native_runtime_cwd=str(npusim.parent),
         status=("expert_backward_physical_partial" if args.expert_backward else
                 "router_sgd_physical_partial" if args.router_sgd else
                 "router_wgrad_physical_partial" if args.router_wgrad else
