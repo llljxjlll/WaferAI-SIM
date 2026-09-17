@@ -968,15 +968,27 @@ class NaiveManifestLinker:
                             abi_by_schedule_binding,
                             expert_scratch=(
                                 tuple(abi for abi in fragment.buffer_abi
-                                      if abi.value_id in (
-                                          f"{action.source.task_id}:gate_up_concat",
-                                          f"{action.source.task_id}:swiglu_activated"))
-                                if fragment.producer_pass == "moe_full_train_expert_lowering"
-                                and action.op_kind is OpKind.MOE_EXPERT_FORWARD else ()),
+                                      if abi.value_id in tuple(
+                                          f"{action.source.task_id}:{role}" for role in
+                                          (("gate_up_concat", "swiglu_activated")
+                                           if action.op_kind is OpKind.MOE_EXPERT_FORWARD else
+                                           ("backward_gate_up_concat",
+                                            "backward_swiglu_activated",
+                                            "backward_activated_gradient",
+                                            "backward_gate_up_gradient",
+                                            "backward_dx_parts"))))
+                                if fragment.producer_pass in (
+                                    "moe_full_train_expert_lowering",
+                                    "moe_full_train_expert_backward_lowering")
+                                and action.op_kind in (
+                                    OpKind.MOE_EXPERT_FORWARD,
+                                    OpKind.MOE_EXPERT_BACKWARD) else ()),
                         )
                         tensor_slices = tuple(abi.tensor_slice for abi in abis)
-                    elif (fragment.producer_pass == "moe_full_train_expert_lowering"
-                          and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+                    elif ((fragment.producer_pass == "moe_full_train_expert_lowering"
+                           and action.op_kind is OpKind.MOE_EXPERT_FORWARD)
+                          or (fragment.producer_pass == "moe_full_train_expert_backward_lowering"
+                              and action.op_kind is OpKind.MOE_EXPERT_BACKWARD)):
                         symbol = declared_symbols[relocation.symbol_ref]
                         matches = tuple(abi for abi in fragment.buffer_abi
                                         if (abi.storage_id if symbol.kind is ProgramSymbolKind.SRAM_LABEL

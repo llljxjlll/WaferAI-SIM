@@ -266,16 +266,18 @@ def add_fixed_sram_lifecycle(
                         "lifecycle storage must resolve to one canonical root",
                         path="fragment.buffer_abi",
                     )
-            if (fragment.producer_pass == "moe_full_train_expert_lowering"
-                    and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+            if ((fragment.producer_pass == "moe_full_train_expert_lowering"
+                 and action.op_kind is OpKind.MOE_EXPERT_FORWARD)
+                or (fragment.producer_pass == "moe_full_train_expert_backward_lowering"
+                    and action.op_kind is OpKind.MOE_EXPERT_BACKWARD)):
                 schedule = next((item for item in context.schedule_set.schedules
                                  if item.id == action.source.schedule_id), None)
                 scratch = (tuple(item.binding for item in
                                  schedule.moe_expert_scratch_bindings
                                  if item.task_id == action.source.task_id)
                            if schedule is not None else ())
-                if len(scratch) != 2:
-                    raise SchemaError("expert lifecycle needs two signed scratch roots",
+                if len(scratch) != (5 if action.op_kind is OpKind.MOE_EXPERT_BACKWARD else 2):
+                    raise SchemaError("expert lifecycle needs exact signed scratch roots",
                                       path="fragment.buffer_abi")
                 for binding in scratch:
                     abi = abi_by_binding.get((action.source.schedule_id, binding.id))

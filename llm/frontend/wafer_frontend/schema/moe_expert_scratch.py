@@ -11,6 +11,7 @@ from .ir2 import (
     MoeExpertScratchBinding, MoeExpertScratchRole, TaskBufferUse, TaskPlacement,
     TensorSlice,
 )
+from .moe_expert_backward_workload import MoeExpertBackwardWorkload
 from .moe_full_training_block_workload import (
     MoeForwardBlockKind, MoeFullTrainingBlockWorkload,
 )
@@ -32,7 +33,7 @@ def derive_moe_expert_scratch_bindings(
     task_buffer_uses: tuple[TaskBufferUse, ...],
     core_orders: tuple[CoreOrder, ...],
 ) -> tuple[MoeExpertScratchBinding, ...]:
-    """Derive two private roots per physical expert, after all public roots."""
+    """Derive exact private roots per physical expert after all public roots."""
     bindings = {binding.id: binding for binding in buffer_bindings}
     placement = {item.task_id: item.core_id for item in placements}
     positions = {task_id: index for order in core_orders
@@ -42,24 +43,32 @@ def derive_moe_expert_scratch_bindings(
         raise SchemaError("expert scratch needs a real physical Die", path="ir1.fabric")
     result: list[MoeExpertScratchBinding] = []
     for task in dag.tasks:
-        if task.op_kind is not OpKind.MOE_EXPERT_FORWARD:
+        if task.op_kind not in (OpKind.MOE_EXPERT_FORWARD,
+                                OpKind.MOE_EXPERT_BACKWARD):
             continue
+        backward = task.op_kind is OpKind.MOE_EXPERT_BACKWARD
         if (task.compute is None
-                or type(task.compute.workload) is not MoeFullTrainingBlockWorkload
-                or task.compute.workload.kind is not MoeForwardBlockKind.EXPERT):
+                or (backward and type(task.compute.workload)
+                    is not MoeExpertBackwardWorkload)
+                or (not backward and
+                    (type(task.compute.workload) is not MoeFullTrainingBlockWorkload
+                     or task.compute.workload.kind is not MoeForwardBlockKind.EXPERT))):
             raise SchemaError("MoE expert scratch requires exact COMP workload",
                               path=f"dag.tasks.{task.id}")
         core_id = placement.get(task.id)
         uses = tuple(use for use in task_buffer_uses if use.task_id == task.id)
-        if core_id is None or len(uses) != 5 or task.id not in positions:
-            raise SchemaError("expert scratch needs five scheduled public operands",
+        if (core_id is None or len(uses) != (9 if backward else 5)
+                or task.id not in positions):
+            raise SchemaError("expert scratch needs all scheduled public operands",
                               path=f"dag.tasks.{task.id}")
         public = tuple(bindings[use.binding_id] for use in uses)
         if (len({binding.core_id for binding in public}) != 1
                 or public[0].core_id != core_id
                 or len({binding.region_ref for binding in public}) != 1
-                or public[0].dtype is not DType.FP16):
-            raise SchemaError("expert operands need one FP16 physical core/region",
+                or public[0].dtype is not DType.FP16
+                or (backward and tuple(binding.dtype for binding in public) !=
+                    (DType.FP16,) * 6 + (DType.FP32,) * 3)):
+            raise SchemaError("expert operands need exact FP16/FP32 physical core/region",
                               path=f"dag.tasks.{task.id}")
         core = next((item for item in die.cores
                      if item.runtime_core_id == core_id), None)
@@ -78,22 +87,44 @@ def derive_moe_expert_scratch_bindings(
                    and binding.region_ref == region.id)
         align = profile.allocation_alignment_bytes
         concat = (high + align - 1) // align * align
-        m = task.compute.workload.owned_token_count
+        m = task.compute.workload.token_count if backward else task.compute.workload.owned_token_count
         i = task.compute.workload.intermediate_size
+        h = task.compute.workload.hidden_size
         projection_bytes = 2 * m * i
-        activated = (concat + 2 * projection_bytes + align - 1) // align * align
-        if (activated + projection_bytes > region.size_bytes
-                or region.base_bytes + activated + projection_bytes
-                   > profile.capacity_bytes
-                or region.base_bytes + activated + projection_bytes > (1 << 16)):
-            raise SchemaError("two expert scratch roots exceed physical SRAM",
+        if backward:
+            dx_bytes = 2 * m * h
+            dx_stride = (dx_bytes + 63) // 64 * 64
+            dx_storage = dx_stride + dx_bytes
+            specs_raw = (
+                (MoeExpertScratchRole.BACKWARD_GATE_UP_CONCAT,
+                 (m, 2*i), 2*projection_bytes),
+                (MoeExpertScratchRole.BACKWARD_SWIGLU_ACTIVATED,
+                 (m, i), projection_bytes),
+                (MoeExpertScratchRole.BACKWARD_ACTIVATED_GRADIENT,
+                 (m, i), projection_bytes),
+                (MoeExpertScratchRole.BACKWARD_GATE_UP_GRADIENT,
+                 (m, 2*i), 2*projection_bytes),
+                (MoeExpertScratchRole.BACKWARD_DX_PARTS,
+                 (dx_storage // 2,), dx_storage),
+            )
+        else:
+            specs_raw = (
+                (MoeExpertScratchRole.GATE_UP_CONCAT,
+                 (m, 2*i), 2*projection_bytes),
+                (MoeExpertScratchRole.SWIGLU_ACTIVATED,
+                 (m, i), projection_bytes),
+            )
+        specs = []
+        cursor = concat
+        for role, shape, size in specs_raw:
+            cursor = (cursor + align - 1) // align * align
+            specs.append((role, shape, cursor, size))
+            cursor += size
+        if (cursor > region.size_bytes
+                or region.base_bytes + cursor > profile.capacity_bytes
+                or region.base_bytes + cursor > (1 << 16)):
+            raise SchemaError("expert scratch roots exceed physical SRAM",
                               path=f"dag.tasks.{task.id}")
-        specs = (
-            (MoeExpertScratchRole.GATE_UP_CONCAT, (m, 2*i),
-             concat, 2*projection_bytes),
-            (MoeExpertScratchRole.SWIGLU_ACTIVATED, (m, i),
-             activated, projection_bytes),
-        )
         for role, shape, offset, size in specs:
             value_id = f"{task.id}:{role.value}"
             identity = {"dag": dag.id, "task": task.id, "role": role.value,
@@ -103,7 +134,7 @@ def derive_moe_expert_scratch_bindings(
                 id=stable_artifact_id("moe_expert_scratch_binding", identity,
                                       schema_version="moe_expert_scratch/v1"),
                 value_id=value_id,
-                tensor_slice=TensorSlice(value_id, (0, 0), shape),
+                tensor_slice=TensorSlice(value_id, tuple(0 for _ in shape), shape),
                 core_id=core_id, region_ref=region.id,
                 region_offset_bytes=offset, size_bytes=size,
                 alignment_bytes=align,

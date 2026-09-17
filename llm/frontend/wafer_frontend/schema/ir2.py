@@ -5893,6 +5893,11 @@ class CoreOrder:
 class MoeExpertScratchRole(str, Enum):
     GATE_UP_CONCAT = "gate_up_concat"
     SWIGLU_ACTIVATED = "swiglu_activated"
+    BACKWARD_GATE_UP_CONCAT = "backward_gate_up_concat"
+    BACKWARD_SWIGLU_ACTIVATED = "backward_swiglu_activated"
+    BACKWARD_ACTIVATED_GRADIENT = "backward_activated_gradient"
+    BACKWARD_GATE_UP_GRADIENT = "backward_gate_up_gradient"
+    BACKWARD_DX_PARTS = "backward_dx_parts"
 
 
 @dataclass(frozen=True, slots=True)

@@ -207,6 +207,19 @@ def _lower_fragments(
                 action, schedule, context.ir1,
                 source_global_dag_id=context.global_dag.id,
             )
+        elif action.op_kind is OpKind.MOE_EXPERT_BACKWARD:
+            from ..lowering.moe_full_train_expert_backward import (
+                lower_moe_expert_backward_fragment,
+            )
+            schedule = next((item for item in context.schedule_set.schedules
+                             if item.id == action.source.schedule_id), None)
+            if schedule is None:
+                raise SchemaError("expert reverse action lacks its physical schedule",
+                                  path=f"source.global_dag.actions[{action_index}]")
+            fragment = lower_moe_expert_backward_fragment(
+                action, schedule, context.ir1,
+                source_global_dag_id=context.global_dag.id,
+            )
         elif action.op_kind is OpKind.MOE_EXPERT_FORWARD:
             from ..lowering.moe_full_train_expert import lower_moe_expert_record_fragment
             schedule = next((item for item in context.schedule_set.schedules

@@ -3746,6 +3746,32 @@ std::set<std::string> ValidateActionSequence(
                     Fail(path, "MoE expert pair requires one SRAM_BIND input");
             valid_body = true;
         }
+        else if (moe_expert_actions.count(action) == 1 &&
+                 suffix == cursor + 21 &&
+                 [&]() {
+                     static constexpr std::array<Opcode, 10> expected = {
+                         Opcode::MATMUL, Opcode::MATMUL, Opcode::SWIGLU,
+                         Opcode::GEMM_DX_TIMING,
+                         Opcode::SWIGLU_BACKWARD_TIMING,
+                         Opcode::GEMM_DX_TIMING, Opcode::GEMM_DX_TIMING,
+                         Opcode::GEMM_WEIGHT_WGRAD_TIMING,
+                         Opcode::GEMM_WEIGHT_WGRAD_TIMING,
+                         Opcode::GEMM_WEIGHT_WGRAD_TIMING,
+                     };
+                     for (std::size_t pair = 0; pair < expected.size(); ++pair) {
+                         const auto *binding = records[cursor + 2*pair];
+                         if (binding->opcode != Opcode::SRAM_BIND ||
+                             binding->operands.empty() ||
+                             LiteralU64(binding->operands[0], path) !=
+                                 ((expected[pair] == Opcode::GEMM_DX_TIMING ||
+                                   expected[pair] == Opcode::GEMM_WEIGHT_WGRAD_TIMING ||
+                                   expected[pair] == Opcode::SWIGLU_BACKWARD_TIMING) ? 2 : 1) ||
+                             records[cursor + 2*pair + 1]->opcode != expected[pair])
+                             return false;
+                     }
+                     return records[cursor + 20]->opcode == Opcode::LOCAL_REDUCE;
+                 }())
+            valid_body = true;
         else if (s3_lite_backward_link && suffix == cursor + 3 &&
             records[cursor]->opcode == Opcode::SRAM_BIND &&
             records[cursor + 1]->opcode == Opcode::SGD_UPDATE &&
@@ -8301,7 +8327,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             std::set<std::string> result;
             for (const LinkedFragmentDto &linked : manifest.fragments) {
                 const CommandFragmentDto &fragment = Leaf(linked);
-                if (fragment.producer_pass != "moe_full_train_expert_lowering")
+                if (fragment.producer_pass != "moe_full_train_expert_lowering" &&
+                    fragment.producer_pass != "moe_full_train_expert_backward_lowering")
                     continue;
                 if (!std::holds_alternative<CommandFragmentDto>(linked) ||
                     fragment.kind != FragmentKindDto::COARSE ||
@@ -9037,6 +9064,49 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                             }) == 1;
                     if (second_expert_projection)
                         expected_addend = abis.front()->size_bytes / 2;
+                    const bool expert_reverse =
+                        owner_fragment != fragments.end() &&
+                        owner_fragment->second->producer_pass ==
+                            "moe_full_train_expert_backward_lowering" &&
+                        moe_expert_actions.count(record.source_global_action_id) == 1;
+                    if (expert_reverse) {
+                        const auto has_suffix = [&](std::string_view suffix) {
+                            return value_id.size() >= suffix.size() &&
+                                value_id.compare(value_id.size() - suffix.size(),
+                                                 suffix.size(), suffix) == 0;
+                        };
+                        const std::size_t occurrence = std::count_if(
+                            stream->second->records.begin(),
+                            stream->second->records.begin() +
+                                static_cast<std::ptrdiff_t>(binding.fragment_record_index),
+                            [&](const RelocatableRecordDto &item) {
+                                return item.source_global_action_id ==
+                                           record.source_global_action_id &&
+                                       item.opcode == record.opcode;
+                            });
+                        if (record.opcode == Opcode::MATMUL && occurrence == 1 &&
+                            binding.operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS &&
+                            has_suffix(":backward_gate_up_concat") &&
+                            abis.front()->size_bytes % 2 == 0)
+                            expected_addend = abis.front()->size_bytes / 2;
+                        if (((record.opcode == Opcode::GEMM_DX_TIMING && occurrence == 2) ||
+                             (record.opcode == Opcode::GEMM_WEIGHT_WGRAD_TIMING && occurrence == 2)) &&
+                            binding.operand_id == SemanticOperandId::COMPUTE_DATA_ADDRESS &&
+                            has_suffix(":backward_gate_up_gradient") &&
+                            abis.front()->size_bytes % 2 == 0)
+                            expected_addend = abis.front()->size_bytes / 2;
+                        if (record.opcode == Opcode::GEMM_DX_TIMING && occurrence == 2 &&
+                            binding.operand_id == SemanticOperandId::COMPUTE_OUTPUT_ADDRESS &&
+                            has_suffix(":backward_dx_parts")) {
+                            const uint64_t access = OperandAccessBytes(
+                                record, binding.operand_id,
+                                "linked_program_manifest.address_operand_bindings");
+                            if (access > abis.front()->size_bytes)
+                                Fail("linked_program_manifest.address_operand_bindings",
+                                     "MoE expert reverse dX part exceeds signed scratch");
+                            expected_addend = abis.front()->size_bytes - access;
+                        }
+                    }
                 } else {
                     if (record.opcode != Opcode::LOCAL_REDUCE ||
                         binding.operand_id != SemanticOperandId::SOURCE_ADDRESS ||
