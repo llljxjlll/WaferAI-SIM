@@ -483,12 +483,13 @@ def run(args: argparse.Namespace) -> None:
             for binding, access in first_access.items()
             if access is StateUseAccess.READ
         }
-        contract = build_timing_program_io(
-            linked_profiles[index],
-            artifact_digest,
-            state_seed_overrides=state_seeds,
-        )
-        contract.validate_against(segment.linked_manifest)
+        with builder_validation_session():
+            contract = build_timing_program_io(
+                linked_profiles[index],
+                artifact_digest,
+                state_seed_overrides=state_seeds,
+            )
+            contract.validate_against(segment.linked_manifest)
         sidecar_path = output / f"segment_{index}.program_io.json"
         sidecar_path.write_text(canonical_json(contract), encoding="utf-8")
         metric["program_io_wall_seconds"] = round(
