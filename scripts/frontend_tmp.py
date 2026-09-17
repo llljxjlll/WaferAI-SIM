@@ -211,6 +211,14 @@ def execute(args: argparse.Namespace, root: Path, *,
     print(json.dumps({'job': str(path), 'command': command}), flush=True)
     process = None
     code = 1
+    termination_signal: int | None = None
+
+    def interrupt(signum: int, _frame: object) -> None:
+        nonlocal termination_signal
+        termination_signal = signum
+        raise KeyboardInterrupt
+
+    previous_sigterm = signal.signal(signal.SIGTERM, interrupt)
     try:
         process = subprocess.Popen(command, env=env, start_new_session=True)
         with locked(root):
@@ -233,11 +241,34 @@ def execute(args: argparse.Namespace, root: Path, *,
                     raise RuntimeError('managed tmp root exceeded byte budget')
     except KeyboardInterrupt:
         if process is not None and process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait()
-        code = 130
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+        code = 128 + (termination_signal or signal.SIGINT)
     finally:
-        if code == 0 and (group_alive(info) or size_bytes(root) > args.max_bytes):
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        if process is not None and group_alive(info):
+            # The direct command may exit while a background writer keeps its
+            # process group alive. Never leave that writer filling this job.
+            if code == 0:
+                code = 2
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            time.sleep(0.1)
+            if group_alive(info):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        if code == 0 and size_bytes(root) > args.max_bytes:
             code = 2
         with locked(root):
             info['state'] = ('held' if code == 0 and info['kind'] == 'evidence'
