@@ -7,6 +7,8 @@ from collections import Counter
 from ..errors import SchemaError
 from ..schema.artifact_manifest import LinkedProgramManifest, RecordOpcode
 from ..schema.flexible_dense_train import FlexibleDenseTrainPlan
+from ..schema.dense_state_version_fence import dense_dp2_state_version_fences
+from ..schema.artifact_manifest import canonical_dense_state_version_record
 from ..schema.full_dense_gradient_requirements import DenseFullTrainRequirements
 from ..schema.full_training_physical_dag import (
     FullTrainingPhysicalDAG, build_full_training_physical_dag,
@@ -75,10 +77,11 @@ def require_named_tp_collective_reverse_records(
     The validated source/N4/N5 GlobalActionDAG fixes all rank/chunk/route
     identities; this check binds every one to its executable native records.
     """
-    global_dag = program.source.replicas[0].lowering_context.global_dag
-    ir1 = program.source.replicas[0].lowering_context.ir1
-    nodes = {node.id: node for node in ir1.nodes}
-    native = {action.id: action for action in global_dag.actions}
+    contexts = tuple(replica.lowering_context for replica in program.source.replicas)
+    nodes_by_replica = tuple({node.id: node for node in context.ir1.nodes}
+                             for context in contexts)
+    native = {action.id: action for context in contexts
+              for action in context.global_dag.actions}
     tp = plan.spec.tp_degree
     inverse = {}
     for node in plan.forward_graph.nodes:
@@ -110,16 +113,17 @@ def require_named_tp_collective_reverse_records(
             RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT,
         },
     }
-    for ref, reverse in sorted(inverse.items()):
+    for dp, nodes in enumerate(nodes_by_replica):
+      for ref, reverse in sorted(inverse.items()):
         for step in (0, 1):
-            source_ref = f"{ref}::step{step}__dp0"
+            source_ref = f"{ref}::step{step}__dp{dp}"
             node = nodes.get(source_ref)
             if (node is None or node.kind is not OpKind.COLLECTIVE
                     or node.phase is not OpPhase.DGRAD
                     or node.workload.collective is not reverse):
                 raise SchemaError("inverse collective differs from real source IR1",
                                   path=source_ref)
-            for rank in range(tp):
+            for rank in range(dp * tp, (dp + 1) * tp):
                 actions = tuple(
                     native[action_id]
                     for action_id, (_, op_ref, action_step, _, phase)
@@ -163,7 +167,9 @@ def require_named_tp_collective_reverse_records(
                           if operation_by_action[send][1] == ref
                           and operation_by_action[send][2] == step
                           and operation_by_action[recv][1] == ref
-                          and operation_by_action[recv][2] == step)
+                          and operation_by_action[recv][2] == step
+                          and native[send].logical_core.die_id // tp == dp
+                          and native[recv].logical_core.die_id // tp == dp)
             if len(edges) != tp * (tp - 1):
                 raise SchemaError("inverse TP collective omits a real SEND→RECV flow",
                                   path=f"{ref}.step{step}")
@@ -177,19 +183,27 @@ def build_full_dense_two_step_physical_dag(
 ) -> FullTrainingPhysicalDAG:
     """Record one verifiable physical STORE0 -> LOAD1 edge per StateABI.
 
-    The DP1 FP32 sync is the WGRAD output's own BufferABI.  No no-op or
-    synthetic action is inserted into the production GlobalActionDAG.
+    DP1 uses the WGRAD output directly. DP2 must prove both independently
+    owned replicas and the native rank-major FP32 SUM route.
     """
     program.validate("full_dense_two_step_program")
     requirements.validate_against(plan)
-    if requirements.steps != 2 or len(program.source.replicas) != 1:
-        raise SchemaError("initial two-step native witness requires one DP1 replica",
+    if (requirements.steps != 2
+            or len(program.source.replicas) != plan.spec.dp_degree
+            or plan.spec.dp_degree not in (1, 2)
+            or tuple(replica.replica_index for replica in program.source.replicas)
+               != tuple(range(plan.spec.dp_degree))):
+        raise SchemaError("two-step physical witness requires exact DP1 or DP2 replicas",
                           path="requirements")
-    context = program.source.replicas[0].lowering_context
-    global_dag = context.global_dag
+    contexts = tuple(replica.lowering_context for replica in program.source.replicas)
+    all_actions = tuple(action for context in contexts
+                        for action in context.global_dag.actions)
+    if len({action.id for action in all_actions}) != len(all_actions):
+        raise SchemaError("physical DP replicas alias a global action id", path="source.replicas")
     manifest: LinkedProgramManifest = program.manifest
     leaves = _leaf_fragments(manifest.fragments)
-    states = {state.id: state for state in context.ir1.persistent_state_manifest.declarations}
+    states = {state.id: state for context in contexts
+              for state in context.ir1.persistent_state_manifest.declarations}
     old_states = {state.id: state for state in plan.forward_graph.persistent_states}
     old_by_shard = {(state.identity.tensor_ref, state.identity.shard_index): state.id
                     for state in old_states.values()}
@@ -219,8 +233,10 @@ def build_full_dense_two_step_physical_dag(
         raise SchemaError("every source parameter needs one real trainable StateABI",
                           path="context.ir1.persistent_state_manifest")
     binding_to_old = {binding.id: source_state[binding.state_ref]
+                      for context in contexts
                       for binding in context.ir1.persistent_state_manifest.bindings}
-    by_id = {node.id: node for node in context.ir1.nodes}
+    by_replica = tuple({node.id: node for node in context.ir1.nodes}
+                       for context in contexts)
     native_source_action_ids = {
         record.source_global_action_id
         for fragment in leaves for stream in fragment.core_streams
@@ -230,7 +246,7 @@ def build_full_dense_two_step_physical_dag(
     operation_by_action: dict[str, tuple[str, str, int, int | None, str]] = {}
     stores: dict[str, object] = {}
     loads: dict[str, list[object]] = {}
-    for action in global_dag.actions:
+    for action in all_actions:
         # TRANSIT belongs to the routed fabric and has no executable core,
         # buffer binding or native record.  Actual DTE SEND/RECV endpoints
         # below still bind the exact source flow and executable bytes.
@@ -245,11 +261,16 @@ def build_full_dense_two_step_physical_dag(
             continue
         origin = action.origin_ref
         member = action.member_id
+        rank = action.logical_core.die_id
+        dp = rank // plan.spec.tp_degree
+        if dp >= len(by_replica):
+            raise SchemaError("native action escapes its physical DP replica", path=action.id)
+        by_id = by_replica[dp]
         source_node = (by_id.get(member) if member is not None else
                        by_id.get(getattr(origin, "node_ref", None)))
-        if source_node is None:
-            raise SchemaError("native action lacks real source IR1 node", path=action.id)
-        node_ref = source_node.id.removesuffix("__dp0")
+        if source_node is None or not source_node.id.endswith(f"__dp{dp}"):
+            raise SchemaError("native action lacks exact DP-replica IR1 source node", path=action.id)
+        node_ref = source_node.id.removesuffix(f"__dp{dp}")
         if "::step0" in node_ref:
             step = 0
         elif "::step1" in node_ref:
@@ -261,7 +282,6 @@ def build_full_dense_two_step_physical_dag(
         binding_refs = {use.hbm_binding_ref for use in action.state_uses}
         if len(binding_refs) > 1:
             raise SchemaError("physical state action crosses source parameters", path=action.id)
-        rank = action.logical_core.die_id
         state_ref = binding_to_old[next(iter(binding_refs))] if binding_refs else None
         if (state_ref is not None
                 and (old_states[state_ref].identity.shard_index
@@ -287,10 +307,10 @@ def build_full_dense_two_step_physical_dag(
             phase = "forward" if source_node.phase.value == "fwd" else "backward"
             loads.setdefault((state_ref, step, rank), []).append(action)
         elif source_node.kind is OpKind.OPTIMIZER_UPDATE:
-            weight = source_node.inputs[0].removesuffix("__dp0")
+            weight = source_node.inputs[0].removesuffix(f"__dp{dp}")
             owner_states = tuple(old_id for (tensor, shard), old_id
                                  in old_by_shard.items()
-                                 if tensor == weight and shard == rank)
+                                 if tensor == weight and shard == rank % plan.spec.tp_degree)
             state_ref = owner_states[0] if len(owner_states) == 1 else None
             if state_ref is None:
                 raise SchemaError("SGD lacks exact source weight", path=action.id)
@@ -300,7 +320,15 @@ def build_full_dense_two_step_physical_dag(
             operation = f"sgd::{state_ref}::r{rank}::step{step}"
             phase = "optimizer"
         else:
-            operation = canonical
+            if node_ref.startswith("dp_sync::"):
+                trainable_ref = node_ref.split("::", 2)[1]
+                original_ref = source_state.get(trainable_ref)
+                if original_ref is None:
+                    raise SchemaError("DP SUM lacks source parameter StateDecl",
+                                      path=action.id)
+                operation = node_ref.replace(trainable_ref, original_ref, 1)
+            else:
+                operation = canonical
             phase = ("loss" if source_node.kind in (
                 OpKind.CE_FORWARD, OpKind.CE_BACKWARD) else
                 "optimizer" if source_node.kind is OpKind.OPTIMIZER_UPDATE else
@@ -323,17 +351,49 @@ def build_full_dense_two_step_physical_dag(
             path="actions",
         )
     state_edges = []
+    fences = {fence.store_action_id: [] for context in contexts
+              for fence in dense_dp2_state_version_fences(context.global_dag)}
+    for context in contexts:
+        for fence in dense_dp2_state_version_fences(context.global_dag):
+            fences[fence.store_action_id].append(fence)
+    native_records = {action_id: [] for action_id in operation_by_action}
+    for fragment in leaves:
+        for stream in fragment.core_streams:
+            for record in stream.records:
+                if record.source_global_action_id in native_records:
+                    native_records[record.source_global_action_id].append(record)
     owners = {(path.parameter_state_ref, path.rank) for path in requirements.paths}
     for old_ref, rank in sorted(owners):
         store = stores.get((old_ref, 0, rank))
         read = loads.get((old_ref, 1, rank))
         if store is None or not read:
             raise SchemaError("STORE0 needs same-state LOAD1", path=old_ref)
-        first = min(read, key=lambda action: action.core_order_index)
-        if any(item.core_order_index <= store.core_order_index for item in read):
-            raise SchemaError("step1 parameter read precedes its step0 STORE",
-                              path=old_ref)
-        state_edges.append((store.id, first.id))
+        first_by_core = {}
+        for item in read:
+            core = item.logical_core
+            previous = first_by_core.get(core)
+            if previous is None or item.core_order_index < previous.core_order_index:
+                first_by_core[core] = item
+        for first in first_by_core.values():
+            if first.logical_core == store.logical_core:
+                if first.core_order_index <= store.core_order_index:
+                    raise SchemaError("same-core LOAD1 precedes STORE0", path=old_ref)
+            else:
+                pair = tuple(fence for fence in fences.get(store.id, ())
+                             if fence.load_action_id == first.id)
+                if len(pair) != 1:
+                    raise SchemaError("cross-core state version lacks exact source event pair",
+                                      path=old_ref)
+                fence = pair[0]
+                required_set = canonical_dense_state_version_record(
+                    fence, owner_id=store.id, opcode=RecordOpcode.EVENT_SET)
+                required_wait = canonical_dense_state_version_record(
+                    fence, owner_id=first.id, opcode=RecordOpcode.EVENT_WAIT)
+                if (required_set not in native_records[store.id]
+                        or required_wait not in native_records[first.id]):
+                    raise SchemaError("cross-core state version lacks native SET/WAIT records",
+                                      path=old_ref)
+            state_edges.append((store.id, first.id))
     # Bind each cross-die SEND/RECV by its original flow and executable DTE
     # records, including TP backward ReduceScatter's distinct peer routes.
     records_by_action = {}
@@ -343,7 +403,7 @@ def build_full_dense_two_step_physical_dag(
                 records_by_action.setdefault(record.source_global_action_id, set()).add(
                     record.opcode)
     flows = {}
-    for action in global_dag.actions:
+    for action in all_actions:
         if action.task_kind not in (SemanticTaskKind.SEND, SemanticTaskKind.RECV):
             continue
         if action.flow_id is None or action.flow is None or action.flow_route is None:
@@ -437,12 +497,20 @@ def build_full_dense_two_step_physical_dag(
     )
     required = {
         *backward, *wgrad, *named_collectives,
+        *(path.named_sync_op_ref for path in requirements.paths
+          if len(path.dp_group_ranks) > 1),
         *(path.named_optimizer_op_ref for path in requirements.paths),
         *(path.named_store_op_ref for path in requirements.paths),
     }
+    missing = required - {entry[1] for entry in operation_by_action.values()}
+    if missing:
+        raise SchemaError("physical Dense operation lacks exact source action: "
+                          f"{tuple(sorted(missing))!r}", path="required_operation_ids")
     result = build_full_training_physical_dag(
         fragments=leaves, streams=manifest.core_streams,
-        source_artifact_ids=tuple(sorted((context.ir1.id, global_dag.id))),
+        source_artifact_ids=tuple(sorted({artifact_id for context in contexts
+                                          for artifact_id in (context.ir1.id,
+                                                              context.global_dag.id)})),
         operation_by_action=operation_by_action,
         transport_edges=tuple(sorted(transport_edges)),
         state_version_edges=tuple(sorted(state_edges)),

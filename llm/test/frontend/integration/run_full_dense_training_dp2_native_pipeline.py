@@ -25,7 +25,14 @@ from llm.frontend.wafer_frontend.policies.registry import RegistryKind, producti
 from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.full_dense_gradient_requirements import build_dense_full_train_requirements
-from llm.frontend.wafer_frontend.lowering.full_dense_gradient_physical_gate import require_exact_dense_parameter_state_inventory
+from llm.frontend.wafer_frontend.lowering.full_dense_gradient_physical_gate import (
+    require_exact_dense_parameter_state_inventory,
+    require_full_dense_physical_gradient_paths,
+)
+from llm.frontend.wafer_frontend.lowering.full_dense_two_step_physical_dag import (
+    build_full_dense_two_step_physical_dag, dense_two_step_native_opcode_contract,
+)
+from llm.frontend.wafer_frontend.schema.dense_state_version_fence import dense_dp2_state_version_fences
 from llm.frontend.wafer_frontend.schema.n4 import FusionPartitionContext, InterDiePlanningContext
 from llm.frontend.wafer_frontend.schema.n5 import ProjectToIR2Context, IntraDieSchedulingContext
 from llm.frontend.wafer_frontend.schema.n6 import _leaf_fragments
@@ -106,6 +113,22 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
     manifest_file = output / "full_dp2_two_step.linked.json"
     manifest_file.write_text(canonical_json(manifest), encoding="utf-8")
     print("LINKED", len(manifest.fragments), manifest_file, flush=True)
+    physical = build_full_dense_two_step_physical_dag(linked, plan, requirements)
+    backward, wgrad = dense_two_step_native_opcode_contract(plan)
+    require_full_dense_physical_gradient_paths(
+        manifest, plan, requirements, physical,
+        required_backward_opcodes=backward, required_wgrad_opcodes=wgrad,
+    )
+    physical_path = output / "full_dp2_two_step.physical_dag.json"
+    physical_path.write_text(canonical_json(physical), encoding="utf-8")
+    cross_core_fences = sum(len(dense_dp2_state_version_fences(
+        replica.lowering_context.global_dag)) for replica in linked.source.replicas)
+    if (len(physical.state_version_edges) != 60 + cross_core_fences
+            or cross_core_fences < 1):
+        raise RuntimeError("all sixty DP2 parameter versions and real cross-core fences must close")
+    print("PHYSICAL_GRADIENT_GATE", len(physical.actions),
+          len(physical.state_version_edges), "FENCES", cross_core_fences,
+          flush=True)
     counts = Counter(record.opcode for fragment in _leaf_fragments(manifest.fragments)
                      for stream in fragment.core_streams for record in stream.records)
     expected = {
@@ -127,6 +150,11 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
         "source_trainable_state_shards": len(graph.persistent_states),
         "physical_trainable_state_abi": len(state_inventory),
         "required_step_parameter_gradient_paths": len(requirements.paths),
+        "full_physical_gradient_gate_pass": True,
+        "physical_dag_digest": canonical_digest(physical),
+        "physical_actions": len(physical.actions),
+        "physical_state_version_edges": len(physical.state_version_edges),
+        "native_cross_core_state_event_pairs": cross_core_fences,
         "source_dp_gradient_routes": len(planned.dp_gradient_routes.gradients),
         "dp_gradient_tasks": len(projected.dp_projected_tasks.tasks),
         "physical_dies": sorted(active_dies),

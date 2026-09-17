@@ -490,10 +490,17 @@ def require_full_dense_physical_gradient_paths(
                                   and by_action[recv].step == step
                                   and by_action[send].operation_ref == inverse_ref
                                   and by_action[recv].operation_ref == inverse_ref)
-            if len(matched_edges) != tp * (tp - 1):
+            if len(matched_edges) != plan.spec.dp_degree * tp * (tp - 1):
                 raise SchemaError("inverse collective misses exact peer physical D2D edges",
                                   path=f"{inverse_ref}.step{step}")
-            for rank in range(tp):
+            for dp in range(plan.spec.dp_degree):
+                local_edges = tuple((send, recv) for send, recv in matched_edges
+                                    if by_action[send].logical_core.die_id // tp == dp
+                                    and by_action[recv].logical_core.die_id // tp == dp)
+                if len(local_edges) != tp * (tp - 1):
+                    raise SchemaError("inverse collective crosses DP replicas or omits a TP peer",
+                                      path=f"{inverse_ref}.step{step}.dp{dp}")
+            for rank in range(tp * plan.spec.dp_degree):
                 group = named[(step, rank, inverse_ref)]
                 functional = Counter(
                     opcode for action in group
@@ -511,8 +518,8 @@ def require_full_dense_physical_gradient_paths(
                                         RecordOpcode.DTE_WAIT: 1,
                                         RecordOpcode.DTE_SEND: tp - 1,
                                         RecordOpcode.DTE_RECV: tp - 1,
-                                        RecordOpcode.EVENT_SET: tp - 1 if rank == 0 else 1,
-                                        RecordOpcode.EVENT_WAIT: tp - 1 if rank == 0 else 1})
+                                        RecordOpcode.EVENT_SET: tp - 1 if rank % tp == 0 else 1,
+                                        RecordOpcode.EVENT_WAIT: tp - 1 if rank % tp == 0 else 1})
                 if functional != expected:
                     raise SchemaError(
                         "inverse collective lacks rank-local executable DTE/SUM records: "
@@ -764,19 +771,35 @@ def require_full_dense_physical_gradient_paths(
             reduction, reduced, rid, rindex = one(
                 step, root, path.named_sync_op_ref, RecordOpcode.LOCAL_REDUCE,
             )
-            reduction_source = buffer(reduction, rid, rindex,
-                                      SemanticOperandId.SOURCE_ADDRESS)
+            reduction_closure = closures.get((rid, reduction.logical_core,
+                                              rindex, SemanticOperandId.SOURCE_ADDRESS))
+            if reduction_closure is None or len(reduction_closure.buffer_abi_ids) != 2:
+                raise SchemaError("DP SUM must read two independently owned FP32 input BufferABIs",
+                                  path=f"gradient_path[{path.parameter_state_ref}].dp_reduce")
+            reduction_inputs = tuple(sorted(
+                (buffers[abi_id] for abi_id in reduction_closure.buffer_abi_ids),
+                key=lambda abi: abi.region_offset_bytes,
+            ))
+            reduction_source, reduction_remote = reduction_inputs
             reduction_result = buffer(reduction, rid, rindex,
                                       SemanticOperandId.DESTINATION_ADDRESS)
+            physical_stride = (reduction_remote.region_offset_bytes
+                               - reduction_source.region_offset_bytes)
             rlits = {item.name: item.literal_value for item in reduced.operands
                      if item.literal_value is not None}
             if (rlits.get("input_dtype") != 1 or rlits.get("accumulator_dtype") != 1
                     or rlits.get("output_dtype") != 1 or rlits.get("reduce_op") != 1
                     or rlits.get("input_count") != 2
                     or rlits.get("element_count") != path.gradient_bytes // 4
-                    or rlits.get("input_stride_bytes") != path.gradient_bytes
-                    or reduction_source.dtype is not DType.FP32
-                    or reduction_source.size_bytes != 2 * path.gradient_bytes
+                    or rlits.get("input_stride_bytes") != physical_stride
+                    or physical_stride < path.gradient_bytes
+                    or physical_stride % 64 != 0
+                    or reduction_source.region_ref != reduction_remote.region_ref
+                    or reduction_source.id == reduction_remote.id
+                    or any(abi.dtype is not DType.FP32
+                           or abi.size_bytes != path.gradient_bytes
+                           or abi.logical_core.die_id != root
+                           for abi in reduction_inputs)
                     or reduction_result.dtype is not DType.FP32
                     or reduction_result.size_bytes != path.gradient_bytes):
                 raise SchemaError("DP root native rank-major FP32 SUM contract/bytes differ",
@@ -794,9 +817,7 @@ def require_full_dense_physical_gradient_paths(
             reduced_recv = first[3]
             broadcast_source = second[2]
             if (reduced_recv.logical_core.die_id != root
-                    or reduced_recv.region_ref != reduction_source.region_ref
-                    or reduced_recv.region_offset_bytes !=
-                        reduction_source.region_offset_bytes + path.gradient_bytes
+                    or not same_physical_value(reduced_recv, reduction_remote)
                     or broadcast_source.logical_core.die_id != root
                     or not same_physical_value(broadcast_source, reduction_result)):
                 raise SchemaError("DP transport fails true rank-major input or reduced-output broadcast binding",
@@ -821,10 +842,7 @@ def require_full_dense_physical_gradient_paths(
             root_gradient = buffer(root_wgrad_action, root_fid, root_idx,
                                    SemanticOperandId.COMPUTE_OUTPUT_ADDRESS)
             if (not same_physical_value(copy_source, root_gradient)
-                    or copy_dest.region_ref != reduction_source.region_ref
-                    or copy_dest.region_offset_bytes !=
-                        reduction_source.region_offset_bytes
-                    or copy_dest.size_bytes != path.gradient_bytes
+                    or not same_physical_value(copy_dest, reduction_source)
                     or not depends_on(local_action, root_wgrad_action)
                     or not depends_on(reduction, local_action)):
                 raise SchemaError("DP root local gradient bytes do not populate first rank-major slice",
@@ -920,9 +938,29 @@ def require_full_dense_physical_gradient_paths(
                                    idx, SemanticOperandId.HBM_ADDRESS)]
                        .state_abi_id] == homes[(path.parameter_state_ref, rank)]
         ]
-        if step < requirements.steps - 1 and len(next_loads) != 1:
-            raise SchemaError("updated parameter needs exact next-step HBM LOAD version",
-                              path=f"gradient_path[{path.parameter_state_ref}].version")
+        if step < requirements.steps - 1:
+            expected_cores = {
+                candidate.logical_core for candidate in dag.actions
+                if candidate.step == step + 1
+                and candidate.logical_core.die_id == rank
+                and any(
+                    opcode is RecordOpcode.LSU_LOAD
+                    and (fid, candidate.logical_core, idx,
+                         SemanticOperandId.HBM_ADDRESS) in state_uses
+                    and states[state_uses[(fid, candidate.logical_core, idx,
+                                          SemanticOperandId.HBM_ADDRESS)]
+                               .state_abi_id] == homes[(path.parameter_state_ref, rank)]
+                    for fid, idx, opcode in candidate.executable_records
+                )
+            }
+            witnessed_cores = {action.logical_core for action, _fid, _idx
+                               in next_loads}
+            if (not expected_cores or witnessed_cores != expected_cores
+                    or len(next_loads) != len(expected_cores)):
+                raise SchemaError(
+                    "updated parameter needs one witnessed next-step HBM LOAD version per physical core",
+                    path=f"gradient_path[{path.parameter_state_ref}].version",
+                )
 
 
 __all__ = ["require_exact_dense_parameter_state_inventory",

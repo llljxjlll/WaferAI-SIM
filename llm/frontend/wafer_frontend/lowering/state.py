@@ -14,10 +14,14 @@ from ..schema.artifact_manifest import (
     RecordOpcode,
     RecordOperand,
     RelocatableRecord,
+    RuntimeRelocation,
+    canonical_dense_state_version_record,
+    canonical_dense_state_version_symbols,
     SemanticOperandId,
     StateABI,
 )
 from ..schema.common import stable_artifact_id
+from ..schema.dense_state_version_fence import dense_dp2_state_version_fences
 from ..schema.global_action import GlobalAction
 from ..schema.ir2 import (
     BufferUseRole,
@@ -212,20 +216,47 @@ class NaiveStateDmaLowering:
                 ),
             ),
         )
+        fences = dense_dp2_state_version_fences(context.global_dag)
+        incoming = tuple(fence for fence in fences
+                         if fence.load_action_id == action.id)
+        outgoing = tuple(fence for fence in fences
+                         if fence.store_action_id == action.id)
+        if (incoming and not is_load) or (outgoing and is_load):
+            raise SchemaError("state-version fence direction differs from DMA",
+                              path="action")
+        prefix = tuple(canonical_dense_state_version_record(
+            fence, owner_id=action.id, opcode=RecordOpcode.EVENT_WAIT,
+        ) for fence in incoming)
+        suffix = tuple(canonical_dense_state_version_record(
+            fence, owner_id=action.id, opcode=RecordOpcode.EVENT_SET,
+        ) for fence in outgoing)
+        records = (*prefix, record, *suffix)
+        runtime_symbols = tuple(sorted({symbol.id: symbol
+            for fence in (*incoming, *outgoing)
+            for symbol in canonical_dense_state_version_symbols(fence)
+        }.values(), key=lambda symbol: symbol.id))
+        runtime_relocations = tuple(
+            RuntimeRelocation(index, operand.runtime_field, operand.symbol_ref)
+            for index, candidate in enumerate(records)
+            if candidate.opcode in (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT)
+            for operand in candidate.operands
+            if operand.kind.name == "RUNTIME_SYMBOL"
+        )
+        lsu_index = len(prefix)
         stream = CoreFragmentStream(
             action.logical_core,
-            (record,),
-            (),
+            records,
+            runtime_relocations,
             (
                 AddressRelocation(
-                    0,
+                    lsu_index,
                     local_operand_id,
                     ProgramSymbolKind.ABSOLUTE_ADDRESS,
                     local_symbol.id,
                     local_addend,
                 ),
                 AddressRelocation(
-                    0,
+                    lsu_index,
                     SemanticOperandId.HBM_ADDRESS,
                     ProgramSymbolKind.ABSOLUTE_ADDRESS,
                     hbm_symbol.id,
@@ -253,7 +284,7 @@ class NaiveStateDmaLowering:
             kind=FragmentKind.STATE_IO,
             claimed_action_ids=(action.id,),
             core_streams=(stream,),
-            runtime_symbols=(),
+            runtime_symbols=runtime_symbols,
             program_symbols=tuple(
                 sorted((hbm_symbol, local_symbol), key=lambda symbol: symbol.id)
             ),
