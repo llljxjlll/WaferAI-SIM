@@ -129,6 +129,8 @@ def build_moe_full_train_paged_runtime(
                           path="offload")
     groups = _external_groups(offload)
     last_source_states = _states(source_manifests[0])
+    first_paged_states = {item.state_ref: item for item in
+                          _states(paged_manifests[0]).values()}
     weights = sorted((item for item in last_source_states.values()
                       if item.kind is StateKind.TRAINABLE_PARAMETER),
                      key=lambda item: item.address)
@@ -151,7 +153,8 @@ def build_moe_full_train_paged_runtime(
         for item in selected:
             addresses[item.state_ref] = cursor
             spans.append({
-                "state_ref": item.state_ref, "state_abi_id": item.id,
+                "state_ref": item.state_ref,
+                "state_abi_id": first_paged_states[item.state_ref].id,
                 "source_hbm_address": item.address,
                 "external_address": cursor, "hbm_address": STATE_SLOT_ADDRESS,
                 "size_bytes": item.size_bytes, "group": group,
