@@ -2338,6 +2338,58 @@ class IR0:
                                for ref in node.outputs)):
                     raise SchemaError("expert reverse must derive exact same-layer forward weights, activation, 0x28 dExpert and FP32 projection gradients",
                                       path=f"{path}.nodes[{index}]")
+            if (node.kind is OpKind.ELEMENTWISE
+                    and node.phase is OpPhase.DGRAD
+                    and any(node_index.get(value_index[ref].producer).kind
+                            is OpKind.MOE_EXPERT_BACKWARD
+                            for ref in node.inputs
+                            if value_index[ref].producer in node_index)):
+                if len(node.inputs) != 2 or len(node.outputs) != 1:
+                    raise SchemaError("MoE input gradient sum needs two exact derivatives",
+                                      path=f"{path}.nodes[{index}].inputs")
+                expert = node_index.get(value_index[node.inputs[0]].producer)
+                router_dx = node_index.get(value_index[node.inputs[1]].producer)
+                if (expert is None or expert.kind is not OpKind.MOE_EXPERT_BACKWARD
+                        or router_dx is None
+                        or router_dx.kind is not OpKind.GEMM_INPUT_DX
+                        or node.inputs[0] != expert.outputs[0]
+                        or node.inputs[1] != router_dx.outputs[0]):
+                    raise SchemaError("MoE input gradient sum must consume expert and router dX in order",
+                                      path=f"{path}.nodes[{index}].inputs")
+                dispatch = node_index.get(value_index[expert.inputs[0]].producer)
+                router = node_index.get(router_dx.workload.source_forward_op_ref)
+                norm = (node_index.get(value_index[dispatch.inputs[0]].producer)
+                        if dispatch is not None and dispatch.kind is OpKind.MOE_DISPATCH
+                        else None)
+                workload = dispatch.workload if dispatch is not None else None
+                expected = (workload.token_count, workload.hidden_size) if workload else None
+                if (norm is None or norm.kind is not OpKind.NORM
+                        or router is None or router.kind is not OpKind.MOE_ROUTER
+                        or workload.expert_count != 1
+                        or workload.frozen_expert_by_token != (0,) * workload.token_count
+                        or workload.frozen_slot_by_token != tuple(range(workload.token_count))
+                        or dispatch.inputs[0] != norm.outputs[0]
+                        or router.inputs[0] != norm.outputs[0]
+                        or expert.workload.step != workload.step
+                        or expert.workload.layer != workload.layer
+                        or router.workload.step != workload.step
+                        or router.workload.layer != workload.layer
+                        or expert.workload.source_route_trace_digest !=
+                           workload.source_route_trace_digest
+                        or router.workload.source_route_trace_digest !=
+                           workload.source_route_trace_digest
+                        or node.mesh_ref != norm.mesh_ref
+                        or node.stage != norm.stage
+                        or node.impl_ref != "residual"
+                        or type(node.workload) is not ResidualWorkload
+                        or node.workload.logical_shape != expected
+                        or node.workload.rank_shape != expected
+                        or tuple((value_index[ref].shape, value_index[ref].dtype)
+                                 for ref in (*node.inputs, *node.outputs))
+                           != ((expected, DType.FP16),) * 3
+                        or value_index[node.outputs[0]].producer != node.id):
+                    raise SchemaError("MoE dX sum requires same-layer router/expert and signed EP1 identity dispatch",
+                                      path=f"{path}.nodes[{index}]")
             if node.kind is OpKind.MOE_COMBINE_BACKWARD:
                 if self.job is not JobKind.TRAIN:
                     raise SchemaError("0x28 requires TRAIN job",

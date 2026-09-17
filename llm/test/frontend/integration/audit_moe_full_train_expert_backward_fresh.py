@@ -30,10 +30,16 @@ EXPECTED_OPCODES = {
 PROFILES = {
     "expert_backward": dict(status="expert_backward_physical_partial",
                             leaves=61, records=293, dx=4, hbm_read=1240,
-                            initializations=98, probes=9),
+                            initializations=98, probes=9,
+                            expert_probes=4, router_probes=0, merged_probes=0),
     "router_dx": dict(status="router_dx_physical_partial",
                       leaves=63, records=300, dx=5, hbm_read=1248,
-                      initializations=100, probes=10),
+                      initializations=100, probes=10,
+                      expert_probes=4, router_probes=1, merged_probes=0),
+    "input_gradient": dict(status="input_gradient_physical_partial",
+                           leaves=64, records=304, dx=5, hbm_read=1248,
+                           initializations=101, probes=9,
+                           expert_probes=3, router_probes=0, merged_probes=1),
 }
 
 
@@ -132,9 +138,15 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path,
             router = [item for item in io["output_probes"]
                       if item["target"]["value_id"] ==
                       "backward::T0.layer1.moe.router.input.gradient"]
-            require(len(expert) == witness["expert_gradient_probes"] == 4 and
-                    len(router) == int(profile_name == "router_dx") and
-                    all(not any(blobs[item["blob_ref"]]) for item in router) and
+            merged = [item for item in io["output_probes"]
+                      if item["target"]["value_id"] ==
+                      "backward::T0.layer1.moe.input_sum.norm2_gradient"]
+            require(len(expert) == witness["expert_gradient_probes"] ==
+                    profile["expert_probes"] and
+                    len(router) == profile["router_probes"] and
+                    len(merged) == profile["merged_probes"] and
+                    all(not any(blobs[item["blob_ref"]])
+                            for item in (*router, *merged)) and
                     len(io["initializations"]) == profile["initializations"] and
                     len(io["output_probes"]) == profile["probes"] and
                     nonzero == witness["expert_gradient_nonzero_expected_bytes"] == 0 and
