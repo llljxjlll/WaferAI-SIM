@@ -2771,9 +2771,25 @@ int sc_main(int argc, char *argv[]) {
                 const frontend::program_io::Result io_result =
                     frontend::program_io::VerifyAfterSimulation(
                         *sequence_program_io_applied);
-                if (!io_result.Passed())
+                if (!io_result.Passed()) {
+                    for (const frontend::program_io::ProbeResult &probe :
+                         io_result.probes) {
+                        if (!probe.exact_match || !probe.all_bytes_valid)
+                            std::cerr << "[DENSE_SEQUENCE_PROGRAM_IO_FAILURE]"
+                                      << " index=" << expected
+                                      << " probe=" << probe.probe_id
+                                      << " core=" << probe.runtime_core_id
+                                      << " address=" << probe.absolute_address_bytes
+                                      << " bytes=" << probe.length_bytes
+                                      << " expected_sha256=" << probe.expected_sha256
+                                      << " actual_sha256=" << probe.actual_sha256
+                                      << " exact=" << probe.exact_match
+                                      << " valid=" << probe.all_bytes_valid
+                                      << std::endl;
+                    }
                     throw std::runtime_error(
                         "Dense sequence ProgramIo segment verification failed");
+                }
                 std::cout << "[DENSE_SEQUENCE_PROGRAM_IO] index=" << expected
                           << " probes=" << io_result.probes.size()
                           << " pass=1" << std::endl;
