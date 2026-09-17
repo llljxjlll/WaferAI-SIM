@@ -3580,14 +3580,18 @@ def _lifecycle_payload_indices(
                 "lifecycle action uses conflicting canonical roots for one storage",
                 path=path,
             )
-    if allow_moe_expert_scratch and action.op_kind is OpKind.MOE_EXPERT_FORWARD:
+    if allow_moe_expert_scratch and action.op_kind in (
+            OpKind.MOE_EXPERT_FORWARD, OpKind.MOE_EXPERT_BACKWARD):
+        roles = (("gate_up_concat", "swiglu_activated")
+                 if action.op_kind is OpKind.MOE_EXPERT_FORWARD else
+                 ("backward_gate_up_concat", "backward_swiglu_activated",
+                  "backward_activated_gradient", "backward_gate_up_gradient",
+                  "backward_dx_parts"))
         scratch = tuple(abi for abi in buffer_abi
-                        if abi.value_id in (
-                            f"{action.source.task_id}:gate_up_concat",
-                            f"{action.source.task_id}:swiglu_activated",
-                        ))
-        if len(scratch) != 2:
-            raise SchemaError("expert lifecycle needs exact two scratch ABIs", path=path)
+                        if abi.value_id in tuple(
+                            f"{action.source.task_id}:{role}" for role in roles))
+        if len(scratch) != len(roles):
+            raise SchemaError("expert lifecycle lacks exact scratch ABIs", path=path)
         for abi in scratch:
             root = root_by_id[abi.id]
             previous = used.setdefault(root.storage_id, root)
@@ -4311,7 +4315,8 @@ class CommandFragment:
                 lifecycle_required=lifecycle_required,
                 path=f"{path}.core_streams[{stream_index}].records",
                 allow_moe_expert_scratch=(
-                    self.producer_pass == "moe_full_train_expert_lowering"),
+                    self.producer_pass in ("moe_full_train_expert_lowering",
+                                           "moe_full_train_expert_backward_lowering")),
             )
             if not indices:
                 raise SchemaError(
@@ -4754,6 +4759,17 @@ class CommandFragment:
                                 or relocation.addend != addend):
                             raise SchemaError("expert record address differs from exact scratch/public ABI",
                                               path=f"{path}.core_streams[{stream_index}].address_relocations")
+            elif (action.task_kind is SemanticTaskKind.COMP
+                    and action.op_kind is OpKind.MOE_EXPERT_BACKWARD):
+                from .moe_expert_backward_record_check import (
+                    validate_moe_expert_backward_records,
+                )
+                validate_moe_expert_backward_records(
+                    action, self.producer_pass, records, indices,
+                    self.buffer_abi, stream.address_relocations,
+                    {symbol.id: symbol for symbol in self.program_symbols},
+                    path=f"{path}.core_streams[{stream_index}].records",
+                )
             elif action.task_kind is SemanticTaskKind.COMP:
                 assert action.compute is not None
                 abi = _compute_record_abi(
@@ -5246,8 +5262,12 @@ class CommandFragment:
                             path=f"{path}.core_streams[{stream_index}].address_relocations[{relocation_index}]",
                         )
                     continue
-                if (action.op_kind is OpKind.MOE_EXPERT_FORWARD
-                        and self.producer_pass == "moe_full_train_expert_lowering"):
+                if ((action.op_kind is OpKind.MOE_EXPERT_FORWARD
+                     and self.producer_pass == "moe_full_train_expert_lowering")
+                    or (action.op_kind is OpKind.MOE_EXPERT_BACKWARD
+                        and self.producer_pass == "moe_full_train_expert_backward_lowering")):
+                    # The macro's dedicated record validator checks every
+                    # scratch view and exact relocation addend above.
                     continue
                 role, operand_index = _address_operand_role(
                     record.opcode, relocation.operand_id, path, action=action
@@ -7513,14 +7533,17 @@ class LinkedProgramManifest:
         }
         expert_scratch_by_action: dict[str, tuple[BufferABI, ...]] = {}
         for action in executable.values():
-            if action.op_kind is not OpKind.MOE_EXPERT_FORWARD:
+            if action.op_kind not in (OpKind.MOE_EXPERT_FORWARD,
+                                      OpKind.MOE_EXPERT_BACKWARD):
                 continue
             schedule = schedules[action.source.schedule_id]
+            expected_scratch_count = (2 if action.op_kind is OpKind.MOE_EXPERT_FORWARD
+                                      else 5)
             scratch = tuple(item.binding for item in
                             schedule.moe_expert_scratch_bindings
                             if item.task_id == action.source.task_id)
-            if len(scratch) != 2:
-                raise SchemaError("expert needs exact two scheduled scratch roots",
+            if len(scratch) != expected_scratch_count:
+                raise SchemaError("expert needs exact scheduled scratch roots",
                                   path=f"{path}.fragments")
             for binding in scratch:
                 key = (schedule.id, binding.id)
@@ -7937,8 +7960,10 @@ class LinkedProgramManifest:
                                 path=f"{path}.fragments",
                             )
                         roles[role] = occurrence
-                    elif (fragment.producer_pass == "moe_full_train_expert_lowering"
-                          and action.op_kind is OpKind.MOE_EXPERT_FORWARD):
+                    elif ((fragment.producer_pass == "moe_full_train_expert_lowering"
+                           and action.op_kind is OpKind.MOE_EXPERT_FORWARD)
+                          or (fragment.producer_pass == "moe_full_train_expert_backward_lowering"
+                              and action.op_kind is OpKind.MOE_EXPERT_BACKWARD)):
                         definition = program_definitions[relocation.symbol_ref]
                         source_ref = definition.symbol.source_ref
                         matches = tuple(abi for abi in fragment.buffer_abi
