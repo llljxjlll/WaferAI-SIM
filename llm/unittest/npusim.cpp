@@ -151,6 +151,9 @@ Define_bool_opt("--moe-forward-sequence", g_flag_moe_forward_sequence, false,
 Define_bool_opt("--moe-router-sgd-partial-sequence",
                 g_flag_moe_router_sgd_partial_sequence, false,
                 "two EP1 MoE partial programs with one native router SGD; not full training");
+Define_bool_opt("--moe-layer1-sgd-partial-sequence",
+                g_flag_moe_layer1_sgd_partial_sequence, false,
+                "two EP1 MoE partial programs with four router/expert SGD writes; not full training");
 Define_string_opt("--dense-adamw-paged-runtime",
                   g_flag_dense_adamw_paged_runtime, std::string{},
                   "source-signed per-StateABI external DMA for two Dense AdamW steps");
@@ -760,13 +763,15 @@ MoeForwardProgramWitness ValidateMoeForwardProgram(
     return result;
 }
 
-MoeForwardProgramWitness ValidateMoeRouterSgdPartialProgram(
+MoeForwardProgramWitness ValidateMoeSgdPartialProgram(
     const std::string &manifest_text,
-    const std::vector<DenseSequenceKvRange> &ranges) {
+    const std::vector<DenseSequenceKvRange> &ranges,
+    bool layer1_parameter_sgd) {
     const frontend::LinkedProgramManifestDto manifest =
         frontend::ProgramArtifactFinalizer::Parse(manifest_text);
     std::map<Opcode, std::size_t> records;
     std::map<std::string, frontend::StateKindDto> states;
+    std::map<std::string, const frontend::StateAbiDto *> state_abis;
     for (const frontend::LinkedFragmentDto &linked : manifest.fragments) {
         const frontend::CommandFragmentDto *fragment =
             std::get_if<frontend::CommandFragmentDto>(&linked);
@@ -774,6 +779,7 @@ MoeForwardProgramWitness ValidateMoeRouterSgdPartialProgram(
             fragment = &std::get<frontend::RegionManifestDto>(linked).fragment;
         for (const frontend::StateAbiDto &state : fragment->state_abi) {
             const auto [it, inserted] = states.emplace(state.id, state.kind);
+            state_abis.emplace(state.id, &state);
             if (!inserted && it->second != state.kind)
                 throw std::runtime_error(
                     "MoE partial sequence has conflicting StateABI kind");
@@ -782,7 +788,7 @@ MoeForwardProgramWitness ValidateMoeRouterSgdPartialProgram(
             for (const auto &record : stream.records) ++records[record.opcode];
     }
     MoeForwardProgramWitness result;
-    result.records = 254;
+    result.records = layer1_parameter_sgd ? 340 : 254;
     for (const auto &[ref, kind] : states) {
         if (kind == frontend::StateKindDto::MOE_STATIC_ROUTE)
             result.route_state_refs.insert(ref);
@@ -794,15 +800,75 @@ MoeForwardProgramWitness ValidateMoeRouterSgdPartialProgram(
     }
     std::size_t total_records = 0;
     for (const auto &[opcode, count] : records) total_records += count;
+    if (layer1_parameter_sgd) {
+        std::set<std::string> stored_state_refs;
+        std::vector<uint64_t> stored_sizes;
+        for (const auto &binding : manifest.state_operand_bindings) {
+            const auto fragment = std::find_if(
+                manifest.fragments.begin(), manifest.fragments.end(),
+                [&](const frontend::LinkedFragmentDto &linked) {
+                    const auto *item =
+                        std::get_if<frontend::CommandFragmentDto>(&linked);
+                    if (item == nullptr)
+                        item = &std::get<frontend::RegionManifestDto>(linked).fragment;
+                    return item->id == binding.fragment_id;
+                });
+            if (fragment == manifest.fragments.end())
+                throw std::runtime_error(
+                    "MoE layer1 SGD STORE references unknown fragment");
+            const auto *item =
+                std::get_if<frontend::CommandFragmentDto>(&*fragment);
+            if (item == nullptr)
+                item = &std::get<frontend::RegionManifestDto>(*fragment).fragment;
+            const auto stream = std::find_if(
+                item->core_streams.begin(), item->core_streams.end(),
+                [&](const auto &entry) {
+                    return entry.logical_core == binding.logical_core;
+                });
+            if (stream == item->core_streams.end() ||
+                binding.fragment_record_index >= stream->records.size())
+                throw std::runtime_error(
+                    "MoE layer1 SGD STORE references unknown core record");
+            if (stream->records[binding.fragment_record_index].opcode !=
+                Opcode::LSU_STORE)
+                continue;
+            const auto state = state_abis.find(binding.state_abi_id);
+            if (state == state_abis.end() ||
+                binding.operand_id != SemanticOperandId::HBM_ADDRESS ||
+                state->second->kind !=
+                    frontend::StateKindDto::TRAINABLE_PARAMETER ||
+                state->second->access != frontend::StateAccessDto::READ_WRITE ||
+                state->second->dtype != frontend::BufferDTypeDto::FP16 ||
+                state->second->die_id != 0 ||
+                !stored_state_refs.insert(state->second->state_ref).second)
+                throw std::runtime_error(
+                    "MoE layer1 SGD STORE lacks unique FP16 trainable StateABI");
+            stored_sizes.push_back(state->second->size_bytes);
+        }
+        std::sort(stored_sizes.begin(), stored_sizes.end());
+        if (stored_sizes != std::vector<uint64_t>{8, 64, 64, 64})
+            throw std::runtime_error(
+                "MoE layer1 SGD STORE has wrong four-state byte closure");
+    }
     if (manifest.producer_pass != "manifest_linker" ||
         total_records != result.records || manifest.core_streams.size() != 1 ||
         result.trainable_states != 19 || result.route_state_refs.size() != 2 ||
-        ranges.size() != 19 || records[Opcode::GEMM_WEIGHT_WGRAD_TIMING] != 2 ||
+        ranges.size() != 19 ||
+        records[Opcode::GEMM_WEIGHT_WGRAD_TIMING] !=
+            (layer1_parameter_sgd ? 5 : 2) ||
         records[Opcode::MOE_SCORE_WEIGHT_BACKWARD] != 1 ||
         records[Opcode::CROSS_ENTROPY_BACKWARD] != 1 ||
-        records[Opcode::SGD_UPDATE] != 1 || records[Opcode::LSU_STORE] != 1)
+        records[Opcode::SGD_UPDATE] != (layer1_parameter_sgd ? 4 : 1) ||
+        records[Opcode::LSU_STORE] != (layer1_parameter_sgd ? 4 : 1) ||
+        (layer1_parameter_sgd &&
+         (records[Opcode::GEMM_DX_TIMING] != 5 ||
+          records[Opcode::NORM_GAMMA_WGRAD_TIMING] != 2 ||
+          records[Opcode::RMSNORM_BACKWARD_TIMING] != 2 ||
+          records[Opcode::RESIDUAL] != 6 ||
+          records[Opcode::SWIGLU_BACKWARD_TIMING] != 1 ||
+          records[Opcode::LOCAL_REDUCE] != 1)))
         throw std::runtime_error(
-            "MoE router SGD partial sequence needs exact physical backward/update/store witness");
+            "MoE partial SGD sequence needs exact physical backward/update/store witness");
     return result;
 }
 
@@ -969,6 +1035,21 @@ std::string PrintMoeRouterSgdPartialStateBoundary(
     const bool changed = previous_digest.has_value() &&
                          *previous_digest != boundary.digest;
     std::cout << "[MOE_ROUTER_SGD_PARTIAL_STATE] version=" << version
+              << " bytes=" << boundary.bytes
+              << " digest=" << boundary.digest
+              << " content_changed=" << (changed ? 1 : 0)
+              << " functional=0 full_training=0 pass=1" << std::endl;
+    return boundary.digest;
+}
+
+std::string PrintMoeLayer1SgdPartialStateBoundary(
+    HBMRuntime &runtime, std::size_t version,
+    const std::vector<DenseSequenceKvRange> &ranges,
+    const std::optional<std::string> &previous_digest) {
+    const DenseSequenceBoundary boundary = ReadDenseStateBoundary(runtime, ranges);
+    const bool changed = previous_digest.has_value() &&
+                         *previous_digest != boundary.digest;
+    std::cout << "[MOE_LAYER1_SGD_PARTIAL_STATE] version=" << version
               << " bytes=" << boundary.bytes
               << " digest=" << boundary.digest
               << " content_changed=" << (changed ? 1 : 0)
@@ -1308,7 +1389,8 @@ int sc_main(int argc, char *argv[]) {
                               adamw_paged || inference_paged ||
                               moe_inference_paged ||
                               g_flag_moe_forward_sequence ||
-                              g_flag_moe_router_sgd_partial_sequence;
+                              g_flag_moe_router_sgd_partial_sequence ||
+                              g_flag_moe_layer1_sgd_partial_sequence;
     if (sequence_any &&
         (g_flag_program_sequence.empty() ||
          g_flag_linked_manifest_sequence.empty() ||
@@ -1323,11 +1405,17 @@ int sc_main(int argc, char *argv[]) {
     const bool moe_forward_sequence = g_flag_moe_forward_sequence;
     const bool moe_router_sgd_partial_sequence =
         g_flag_moe_router_sgd_partial_sequence;
-    if (moe_forward_sequence && moe_router_sgd_partial_sequence) {
-        LOG_ERROR(CONFIG) << "MoE forward and router SGD partial sequence modes are exclusive";
+    const bool moe_layer1_sgd_partial_sequence =
+        g_flag_moe_layer1_sgd_partial_sequence;
+    const bool moe_partial_sgd_sequence =
+        moe_router_sgd_partial_sequence || moe_layer1_sgd_partial_sequence;
+    if (static_cast<int>(moe_forward_sequence) +
+        static_cast<int>(moe_router_sgd_partial_sequence) +
+        static_cast<int>(moe_layer1_sgd_partial_sequence) > 1) {
+        LOG_ERROR(CONFIG) << "MoE forward/router/layer1 SGD partial sequence modes are exclusive";
         return 2;
     }
-    if ((moe_forward_sequence || moe_router_sgd_partial_sequence) &&
+    if ((moe_forward_sequence || moe_partial_sgd_sequence) &&
         (adamw_paged || inference_paged || moe_inference_paged ||
          !g_flag_external_dma_binding.empty())) {
         LOG_ERROR(CONFIG) << "MoE forward-only sequence forbids pager and external DMA";
@@ -1756,7 +1844,7 @@ int sc_main(int argc, char *argv[]) {
                     (!adamw_paged &&
                      sidecar_paths.size() != program_paths.size()) ||
                     (adamw_paged && program_paths.size() != 2) ||
-                    ((moe_forward_sequence || moe_router_sgd_partial_sequence) &&
+                    ((moe_forward_sequence || moe_partial_sgd_sequence) &&
                      program_paths.size() != 2) ||
                     (inference_paged && program_paths.size() != 3) ||
                     (moe_inference_paged && program_paths.size() != 3))
@@ -1789,17 +1877,18 @@ int sc_main(int argc, char *argv[]) {
                                 "Program sequence must contain exactly one "
                                 "supported persistent-state family");
                         dense_training_sequence = !training_ranges.empty() &&
-                            !moe_forward_sequence && !moe_router_sgd_partial_sequence;
+                            !moe_forward_sequence && !moe_partial_sgd_sequence;
                     }
-                    if (moe_forward_sequence || moe_router_sgd_partial_sequence) {
+                    if (moe_forward_sequence || moe_partial_sgd_sequence) {
                         if (!kv_ranges.empty() || training_ranges.empty())
                             throw std::runtime_error(
                                 "MoE forward-only sequence state family changed");
                         sequence_training_state_ranges.push_back(training_ranges);
                         sequence_moe_forward_witnesses.push_back(
-                            moe_router_sgd_partial_sequence
-                                ? ValidateMoeRouterSgdPartialProgram(
-                                      manifest, training_ranges)
+                            moe_partial_sgd_sequence
+                                ? ValidateMoeSgdPartialProgram(
+                                      manifest, training_ranges,
+                                      moe_layer1_sgd_partial_sequence)
                                 : ValidateMoeForwardProgram(
                                       manifest, training_ranges));
                     } else if (dense_training_sequence) {
@@ -1821,7 +1910,7 @@ int sc_main(int argc, char *argv[]) {
                             "Dense sequence ProgramIo sidecar",
                             sidecar_paths[index]);
                         if (moe_forward_sequence ||
-                            moe_router_sgd_partial_sequence) {
+                            moe_partial_sgd_sequence) {
                             const nlohmann::json io = nlohmann::json::parse(sidecar);
                             if (!io.is_object() ||
                                 io.value("producer_pass", std::string{}) !=
@@ -1835,7 +1924,7 @@ int sc_main(int argc, char *argv[]) {
                                 sequence_program_bytes.back()));
                     }
                 }
-                if (moe_router_sgd_partial_sequence) {
+                if (moe_partial_sgd_sequence) {
                     const auto &ranges = sequence_training_state_ranges.front();
                     const auto &initializations =
                         sequence_program_io_resolved.front().initializations;
@@ -1872,7 +1961,7 @@ int sc_main(int argc, char *argv[]) {
                     dense_training_sequence)
                     throw std::runtime_error(
                         "paged inference DMA requires actual three-segment KV sequence");
-                if (moe_forward_sequence || moe_router_sgd_partial_sequence) {
+                if (moe_forward_sequence || moe_partial_sgd_sequence) {
                     ValidateDenseTrainingStateContinuity(
                         sequence_training_state_ranges);
                     if (sequence_manifest_texts[0] == sequence_manifest_texts[1] ||
@@ -2431,10 +2520,14 @@ int sc_main(int argc, char *argv[]) {
     }
 
     std::optional<std::string> dense_training_state_digest;
-    if (sequence_mode && moe_router_sgd_partial_sequence) {
-        dense_training_state_digest = PrintMoeRouterSgdPartialStateBoundary(
-            *monitor->hbmRuntime, 0,
-            sequence_training_state_ranges.front(), std::nullopt);
+    if (sequence_mode && moe_partial_sgd_sequence) {
+        dense_training_state_digest = moe_layer1_sgd_partial_sequence
+            ? PrintMoeLayer1SgdPartialStateBoundary(
+                  *monitor->hbmRuntime, 0,
+                  sequence_training_state_ranges.front(), std::nullopt)
+            : PrintMoeRouterSgdPartialStateBoundary(
+                  *monitor->hbmRuntime, 0,
+                  sequence_training_state_ranges.front(), std::nullopt);
     }
     if (sequence_mode && dense_training_sequence) {
         if (adamw_paged) {
@@ -2565,20 +2658,29 @@ int sc_main(int argc, char *argv[]) {
                           << " route_states=" << witness.route_state_refs.size()
                           << " backward=0 sgd=0 functional=0 pass=1"
                           << std::endl;
-            } else if (moe_router_sgd_partial_sequence) {
+            } else if (moe_partial_sgd_sequence) {
                 const auto before = *dense_training_state_digest;
-                dense_training_state_digest = PrintMoeRouterSgdPartialStateBoundary(
-                    *monitor->hbmRuntime, expected + 1,
-                    sequence_training_state_ranges[expected],
-                    dense_training_state_digest);
+                dense_training_state_digest = moe_layer1_sgd_partial_sequence
+                    ? PrintMoeLayer1SgdPartialStateBoundary(
+                          *monitor->hbmRuntime, expected + 1,
+                          sequence_training_state_ranges[expected],
+                          dense_training_state_digest)
+                    : PrintMoeRouterSgdPartialStateBoundary(
+                          *monitor->hbmRuntime, expected + 1,
+                          sequence_training_state_ranges[expected],
+                          dense_training_state_digest);
                 const auto &witness = sequence_moe_forward_witnesses[expected];
-                std::cout << "[MOE_ROUTER_SGD_PARTIAL_SEQUENCE_STEP] index=" << expected
-                          << " input_version=" << expected
+                std::cout << (moe_layer1_sgd_partial_sequence
+                                  ? "[MOE_LAYER1_SGD_PARTIAL_SEQUENCE_STEP] index="
+                                  : "[MOE_ROUTER_SGD_PARTIAL_SEQUENCE_STEP] index=")
+                          << expected << " input_version=" << expected
                           << " output_version=" << expected + 1
                           << " trainable_states=" << witness.trainable_states
                           << " route_states=" << witness.route_state_refs.size()
                           << " records=" << witness.records
-                          << " sgd=1 store=1 state_digest_before=" << before
+                          << " sgd=" << (moe_layer1_sgd_partial_sequence ? 4 : 1)
+                          << " store=" << (moe_layer1_sgd_partial_sequence ? 4 : 1)
+                          << " state_digest_before=" << before
                           << " state_digest_after=" << *dense_training_state_digest
                           << " full_training=0 functional=0 pass=1"
                           << std::endl;
@@ -2664,7 +2766,7 @@ int sc_main(int argc, char *argv[]) {
                     frontend::program_io::ApplyBeforeSequenceSegment(
                         sequence_program_io_resolved[expected + 1],
                         *sequence_program_io_bindings, true);
-                if (moe_router_sgd_partial_sequence) {
+                if (moe_partial_sgd_sequence) {
                     const DenseSequenceBoundary next_input =
                         ReadDenseStateBoundary(
                             *monitor->hbmRuntime,
@@ -2672,7 +2774,9 @@ int sc_main(int argc, char *argv[]) {
                     if (next_input.digest != *dense_training_state_digest)
                         throw std::runtime_error(
                             "MoE partial step input does not preserve completed prior HBM state");
-                    std::cout << "[MOE_ROUTER_SGD_PARTIAL_INPUT] index="
+                    std::cout << (moe_layer1_sgd_partial_sequence
+                                      ? "[MOE_LAYER1_SGD_PARTIAL_INPUT] index="
+                                      : "[MOE_ROUTER_SGD_PARTIAL_INPUT] index=")
                               << expected + 1 << " prior_store_completed=1"
                               << " same_hbm_state=1 digest="
                               << next_input.digest << " pass=1" << std::endl;

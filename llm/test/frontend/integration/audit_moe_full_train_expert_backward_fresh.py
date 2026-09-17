@@ -8,6 +8,7 @@ from collections import Counter
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -65,6 +66,8 @@ PROFILES = {
         backbone_probes=2,
     ),
 }
+PROFILES["layer1_sgd_sequence"] = dict(
+    PROFILES["layer1_parameter_sgd"], sequence=True)
 
 
 def digest(path: Path) -> str:
@@ -229,10 +232,52 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path,
                     (root / f"{prefix}.resolver.log").read_text(),
                     f"fresh{fresh_index} step{step} finalizer/resolver missing")
             ids.append(manifest["id"])
+        if profile.get("sequence", False):
+            sequence_log = root / "layer1_sgd_partial_sequence.npusim.log"
+            require(sequence_log.is_file() and
+                    digest(sequence_log) ==
+                    receipt.get("layer1_sgd_partial_sequence_log_sha256"),
+                    f"fresh{fresh_index} partial two-step sequence log drifted")
+            content = sequence_log.read_text()
+            states = re.findall(
+                r"\[MOE_LAYER1_SGD_PARTIAL_STATE\] version=([012]) "
+                r"bytes=952 digest=([0-9a-f]{64}) content_changed=0 "
+                r"functional=0 full_training=0 pass=1", content)
+            steps = re.findall(
+                r"\[MOE_LAYER1_SGD_PARTIAL_SEQUENCE_STEP\] "
+                r"index=([01]) input_version=[01] output_version=[12] "
+                r"trainable_states=19 route_states=2 records=340 "
+                r"sgd=4 store=4 state_digest_before=([0-9a-f]{64}) "
+                r"state_digest_after=([0-9a-f]{64}) "
+                r"full_training=0 functional=0 pass=1", content)
+            input_digest = re.findall(
+                r"\[MOE_LAYER1_SGD_PARTIAL_INPUT\] index=1 "
+                r"prior_store_completed=1 same_hbm_state=1 "
+                r"digest=([0-9a-f]{64}) pass=1", content)
+            require(tuple(version for version, _digest in states) ==
+                    ("0", "1", "2") and
+                    tuple(index for index, _before, _after in steps) ==
+                    ("0", "1") and len(input_digest) == 1 and
+                    steps[0][1:] == (states[0][1], states[1][1]) and
+                    steps[1][1:] == (states[1][1], states[2][1]) and
+                    input_digest[0] == states[1][1] and
+                    content.count("[TRAIN_SGD]") == 8 and
+                    content.count("[DENSE_SEQUENCE_PROGRAM_IO] index=0 probes=5 pass=1") == 1 and
+                    content.count("[DENSE_SEQUENCE_PROGRAM_IO] index=1 probes=5 pass=1") == 1 and
+                    content.count("[DENSE_SEQUENCE_DRAIN] segments=2 one_shot=1") == 1 and
+                    "lsu_hbm_read_bytes=2896 lsu_hbm_write_bytes=400" in content and
+                    "[CREDIT] data_balanced=1 ctrl_balanced=1" in content and
+                    "[DRAIN] d2d_link_residual=0" in content,
+                    f"fresh{fresh_index} partial two-step HBM version chain drifted")
+        else:
+            require(receipt.get("layer1_sgd_partial_sequence_log_sha256") is None,
+                    f"fresh{fresh_index} unexpected partial sequence claim")
         bindings.append(tuple(source_maps))
         linked_ids.append(ids)
         case_files.append({path.name: digest(path) for path in sorted(root.iterdir())
                            if path.is_file()})
+        require(len(case_files[-1]) == (18 if profile.get("sequence", False) else 17),
+                f"fresh{fresh_index} artifact set size drifted")
     require(bindings[0] == bindings[1] and linked_ids[0] == linked_ids[1],
             "independent Fresh source/import/linked IDs diverged")
     require(set(case_files[0]) == set(case_files[1]),
@@ -247,7 +292,8 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path,
         "imported_python_at_exit_count": len(bindings[0][2]),
         "fresh_roots": [str(path) for path in roots],
         "native_runtime_cwd": str(tools),
-        "native_executions": 4,
+        "native_invocations": 5 if profile.get("sequence", False) else 4,
+        "native_executions": 6 if profile.get("sequence", False) else 4,
         "linked_ids_by_step": linked_ids[0],
         "file_count_per_fresh": [len(files) for files in case_files],
         "file_sha256_by_fresh": case_files,

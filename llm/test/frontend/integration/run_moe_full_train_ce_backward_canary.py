@@ -11,6 +11,7 @@ import base64
 from dataclasses import replace
 import json
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -436,6 +437,62 @@ def main() -> None:
                 or "[DRAIN] d2d_link_residual=0" not in content):
             raise RuntimeError("MoE router SGD partial native sequence audit failed")
         sequence_log_sha256 = _sha(sequence_log)
+    layer1_sequence_log_sha256 = None
+    if args.layer1_parameter_sgd:
+        sequence_log = output / "layer1_sgd_partial_sequence.npusim.log"
+        _run([
+            str(npusim),
+            "--program-sequence", ",".join(str(output / f"step{step}.npup")
+                                           for step in (0, 1)),
+            "--linked-manifest-sequence", ",".join(
+                str(output / f"step{step}.linked.json") for step in (0, 1)),
+            "--program-io-sequence", ",".join(
+                str(output / f"step{step}.program_io.json") for step in (0, 1)),
+            "--moe-layer1-sgd-partial-sequence",
+            "--hardware-config", str(hardware_path),
+            "--simulation-config", str(simulation),
+            "--mapping-config", str(mapping), "--trace-window", "1000000",
+        ], cwd=npusim.parent, log=sequence_log)
+        content = sequence_log.read_text()
+        required = (
+            "[MOE_LAYER1_SGD_PARTIAL_STATE] version=0 bytes=952",
+            "[MOE_LAYER1_SGD_PARTIAL_STATE] version=1 bytes=952",
+            "[MOE_LAYER1_SGD_PARTIAL_STATE] version=2 bytes=952",
+            "[MOE_LAYER1_SGD_PARTIAL_INPUT] index=1 prior_store_completed=1 same_hbm_state=1",
+            "[MOE_LAYER1_SGD_PARTIAL_SEQUENCE_STEP] index=0 input_version=0 output_version=1 trainable_states=19 route_states=2 records=340 sgd=4 store=4",
+            "[MOE_LAYER1_SGD_PARTIAL_SEQUENCE_STEP] index=1 input_version=1 output_version=2 trainable_states=19 route_states=2 records=340 sgd=4 store=4",
+            "[DENSE_SEQUENCE_PROGRAM_IO] index=0 probes=5 pass=1",
+            "[DENSE_SEQUENCE_PROGRAM_IO] index=1 probes=5 pass=1",
+            "[DENSE_SEQUENCE_DRAIN] segments=2 one_shot=1",
+            "lsu_hbm_read_bytes=2896 lsu_hbm_write_bytes=400",
+        )
+        state_versions = re.findall(
+            r"\[MOE_LAYER1_SGD_PARTIAL_STATE\] version=([012]) bytes=952 "
+            r"digest=([0-9a-f]{64}) content_changed=0 functional=0 "
+            r"full_training=0 pass=1", content)
+        steps = re.findall(
+            r"\[MOE_LAYER1_SGD_PARTIAL_SEQUENCE_STEP\] index=([01]) .*?"
+            r"state_digest_before=([0-9a-f]{64}) "
+            r"state_digest_after=([0-9a-f]{64}) "
+            r"full_training=0 functional=0 pass=1", content)
+        input_match = re.findall(
+            r"\[MOE_LAYER1_SGD_PARTIAL_INPUT\] index=1 "
+            r"prior_store_completed=1 same_hbm_state=1 "
+            r"digest=([0-9a-f]{64}) pass=1", content)
+        if (any(content.count(marker) != 1 for marker in required)
+                or content.count("[TRAIN_SGD]") != 8
+                or tuple(version for version, _digest in state_versions)
+                   != ("0", "1", "2")
+                or tuple(index for index, _before, _after in steps)
+                   != ("0", "1")
+                or len(input_match) != 1
+                or steps[0][1:] != (state_versions[0][1], state_versions[1][1])
+                or steps[1][1:] != (state_versions[1][1], state_versions[2][1])
+                or input_match[0] != state_versions[1][1]
+                or "[CREDIT] data_balanced=1 ctrl_balanced=1" not in content
+                or "[DRAIN] d2d_link_residual=0" not in content):
+            raise RuntimeError("MoE layer1 four-SGD partial native sequence audit failed")
+        layer1_sequence_log_sha256 = _sha(sequence_log)
     repo = repo_root
     source_files = (
         "llm/frontend/wafer_frontend/passes/moe_full_train_ce_backward_ir0.py",
@@ -503,6 +560,7 @@ def main() -> None:
                 "ce_backward_physical_partial"),
         full_training_gate="closed", steps=receipts,
         router_sgd_partial_sequence_log_sha256=sequence_log_sha256,
+        layer1_sgd_partial_sequence_log_sha256=layer1_sequence_log_sha256,
         finalizer_sha256=_sha(finalizer), resolver_sha256=_sha(resolver),
         npusim_sha256=_sha(npusim), hardware_sha256=_sha(hardware_path),
         simulation_sha256=_sha(simulation),
