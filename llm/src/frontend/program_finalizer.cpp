@@ -3670,7 +3670,8 @@ std::set<std::string> ValidateActionSequence(
     bool flexible_dense_backward_link,
     bool unfused_link,
     const std::set<std::string> &moe_terminal_labels,
-    const std::set<std::string> &moe_expert_actions) {
+    const std::set<std::string> &moe_expert_actions,
+    const std::set<std::string> &dense_dp2_state_fence_actions) {
     std::set<std::string> completed;
     std::set<std::string> allocated_once;
     std::set<std::string> freed_once;
@@ -3858,6 +3859,13 @@ std::set<std::string> ValidateActionSequence(
         else if (flexible_dense_backward_link && suffix == cursor + 2 &&
                  records[cursor]->opcode == Opcode::DTE_RECV &&
                  records[cursor + 1]->opcode == Opcode::DTE_WAIT)
+            valid_body = true;
+        else if (dense_dp2_state_fence_actions.count(action) == 1 &&
+                 suffix == cursor + 2 &&
+                 ((records[cursor]->opcode == Opcode::EVENT_WAIT &&
+                   records[cursor + 1]->opcode == Opcode::LSU_LOAD) ||
+                  (records[cursor]->opcode == Opcode::LSU_STORE &&
+                   records[cursor + 1]->opcode == Opcode::EVENT_SET)))
             valid_body = true;
         else if (suffix == cursor + 1) {
             const Opcode opcode = records[cursor]->opcode;
@@ -8339,6 +8347,29 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
             }
             return result;
         }();
+        const std::set<std::string> dense_dp2_state_fence_actions = [&]() {
+            std::set<std::string> result;
+            if (dp2_route_digest_count != 1) return result;
+            for (const LinkedFragmentDto &linked : manifest.fragments) {
+                const CommandFragmentDto &fragment = Leaf(linked);
+                if (fragment.producer_pass != "state_dma_lowering" ||
+                    fragment.kind != FragmentKindDto::STATE_IO)
+                    continue;
+                bool has_fence = false;
+                for (const CoreFragmentStreamDto &stream : fragment.core_streams)
+                    for (const RelocatableRecordDto &record : stream.records)
+                        has_fence = has_fence ||
+                            record.opcode == Opcode::EVENT_SET ||
+                            record.opcode == Opcode::EVENT_WAIT;
+                if (!has_fence) continue;
+                if (fragment.claimed_action_ids.size() != 1 ||
+                    fragment.core_streams.size() != 1 ||
+                    !result.insert(fragment.claimed_action_ids.front()).second)
+                    Fail("linked_program_manifest.fragments",
+                         "DP2 state fence must belong to one unique STATE_IO action");
+            }
+            return result;
+        }();
         for (std::size_t core_index = 0; core_index < pending.size(); ++core_index) {
             const LinkedCoreStreamDto &linked = *pending[core_index].linked;
             ProgramCore core;
@@ -8553,7 +8584,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                         flexible_dense_backward_link,
                         unfused_link,
                         moe_terminal_labels,
-                        moe_expert_actions);
+                        moe_expert_actions,
+                        dense_dp2_state_fence_actions);
                 }();
             std::size_t persistent_tape_allocations = 0;
             for (std::size_t index = 0; index < source_records.size(); ++index) {
