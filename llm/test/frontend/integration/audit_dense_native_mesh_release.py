@@ -1,4 +1,4 @@
-"""Reopen and aggregate the four strict Dense resident 100-shape shards."""
+"""Reopen the Dense 100-shape resident profile without claiming full-Die coverage."""
 from __future__ import annotations
 
 import argparse
@@ -107,6 +107,8 @@ def audit_release(
     return {
         "schema_version": "dense-native-mesh-release-audit-v1",
         "status": "verified",
+        "profile_scope": "resident_mixed_shape_scaled_and_fixed_tp6",
+        "full_die_active_accepted": False,
         "source_root": str(source_root),
         "driver_sha256": driver_sha,
         "runner_sha256": runner_sha,
@@ -136,7 +138,7 @@ def main() -> None:
         raise ValueError("release audit output already exists")
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
                            encoding="utf-8")
-    print("Dense native 100-shape resident release audit PASS 100 cases / 200 Fresh")
+    print("Dense resident profile audit PASS 100 cases / 200 Fresh; full-Die matrix pending")
 
 
 if __name__ == "__main__":
