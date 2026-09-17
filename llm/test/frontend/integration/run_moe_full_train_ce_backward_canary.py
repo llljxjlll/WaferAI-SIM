@@ -53,6 +53,23 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_input_gradient_ir0 import
 from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_backbone_ir0 import (
     append_moe_full_train_layer1_backbone_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_attention_ir0 import (
+    append_moe_full_train_layer1_attention_ir0,
+    append_moe_full_train_layer0_attention_ir0,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_qkv_ir0 import (
+    append_moe_full_train_layer1_qkv_ir0,
+    append_moe_full_train_layer0_qkv_ir0,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_layer0_moe_ir0 import (
+    append_moe_full_train_layer0_moe_ir0,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_embedding_wgrad_ir0 import (
+    append_moe_full_train_embedding_wgrad_ir0,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_all_parameter_sgd_ir0 import (
+    append_moe_full_train_all_parameter_sgd_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_parameter_sgd_ir0 import (
     append_moe_full_train_layer1_parameter_sgd_ir0,
 )
@@ -110,8 +127,14 @@ def main() -> None:
     parser.add_argument("--input-gradient", action="store_true")
     parser.add_argument("--layer1-backbone", action="store_true")
     parser.add_argument("--layer1-parameter-sgd", action="store_true")
+    parser.add_argument("--two-layer-reverse", action="store_true")
+    parser.add_argument("--all-parameter-sgd", action="store_true")
     args = parser.parse_args()
-    layer1_backbone_mode = args.layer1_backbone or args.layer1_parameter_sgd
+    two_layer_reverse_mode = args.two_layer_reverse or args.all_parameter_sgd
+    if two_layer_reverse_mode and (args.router_sgd or args.layer1_parameter_sgd):
+        parser.error("two-layer reverse and partial SGD modes are exclusive")
+    layer1_backbone_mode = (args.layer1_backbone or args.layer1_parameter_sgd
+                            or two_layer_reverse_mode)
     input_gradient_mode = args.input_gradient or layer1_backbone_mode
     router_dx_mode = args.router_dx or input_gradient_mode
     expert_mode = args.expert_backward or router_dx_mode
@@ -168,6 +191,15 @@ def main() -> None:
         if args.layer1_parameter_sgd:
             source = append_moe_full_train_layer1_parameter_sgd_ir0(
                 source, sequence)
+        if two_layer_reverse_mode:
+            source = append_moe_full_train_layer1_attention_ir0(source)
+            source = append_moe_full_train_layer1_qkv_ir0(source)
+            source = append_moe_full_train_layer0_moe_ir0(source)
+            source = append_moe_full_train_layer0_attention_ir0(source)
+            source = append_moe_full_train_layer0_qkv_ir0(source)
+        if args.all_parameter_sgd:
+            source = append_moe_full_train_embedding_wgrad_ir0(source)
+            source = append_moe_full_train_all_parameter_sgd_ir0(source, sequence)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
@@ -199,7 +231,7 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != (79 if args.layer1_parameter_sgd else 67 if layer1_backbone_mode else 64 if input_gradient_mode else 63 if router_dx_mode else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
+        if len(leaves) != (160 if args.all_parameter_sgd else 101 if two_layer_reverse_mode else 79 if args.layer1_parameter_sgd else 67 if layer1_backbone_mode else 64 if input_gradient_mode else 63 if router_dx_mode else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
                            59 if args.combine_backward else
                            58 if args.shared_reverse else
                            55 if args.head_backward else 52):
@@ -212,7 +244,27 @@ def main() -> None:
         )
         opcodes = [record.opcode for fragment in manifest.fragments
                    for stream in fragment.core_streams for record in stream.records]
-        if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
+        if two_layer_reverse_mode:
+            expected = {
+                RecordOpcode.CROSS_ENTROPY_BACKWARD: 1,
+                RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING: 13,
+                RecordOpcode.GEMM_DX_TIMING: 13,
+                RecordOpcode.NORM_GAMMA_WGRAD_TIMING: 5,
+                RecordOpcode.RMSNORM_BACKWARD_TIMING: 5,
+                RecordOpcode.RESIDUAL_BACKWARD_TIMING: 4,
+                RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD: 2,
+                RecordOpcode.SGD_UPDATE: 19 if args.all_parameter_sgd else 0,
+                RecordOpcode.EMBEDDING_TABLE_WGRAD_TIMING: 1 if args.all_parameter_sgd else 0,
+                RecordOpcode.LSU_STORE: 19 if args.all_parameter_sgd else 0,
+                RecordOpcode.SWIGLU_BACKWARD_TIMING: 2,
+                RecordOpcode.LOCAL_REDUCE: 2,
+                RecordOpcode.ATTENTION_BACKWARD_TIMING: 2,
+                RecordOpcode.ROPE_BACKWARD_TIMING: 2,
+            }
+            actual = {kind.name: opcodes.count(kind) for kind in expected}
+            if any(actual[kind.name] != count for kind, count in expected.items()):
+                raise RuntimeError(f"two-layer reverse physical opcodes drifted: {actual}")
+        elif (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
                 or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (5 if expert_mode else 2 if args.router_wgrad or args.router_sgd else int(args.head_backward or args.shared_reverse or args.combine_backward))
                 or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != (5 if router_dx_mode else 4 if expert_mode else int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd))
                 or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != (2 if layer1_backbone_mode else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
@@ -232,6 +284,27 @@ def main() -> None:
              cwd=output, log=output / f"step{step}.finalizer.log")
         carrier = MoeFullTrainForwardLinkedSource(manifest, context)
         carrier.validate()
+        full_state_writes = ()
+        if args.all_parameter_sgd:
+            update_nodes = source.nodes[-19:]
+            state_refs = tuple(next(access.state_ref for access in source.state_accesses
+                                    if access.node_ref == node.id
+                                    and access.mode is StateAccessMode.READ_WRITE)
+                               for node in update_nodes)
+            matches = tuple(item for item in _resolved_state_abis(carrier)
+                            if item.abi.state_ref in state_refs)
+            if (len(state_refs) != 19 or len(set(state_refs)) != 19
+                    or len(matches) != 19
+                    or {item.abi.state_ref for item in matches} != set(state_refs)
+                    or sum(item.abi.size_bytes for item in matches) != 952
+                    or any(item.abi.access is not PersistentStateAccess.READ_WRITE
+                           or item.first_access is not StateUseAccess.READ
+                           or sum(access is StateUseAccess.WRITE
+                                  for _index, access in item.uses) != 1
+                           for item in matches)
+                    or opcodes.count(RecordOpcode.LSU_STORE) != 19):
+                raise RuntimeError("full MoE 19-parameter SGD lacks exact physical HBM writes")
+            full_state_writes = matches
         state_write = None
         layer1_state_writes = ()
         if args.layer1_parameter_sgd:
@@ -310,10 +383,23 @@ def main() -> None:
             expert_probes = tuple(item for item in sidecar_payload["output_probes"]
                                   if item["target"]["value_id"].startswith(
                                       "backward::T0.layer1.moe.expert0."))
-            if len(expert_probes) != (0 if args.layer1_parameter_sgd else
+            if len(expert_probes) != (0 if args.all_parameter_sgd else
+                                      3 if two_layer_reverse_mode else
+                                      0 if args.layer1_parameter_sgd else
                                       3 if input_gradient_mode else 4):
                 raise RuntimeError("expert reverse lacks exact physical output probes")
-            if input_gradient_mode:
+            if two_layer_reverse_mode and not args.all_parameter_sgd:
+                layer0_expert_probes = tuple(item for item in sidecar_payload["output_probes"]
+                    if item["target"]["value_id"].startswith(
+                        "backward::T0.layer0.moe.expert0."))
+                terminal = tuple(item for item in sidecar_payload["output_probes"]
+                    if item["target"]["value_id"] ==
+                    "backward::T0.layer0.norm1.merge_layer0.input_gradient")
+                if (len(sidecar_payload["output_probes"]) != 20
+                        or len(layer0_expert_probes) != 3
+                        or len(terminal) != 1):
+                    raise RuntimeError("two-layer source gradients lack exact physical probes")
+            if input_gradient_mode and not two_layer_reverse_mode:
                 terminal_ids = (
                     ("backward::T0.layer1.residual1.merge.input_gradient",
                      next(node.outputs[0] for node in source.nodes
@@ -330,6 +416,12 @@ def main() -> None:
             expert_probe_nonzero_expected_bytes = sum(
                 byte != 0 for item in expert_probes
                 for byte in blobs[item["blob_ref"]])
+        if args.all_parameter_sgd:
+            sidecar_payload = json.loads(sidecar.read_text())
+            if (len(sidecar_payload["output_probes"]) != 1
+                    or sidecar_payload["output_probes"][0]["target"]["value_id"]
+                       != "T0.loss"):
+                raise RuntimeError("all-parameter SGD must consume 19 gradient outputs")
         _run([str(resolver), "--resolve", str(linked), str(artifact),
               str(sidecar)], cwd=output,
              log=output / f"step{step}.resolver.log")
@@ -356,6 +448,10 @@ def main() -> None:
                                          for item in layer1_state_writes),
             layer1_sgd_write_bytes=sum(item.abi.size_bytes
                                        for item in layer1_state_writes),
+            all_sgd_state_refs=sorted(item.abi.state_ref
+                                      for item in full_state_writes),
+            all_sgd_write_bytes=sum(item.abi.size_bytes
+                                    for item in full_state_writes),
             dloss_seed_abi=dloss[0].id,
         ))
     assert native_context is not None
@@ -390,6 +486,10 @@ def main() -> None:
               "--mapping-config", str(mapping), "--trace-window", "1000000"],
              cwd=npusim.parent, log=log)
         content = log.read_text()
+        if (args.all_parameter_sgd
+                and (content.count("[TRAIN_SGD]") != 19
+                     or "lsu_hbm_write_bytes=952" not in content)):
+            raise RuntimeError(f"step{step} all 19 MoE SGD/state writes did not execute")
         if (args.layer1_parameter_sgd
                 and (content.count("[TRAIN_SGD]") != 4
                      or "lsu_hbm_write_bytes=200" not in content)):
@@ -493,6 +593,62 @@ def main() -> None:
                 or "[DRAIN] d2d_link_residual=0" not in content):
             raise RuntimeError("MoE layer1 four-SGD partial native sequence audit failed")
         layer1_sequence_log_sha256 = _sha(sequence_log)
+    all_sequence_log_sha256 = None
+    if args.all_parameter_sgd:
+        sequence_log = output / "all_sgd_partial_sequence.npusim.log"
+        _run([
+            str(npusim),
+            "--program-sequence", ",".join(str(output / f"step{step}.npup")
+                                           for step in (0, 1)),
+            "--linked-manifest-sequence", ",".join(
+                str(output / f"step{step}.linked.json") for step in (0, 1)),
+            "--program-io-sequence", ",".join(
+                str(output / f"step{step}.program_io.json") for step in (0, 1)),
+            "--moe-all-sgd-partial-sequence",
+            "--hardware-config", str(hardware_path),
+            "--simulation-config", str(simulation),
+            "--mapping-config", str(mapping), "--trace-window", "1000000",
+        ], cwd=npusim.parent, log=sequence_log)
+        content = sequence_log.read_text()
+        required = (
+            "[MOE_ALL_SGD_PARTIAL_STATE] version=0 bytes=952",
+            "[MOE_ALL_SGD_PARTIAL_STATE] version=1 bytes=952",
+            "[MOE_ALL_SGD_PARTIAL_STATE] version=2 bytes=952",
+            "[MOE_ALL_SGD_PARTIAL_INPUT] index=1 prior_store_completed=1 same_hbm_state=1",
+            "[MOE_ALL_SGD_PARTIAL_SEQUENCE_STEP] index=0 input_version=0 output_version=1 trainable_states=19 route_states=2 records=621 sgd=19 store=19",
+            "[MOE_ALL_SGD_PARTIAL_SEQUENCE_STEP] index=1 input_version=1 output_version=2 trainable_states=19 route_states=2 records=621 sgd=19 store=19",
+            "[DENSE_SEQUENCE_PROGRAM_IO] index=0 probes=1 pass=1",
+            "[DENSE_SEQUENCE_PROGRAM_IO] index=1 probes=1 pass=1",
+            "[DENSE_SEQUENCE_DRAIN] segments=2 one_shot=1",
+            "lsu_hbm_read_bytes=5184 lsu_hbm_write_bytes=1904",
+        )
+        state_versions = re.findall(
+            r"\[MOE_ALL_SGD_PARTIAL_STATE\] version=([012]) bytes=952 "
+            r"digest=([0-9a-f]{64}) content_changed=0 functional=0 "
+            r"full_training=0 pass=1", content)
+        steps = re.findall(
+            r"\[MOE_ALL_SGD_PARTIAL_SEQUENCE_STEP\] index=([01]) .*?"
+            r"state_digest_before=([0-9a-f]{64}) "
+            r"state_digest_after=([0-9a-f]{64}) "
+            r"full_training=0 functional=0 pass=1", content)
+        input_match = re.findall(
+            r"\[MOE_ALL_SGD_PARTIAL_INPUT\] index=1 "
+            r"prior_store_completed=1 same_hbm_state=1 "
+            r"digest=([0-9a-f]{64}) pass=1", content)
+        if (any(content.count(marker) != 1 for marker in required)
+                or content.count("[TRAIN_SGD]") != 38
+                or tuple(version for version, _digest in state_versions)
+                   != ("0", "1", "2")
+                or tuple(index for index, _before, _after in steps)
+                   != ("0", "1")
+                or len(input_match) != 1
+                or steps[0][1:] != (state_versions[0][1], state_versions[1][1])
+                or steps[1][1:] != (state_versions[1][1], state_versions[2][1])
+                or input_match[0] != state_versions[1][1]
+                or "[CREDIT] data_balanced=1 ctrl_balanced=1" not in content
+                or "[DRAIN] d2d_link_residual=0" not in content):
+            raise RuntimeError("MoE all-19-SGD partial native sequence audit failed")
+        all_sequence_log_sha256 = _sha(sequence_log)
     repo = repo_root
     source_files = (
         "llm/frontend/wafer_frontend/passes/moe_full_train_ce_backward_ir0.py",
@@ -505,6 +661,11 @@ def main() -> None:
         "llm/frontend/wafer_frontend/passes/moe_full_train_router_dx_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_input_gradient_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_backbone_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_attention_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_qkv_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_layer0_moe_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_embedding_wgrad_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_all_parameter_sgd_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_parameter_sgd_ir0.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_workload.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_record_check.py",
@@ -547,7 +708,9 @@ def main() -> None:
         native_tool_sha256=tool_hashes_at_entry,
         runner_cwd=str(Path.cwd().resolve()),
         native_runtime_cwd=str(npusim.parent),
-        status=("layer1_parameter_sgd_physical_partial" if args.layer1_parameter_sgd else
+        status=("all_parameter_sgd_physical_partial" if args.all_parameter_sgd else
+                "two_layer_reverse_physical_partial" if two_layer_reverse_mode else
+                "layer1_parameter_sgd_physical_partial" if args.layer1_parameter_sgd else
                 "layer1_backbone_physical_partial" if layer1_backbone_mode else
                 "input_gradient_physical_partial" if input_gradient_mode else
                 "router_dx_physical_partial" if router_dx_mode else
@@ -561,6 +724,7 @@ def main() -> None:
         full_training_gate="closed", steps=receipts,
         router_sgd_partial_sequence_log_sha256=sequence_log_sha256,
         layer1_sgd_partial_sequence_log_sha256=layer1_sequence_log_sha256,
+        all_sgd_partial_sequence_log_sha256=all_sequence_log_sha256,
         finalizer_sha256=_sha(finalizer), resolver_sha256=_sha(resolver),
         npusim_sha256=_sha(npusim), hardware_sha256=_sha(hardware_path),
         simulation_sha256=_sha(simulation),
