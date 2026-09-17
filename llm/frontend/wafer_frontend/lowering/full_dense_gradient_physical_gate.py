@@ -958,7 +958,7 @@ def require_full_dense_physical_gradient_paths(
             if (not expected_cores or witnessed_cores != expected_cores
                     or len(next_loads) != len(expected_cores)):
                 raise SchemaError(
-                    "updated parameter needs one witnessed next-step HBM LOAD version per physical core",
+                    "updated parameter needs exact next-step HBM LOAD version per physical core",
                     path=f"gradient_path[{path.parameter_state_ref}].version",
                 )
 
