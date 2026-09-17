@@ -36,6 +36,7 @@ from .common import (
     validate_unique_ids,
 )
 from .ir0 import (
+    AdamwUpdateWorkload,
     CollectiveKind,
     EdgeKind,
     FusionPattern,
@@ -2874,13 +2875,29 @@ class IntraDieDAG:
                 if declaration.dtype is DType.INT32:
                     source_node = next((node for node in ir1.nodes
                                         if node.id == access.node_ref), None)
-                    if (declaration.identity.kind is not StateKind.MOE_STATIC_ROUTE
-                            or access.mode is not StateAccessMode.READ
-                            or source_node is None
-                            or source_node.kind is not OpKind.MOE_ROUTE_FREEZE
-                            or declaration.shape != (source_node.workload.token_count, 5)):
+                    static_route = (
+                        declaration.identity.kind is StateKind.MOE_STATIC_ROUTE
+                        and access.mode is StateAccessMode.READ
+                        and source_node is not None
+                        and source_node.kind is OpKind.MOE_ROUTE_FREEZE
+                        and declaration.shape == (source_node.workload.token_count, 5)
+                    )
+                    adamw_counter = (
+                        declaration.identity.kind is StateKind.OPTIMIZER_STEP
+                        and declaration.access is PersistentStateAccess.READ_WRITE
+                        and access.mode is StateAccessMode.READ_WRITE
+                        and access.rank == declaration.identity.shard_index == 0
+                        and declaration.shape == (1,)
+                        and source_node is not None
+                        and source_node.kind is OpKind.OPTIMIZER_UPDATE
+                        and type(source_node.workload) is AdamwUpdateWorkload
+                        and len(source_node.inputs) == 6
+                        and len(source_node.outputs) == 5
+                        and declaration.identity.tensor_ref == source_node.inputs[5]
+                    )
+                    if not (static_route or adamw_counter):
                         raise SchemaError(
-                            "INT32 state DMA is reserved for the exact static MoE route read",
+                            "INT32 state DMA needs exact static route or AdamW step counter",
                             path=f"{path}.state_access_ids[{access_index}]",
                         )
                 expected_kinds = expected_kinds_by_mode[access.mode]
@@ -7271,6 +7288,76 @@ class IntraDieSchedule:
                 and use.role is BufferUseRole.COMP_INPUT
                 and use.operand_index == 0
             )
+            if (optimizer.compute is not None
+                    and type(optimizer.compute.workload) is AdamwUpdateWorkload):
+                output_index = alias_use.operand_index
+                if (output_index >= 5
+                        or len(optimizer.compute.inputs) != 6
+                        or len(optimizer.compute.outputs) != 5):
+                    raise SchemaError(
+                        "AdamW alias needs six inputs and five exact outputs",
+                        path=f"{binding_path}.value_id",
+                    )
+                input_indices = (0, 2, 3, 4, 5)
+                kinds = (StateKind.TRAINABLE_PARAMETER,
+                         StateKind.OPTIMIZER_MASTER,
+                         StateKind.OPTIMIZER_MOMENT1,
+                         StateKind.OPTIMIZER_MOMENT2,
+                         StateKind.OPTIMIZER_STEP)
+                roles = ("weight", "master", "m", "v", "step")
+                weight_staging = staging_value_index.get(
+                    optimizer.compute.inputs[0].value_id)
+                weight_state = (None if weight_staging is None else next(
+                    (item for item in manifest.declarations
+                     if item.id == weight_staging.state_ref), None))
+                weight_ref = (None if weight_state is None else
+                              weight_state.identity.tensor_ref)
+                own_root_uses = tuple(
+                    use for use in root_uses
+                    if use.task_id == optimizer.id
+                    and use.role is BufferUseRole.COMP_INPUT
+                    and use.operand_index == input_indices[output_index]
+                )
+                if (declaration is None or access is None
+                        or weight_state is None or weight_ref is None
+                        or weight_state.identity.kind is not StateKind.TRAINABLE_PARAMETER
+                        or declaration.identity.kind is not kinds[output_index]
+                        or declaration.lifetime is not PersistentStateLifetime.PERSISTENT
+                        or declaration.access is not PersistentStateAccess.READ_WRITE
+                        or access.state_ref != declaration.id
+                        or access.mode is not StateAccessMode.READ_WRITE
+                        or optimizer.kind is not SemanticTaskKind.COMP
+                        or optimizer.op_kind is not OpKind.OPTIMIZER_UPDATE
+                        or not isinstance(optimizer.origin_ref, OrdinaryNodeOrigin)
+                        or access.node_ref != optimizer.origin_ref.op_id
+                        or optimizer.compute.inputs[input_indices[output_index]].value_id
+                           != root.value_id
+                        or optimizer.compute.outputs[output_index].value_id
+                           != binding.value_id
+                        or alias_use.role is not BufferUseRole.COMP_OUTPUT
+                        or len(own_root_uses) != 1
+                        or binding.tensor_slice.offset != root.tensor_slice.offset
+                        or binding.tensor_slice.shape != root.tensor_slice.shape):
+                    raise SchemaError(
+                        "AdamW output alias must bind its own exact state staging",
+                        path=f"{binding_path}.value_id",
+                    )
+                expected_alias = (
+                    (f"trainable:{weight_ref}"
+                     + (f":tp{weight_state.identity.shard_index}"
+                        if sum(item.identity.tensor_ref == weight_ref
+                               for item in manifest.declarations) > 1 else ""))
+                    if output_index == 0 else
+                    f"optimizer:{roles[output_index]}:{weight_ref}"
+                )
+                if (alias_value.alias_set != expected_alias
+                        or (output_index == 0 and
+                            optimizer.compute.effects.alias_set != expected_alias)):
+                    raise SchemaError(
+                        "AdamW output alias changes source state identity",
+                        path=f"{binding_path}.value_id",
+                    )
+                continue
             if (
                 declaration is None
                 or access is None

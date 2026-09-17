@@ -10,7 +10,7 @@ from ..schema.common import DType, stable_artifact_id
 from ..schema.dense_dp_sync_routes import DenseDP2RoutePlan
 from ..schema.dense_dp_sync_tasks import DenseDP2ProjectedTasks
 from ..schema.ir1 import IR1, MemoryInitiator
-from ..schema.ir0 import OpKind
+from ..schema.ir0 import AdamwUpdateWorkload, OpKind
 from ..schema.ir2 import (
     BufferAccess,
     BufferBinding,
@@ -550,69 +550,84 @@ def _ordinary_schedule(
                 f"projection.dags.values.{value.id}.producer_tasks",
             )
         producer = task_by_id[value.producer_tasks[0]]
-        if (
-            producer.kind is not SemanticTaskKind.COMP
-            or producer.op_kind is not OpKind.OPTIMIZER_UPDATE
-            or producer.compute is None
-            or producer.compute.effects.alias_set != value.alias_set
-            or tuple(operand.role for operand in producer.compute.inputs)
-            != ("weight", "weight_gradient")
-            or tuple(operand.role for operand in producer.compute.outputs)
-            != ("updated_weight",)
-            or producer.compute.outputs[0].value_id != value.id
-        ):
-            _fail(
-                "only exact OPTIMIZER_UPDATE output aliasing is supported",
-                f"projection.dags.values.{value.id}.alias_set",
-            )
-        source_id = producer.compute.inputs[0].value_id
+        if (producer.kind is not SemanticTaskKind.COMP
+                or producer.op_kind is not OpKind.OPTIMIZER_UPDATE
+                or producer.compute is None):
+            _fail("aliased output needs a real optimizer compute",
+                  f"projection.dags.values.{value.id}.alias_set")
+        compute = producer.compute
+        adamw = type(compute.workload) is AdamwUpdateWorkload
+        expected_inputs = (("weight", "weight_gradient", "master_weight",
+                            "first_moment", "second_moment", "step_counter")
+                           if adamw else ("weight", "weight_gradient"))
+        expected_outputs = (("updated_weight", "updated_master_weight",
+                             "updated_first_moment", "updated_second_moment",
+                             "updated_step_counter")
+                            if adamw else ("updated_weight",))
+        if (tuple(operand.role for operand in compute.inputs) != expected_inputs
+                or tuple(operand.role for operand in compute.outputs)
+                   != expected_outputs):
+            _fail("only exact OPTIMIZER_UPDATE output aliasing is supported",
+                  f"projection.dags.values.{value.id}.alias_set")
+        matching = tuple(index for index, operand in enumerate(compute.outputs)
+                         if operand.value_id == value.id)
+        if len(matching) != 1:
+            _fail("optimizer aliased value lacks its exact output role",
+                  f"projection.dags.values.{value.id}.alias_set")
+        output_index = matching[0]
+        input_index = (0, 2, 3, 4, 5)[output_index] if adamw else 0
+        source_id = compute.inputs[input_index].value_id
         staging = staging_value_index.get(source_id)
         manifest = ir1.persistent_state_manifest
         if staging is None or manifest is None:
-            _fail(
-                "optimizer alias root must be persistent-state staging",
-                f"projection.dags.values.{value.id}.alias_set",
+            _fail("optimizer alias root must be persistent-state staging",
+                  f"projection.dags.values.{value.id}.alias_set")
+        declarations = {item.id: item for item in manifest.declarations}
+        declaration = declarations.get(staging.state_ref)
+        access = next((item for item in ir1.state_accesses
+                       if item.id == staging.state_access_ref), None)
+        weight_staging = staging_value_index.get(compute.inputs[0].value_id)
+        weight_declaration = (None if weight_staging is None else
+                              declarations.get(weight_staging.state_ref))
+        kinds = (StateKind.TRAINABLE_PARAMETER, StateKind.OPTIMIZER_MASTER,
+                 StateKind.OPTIMIZER_MOMENT1, StateKind.OPTIMIZER_MOMENT2,
+                 StateKind.OPTIMIZER_STEP)
+        roles = ("weight", "master", "m", "v", "step")
+        expected_kind = kinds[output_index]
+        if output_index == 0:
+            tensor_ref = None if declaration is None else declaration.identity.tensor_ref
+            expected_alias = (
+                None if tensor_ref is None else
+                f"trainable:{tensor_ref}"
+                + (f":tp{declaration.identity.shard_index}"
+                   if sum(state.identity.tensor_ref == tensor_ref
+                          for state in manifest.declarations) > 1 else "")
             )
-        declaration = next(
-            (
-                item
-                for item in manifest.declarations
-                if item.id == staging.state_ref
-            ),
-            None,
-        )
-        access = next(
-            (
-                item
-                for item in ir1.state_accesses
-                if item.id == staging.state_access_ref
-            ),
-            None,
-        )
+        else:
+            tensor_ref = (None if weight_declaration is None else
+                          weight_declaration.identity.tensor_ref)
+            expected_alias = (None if tensor_ref is None else
+                              f"optimizer:{roles[output_index]}:{tensor_ref}")
         if (
             declaration is None
             or access is None
-            or declaration.identity.kind is not StateKind.TRAINABLE_PARAMETER
+            or declaration.identity.kind is not expected_kind
             or declaration.lifetime is not PersistentStateLifetime.PERSISTENT
             or declaration.access is not PersistentStateAccess.READ_WRITE
             or declaration.identity.tensor_ref is None
-            or value.alias_set
-            != (
-                f"trainable:{declaration.identity.tensor_ref}"
-                + (f":tp{declaration.identity.shard_index}"
-                   if sum(state.identity.tensor_ref == declaration.identity.tensor_ref
-                          for state in manifest.declarations) > 1 else "")
-            )
+            or weight_declaration is None
+            or weight_declaration.identity.kind is not StateKind.TRAINABLE_PARAMETER
+            or (output_index == 0
+                and compute.effects.alias_set != value.alias_set)
+            or value.alias_set != expected_alias
             or access.state_ref != declaration.id
             or access.node_ref != producer.member_id
             or value.shape != staging.shape
             or value.dtype is not staging.dtype
             or value.logical_layout != staging.logical_layout
         ):
-            _fail(
-                "optimizer alias root must be the exact READ_WRITE trainable state",
-                f"projection.dags.values.{value.id}.alias_set",
-            )
+            _fail("optimizer alias root must be the exact READ_WRITE source state",
+                  f"projection.dags.values.{value.id}.alias_set")
         alias_source_by_value[value.id] = source_id
     state_domain_by_value = {
         value.id: TensorSlice(

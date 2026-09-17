@@ -16,6 +16,7 @@ from .common import DType, stable_artifact_id, validate_nonempty, validate_uint6
 from .global_action import GlobalActionDAG
 from .ir1 import IR1
 from .ir0 import (
+    AdamwUpdateWorkload,
     CrossEntropyBackwardWorkload,
     CrossEntropyForwardWorkload,
     OpKind,
@@ -862,23 +863,57 @@ def _validate_full_dense_sgd_projection_state(
 ) -> None:
     """Every source parameter read and in-place SGD write owns actual HBM IO."""
     manifest = graph.persistent_state_manifest
-    updates = {node.id for node in graph.nodes
-               if node.kind is OpKind.OPTIMIZER_UPDATE}
+    update_nodes = tuple(node for node in graph.nodes
+                         if node.kind is OpKind.OPTIMIZER_UPDATE)
+    updates = {node.id for node in update_nodes}
     steps = sum(node.kind is OpKind.CE_FORWARD for node in graph.nodes)
-    if (manifest is None or steps not in (1, 2) or not updates or
-            len(updates) != steps * len(manifest.declarations) or
-            any(state.identity.kind is not StateKind.TRAINABLE_PARAMETER
-                or state.access is not PersistentStateAccess.READ_WRITE
-                for state in manifest.declarations)):
-        raise SchemaError("Dense SGD projection requires one writable state per update",
+    declarations = (() if manifest is None else manifest.declarations)
+    adamw = bool(update_nodes) and all(
+        type(node.workload) is AdamwUpdateWorkload for node in update_nodes
+    )
+    trainable = tuple(state for state in declarations
+                      if state.identity.kind is StateKind.TRAINABLE_PARAMETER)
+    if (manifest is None or steps not in (1, 2) or not updates
+            or len(updates) != steps * len(trainable)
+            or any(state.access is not PersistentStateAccess.READ_WRITE
+                   for state in declarations)):
+        raise SchemaError("Dense optimizer projection needs exact writable source states",
                           path=f"{path}.graph.persistent_state_manifest")
     accesses = {access.id: access for access in graph.state_accesses}
     read_ids = set(accesses)
     write_ids = {access.id for access in accesses.values()
                  if access.mode is StateAccessMode.READ_WRITE}
-    if {accesses[ref].node_ref for ref in write_ids} != updates or (
-        len(write_ids) != len(updates)
-    ):
+    if adamw:
+        kinds = (
+            StateKind.TRAINABLE_PARAMETER, StateKind.OPTIMIZER_MASTER,
+            StateKind.OPTIMIZER_MOMENT1, StateKind.OPTIMIZER_MOMENT2,
+            StateKind.OPTIMIZER_STEP,
+        )
+        by_tensor = {state.identity.tensor_ref: state for state in declarations}
+        if (len(declarations) != 5 * len(trainable)
+                or len(by_tensor) != len(declarations)
+                or len(write_ids) != 5 * len(updates)):
+            raise SchemaError("AdamW needs five distinct physical states per update",
+                              path=f"{path}.graph.persistent_state_manifest")
+        for update in update_nodes:
+            operand_refs = (update.inputs[0], *update.inputs[2:])
+            expected = tuple(by_tensor.get(ref) for ref in operand_refs)
+            own = tuple(access for access in accesses.values()
+                        if access.node_ref == update.id
+                        and access.mode is StateAccessMode.READ_WRITE)
+            if (len(update.inputs) != 6 or len(expected) != 5
+                    or any(state is None or state.identity.kind is not kind
+                           for state, kind in zip(expected, kinds))
+                    or len(own) != 5
+                    or {access.state_ref for access in own}
+                       != {state.id for state in expected}):
+                raise SchemaError("AdamW update must read/write its own weight/master/m/v/step",
+                                  path=f"{path}.graph.state_accesses")
+    elif (len(declarations) != len(trainable)
+          or any(type(node.workload) is not SgdUpdateWorkload
+                 for node in update_nodes)
+          or {accesses[ref].node_ref for ref in write_ids} != updates
+          or len(write_ids) != len(updates)):
         raise SchemaError("each SGD update needs one exact state write",
                           path=f"{path}.graph.state_accesses")
     physical_read = []
@@ -1199,8 +1234,9 @@ class TrainProjectedReplica:
                 for node in ce_nodes)
             for step in (0, 1)
         ) and sum(node.kind is OpKind.OPTIMIZER_UPDATE
-                  for node in self.graph.nodes) == 2 * len(
-                      self.graph.persistent_state_manifest.declarations)
+                  for node in self.graph.nodes) == 2 * sum(
+                      state.identity.kind is StateKind.TRAINABLE_PARAMETER
+                      for state in self.graph.persistent_state_manifest.declarations)
         if not (len(ce_nodes) == 1 or two_step):
             raise SchemaError(
                 "train forward requires one CE or exact two-step CE/SGD inventory",
