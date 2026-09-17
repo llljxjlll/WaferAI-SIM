@@ -156,7 +156,7 @@ def _six_die_fixed_model_case(rows: int, columns: int):
     return manifest, template, fabric
 
 
-def _all_die_scaled_model_case(rows: int, columns: int, *, compact: bool = False):
+def _all_die_scaled_model_case(rows: int, columns: int):
     """One two-layer Dense source with every physical Die doing TP work."""
 
     if not (1 <= rows <= 10 and 1 <= columns <= 10):
@@ -178,7 +178,7 @@ def _all_die_scaled_model_case(rows: int, columns: int, *, compact: bool = False
         steps=WorkloadStepSpec(inference=WorkloadInferenceSteps(
             prefill_tokens=1,
             decode_steps=2,
-            request_count=1 if compact else ranks,
+            request_count=ranks,
         )),
         mesh=WorkloadMeshSpec(rows, columns),
         parallel=WorkloadParallelSpec(
@@ -327,13 +327,10 @@ def _source_tool_snapshot(args: argparse.Namespace) -> dict[str, dict[str, str]]
 def run(args: argparse.Namespace) -> None:
     source_tool_at_entry = _source_tool_snapshot(args)
     rows, columns = (int(dimension) for dimension in args.mesh_size.split("x"))
-    scaled_all_dies = args.scaled_all_dies or args.compact_scaled_all_dies
-    if sum((args.scaled_all_dies, args.compact_scaled_all_dies,
-            args.fixed_global_tp6)) > 1:
-        raise ValueError("select exactly one Dense mesh profile")
-    if scaled_all_dies:
-        manifest, template, fabric = _all_die_scaled_model_case(
-            rows, columns, compact=args.compact_scaled_all_dies)
+    if args.scaled_all_dies and args.fixed_global_tp6:
+        raise ValueError("select either scaled-all-dies or fixed-global-tp6")
+    if args.scaled_all_dies:
+        manifest, template, fabric = _all_die_scaled_model_case(rows, columns)
     elif args.fixed_global_tp6:
         manifest, template, fabric = _six_die_fixed_model_case(rows, columns)
     elif args.mesh_size == "1x1":
@@ -360,7 +357,7 @@ def run(args: argparse.Namespace) -> None:
                 manifest, template, fabric,
                 hbm_address_spaces=hbm_address_spaces,
                 intra_die_wire_address_limit_bytes=(
-                    65536 if scaled_all_dies
+                    65536 if args.scaled_all_dies
                     or manifest.request.parallel.tp == 6 else None
                 ),
             )
@@ -396,7 +393,7 @@ def run(args: argparse.Namespace) -> None:
         )
     (output / "compiled_receipt.json").write_text(json.dumps({
         "mesh": args.mesh_size,
-        "scaled_all_dies": scaled_all_dies,
+        "scaled_all_dies": args.scaled_all_dies,
         "active_die_ids": manifest.placement.active_die_ids,
         "idle_die_ids": manifest.placement.idle_die_ids,
         "compiled_core_die_ids": compiled_core_die_ids,
@@ -413,7 +410,7 @@ def run(args: argparse.Namespace) -> None:
         "frontend_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "runtime_status": "not_measured",
         "intra_die_wire_address_limit_bytes": (
-            65536 if scaled_all_dies
+            65536 if args.scaled_all_dies
             or manifest.request.parallel.tp == 6 else None
         ),
     }, indent=2, sort_keys=True), encoding="utf-8")
@@ -527,11 +524,11 @@ def run(args: argparse.Namespace) -> None:
     hardware = json.loads(specialize_p5_large_release_hardware(rows, columns))
     native_core_grid = _bind_native_hardware_to_fabric(hardware, fabric)
     sram_bytes = (
-        _SIX_DIE_SRAM_BYTES if scaled_all_dies
+        _SIX_DIE_SRAM_BYTES if args.scaled_all_dies
         or manifest.request.parallel.tp == 6 else 65536
     )
     sram_alignment = (
-        32 if scaled_all_dies else
+        32 if args.scaled_all_dies else
         _SIX_DIE_SRAM_ALIGNMENT_BYTES
         if manifest.request.parallel.tp == 6 else 64
     )
@@ -737,10 +734,6 @@ def _parse_args() -> argparse.Namespace:
         help="two-layer Dense TP=all physical Dies; shape-scaled main case",
     )
     parser.add_argument(
-        "--compact-scaled-all-dies", action="store_true",
-        help="TP=all Dies with one request; separate lower-cost release profile",
-    )
-    parser.add_argument(
         "--fixed-global-tp6",
         action="store_true",
         help="unchanged two-layer Dense TP6 source on a physical mesh of >=6 Dies",
@@ -761,16 +754,15 @@ def _parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     fixed_shapes = {"1x1", "2x2", "1x4", "4x1", "2x3", "3x2",
                     "1x6", "6x1", "3x3"}
-    if sum((args.scaled_all_dies, args.compact_scaled_all_dies,
-            args.fixed_global_tp6)) > 1:
-        parser.error("choose exactly one Dense mesh profile")
+    if args.scaled_all_dies and args.fixed_global_tp6:
+        parser.error("choose exactly one of --scaled-all-dies and --fixed-global-tp6")
     if args.fixed_global_tp6 and (
         int(args.mesh_size.split("x")[0]) * int(args.mesh_size.split("x")[1]) < 6
     ):
         parser.error("--fixed-global-tp6 requires at least six physical Dies")
-    if (not args.scaled_all_dies and not args.compact_scaled_all_dies
-            and not args.fixed_global_tp6 and args.mesh_size not in fixed_shapes):
-        parser.error("this mesh size requires a scaled all-Die or fixed TP6 profile")
+    if (not args.scaled_all_dies and not args.fixed_global_tp6
+            and args.mesh_size not in fixed_shapes):
+        parser.error("this mesh size requires --scaled-all-dies or --fixed-global-tp6")
     if args.timeout <= 0 or args.compile_timeout <= 0:
         parser.error("--timeout and --compile-timeout must be positive")
     for name in ("finalizer", "npusim", "resolver", "simulation"):
