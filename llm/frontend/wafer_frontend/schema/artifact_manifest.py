@@ -16,6 +16,9 @@ from .action import (
 )
 from .common import DType, stable_artifact_id, validate_nonempty, validate_uint64
 from ._validation_session import mark_validation_complete, validation_seen
+from .dense_state_version_fence import (
+    DenseStateVersionFence, dense_dp2_state_version_fences,
+)
 from .global_action import (
     STATE_TRANSFER_ENDPOINT_SESSION_CAPACITY,
     GlobalAction,
@@ -3223,6 +3226,40 @@ def _plan_barrier_operands(
     return operands
 
 
+def canonical_dense_state_version_symbols(
+    fence: DenseStateVersionFence,
+) -> tuple[RuntimeSymbol, RuntimeSymbol, RuntimeSymbol]:
+    """Exact runtime core/tag symbols for one physical HBM version edge."""
+    return (
+        RuntimeSymbol(fence.symbol_id("source_core"),
+                      RuntimeSymbolKind.RUNTIME_CORE, fence.source_ref),
+        RuntimeSymbol(fence.symbol_id("destination_core"),
+                      RuntimeSymbolKind.RUNTIME_CORE, fence.source_ref),
+        RuntimeSymbol(fence.symbol_id("event_tag"),
+                      RuntimeSymbolKind.EVENT_TAG, fence.source_ref),
+    )
+
+
+def canonical_dense_state_version_record(
+    fence: DenseStateVersionFence, *, owner_id: str, opcode: RecordOpcode,
+) -> RelocatableRecord:
+    if ((opcode is RecordOpcode.EVENT_SET and owner_id != fence.store_action_id)
+            or (opcode is RecordOpcode.EVENT_WAIT and owner_id != fence.load_action_id)
+            or opcode not in (RecordOpcode.EVENT_SET, RecordOpcode.EVENT_WAIT)):
+        raise SchemaError("state version EVENT owner/opcode differs from source pair",
+                          path="dense_state_version_fence")
+    source, destination, event = canonical_dense_state_version_symbols(fence)
+    operands = (
+        RecordOperand.runtime("source_core", RuntimeOperandField.SOURCE_CORE, source.id),
+        RecordOperand.runtime("destination_core", RuntimeOperandField.DESTINATION_CORE,
+                              destination.id),
+        RecordOperand.runtime("tag", RuntimeOperandField.EVENT_TAG, event.id),
+    )
+    if opcode is RecordOpcode.EVENT_WAIT:
+        operands += (RecordOperand.literal("count", 1),)
+    return RelocatableRecord(owner_id, opcode, operands)
+
+
 def _expected_plan_barrier_events(
     dag: GlobalActionDAG, path: str
 ) -> dict[tuple[str, str, str], _PlanBarrierRecordSpec]:
@@ -4852,9 +4889,10 @@ class CommandFragment:
                     if action.task_kind is SemanticTaskKind.DMA_IN
                     else RecordOpcode.LSU_STORE
                 )
+                lsu_indices = tuple(index for index in indices
+                                    if records[index].opcode is expected_opcode)
                 if (
-                    len(indices) != 1
-                    or records[indices[0]].opcode is not expected_opcode
+                    len(lsu_indices) != 1
                     or action.dma is None
                     or len(action.state_uses) != 1
                     or len(action.buffer_uses) != 1
@@ -4863,7 +4901,7 @@ class CommandFragment:
                         "state DMA requires one exact direction-matching blocking LSU record",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
-                record = records[indices[0]]
+                record = records[lsu_indices[0]]
                 state_use = action.state_uses[0]
                 matching_state = tuple(
                     abi
@@ -4967,6 +5005,42 @@ class CommandFragment:
                         "UNFUSED WAIT requires exact DTE_WAIT then no-operand DTE_FENCE",
                         path=f"{path}.core_streams[{stream_index}].records",
                     )
+            elif (self.kind is FragmentKind.STATE_IO
+                  and action.task_kind in (SemanticTaskKind.DMA_IN,
+                                           SemanticTaskKind.DMA_OUT)):
+                fences = dense_dp2_state_version_fences(dag)
+                incoming = tuple(fence for fence in fences
+                                 if fence.load_action_id == action.id)
+                outgoing = tuple(fence for fence in fences
+                                 if fence.store_action_id == action.id)
+                if (incoming and action.task_kind is not SemanticTaskKind.DMA_IN
+                        or outgoing and action.task_kind is not SemanticTaskKind.DMA_OUT):
+                    raise SchemaError("state-version EVENT direction differs from source DMA",
+                                      path=f"{path}.core_streams[{stream_index}].records")
+                exact_events = (
+                    *(canonical_dense_state_version_record(
+                        fence, owner_id=action.id, opcode=RecordOpcode.EVENT_WAIT)
+                      for fence in incoming),
+                    *(canonical_dense_state_version_record(
+                        fence, owner_id=action.id, opcode=RecordOpcode.EVENT_SET)
+                      for fence in outgoing),
+                )
+                actual = tuple(records[index] for index in indices)
+                expected_opcodes = (
+                    *((RecordOpcode.EVENT_WAIT,) * len(incoming)),
+                    allowed_opcodes[action.task_kind][0],
+                    *((RecordOpcode.EVENT_SET,) * len(outgoing)),
+                )
+                expected_symbols = tuple(sorted({symbol.id: symbol
+                    for fence in (*incoming, *outgoing)
+                    for symbol in canonical_dense_state_version_symbols(fence)
+                }.values(), key=lambda symbol: symbol.id))
+                if (tuple(record.opcode for record in actual) != expected_opcodes
+                        or actual[:len(incoming)] != exact_events[:len(incoming)]
+                        or actual[len(incoming) + 1:] != exact_events[len(incoming):]
+                        or self.runtime_symbols != expected_symbols):
+                    raise SchemaError("STATE_IO native version EVENT must exactly fence its physical HBM source",
+                                      path=f"{path}.core_streams[{stream_index}].records")
             elif (
                 action.task_kind not in allowed_opcodes
                 or len(indices) != 1
