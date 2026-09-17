@@ -52,6 +52,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_input_gradient_ir0 import
 from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_backbone_ir0 import (
     append_moe_full_train_layer1_backbone_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_parameter_sgd_ir0 import (
+    append_moe_full_train_layer1_parameter_sgd_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -70,6 +73,7 @@ from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePo
 from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import NaiveProjectToIR2
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.common import DType
+from llm.frontend.wafer_frontend.schema.ir0 import StateAccessMode
 from llm.frontend.wafer_frontend.schema.ir1 import IR1
 from llm.frontend.wafer_frontend.schema.ir2 import BufferOwnership, StateUseAccess
 from llm.frontend.wafer_frontend.schema.persistent_state import StateKind, PersistentStateAccess
@@ -104,8 +108,10 @@ def main() -> None:
     parser.add_argument("--router-dx", action="store_true")
     parser.add_argument("--input-gradient", action="store_true")
     parser.add_argument("--layer1-backbone", action="store_true")
+    parser.add_argument("--layer1-parameter-sgd", action="store_true")
     args = parser.parse_args()
-    input_gradient_mode = args.input_gradient or args.layer1_backbone
+    layer1_backbone_mode = args.layer1_backbone or args.layer1_parameter_sgd
+    input_gradient_mode = args.input_gradient or layer1_backbone_mode
     router_dx_mode = args.router_dx or input_gradient_mode
     expert_mode = args.expert_backward or router_dx_mode
     output = args.output.resolve()
@@ -156,8 +162,11 @@ def main() -> None:
             source = append_moe_full_train_router_dx_ir0(source)
         if input_gradient_mode:
             source = append_moe_full_train_input_gradient_ir0(source)
-        if args.layer1_backbone:
+        if layer1_backbone_mode:
             source = append_moe_full_train_layer1_backbone_ir0(source)
+        if args.layer1_parameter_sgd:
+            source = append_moe_full_train_layer1_parameter_sgd_ir0(
+                source, sequence)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
@@ -189,7 +198,7 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != (67 if args.layer1_backbone else 64 if input_gradient_mode else 63 if router_dx_mode else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
+        if len(leaves) != (79 if args.layer1_parameter_sgd else 67 if layer1_backbone_mode else 64 if input_gradient_mode else 63 if router_dx_mode else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
                            59 if args.combine_backward else
                            58 if args.shared_reverse else
                            55 if args.head_backward else 52):
@@ -205,11 +214,11 @@ def main() -> None:
         if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
                 or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (5 if expert_mode else 2 if args.router_wgrad or args.router_sgd else int(args.head_backward or args.shared_reverse or args.combine_backward))
                 or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != (5 if router_dx_mode else 4 if expert_mode else int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd))
-                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != (2 if args.layer1_backbone else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
-                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != (2 if args.layer1_backbone else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
+                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != (2 if layer1_backbone_mode else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
+                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != (2 if layer1_backbone_mode else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
                 or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
                 or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
-                or opcodes.count(RecordOpcode.SGD_UPDATE) != int(args.router_sgd)
+                or opcodes.count(RecordOpcode.SGD_UPDATE) != (4 if args.layer1_parameter_sgd else int(args.router_sgd))
                 or opcodes.count(RecordOpcode.SWIGLU_BACKWARD_TIMING) != int(expert_mode)
                 or opcodes.count(RecordOpcode.LOCAL_REDUCE) != int(expert_mode)):
             raise RuntimeError(f"linked program reverse opcode counts: {[(item.name, opcodes.count(item)) for item in set(opcodes)]}")
@@ -223,6 +232,27 @@ def main() -> None:
         carrier = MoeFullTrainForwardLinkedSource(manifest, context)
         carrier.validate()
         state_write = None
+        layer1_state_writes = ()
+        if args.layer1_parameter_sgd:
+            update_nodes = source.nodes[-4:]
+            state_refs = tuple(next(access.state_ref for access in source.state_accesses
+                                    if access.node_ref == node.id
+                                    and access.mode is StateAccessMode.READ_WRITE)
+                               for node in update_nodes)
+            matches = tuple(item for item in _resolved_state_abis(carrier)
+                            if item.abi.state_ref in state_refs)
+            if (len(state_refs) != 4 or len(set(state_refs)) != 4
+                    or len(matches) != 4
+                    or {item.abi.state_ref for item in matches} != set(state_refs)
+                    or sorted(item.abi.size_bytes for item in matches) != [8, 64, 64, 64]
+                    or any(item.abi.access is not PersistentStateAccess.READ_WRITE
+                           or item.first_access is not StateUseAccess.READ
+                           or sum(access is StateUseAccess.WRITE
+                                  for _index, access in item.uses) != 1
+                           for item in matches)
+                    or opcodes.count(RecordOpcode.LSU_STORE) != 4):
+                raise RuntimeError("four MoE parameter SGD states lack exact physical writes")
+            layer1_state_writes = matches
         if args.router_sgd:
             gate_state_ref = source.nodes[-2].workload.source_parameter_state_ref
             matches = [item for item in _resolved_state_abis(carrier)
@@ -279,14 +309,15 @@ def main() -> None:
             expert_probes = tuple(item for item in sidecar_payload["output_probes"]
                                   if item["target"]["value_id"].startswith(
                                       "backward::T0.layer1.moe.expert0."))
-            if len(expert_probes) != (3 if input_gradient_mode else 4):
+            if len(expert_probes) != (0 if args.layer1_parameter_sgd else
+                                      3 if input_gradient_mode else 4):
                 raise RuntimeError("expert reverse lacks exact physical output probes")
             if input_gradient_mode:
                 terminal_ids = (
                     ("backward::T0.layer1.residual1.merge.input_gradient",
                      next(node.outputs[0] for node in source.nodes
                           if node.id.startswith("backward::T0.layer1.norm2::")))
-                    if args.layer1_backbone else
+                    if layer1_backbone_mode else
                     ("backward::T0.layer1.moe.input_sum.norm2_gradient",)
                 )
                 for ref in terminal_ids:
@@ -320,6 +351,10 @@ def main() -> None:
                                       if state_write else None),
             gate_hbm_write_bytes=(state_write.abi.size_bytes
                                   if state_write else 0),
+            layer1_sgd_state_refs=sorted(item.abi.state_ref
+                                         for item in layer1_state_writes),
+            layer1_sgd_write_bytes=sum(item.abi.size_bytes
+                                       for item in layer1_state_writes),
             dloss_seed_abi=dloss[0].id,
         ))
     assert native_context is not None
@@ -354,6 +389,10 @@ def main() -> None:
               "--mapping-config", str(mapping), "--trace-window", "1000000"],
              cwd=npusim.parent, log=log)
         content = log.read_text()
+        if (args.layer1_parameter_sgd
+                and (content.count("[TRAIN_SGD]") != 4
+                     or "lsu_hbm_write_bytes=200" not in content)):
+            raise RuntimeError(f"step{step} four MoE SGD/state writes did not execute")
         if (args.router_sgd
                 and (content.count("[TRAIN_SGD]") != 1
                      or "lsu_hbm_write_bytes=8" not in content)):
@@ -409,6 +448,7 @@ def main() -> None:
         "llm/frontend/wafer_frontend/passes/moe_full_train_router_dx_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_input_gradient_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_backbone_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_parameter_sgd_ir0.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_workload.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_record_check.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_scratch.py",
@@ -450,7 +490,8 @@ def main() -> None:
         native_tool_sha256=tool_hashes_at_entry,
         runner_cwd=str(Path.cwd().resolve()),
         native_runtime_cwd=str(npusim.parent),
-        status=("layer1_backbone_physical_partial" if args.layer1_backbone else
+        status=("layer1_parameter_sgd_physical_partial" if args.layer1_parameter_sgd else
+                "layer1_backbone_physical_partial" if layer1_backbone_mode else
                 "input_gradient_physical_partial" if input_gradient_mode else
                 "router_dx_physical_partial" if router_dx_mode else
                 "expert_backward_physical_partial" if expert_mode else
