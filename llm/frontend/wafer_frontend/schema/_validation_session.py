@@ -35,6 +35,22 @@ def mark_validation_complete(value: object, domain: str) -> None:
     if session is not None:
         session[(domain, id(value))] = value
 
+def cached_validation_aux(owner: object, domain: str) -> object | None:
+    session = _SESSION.get()
+    if session is None:
+        return None
+    cached = session.get(("validation_aux:" + domain, id(owner)))
+    if type(cached) is tuple and len(cached) == 2 and cached[0] is owner:
+        return cached[1]
+    return None
+
+
+def cache_validation_aux(owner: object, domain: str, value: object) -> None:
+    session = _SESSION.get()
+    if session is not None:
+        session[("validation_aux:" + domain, id(owner))] = (owner, value)
+
+
 def cached_dataclass_primitive(value: object) -> object | None:
     session = _SESSION.get()
     if session is None:
@@ -52,6 +68,8 @@ def cache_dataclass_primitive(value: object, primitive: object) -> None:
 
 __all__ = [
     "builder_validation_session",
+    "cache_validation_aux",
+    "cached_validation_aux",
     "cache_dataclass_primitive",
     "cached_dataclass_primitive",
     "mark_validation_complete",

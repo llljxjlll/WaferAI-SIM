@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ..errors import SchemaError
+from ._validation_session import cache_validation_aux, cached_validation_aux
 from .common import (
     DType,
     MeshAxisName,
@@ -1532,15 +1533,22 @@ class FusionPlan:
         state_declarations = (
             {} if state_manifest is None else {item.id: item for item in state_manifest.declarations}
         )
-        parameter_accesses: dict[tuple[str, int, str], list[StateAccess]] = {}
-        if state_manifest is not None:
-            for access in ir1.state_accesses:
-                identity = state_declarations[access.state_ref].identity
-                if (identity.kind in (StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
-                        and identity.tensor_ref is not None):
-                    parameter_accesses.setdefault(
-                        (access.node_ref, access.rank, identity.tensor_ref), [],
-                    ).append(access)
+        cached_accesses = cached_validation_aux(ir1, "fusion_parameter_accesses")
+        if cached_accesses is not None:
+            parameter_accesses = cast(
+                dict[tuple[str, int, str], list[StateAccess]], cached_accesses,
+            )
+        else:
+            parameter_accesses: dict[tuple[str, int, str], list[StateAccess]] = {}
+            if state_manifest is not None:
+                for access in ir1.state_accesses:
+                    identity = state_declarations[access.state_ref].identity
+                    if (identity.kind in (StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER)
+                            and identity.tensor_ref is not None):
+                        parameter_accesses.setdefault(
+                            (access.node_ref, access.rank, identity.tensor_ref), [],
+                        ).append(access)
+            cache_validation_aux(ir1, "fusion_parameter_accesses", parameter_accesses)
         route_keys = {
             (route.source_rank, route.destination_rank, route.die_path)
             for route in group.embedding.routes

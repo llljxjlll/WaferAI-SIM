@@ -6,6 +6,8 @@ import unittest
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.schema._validation_session import (
     builder_validation_session,
+    cache_validation_aux,
+    cached_validation_aux,
     mark_validation_complete,
     validation_seen,
 )
@@ -331,6 +333,17 @@ class BuilderValidationSessionTest(unittest.TestCase):
             self.assertFalse(validation_seen(second, "test"))
             self.assertFalse(validation_seen(first, "different-domain"))
         self.assertFalse(validation_seen(first, "test"))
+
+    def test_aux_index_is_shared_only_within_owner_and_session(self) -> None:
+        first, second = object(), object()
+        index = {("node", 0, "parameter"): ("access",)}
+        self.assertIsNone(cached_validation_aux(first, "fusion_parameter_accesses"))
+        with builder_validation_session():
+            cache_validation_aux(first, "fusion_parameter_accesses", index)
+            self.assertIs(cached_validation_aux(first, "fusion_parameter_accesses"), index)
+            self.assertIsNone(cached_validation_aux(second, "fusion_parameter_accesses"))
+            self.assertIsNone(cached_validation_aux(first, "different-domain"))
+        self.assertIsNone(cached_validation_aux(first, "fusion_parameter_accesses"))
 
 
 class FlexibleDenseTrainForwardCarrierTest(unittest.TestCase):
