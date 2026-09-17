@@ -15,13 +15,11 @@ batch.sh
 aaa.cpp
 /build/*
 /build-managed/
+/build-*/
 /doc/build
 /llm/include/unit_module/sram_manager/build/*
-/build-managed/
 /llm/include/unit_module/dram_kvtable/build/*
-/build-managed/
 /llm/config_generation/build/*
-/build-managed/
 /llm/test/workload_config/playground.json
 /streaming_trace_viewer/static/timeline2.js
 /DRAMSys/configs/addressmapping/am_ddr4_8x4Gbx8_df.json
