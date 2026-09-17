@@ -18,9 +18,11 @@ from ..schema.ir0 import (
 )
 
 
-def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
-    source.validate("moe_layer1_qkv_source")
-    if (source.producer_pass != "moe_full_train_layer1_attention_ir0"
+def _append_moe_full_train_layer_qkv_ir0(
+    source: IR0, *, layer: int, expected_source_pass: str, producer_pass: str,
+) -> IR0:
+    source.validate(f"moe_layer{layer}_qkv_source")
+    if (source.producer_pass != expected_source_pass
             or len(source.instances) != 1
             or source.instances[0].parallel.tp != 1
             or source.instances[0].parallel.ep != 1):
@@ -29,7 +31,7 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
     instance = source.instances[0]
     nodes = {node.id: node for node in source.nodes}
     values = {value.id: value for value in source.values}
-    prefix = f"{instance.id}.layer1"
+    prefix = f"{instance.id}.layer{layer}"
     attention_dx = nodes.get(f"backward::{prefix}.attention")
     rope = nodes.get(f"{prefix}.rope")
     qkv = nodes.get(f"{prefix}.qkv")
@@ -47,7 +49,7 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
             or qkv.inputs[0] != norm.outputs[0]
             or norm.inputs[0] != residual.inputs[0]
             or residual_dx.outputs[0] not in values):
-        raise SchemaError("layer1 RoPE/QKV/norm1 source drifted", path="source.nodes")
+        raise SchemaError(f"layer{layer} RoPE/QKV/norm1 source drifted", path="source.nodes")
     r = rope.workload
     a = attention_dx.workload
     rows = a.tokens
@@ -63,14 +65,14 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
             or r.head_dim != a.head_dim
             or r.rank_num_heads != a.rank_heads
             or r.rank_num_kv_heads != a.rank_kv_heads):
-        raise SchemaError("layer1 RoPE/QKV rank extent drifted", path="source.values")
+        raise SchemaError(f"layer{layer} RoPE/QKV rank extent drifted", path="source.values")
     qkv_states = tuple(state for state in source.persistent_states
                        if state.identity.tensor_ref == qkv.inputs[1])
     norm_states = tuple(state for state in source.persistent_states
                         if state.identity.tensor_ref == norm.inputs[1])
     if (len(qkv_states) != 1 or qkv_states[0].shape != (hidden, packed)
             or len(norm_states) != 1 or norm_states[0].shape != (hidden,)):
-        raise SchemaError("layer1 QKV/norm1 weights need unique owned states",
+        raise SchemaError(f"layer{layer} QKV/norm1 weights need unique owned states",
                           path="source.persistent_states")
     qstate, nstate = qkv_states[0], norm_states[0]
     ids = (
@@ -91,7 +93,7 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
     )
     position_id = f"{rope.id}.position_ids"
     if any(ref in nodes for ref in ids) or any(ref in values for ref in (*outputs, position_id)):
-        raise SchemaError("layer1 QKV reverse already exists", path="source")
+        raise SchemaError(f"layer{layer} QKV reverse already exists", path="source")
     pure = NodeEffects(EffectKind.PURE, None, None)
     rope_dx = LogicalNode(
         ids[0], instance.id, OpKind.ROPE_BACKWARD, OpPhase.DGRAD,
@@ -141,25 +143,25 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
     source_values = (values[qkv.inputs[0]], values[norm.inputs[0]],
                      values[qkv.inputs[1]], values[norm.inputs[1]])
     new_values = (
-        TensorValue(position_id, (rows,), DType.INT32, "M_layer1_position_ids",
+        TensorValue(position_id, (rows,), DType.INT32, f"M_layer{layer}_position_ids",
                     Sharding(rope.mesh_ref, (None,), ()), None, (), None),
         TensorValue(outputs[0], (rows, packed), DType.FP16,
-                    "MQKV_layer1_rope_gradient", values[qkv.outputs[0]].sharding,
+                    f"MQKV_layer{layer}_rope_gradient", values[qkv.outputs[0]].sharding,
                     ids[0], (), None),
         TensorValue(outputs[1], (hidden, packed), DType.FP32,
-                    "HQKV_layer1_weight_gradient", source_values[2].sharding,
+                    f"HQKV_layer{layer}_weight_gradient", source_values[2].sharding,
                     ids[1], (), None),
         TensorValue(outputs[2], (rows, hidden), DType.FP16,
-                    "MH_layer1_norm1_gradient", source_values[0].sharding,
+                    f"MH_layer{layer}_norm1_gradient", source_values[0].sharding,
                     ids[2], (), None),
         TensorValue(outputs[3], (hidden,), DType.FP32,
-                    "H_layer1_norm1_gamma_gradient", source_values[3].sharding,
+                    f"H_layer{layer}_norm1_gamma_gradient", source_values[3].sharding,
                     ids[3], (), None),
         TensorValue(outputs[4], (rows, hidden), DType.FP16,
-                    "MH_layer1_norm1_input_gradient", source_values[1].sharding,
+                    f"MH_layer{layer}_norm1_input_gradient", source_values[1].sharding,
                     ids[4], (), None),
         TensorValue(outputs[5], (rows, hidden), DType.FP16,
-                    "MH_layer0_output_gradient", source_values[1].sharding,
+                    f"MH_layer{layer}_input_gradient", source_values[1].sharding,
                     ids[5], (), None),
     )
     all_nodes = (*source.nodes, rope_dx, wgrad, qkv_dx, gamma, norm_dx, merge)
@@ -178,7 +180,7 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
     controls = tuple(edge for edge in source.edges
                      if edge.kind is EdgeKind.CONTROL)
     result = IR0.create(
-        producer_pass="moe_full_train_layer1_qkv_ir0",
+        producer_pass=producer_pass,
         job=source.job, instances=source.instances, nodes=all_nodes,
         values=final_values, edges=(*data_edges, *controls),
         fusion_candidates=source.fusion_candidates, profile=source.profile,
@@ -188,8 +190,25 @@ def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
                                            state_ref=qstate.id,
                                            mode=StateAccessMode.READ, rank=0)),
     )
-    result.validate("moe_full_train_layer1_qkv_ir0")
+    result.validate(producer_pass)
     return result
 
 
-__all__ = ["append_moe_full_train_layer1_qkv_ir0"]
+def append_moe_full_train_layer1_qkv_ir0(source: IR0) -> IR0:
+    return _append_moe_full_train_layer_qkv_ir0(
+        source, layer=1,
+        expected_source_pass="moe_full_train_layer1_attention_ir0",
+        producer_pass="moe_full_train_layer1_qkv_ir0",
+    )
+
+
+def append_moe_full_train_layer0_qkv_ir0(source: IR0) -> IR0:
+    return _append_moe_full_train_layer_qkv_ir0(
+        source, layer=0,
+        expected_source_pass="moe_full_train_layer0_attention_ir0",
+        producer_pass="moe_full_train_layer0_qkv_ir0",
+    )
+
+
+__all__ = ["append_moe_full_train_layer1_qkv_ir0",
+           "append_moe_full_train_layer0_qkv_ir0"]

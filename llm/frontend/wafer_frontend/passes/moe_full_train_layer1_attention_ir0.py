@@ -17,9 +17,11 @@ from ..schema.ir0 import (
 )
 
 
-def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
-    source.validate("moe_layer1_attention_source")
-    if (source.producer_pass != "moe_full_train_layer1_backbone_ir0"
+def _append_moe_full_train_layer_attention_ir0(
+    source: IR0, *, layer: int, expected_source_pass: str, producer_pass: str,
+) -> IR0:
+    source.validate(f"moe_layer{layer}_attention_source")
+    if (source.producer_pass != expected_source_pass
             or len(source.instances) != 1
             or source.instances[0].parallel.tp != 1
             or source.instances[0].parallel.ep != 1):
@@ -28,7 +30,7 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
     instance = source.instances[0]
     nodes = {node.id: node for node in source.nodes}
     values = {value.id: value for value in source.values}
-    prefix = f"{instance.id}.layer1"
+    prefix = f"{instance.id}.layer{layer}"
     residual = nodes.get(f"{prefix}.residual1")
     merge = nodes.get(f"backward::{residual.id}.merge") if residual else None
     projection = nodes.get(f"{prefix}.o")
@@ -45,7 +47,7 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
             or projection.stage != attention.stage
             or residual.mesh_ref != projection.mesh_ref
             or projection.mesh_ref != attention.mesh_ref):
-        raise SchemaError("layer1 attention/output/residual source drifted",
+        raise SchemaError(f"layer{layer} attention/output/residual source drifted",
                           path="source.nodes")
     upstream = values[merge.outputs[0]]
     skip = values[residual.inputs[0]]
@@ -64,12 +66,12 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
             or attention.workload.hidden_size != hidden
             or attention.workload.rank_num_heads *
                attention.workload.head_dim != hidden):
-        raise SchemaError("layer1 causal attention/output projection geometry drifted",
+        raise SchemaError(f"layer{layer} causal attention/output projection geometry drifted",
                           path="source.values")
     declarations = tuple(state for state in source.persistent_states
                          if state.identity.tensor_ref == weight.id)
     if len(declarations) != 1 or declarations[0].shape != weight.shape:
-        raise SchemaError("layer1 output weight needs one owned StateDecl",
+        raise SchemaError(f"layer{layer} output weight needs one owned StateDecl",
                           path="source.persistent_states")
     state = declarations[0]
     residual_id = f"backward::{residual.id}"
@@ -78,7 +80,7 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
     attention_dx_id = f"backward::{attention.id}"
     ids = (residual_id, wgrad_id, projection_dx_id, attention_dx_id)
     if any(ref in nodes for ref in ids):
-        raise SchemaError("layer1 attention reverse already exists",
+        raise SchemaError(f"layer{layer} attention reverse already exists",
                           path="source")
     skip_id = f"{residual_id}.left_gradient"
     output_id = f"{residual_id}.right_gradient"
@@ -88,7 +90,7 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
     if any(ref in values for ref in (skip_id, output_id, wgrad_value_id,
                                      projection_dx_value_id,
                                      attention_dx_value_id)):
-        raise SchemaError("layer1 attention reverse values already exist",
+        raise SchemaError(f"layer{layer} attention reverse values already exist",
                           path="source")
     pure = NodeEffects(EffectKind.PURE, None, None)
     residual_dx = LogicalNode(
@@ -134,19 +136,19 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
     )
     new_values = (
         TensorValue(skip_id, skip.shape, DType.FP16,
-                    "MH_layer1_residual1_skip_gradient", skip.sharding,
+                    f"MH_layer{layer}_residual1_skip_gradient", skip.sharding,
                     residual_id, (), None),
         TensorValue(output_id, out.shape, DType.FP16,
-                    "MH_layer1_attention_output_gradient", out.sharding,
+                    f"MH_layer{layer}_attention_output_gradient", out.sharding,
                     residual_id, (), None),
         TensorValue(wgrad_value_id, weight.shape, DType.FP32,
-                    "HH_layer1_attention_output_weight_gradient",
+                    f"HH_layer{layer}_attention_output_weight_gradient",
                     weight.sharding, wgrad_id, (), None),
         TensorValue(projection_dx_value_id, attn_out.shape, DType.FP16,
-                    "MH_layer1_attention_gradient", attn_out.sharding,
+                    f"MH_layer{layer}_attention_gradient", attn_out.sharding,
                     projection_dx_id, (), None),
         TensorValue(attention_dx_value_id, packed.shape, DType.FP16,
-                    "MQKV_layer1_attention_input_gradient", packed.sharding,
+                    f"MQKV_layer{layer}_attention_input_gradient", packed.sharding,
                     attention_dx_id, (), None),
     )
     all_nodes = (*source.nodes, residual_dx, wgrad, projection_dx,
@@ -166,7 +168,7 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
     controls = tuple(edge for edge in source.edges
                      if edge.kind is EdgeKind.CONTROL)
     result = IR0.create(
-        producer_pass="moe_full_train_layer1_attention_ir0",
+        producer_pass=producer_pass,
         job=source.job, instances=source.instances, nodes=all_nodes,
         values=final_values, edges=(*data_edges, *controls),
         fusion_candidates=source.fusion_candidates, profile=source.profile,
@@ -176,8 +178,25 @@ def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
                                            state_ref=state.id,
                                            mode=StateAccessMode.READ, rank=0)),
     )
-    result.validate("moe_full_train_layer1_attention_ir0")
+    result.validate(producer_pass)
     return result
 
 
-__all__ = ["append_moe_full_train_layer1_attention_ir0"]
+def append_moe_full_train_layer1_attention_ir0(source: IR0) -> IR0:
+    return _append_moe_full_train_layer_attention_ir0(
+        source, layer=1,
+        expected_source_pass="moe_full_train_layer1_backbone_ir0",
+        producer_pass="moe_full_train_layer1_attention_ir0",
+    )
+
+
+def append_moe_full_train_layer0_attention_ir0(source: IR0) -> IR0:
+    return _append_moe_full_train_layer_attention_ir0(
+        source, layer=0,
+        expected_source_pass="moe_full_train_layer0_moe_ir0",
+        producer_pass="moe_full_train_layer0_attention_ir0",
+    )
+
+
+__all__ = ["append_moe_full_train_layer1_attention_ir0",
+           "append_moe_full_train_layer0_attention_ir0"]
