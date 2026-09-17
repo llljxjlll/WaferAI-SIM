@@ -20,6 +20,7 @@
 #include "memory/hbm_r4_selftest.h"
 #include "memory/external_dma_program.h"
 #include "memory/dense_adamw_mid_program_pager.h"
+#include "memory/full_dense_adamw_pager.h"
 #include "memory/dense_inference_mid_program_pager.h"
 #include "memory/moe_inference_mid_program_pager.h"
 #include "memory/sram/sram_selftest.h"
@@ -157,6 +158,9 @@ Define_bool_opt("--moe-layer1-sgd-partial-sequence",
 Define_bool_opt("--moe-all-sgd-partial-sequence",
                 g_flag_moe_all_sgd_partial_sequence, false,
                 "two EP1 MoE timing programs with 19 trainable SGD writes; not numeric full training");
+Define_string_opt("--full-dense-adamw-paged-runtime",
+                  g_flag_full_dense_adamw_paged_runtime, std::string{},
+                  "source-signed 520-fragment Dense AdamW full training with blocking external DMA");
 Define_string_opt("--dense-adamw-paged-runtime",
                   g_flag_dense_adamw_paged_runtime, std::string{},
                   "source-signed per-StateABI external DMA for two Dense AdamW steps");
@@ -1514,11 +1518,14 @@ int sc_main(int argc, char *argv[]) {
     }
 
     const bool adamw_paged = !g_flag_dense_adamw_paged_runtime.empty();
+    const bool full_adamw_paged =
+        !g_flag_full_dense_adamw_paged_runtime.empty();
     const bool inference_paged =
         !g_flag_dense_inference_paged_runtime.empty();
     const bool moe_inference_paged =
         !g_flag_moe_inference_paged_runtime.empty();
     if (static_cast<int>(adamw_paged) +
+            static_cast<int>(full_adamw_paged) +
             static_cast<int>(inference_paged) +
             static_cast<int>(moe_inference_paged) > 1) {
         LOG_ERROR(CONFIG) << "only one source-signed mid-program pager may be bound";
@@ -1599,6 +1606,13 @@ int sc_main(int argc, char *argv[]) {
         return 2;
     }
     const bool program_io_requested = program_io_any;
+    if (full_adamw_paged &&
+        (sequence_mode || external_dma_requested || program_io_any ||
+         g_flag_program.empty())) {
+        LOG_ERROR(CONFIG) << "full Dense AdamW paged runtime requires one "
+                             "single --program and no sequence/ProgramIO/startup DMA";
+        return 2;
+    }
     const bool moe_swizzle_calibration_requested =
         !g_flag_moe_swizzle_calibration_kind.empty();
     if (g_flag_moe_swizzle_runtime_markers && !program_io_requested) {
@@ -2277,7 +2291,8 @@ int sc_main(int argc, char *argv[]) {
             else
                 program_helper =
                     std::make_unique<config_helper_program>(
-                        program_bytes, !g_flag_program_one_shot);
+                        program_bytes,
+                        !g_flag_program_one_shot && !full_adamw_paged);
             const uint64_t loaded_capabilities = sequence_mode
                 ? DecodeProgramArtifact(sequence_program_bytes.front()).capabilities
                 : program_helper->artifact().capabilities;
@@ -2319,6 +2334,8 @@ int sc_main(int argc, char *argv[]) {
         external_dma_executor;
     std::unique_ptr<external_memory::DenseAdamwMidProgramPager>
         adamw_mid_program_pager;
+    std::unique_ptr<external_memory::FullDenseAdamwPager>
+        full_adamw_pager;
     std::unique_ptr<external_memory::DenseInferenceMidProgramPager>
         inference_mid_program_pager;
     bool inference_rect_paged = false;
@@ -2393,6 +2410,41 @@ int sc_main(int argc, char *argv[]) {
                       << " workspace_end=9248 pass=1" << std::endl;
         } catch (const std::exception &error) {
             LOG_ERROR(CONFIG) << "Dense AdamW paged DMA binding failed: "
+                              << error.what();
+            return 2;
+        }
+    }
+    if (full_adamw_paged) {
+        try {
+            if (monitor->hbmRuntime == nullptr ||
+                monitor->workerCores[0] == nullptr ||
+                !monitor->workerCores[0]->lsu_memory)
+                throw std::runtime_error(
+                    "full Dense AdamW pager requires physical die0 core0 LSU/HBM");
+            auto *physical = monitor->hbmRuntime->Find(0, 0);
+            if (physical == nullptr || !physical->backend)
+                throw std::runtime_error(
+                    "full Dense AdamW pager lacks behavioral HBM backend");
+            full_adamw_pager = std::make_unique<
+                external_memory::FullDenseAdamwPager>(
+                    "full_dense_adamw_pager",
+                    std::filesystem::path(g_flag_full_dense_adamw_paged_runtime),
+                    program_bytes, physical->backend.get(),
+                    sc_time(CYCLE, SC_NS));
+            monitor->workerCores[0]->lsu_memory->SetFullDenseAdamwPager(
+                full_adamw_pager.get());
+            std::cout << "[FULL_DENSE_ADAMW_PAGED_BINDING] source="
+                      << full_adamw_pager->SourceManifestDigest()
+                      << " paged=" << full_adamw_pager->PagedManifestDigest()
+                      << " state_abi=" << full_adamw_pager->StateCount()
+                      << " events=350 hbm_capacity="
+                      << full_adamw_pager->HbmCapacity()
+                      << " external_capacity="
+                      << full_adamw_pager->ExternalCapacity()
+                      << " slot_bytes=" << full_adamw_pager->SlotBytes()
+                      << " pass=1" << std::endl;
+        } catch (const std::exception &error) {
+            LOG_ERROR(CONFIG) << "Full Dense AdamW paged DMA binding failed: "
                               << error.what();
             return 2;
         }
@@ -3108,6 +3160,20 @@ int sc_main(int argc, char *argv[]) {
         }
     } else {
         sc_start();
+        if (full_adamw_pager) {
+            full_adamw_pager->RequireComplete();
+            const auto &stats = full_adamw_pager->Stats();
+            std::cout << "[FULL_DENSE_ADAMW_PAGED_DMA_DRAIN] events="
+                      << full_adamw_pager->CompletedEvents()
+                      << " submitted=" << stats.submitted_requests
+                      << " completed=" << stats.completed_requests
+                      << " external_read_bytes=" << stats.external_read_bytes
+                      << " external_write_bytes=" << stats.external_write_bytes
+                      << " hbm_read_bytes=" << stats.hbm_read_bytes
+                      << " hbm_write_bytes=" << stats.hbm_write_bytes
+                      << " pending=" << full_adamw_pager->Outstanding()
+                      << " pass=1" << std::endl;
+        }
     }
 
     const uint64_t makespan_cycles =
