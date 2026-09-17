@@ -83,6 +83,22 @@ class ManagedFrontendTmpTest(unittest.TestCase):
         self.assertTrue(unmarked.exists())
         self.assertNotEqual(self.run_cli('release', str(job)).returncode, 0)
 
+    def test_native_job_links_dramsys_within_managed_root(self) -> None:
+        config = self.parent / 'frozen-dramsys'
+        (config / 'configs').mkdir(parents=True)
+        (config / 'configs' / 'hbm.json').write_text('{}')
+        result = self.run_cli(
+            'run', '--name', 'native', '--dramsys-root', str(config), '--',
+            sys.executable, '-c',
+            "from pathlib import Path; import os; p=Path(os.environ['TMPDIR']); "
+            "assert (p/'DRAMSys/configs/hbm.json').read_text() == '{}'; "
+            "print('DRAM_LINK_OK')",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('DRAM_LINK_OK', result.stdout)
+        self.assertFalse(Path(json.loads(result.stdout.splitlines()[0])['job']).exists())
+        self.assertEqual((config / 'configs' / 'hbm.json').read_text(), '{}')
+
     def test_job_exceeding_budget_is_not_published_as_success(self) -> None:
         self.base[5] = '0.000001'
         result = self.run_cli('run', '--name', 'oversize', '--kind', 'evidence',

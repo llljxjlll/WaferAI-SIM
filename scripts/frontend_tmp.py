@@ -168,6 +168,11 @@ def execute(args: argparse.Namespace, root: Path) -> int:
         command.pop(0)
     if not command:
         raise ValueError('run requires an executable after --')
+    dramsys_root = None
+    if args.dramsys_root is not None:
+        dramsys_root = args.dramsys_root.resolve(strict=True)
+        if not dramsys_root.is_dir():
+            raise ValueError('DRAMSys root must be a directory')
     prune(root, apply=True, max_bytes=args.max_bytes,
           failure_ttl=args.failure_ttl)
     with locked(root):
@@ -181,6 +186,10 @@ def execute(args: argparse.Namespace, root: Path) -> int:
             'process_group': None, 'boot_id': boot_id(),
         }
         save(path, info)
+        if dramsys_root is not None:
+            # Native NpuSim resolves ../DRAMSys/configs from a nested Fresh cwd.
+            # A symlink keeps the immutable configuration outside the quota.
+            (path / 'DRAMSys').symlink_to(dramsys_root, target_is_directory=True)
     env = dict(os.environ, TMPDIR=str(path), WAFERAI_TEMP_DIR=str(path))
     command = [part.replace('{tmp}', str(path)) for part in command]
     print(json.dumps({'job': str(path), 'command': command}), flush=True)
@@ -248,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser('run', help='run a command with bounded TMPDIR and {tmp} substitution')
     run.add_argument('--name', required=True)
     run.add_argument('--kind', choices=('scratch', 'evidence'), default='scratch')
+    run.add_argument('--dramsys-root', type=Path,
+                     help='link immutable DRAMSys configs for nested native Fresh cwd')
     run.add_argument('command', nargs=argparse.REMAINDER)
     sub.add_parser('prune', help='dry-run by default; only remove managed jobs')
     sub.choices['prune'].add_argument('--apply', action='store_true')

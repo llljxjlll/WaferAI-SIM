@@ -537,6 +537,7 @@ def _ordinary_schedule(
         for value in (*dag.values, *dag.state_staging_values, *swizzle_schedule_values)
     }
     state_value_ids = {value.id for value in dag.state_staging_values}
+    terminal_value_ids = {value.id for value in ir1.values if not value.consumers}
     staging_value_index = {
         value.id: value for value in dag.state_staging_values
     }
@@ -1187,13 +1188,20 @@ def _ordinary_schedule(
                     f"available={max(addressable, 0)}, value={value_id!r}",
                     f"schedule.die_{dag.die_id}.core_{core_id}.{region.id}",
                 )
-            new_start = 0 if not owned else lifetime_start
+            # ProgramIO seeds terminal timing outputs before simulation.
+            # Their physical bytes must not overlap any earlier lifetime:
+            # a timing-only compute does not itself rewrite missing bytes.
+            # Otherwise the late output can occupy a reclaimed hole and its
+            # terminal validity depends on incidental previous traffic.
+            terminal_output = owned and value_id in terminal_value_ids
+            new_start = 0 if not owned or terminal_output else lifetime_start
             blockers = tuple(
                 binding for binding in binding_by_key.values()
                 if binding.core_id == core_id
                 and binding.region_ref == region.id
                 and (
                     0 if binding.ownership is BufferOwnership.BORROWED
+                    or binding.value_id in terminal_value_ids
                     else binding.lifetime_start
                 ) < lifetime_end
                 and new_start < binding.lifetime_end_exclusive
