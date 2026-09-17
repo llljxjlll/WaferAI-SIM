@@ -551,7 +551,8 @@ class DenseIR0Validator:
                                    "full_dense_training_sgd_source",
                                    "full_dense_training_two_step_source",
                                    "full_dense_training_two_step_dp2_source",
-                                   "full_dense_training_adamw_source"):
+                                   "full_dense_training_adamw_source",
+                                   "full_dense_training_two_step_adamw_source"):
             DenseIR0Validator._validate_full_dense_backward_job_contract(
                 graph, path
             )
@@ -625,6 +626,7 @@ class DenseIR0Validator:
         steps = (0, 1) if graph.producer_pass in (
             "full_dense_training_two_step_source",
             "full_dense_training_two_step_dp2_source",
+            "full_dense_training_two_step_adamw_source",
         ) else (0,)
         if len(ce_forward) != len(steps) or len(ce_backward) != len(steps):
             _fail("complete Dense backward requires one CE forward/backward per step",
@@ -713,10 +715,12 @@ class DenseIR0Validator:
                         ) for physical_rank in range(rank, tp * (2 if dp2 else 1), tp)]):
                     _fail("complete Dense SGD must update each trainable state from its own FP32 WGRAD exactly once",
                           f"{path}.nodes")
-        elif graph.producer_pass == "full_dense_training_adamw_source":
+        elif graph.producer_pass in ("full_dense_training_adamw_source",
+                                          "full_dense_training_two_step_adamw_source"):
             expected_updates = {
-                f"adamw_update::{weight}::tp{rank}": (weight, rank)
+                f"adamw_update::{weight}::tp{rank}{suffix}": (weight, rank, suffix)
                 for weight in weights for rank in range(tp)
+                for suffix in (("::step0", "::step1") if len(steps) == 2 else ("",))
             }
             values_by_ref = {value.id: value for value in graph.values}
             access_by_node = {}
@@ -730,13 +734,14 @@ class DenseIR0Validator:
                 _fail("complete Dense AdamW must update every authentic parameter shard once",
                       f"{path}.nodes")
             for update in updates:
-                weight, rank = expected_updates[update.id]
-                gradient_ref = f"wgrad::{weight}::tp{rank}.output"
+                weight, rank, suffix = expected_updates[update.id]
+                gradient_ref = f"wgrad::{weight}::tp{rank}.output{suffix}"
                 if (type(update.workload) is not AdamwUpdateWorkload
                         or update.phase is not OpPhase.UPDATE
                         or update.inputs[:2] != (weight, gradient_ref)
                         or len(update.inputs) != 6 or len(update.outputs) != 5
-                        or update.workload.step not in (1, 2)
+                        or update.workload.step != (1 if not suffix else
+                                                    int(suffix[-1]) + 1)
                         or values_by_ref[gradient_ref].dtype is not DType.FP32
                         or len(access_by_node.get(update.id, ())) != 5):
                     _fail("complete Dense AdamW must consume its own real FP32 WGRAD and five states",
@@ -852,24 +857,54 @@ class DenseIR0Validator:
             _fail("every CE forward must control its own backward exactly once",
                   f"{path}.edges")
         if len(steps) == 2:
-            state_by_weight = {state.identity.tensor_ref: state
-                               for state in graph.persistent_states}
-            expected_version = {
-                (f"sgd_update::{weight}::tp{rank}::step0", node.id)
-                for node in forward if node.id.endswith("::step1")
-                for weight in node.inputs
-                if (weight in state_by_weight and node.kind in (
-                    OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING))
-                for rank in range(tp)
-            }
-            version_edges = tuple(edge for edge in control
-                                  if edge.source_node.startswith("sgd_update::"))
-            actual_version = {(edge.source_node, edge.destination_node)
-                              for edge in version_edges}
-            if (len(version_edges) != len(expected_version)
-                    or actual_version != expected_version):
-                _fail("step0 SGD STORE must control every matching step1 parameter LOAD",
-                      f"{path}.edges")
+            if graph.producer_pass == "full_dense_training_two_step_adamw_source":
+                update_by_state = {
+                    access.state_ref: access.node_ref
+                    for access in graph.state_accesses
+                    if access.mode is StateAccessMode.READ_WRITE
+                    and access.node_ref.endswith("::step0")
+                }
+                if set(update_by_state) != set(states):
+                    _fail("two-step AdamW needs one real update for every persistent state",
+                          f"{path}.state_accesses")
+                expected_version = {
+                    (update_by_state[access.state_ref], access.node_ref)
+                    for access in graph.state_accesses
+                    if access.mode is StateAccessMode.READ
+                    and access.node_ref.endswith("::step1")
+                }
+                expected_version.update(
+                    (f"adamw_update::{weight}::tp{rank}::step0",
+                     f"adamw_update::{weight}::tp{rank}::step1")
+                    for weight in weights for rank in range(tp)
+                )
+                version_edges = tuple(edge for edge in control
+                                      if edge.source_node.startswith("adamw_update::"))
+                actual_version = {(edge.source_node, edge.destination_node)
+                                  for edge in version_edges}
+                if (len(version_edges) != len(expected_version)
+                        or actual_version != expected_version):
+                    _fail("step0 AdamW STORE must control every step1 state LOAD/UPDATE",
+                          f"{path}.edges")
+            else:
+                state_by_weight = {state.identity.tensor_ref: state
+                                   for state in graph.persistent_states}
+                expected_version = {
+                    (f"sgd_update::{weight}::tp{rank}::step0", node.id)
+                    for node in forward if node.id.endswith("::step1")
+                    for weight in node.inputs
+                    if (weight in state_by_weight and node.kind in (
+                        OpKind.GEMM, OpKind.NORM, OpKind.EMBEDDING))
+                    for rank in range(tp)
+                }
+                version_edges = tuple(edge for edge in control
+                                      if edge.source_node.startswith("sgd_update::"))
+                actual_version = {(edge.source_node, edge.destination_node)
+                                  for edge in version_edges}
+                if (len(version_edges) != len(expected_version)
+                        or actual_version != expected_version):
+                    _fail("step0 SGD STORE must control every matching step1 parameter LOAD",
+                          f"{path}.edges")
         elif len(control) != 1:
             _fail("single-step CE control edge must remain exact", f"{path}.edges")
 
@@ -1016,7 +1051,8 @@ class DenseIR0Validator:
                 graph, values, axis_sizes, path
             )
             return
-        if graph.producer_pass == "full_dense_training_adamw_source":
+        if graph.producer_pass in ("full_dense_training_adamw_source",
+                                      "full_dense_training_two_step_adamw_source"):
             DenseIR0Validator._validate_full_dense_adamw_persistent_states(
                 graph, values, path
             )
@@ -1401,8 +1437,10 @@ class DenseIR0Validator:
         }
         updates = tuple(node for node in graph.nodes
                         if node.kind is OpKind.OPTIMIZER_UPDATE)
-        if (len(trainable) != 15 or len(updates) != 15
-                or len(states) != 75 or len(graph.state_accesses) != 100):
+        steps = (2 if graph.producer_pass ==
+                 "full_dense_training_two_step_adamw_source" else 1)
+        if (len(trainable) != 15 or len(updates) != 15 * steps
+                or len(states) != 75 or len(graph.state_accesses) != 100 * steps):
             _fail("full Dense AdamW needs 15 parameters and exact master/m/v/step states",
                   f"{path}.persistent_states")
         expected: list[StateAccess] = []
