@@ -2609,19 +2609,40 @@ class IR0:
                 for consumer_ref in value_index[source.outputs[0]].consumers
                 if nodes_by_ref[consumer_ref].phase is OpPhase.FWD
             ) if source is not None and source.outputs else ()
-            expected_upstream_producers = frozenset(
-                (
-                    f"{consumer.id}_backward"
-                    if consumer.kind is OpKind.CE_FORWARD
-                    else f"backward::{consumer.id}"
+            router_source = source is not None and source.kind is OpKind.MOE_ROUTER
+            router_backward = nodes_by_ref.get(upstream.producer) if router_source else None
+            expected_upstream_producers = (
+                frozenset((router_backward.id,))
+                if router_backward is not None and router_source else
+                frozenset(
+                    (
+                        f"{consumer.id}_backward"
+                        if consumer.kind is OpKind.CE_FORWARD
+                        else f"backward::{consumer.id}"
+                    )
+                    for consumer in forward_consumers
                 )
-                for consumer in forward_consumers
             )
             actual_upstream_producers = gradient_leaf_producers(upstream.id)
-            if (source is None or source.kind is not OpKind.GEMM
+            if (source is None or source.kind not in (OpKind.GEMM, OpKind.MOE_ROUTER)
                     or source.phase is not OpPhase.FWD
-                    or source.workload.rank_shape
-                       != (workload.k,workload.n,workload.m)
+                    or (source.kind is OpKind.GEMM and source.workload.rank_shape
+                        != (workload.k,workload.n,workload.m))
+                    or (router_source and (
+                        source.workload.kind is not MoeForwardBlockKind.ROUTER
+                        or source.workload.expert_count != 1
+                        or source.workload.token_count != workload.k
+                        or source.workload.hidden_size != workload.m
+                        or workload.n != 1
+                        or parameter is None
+                        or parameter.identity.ep_owner_rank != 0
+                        or router_backward is None
+                        or router_backward.kind is not OpKind.MOE_COMBINE_BACKWARD
+                        or router_backward.outputs[0] != upstream.id
+                        or router_backward.workload.step != source.workload.step
+                        or router_backward.workload.layer != source.workload.layer
+                        or router_backward.workload.source_route_trace_digest
+                           != source.workload.source_route_trace_digest))
                     or len(source.inputs) != 2 or len(source.outputs) != 1
                     or source.inputs[1] != node.inputs[0]
                     or tuple(
