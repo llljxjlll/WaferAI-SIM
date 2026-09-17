@@ -23,6 +23,9 @@ EXPECTED_OPCODES = {
     37: 5,  # GEMM_WEIGHT_WGRAD_TIMING
     38: 4,  # GEMM_DX_TIMING; router dX adds one
     34: 1,  # SWIGLU_BACKWARD_TIMING
+    14: 4,  # RESIDUAL; MoE dX merge/backbone each add one
+    36: 1,  # NORM_GAMMA_WGRAD_TIMING; backbone adds one
+    41: 1,  # RMSNORM_BACKWARD_TIMING; backbone adds one
     67: 1,  # LOCAL_REDUCE
     40: 1,  # MOE_SCORE_WEIGHT_BACKWARD
     32: 0,  # SGD_UPDATE
@@ -30,16 +33,24 @@ EXPECTED_OPCODES = {
 PROFILES = {
     "expert_backward": dict(status="expert_backward_physical_partial",
                             leaves=61, records=293, dx=4, hbm_read=1240,
-                            initializations=98, probes=9,
-                            expert_probes=4, router_probes=0, merged_probes=0),
+                            initializations=98, probes=9, residual=4, norm=1,
+                            expert_probes=4, router_probes=0, merged_probes=0,
+                            backbone_probes=0),
     "router_dx": dict(status="router_dx_physical_partial",
                       leaves=63, records=300, dx=5, hbm_read=1248,
-                      initializations=100, probes=10,
-                      expert_probes=4, router_probes=1, merged_probes=0),
+                      initializations=100, probes=10, residual=4, norm=1,
+                      expert_probes=4, router_probes=1, merged_probes=0,
+                      backbone_probes=0),
     "input_gradient": dict(status="input_gradient_physical_partial",
                            leaves=64, records=304, dx=5, hbm_read=1248,
-                           initializations=101, probes=9,
-                           expert_probes=3, router_probes=0, merged_probes=1),
+                           initializations=101, probes=9, residual=5, norm=1,
+                           expert_probes=3, router_probes=0, merged_probes=1,
+                           backbone_probes=0),
+    "layer1_backbone": dict(status="layer1_backbone_physical_partial",
+                            leaves=67, records=316, dx=5, hbm_read=1248,
+                            initializations=104, probes=9, residual=6, norm=2,
+                            expert_probes=3, router_probes=0, merged_probes=0,
+                            backbone_probes=2),
 }
 
 
@@ -123,7 +134,10 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path,
             opcodes = Counter(record["opcode"] for record in records)
             require(manifest["id"] == witness["linked"] and
                     len(records) == witness["records"] == profile["records"] and
-                    all(opcodes[name] == (profile["dx"] if name == 38 else count)
+                    all(opcodes[name] == (profile["dx"] if name == 38 else
+                                          profile["residual"] if name == 14 else
+                                          profile["norm"] if name in (36, 41) else
+                                          count)
                         for name, count in EXPECTED_OPCODES.items()) and
                     witness["leaves"] == profile["leaves"],
                     f"fresh{fresh_index} step{step} linked opcode closure drifted")
@@ -141,12 +155,18 @@ def audit(freeze: Path, roots: tuple[Path, Path], tools: Path,
             merged = [item for item in io["output_probes"]
                       if item["target"]["value_id"] ==
                       "backward::T0.layer1.moe.input_sum.norm2_gradient"]
+            backbone = [item for item in io["output_probes"]
+                        if item["target"]["value_id"] ==
+                           "backward::T0.layer1.residual1.merge.input_gradient"
+                        or item["target"]["value_id"].startswith(
+                            "backward::T0.layer1.norm2::")]
             require(len(expert) == witness["expert_gradient_probes"] ==
                     profile["expert_probes"] and
                     len(router) == profile["router_probes"] and
                     len(merged) == profile["merged_probes"] and
+                    len(backbone) == profile["backbone_probes"] and
                     all(not any(blobs[item["blob_ref"]])
-                            for item in (*router, *merged)) and
+                            for item in (*router, *merged, *backbone)) and
                     len(io["initializations"]) == profile["initializations"] and
                     len(io["output_probes"]) == profile["probes"] and
                     nonzero == witness["expert_gradient_nonzero_expected_bytes"] == 0 and

@@ -49,6 +49,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_router_dx_ir0 import (
 from llm.frontend.wafer_frontend.passes.moe_full_train_input_gradient_ir0 import (
     append_moe_full_train_input_gradient_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_layer1_backbone_ir0 import (
+    append_moe_full_train_layer1_backbone_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
 )
@@ -100,8 +103,10 @@ def main() -> None:
     parser.add_argument("--expert-backward", action="store_true")
     parser.add_argument("--router-dx", action="store_true")
     parser.add_argument("--input-gradient", action="store_true")
+    parser.add_argument("--layer1-backbone", action="store_true")
     args = parser.parse_args()
-    router_dx_mode = args.router_dx or args.input_gradient
+    input_gradient_mode = args.input_gradient or args.layer1_backbone
+    router_dx_mode = args.router_dx or input_gradient_mode
     expert_mode = args.expert_backward or router_dx_mode
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -149,8 +154,10 @@ def main() -> None:
             source = append_moe_full_train_expert_backward_ir0(source)
         if router_dx_mode:
             source = append_moe_full_train_router_dx_ir0(source)
-        if args.input_gradient:
+        if input_gradient_mode:
             source = append_moe_full_train_input_gradient_ir0(source)
+        if args.layer1_backbone:
+            source = append_moe_full_train_layer1_backbone_ir0(source)
         base = build_moe_ep_placed_ir1_candidate(
             phase, original_dense=Fixture.dense, sequence=sequence,
             placement=placement, context=physical,
@@ -182,7 +189,7 @@ def main() -> None:
         leaves = _lower_fragments(
             context, _resolve_dependencies(None, None, None, None, None),
         )
-        if len(leaves) != (64 if args.input_gradient else 63 if router_dx_mode else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
+        if len(leaves) != (67 if args.layer1_backbone else 64 if input_gradient_mode else 63 if router_dx_mode else 61 if expert_mode else 63 if args.router_sgd else 60 if args.router_wgrad else
                            59 if args.combine_backward else
                            58 if args.shared_reverse else
                            55 if args.head_backward else 52):
@@ -198,8 +205,8 @@ def main() -> None:
         if (opcodes.count(RecordOpcode.CROSS_ENTROPY_BACKWARD) != 1
                 or opcodes.count(RecordOpcode.GEMM_WEIGHT_WGRAD_TIMING) != (5 if expert_mode else 2 if args.router_wgrad or args.router_sgd else int(args.head_backward or args.shared_reverse or args.combine_backward))
                 or opcodes.count(RecordOpcode.GEMM_DX_TIMING) != (5 if router_dx_mode else 4 if expert_mode else int(args.head_backward or args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd))
-                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
-                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
+                or opcodes.count(RecordOpcode.NORM_GAMMA_WGRAD_TIMING) != (2 if args.layer1_backbone else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
+                or opcodes.count(RecordOpcode.RMSNORM_BACKWARD_TIMING) != (2 if args.layer1_backbone else int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode))
                 or opcodes.count(RecordOpcode.RESIDUAL_BACKWARD_TIMING) != int(args.shared_reverse or args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
                 or opcodes.count(RecordOpcode.MOE_SCORE_WEIGHT_BACKWARD) != int(args.combine_backward or args.router_wgrad or args.router_sgd or expert_mode)
                 or opcodes.count(RecordOpcode.SGD_UPDATE) != int(args.router_sgd)
@@ -272,14 +279,21 @@ def main() -> None:
             expert_probes = tuple(item for item in sidecar_payload["output_probes"]
                                   if item["target"]["value_id"].startswith(
                                       "backward::T0.layer1.moe.expert0."))
-            if len(expert_probes) != (3 if args.input_gradient else 4):
+            if len(expert_probes) != (3 if input_gradient_mode else 4):
                 raise RuntimeError("expert reverse lacks exact physical output probes")
-            if args.input_gradient:
-                merged = tuple(item for item in sidecar_payload["output_probes"]
-                               if item["target"]["value_id"] ==
-                               "backward::T0.layer1.moe.input_sum.norm2_gradient")
-                if len(merged) != 1:
-                    raise RuntimeError("shared norm2 dX lacks one physical output probe")
+            if input_gradient_mode:
+                terminal_ids = (
+                    ("backward::T0.layer1.residual1.merge.input_gradient",
+                     next(node.outputs[0] for node in source.nodes
+                          if node.id.startswith("backward::T0.layer1.norm2::")))
+                    if args.layer1_backbone else
+                    ("backward::T0.layer1.moe.input_sum.norm2_gradient",)
+                )
+                for ref in terminal_ids:
+                    matches = tuple(item for item in sidecar_payload["output_probes"]
+                                    if item["target"]["value_id"] == ref)
+                    if len(matches) != 1:
+                        raise RuntimeError(f"MoE shared gradient lacks one physical output probe: {ref}")
             expert_probe_count = len(expert_probes)
             expert_probe_nonzero_expected_bytes = sum(
                 byte != 0 for item in expert_probes
@@ -394,6 +408,7 @@ def main() -> None:
         "llm/frontend/wafer_frontend/passes/moe_full_train_expert_backward_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_router_dx_ir0.py",
         "llm/frontend/wafer_frontend/passes/moe_full_train_input_gradient_ir0.py",
+        "llm/frontend/wafer_frontend/passes/moe_full_train_layer1_backbone_ir0.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_workload.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_backward_record_check.py",
         "llm/frontend/wafer_frontend/schema/moe_expert_scratch.py",
@@ -435,7 +450,8 @@ def main() -> None:
         native_tool_sha256=tool_hashes_at_entry,
         runner_cwd=str(Path.cwd().resolve()),
         native_runtime_cwd=str(npusim.parent),
-        status=("input_gradient_physical_partial" if args.input_gradient else
+        status=("layer1_backbone_physical_partial" if args.layer1_backbone else
+                "input_gradient_physical_partial" if input_gradient_mode else
                 "router_dx_physical_partial" if router_dx_mode else
                 "expert_backward_physical_partial" if expert_mode else
                 "router_sgd_physical_partial" if args.router_sgd else
