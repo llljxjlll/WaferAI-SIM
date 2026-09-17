@@ -18,10 +18,75 @@ from ..schema.ir0 import (
 )
 from ..schema.n6 import _leaf_fragments
 from ..schema.ir2 import (
-    FlowRouteRole, SemanticTaskKind, canonical_transit_completion_event,
+    FlowRouteRole, SemanticTaskKind, StandaloneNodeOrigin,
+    canonical_transit_completion_event,
 )
 from ..schema.persistent_state import PersistentStateAccess, StateKind
 from ..schema.train_n6 import TrainLinkedProgram
+
+
+
+def require_dense_dp2_receive_drain(program: TrainLinkedProgram) -> int:
+    """Bind source DP receive completion before each cross-core version WAIT.
+
+    Both the GlobalAction order and executable linked core stream must agree.
+    """
+    contexts = tuple(replica.lowering_context for replica in program.source.replicas)
+    if not any(context.dp_route_plan is not None for context in contexts):
+        return 0
+    leaves = {fragment.id: fragment for fragment in
+              _leaf_fragments(program.manifest.fragments)}
+    stream_by_core = {stream.logical_core: stream
+                      for stream in program.manifest.core_streams}
+    checked = 0
+    for context in contexts:
+        route = context.dp_route_plan
+        if route is None:
+            raise SchemaError("DP2 receive drain lacks one source route plan",
+                              path="source.replicas")
+        by_id = {action.id: action for action in context.global_dag.actions}
+        for fence in dense_dp2_state_version_fences(context.global_dag):
+            load = by_id[fence.load_action_id]
+            waits = tuple(action for action in by_id.values()
+                          if action.logical_core == fence.destination_core
+                          and action.task_kind is SemanticTaskKind.WAIT
+                          and isinstance(action.origin_ref, StandaloneNodeOrigin)
+                          and action.origin_ref.collective_plan_id == route.id
+                          and action.origin_ref.action_id.endswith(".broadcast_wait")
+                          and "::step1." in action.origin_ref.action_id)
+            if (not waits or any(wait.core_order_index >= load.core_order_index
+                                 for wait in waits)):
+                raise SchemaError("DP broadcast WAIT must precede first cross-core state EVENT_WAIT",
+                                  path=load.id)
+            stream = stream_by_core.get(fence.destination_core)
+            if stream is None:
+                raise SchemaError("cross-core fence lacks linked destination stream",
+                                  path=load.id)
+            positions: dict[str, list[tuple[int, RecordOpcode]]] = {}
+            for index, ref in enumerate(stream.records):
+                fragment = leaves[ref.fragment_id]
+                core_stream = next((item for item in fragment.core_streams
+                                    if item.logical_core == fence.destination_core), None)
+                if core_stream is None:
+                    raise SchemaError("linked reference lacks source fragment stream",
+                                      path=ref.fragment_id)
+                record = core_stream.records[ref.fragment_record_index]
+                if record.source_global_action_id != ref.source_global_action_id:
+                    raise SchemaError("linked record changed source action",
+                                      path=ref.fragment_id)
+                positions.setdefault(ref.source_global_action_id, []).append(
+                    (index, record.opcode))
+            event = tuple(index for index, opcode in positions.get(load.id, ())
+                          if opcode is RecordOpcode.EVENT_WAIT)
+            completions = tuple(index for wait in waits
+                                for index, opcode in positions.get(wait.id, ())
+                                if opcode is RecordOpcode.DTE_WAIT)
+            if (len(event) != 1 or len(completions) != len(waits)
+                    or max(completions, default=-1) >= event[0]):
+                raise SchemaError("linked DP DTE_WAIT must precede state EVENT_WAIT",
+                                  path=load.id)
+            checked += 1
+    return checked
 
 
 def dense_two_step_native_opcode_contract(plan: FlexibleDenseTrainPlan) -> tuple[
@@ -187,6 +252,8 @@ def build_full_dense_two_step_physical_dag(
     owned replicas and the native rank-major FP32 SUM route.
     """
     program.validate("full_dense_two_step_program")
+    if plan.spec.dp_degree == 2:
+        require_dense_dp2_receive_drain(program)
     requirements.validate_against(plan)
     if (requirements.steps != 2
             or len(program.source.replicas) != plan.spec.dp_degree
@@ -520,4 +587,5 @@ def build_full_dense_two_step_physical_dag(
 
 
 __all__ = ["build_full_dense_two_step_physical_dag",
+           "require_dense_dp2_receive_drain",
            "dense_two_step_native_opcode_contract"]

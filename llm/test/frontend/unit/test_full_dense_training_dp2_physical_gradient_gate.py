@@ -10,9 +10,14 @@ from llm.frontend.wafer_frontend.lowering.full_dense_gradient_physical_gate impo
 )
 from llm.frontend.wafer_frontend.lowering.full_dense_two_step_physical_dag import (
     build_full_dense_two_step_physical_dag, dense_two_step_native_opcode_contract,
+    require_dense_dp2_receive_drain,
 )
 from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
+from llm.frontend.wafer_frontend.schema.n6 import _leaf_fragments
+from llm.frontend.wafer_frontend.schema.ir2 import (
+    SemanticTaskKind, StandaloneNodeOrigin,
+)
 from llm.frontend.wafer_frontend.schema.dense_state_version_fence import (
     dense_dp2_state_version_fences,
 )
@@ -60,6 +65,50 @@ class FullDenseDP2PhysicalGradientGateTest(unittest.TestCase):
             required_backward_opcodes=self.backward,
             required_wgrad_opcodes=self.wgrad,
         )
+
+    @builder_validation_session()
+    def test_dp_receive_drain_is_source_and_linked_order_not_sorting_luck(self) -> None:
+        self.assertEqual(require_dense_dp2_receive_drain(self.linked), 22)
+        replica = self.linked.source.replicas[1]
+        context = replica.lowering_context
+        fence = next(item for item in self.fences
+                     if item.destination_core.die_id in (2, 3))
+        load = next(action for action in context.global_dag.actions
+                    if action.id == fence.load_action_id)
+        route = context.dp_route_plan
+        wait = next(action for action in context.global_dag.actions
+                    if action.logical_core == fence.destination_core
+                    and action.task_kind is SemanticTaskKind.WAIT
+                    and isinstance(action.origin_ref, StandaloneNodeOrigin)
+                    and action.origin_ref.collective_plan_id == route.id
+                    and action.origin_ref.action_id.endswith(".broadcast_wait")
+                    and "::step1." in action.origin_ref.action_id)
+        stream = next(item for item in self.linked.manifest.core_streams
+                      if item.logical_core == fence.destination_core)
+        refs = list(stream.records)
+        leaves = {fragment.id: fragment for fragment in
+                  _leaf_fragments(self.linked.manifest.fragments)}
+        def opcode(ref):
+            source = next(item for item in leaves[ref.fragment_id].core_streams
+                          if item.logical_core == stream.logical_core)
+            return source.records[ref.fragment_record_index].opcode
+        wait_pos = next(index for index, ref in enumerate(refs)
+                        if ref.source_global_action_id == wait.id
+                        and opcode(ref) is RecordOpcode.DTE_WAIT)
+        event_pos = next(index for index, ref in enumerate(refs)
+                         if ref.source_global_action_id == load.id
+                         and opcode(ref) is RecordOpcode.EVENT_WAIT)
+        self.assertLess(wait_pos, event_pos)
+        refs[wait_pos], refs[event_pos] = refs[event_pos], refs[wait_pos]
+        forged_stream = replace(stream, records=tuple(refs))
+        forged = replace(self.linked, manifest=replace(
+            self.linked.manifest, core_streams=tuple(
+                forged_stream if item.logical_core == stream.logical_core else item
+                for item in self.linked.manifest.core_streams
+            ),
+        ))
+        with self.assertRaisesRegex(SchemaError, "linked DP DTE_WAIT must precede state EVENT_WAIT"):
+            require_dense_dp2_receive_drain(forged)
 
     @builder_validation_session()
     def test_missing_event_or_version_edge_fails_closed(self) -> None:

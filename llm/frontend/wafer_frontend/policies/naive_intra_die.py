@@ -43,6 +43,7 @@ from ..schema.persistent_state import (
     PersistentStateLifetime,
     StateKind,
 )
+from .dense_dp2_receive_drain import order_dense_dp2_receives_before_state_fences
 
 
 _USE_ROLE_ORDER = {
@@ -491,6 +492,10 @@ def _ordinary_schedule(
         )
         for core in cores
     }
+    if dp_route_plan is not None:
+        order_by_core = order_dense_dp2_receives_before_state_fences(
+            dag, ir1, dp_route_plan, placement_by_task, order_by_core,
+        )
     core_orders = tuple(
         CoreOrder(core.runtime_core_id, order_by_core[core.runtime_core_id])
         for core in cores
