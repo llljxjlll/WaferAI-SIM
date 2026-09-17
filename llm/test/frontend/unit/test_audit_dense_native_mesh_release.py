@@ -1,10 +1,14 @@
 """Reject incomplete or overlapping Dense 100-shape release shards."""
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from llm.test.frontend.integration.audit_dense_native_mesh_release import (
-    _SHAPES, check_release_partition,
+    _SHAPES, audit_fresh_source_tool, check_release_partition,
 )
 
 
@@ -34,6 +38,41 @@ class DenseReleasePartitionTest(unittest.TestCase):
                 mutate(binding)
                 with self.assertRaises(ValueError):
                     check_release_partition(tuple(binding))
+
+
+class DenseReleaseSourceToolTest(unittest.TestCase):
+    def test_fresh_must_bind_exact_frozen_source_and_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            fresh = root / "fresh0"
+            (source / "pkg").mkdir(parents=True)
+            fresh.mkdir()
+            module = source / "pkg" / "driver.py"
+            module.write_text("value = 1\n", encoding="utf-8")
+            digest = hashlib.sha256(module.read_bytes()).hexdigest()
+            binding = {
+                "source_tool_at_entry": {
+                    "tool_sha256": {"npusim": "native-digest"},
+                    "imported_python_sha256": {"pkg/driver.py": digest},
+                },
+                "additional_imported_python_sha256": {},
+            }
+            sidecar = fresh / "source_tool_binding.json"
+            sidecar.write_text(json.dumps(binding), encoding="utf-8")
+            audit_fresh_source_tool(fresh, source, {"npusim": "native-digest"}, {})
+            module.write_text("value = 2\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "source bytes differ"):
+                audit_fresh_source_tool(fresh, source, {"npusim": "native-digest"}, {})
+            module.write_text("value = 1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "tool bytes differ"):
+                audit_fresh_source_tool(fresh, source, {"npusim": "other"}, {})
+            binding["source_tool_at_entry"]["imported_python_sha256"] = {
+                "../outside.py": digest,
+            }
+            sidecar.write_text(json.dumps(binding), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "path or digest is invalid"):
+                audit_fresh_source_tool(fresh, source, {"npusim": "native-digest"}, {})
 
 
 if __name__ == "__main__":

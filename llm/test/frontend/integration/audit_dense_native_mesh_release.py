@@ -52,6 +52,35 @@ def _frozen_driver(path: Path):
     return module
 
 
+def audit_fresh_source_tool(
+    fresh_root: Path, source_root: Path, tool_sha: dict[str, str],
+    source_sha_cache: dict[str, str],
+) -> None:
+    """Bind each Fresh's imported modules and native tools to this checkout."""
+    binding = _json(fresh_root / "source_tool_binding.json")
+    entry = binding.get("source_tool_at_entry")
+    if type(entry) is not dict or entry.get("tool_sha256") != tool_sha:
+        raise ValueError(f"Fresh native tool bytes differ from release: {fresh_root}")
+    maps = (entry.get("imported_python_sha256"),
+            binding.get("additional_imported_python_sha256"))
+    if any(type(items) is not dict for items in maps) or not maps[0]:
+        raise ValueError(f"Fresh source inventory is incomplete: {fresh_root}")
+    for items in maps:
+        for relative, expected in items.items():
+            if (type(relative) is not str or type(expected) is not str
+                    or not relative.endswith(".py")
+                    or Path(relative).is_absolute()
+                    or any(part in ("", ".", "..") for part in Path(relative).parts)):
+                raise ValueError(f"Fresh source path or digest is invalid: {relative}")
+            path = source_root / relative
+            if not path.is_file() or not path.resolve().is_relative_to(source_root):
+                raise ValueError(f"Fresh source is outside frozen checkout: {relative}")
+            if relative not in source_sha_cache:
+                source_sha_cache[relative] = _sha(path)
+            if source_sha_cache[relative] != expected:
+                raise ValueError(f"Fresh source bytes differ from release: {relative}")
+
+
 def audit_release(
     shard_roots: tuple[Path, ...], source_root: Path,
     tools: dict[str, Path], *, profile: str = "mixed",
@@ -80,6 +109,7 @@ def audit_release(
     check_release_partition(bindings)
     receipts: dict[str, str] = {}
     case_sha: dict[str, str] = {}
+    source_sha_cache: dict[str, str] = {}
     for root, binding in zip(roots, bindings):
         index = binding["shard_index"]
         expected_schema = ("dense-native-mesh-matrix-binding-v4"
@@ -111,6 +141,9 @@ def audit_release(
                                          all_dies_scaled=True)
             else:
                 driver.audit_cached_case(root / shape, shape)
+            for fresh in (0, 1):
+                audit_fresh_source_tool(root / shape / f"fresh{fresh}",
+                                        source_root, tool_sha, source_sha_cache)
             case_sha[shape] = _sha(root / shape / "case_evidence.json")
         receipts[str(index)] = _sha(receipt_path)
     if set(case_sha) != set(_SHAPES):
