@@ -56,6 +56,11 @@ class MoeEp2RankPlanTest(unittest.TestCase):
                                 for item in plan.transfers))
             self.assertEqual(sum(item.source_flow_ref is not None
                                  for item in plan.transfers), 4)
+            self.assertTrue(all(item.source_send_action_ref is not None
+                                and item.destination_recv_action_ref is not None
+                                and item.destination_wait_action_ref is not None
+                                for item in plan.transfers
+                                if item.source_flow_ref is not None))
             ranks = {item.node_ref: item.rank for item in plan.node_ranks}
             self.assertEqual({ref for ref, rank in ranks.items() if rank == 1},
                              {f"T0.layer{layer}.moe.expert1" for layer in (0, 1)})
@@ -94,6 +99,9 @@ class MoeEp2RankPlanTest(unittest.TestCase):
             replace(plan, transfers=plan.transfers[:-1]),
             replace(plan, transfers=(replace(
                 plan.transfers[0], source_flow_ref="forged_flow",
+            ), *plan.transfers[1:])),
+            replace(plan, transfers=(replace(
+                plan.transfers[0], destination_wait_action_ref="forged_wait",
             ), *plan.transfers[1:])),
         ):
             with self.subTest(forged=forged), self.assertRaisesRegex(

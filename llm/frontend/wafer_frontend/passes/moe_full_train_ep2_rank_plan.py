@@ -12,7 +12,7 @@ from math import prod
 from ..errors import SchemaError
 from ..schema.common import DType, MeshAxisName
 from ..schema.ir0 import OpKind, StateAccessMode
-from ..schema.flexible_moe import MoeRectFlowStage
+from ..schema.flexible_moe import MoeRectActionKind, MoeRectFlowStage
 from ..schema.moe_compile_sequence import MoeCompileSequence
 from .moe_full_train_ep_ir1_source import MoeEpSharedReverseIr1Candidate
 
@@ -40,6 +40,9 @@ class MoeEp2Transfer:
     route_ref: str
     die_path: tuple[int, ...]
     source_flow_ref: str | None
+    source_send_action_ref: str | None
+    destination_recv_action_ref: str | None
+    destination_wait_action_ref: str | None
     bytes: int
 
 
@@ -147,6 +150,7 @@ def _derive(
                                   path=f"source.values.{value.id}")
             logical_bytes = prod(value.shape) * _BYTES[value.dtype]
             source_flow_ref = None
+            send_ref = recv_ref = wait_ref = None
             for layer in (0, 1):
                 prefix = f"{instance_id}.layer{layer}.moe."
                 stage = (
@@ -168,12 +172,49 @@ def _derive(
                     raise SchemaError("EP2 remote value lacks one exact signed P2 flow",
                                       path=f"source.values.{value.id}")
                 source_flow_ref = matching[0].id
+                actions = tuple(unit.plan.actions)
+                def one(kind, rank):
+                    found = tuple(action for action in actions
+                                  if action.kind is kind and action.rank == rank
+                                  and action.flow_ref == source_flow_ref)
+                    if len(found) != 1:
+                        raise SchemaError("EP2 signed flow lacks one native action",
+                                          path=f"source.values.{value.id}")
+                    return found[0]
+                send = one(MoeRectActionKind.SEND, source_rank)
+                recv = one(MoeRectActionKind.RECV, destination_rank)
+                wait = one(MoeRectActionKind.WAIT, destination_rank)
+                if not {send.id, recv.id}.issubset(wait.deps):
+                    raise SchemaError("EP2 WAIT does not depend on signed SEND/RECV",
+                                      path=f"source.values.{value.id}")
+                if stage is MoeRectFlowStage.DISPATCH:
+                    producers = tuple(action for action in actions
+                                      if action.kind is MoeRectActionKind.PACK
+                                      and action.rank == source_rank
+                                      and action.id in send.deps)
+                    consumers = tuple(action for action in actions
+                                      if action.kind is MoeRectActionKind.EXPERT_FORWARD
+                                      and action.rank == destination_rank
+                                      and wait.id in action.deps)
+                else:
+                    producers = tuple(action for action in actions
+                                      if action.kind is MoeRectActionKind.EXPERT_FORWARD
+                                      and action.rank == source_rank
+                                      and action.id in send.deps)
+                    consumers = tuple(action for action in actions
+                                      if action.kind is MoeRectActionKind.WEIGHTED_COMBINE
+                                      and action.rank == destination_rank
+                                      and wait.id in action.deps)
+                if len(producers) != 1 or len(consumers) != 1:
+                    raise SchemaError("EP2 P2 action chain does not carry true expert value",
+                                      path=f"source.values.{value.id}")
+                send_ref, recv_ref, wait_ref = send.id, recv.id, wait.id
                 break
             transfers.append(MoeEp2Transfer(
                 value.id, value.producer, state_ref, consumer_ref,
                 source_rank, destination_rank, dies[source_rank],
                 dies[destination_rank], route.id, route.die_path,
-                source_flow_ref, logical_bytes,
+                source_flow_ref, send_ref, recv_ref, wait_ref, logical_bytes,
             ))
     transfers = tuple(sorted(transfers, key=lambda item: (item.value_ref,
                                                            item.consumer_node_ref)))
@@ -193,7 +234,14 @@ def _derive(
             or len(transfers) != 6
             or any(item.bytes <= 0 for item in transfers)
             or any((item.source_flow_ref is None) !=
-                   (item.source_state_ref is not None) for item in transfers)):
+                   (item.source_state_ref is not None) for item in transfers)
+            or any((item.source_flow_ref is None) !=
+                   (item.source_send_action_ref is None)
+                   or (item.source_flow_ref is None) !=
+                   (item.destination_recv_action_ref is None)
+                   or (item.source_flow_ref is None) !=
+                   (item.destination_wait_action_ref is None)
+                   for item in transfers)):
         raise SchemaError("EP2 needs six exact router/dispatch/return transfers",
                           path="source.values")
     return MoeEp2RankPlan(ir1.id, node_ranks, transfers)
