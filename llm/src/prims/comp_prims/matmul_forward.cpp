@@ -8,11 +8,17 @@
 #include "common/system.h"
 #include "defs/global.h"
 #include "memory/dram/Dcachecore.h"
+#include "memory/sram/sram_access_unit.h"
+#include "memory/sram/sram_storage.h"
 #include "prims/base.h"
 #include "prims/comp_prims.h"
 #include "utils/memory_utils.h"
 #include "utils/print_utils.h"
 #include "utils/system_utils.h"
+
+#include <limits>
+#include <stdexcept>
+#include <vector>
 
 REGISTER_PRIM(Matmul_f, PrimId::MATMUL_F);
 
@@ -109,4 +115,29 @@ void Matmul_f::taskCore(TaskCoreContext &context, string prim_name,
     exu_ops = ops.exu;
     sfu_ops = ops.sfu;
     vec_ops = ops.vec;
+
+    // Program-mode MATMUL charges compute but does not perform the legacy
+    // implicit output write. A subsequent DTE send or LOCAL_REDUCE still
+    // needs valid bytes, even when liveness reuses this SRAM address and
+    // ProgramIO cannot seed every owner before the program starts. Preserve
+    // explicitly seeded timing payloads; materialize only an unseeded result.
+    if (prim_context->program_mode_ && context.sram_storage != nullptr &&
+        context.sram_storage->payload_mode()) {
+        if (context.sram_access == nullptr || out_offset < 0 || out_size < 0 ||
+            static_cast<uint64_t>(out_size) >
+                std::numeric_limits<size_t>::max() /
+                    static_cast<uint64_t>(data_byte))
+            throw std::logic_error("Matmul_f invalid program SRAM output");
+        const uint64_t address = static_cast<uint64_t>(out_offset);
+        const uint64_t bytes = static_cast<uint64_t>(out_size) * data_byte;
+        if (!context.sram_storage->IsValid(address, bytes)) {
+            sram::Request write;
+            write.initiator = sram::Initiator::kCompute;
+            write.command = sram::Command::kWrite;
+            write.address = address;
+            write.size_bytes = bytes;
+            write.payload = std::vector<uint8_t>(static_cast<size_t>(bytes));
+            context.sram_access->Access(write);
+        }
+    }
 }
