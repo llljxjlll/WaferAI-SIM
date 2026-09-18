@@ -31,6 +31,7 @@ class DenseTpOwnerProjectionTest(unittest.TestCase):
             id=self.access.state_ref,
             identity=SimpleNamespace(
                 kind=StateKind.TRAINABLE_PARAMETER, shard_index=2,
+                tensor_ref="T0.layer0.w_qkv",
             ),
         )
         self.binding = SimpleNamespace(
@@ -91,7 +92,7 @@ class DenseTpOwnerProjectionTest(unittest.TestCase):
                     ),
                 ), self.node, self.group,
             )
-        with self.assertRaisesRegex(SchemaError, "one physical StateAccess"):
+        with self.assertRaisesRegex(SchemaError, "forward parameter READ"):
             _dense_train_tp_owner_placements(
                 SimpleNamespace(
                     state_accesses=(),

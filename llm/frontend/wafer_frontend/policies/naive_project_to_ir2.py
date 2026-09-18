@@ -21,7 +21,7 @@ from ..schema.action import (
     SwizzleBoundActionRef,
     SyncContract,
 )
-from ..schema.common import DType, RoundingMode, Sharding
+from ..schema.common import DType, MeshAxisName, RoundingMode, Sharding
 from ..schema.ir0 import CollectiveKind, EdgeKind, FusionPattern, OpKind, ReduceOp, StateAccessMode
 from ..schema.ir1 import IR1, PhysicalNode
 from ..schema.persistent_state import StateKind
@@ -125,12 +125,56 @@ _DENSE_TP_PARAMETER_NODE = re.compile(
 )
 
 
-def _dense_train_tp_owner_placements(ir1: IR1, node: PhysicalNode, group):
-    """Use the real shard StateAccess/home to select one native TP rank.
+def _moe_ep_shared_reverse_owner_placements(ir1: IR1, node: PhysicalNode, group):
+    """Place the source-bound EP2 shared path on rank 0 and expert 1 on rank 1.
 
-    Only an explicitly named Dense WGRAD/SGD shard opts in.  Ordinary forward
-    and backbone dX nodes still execute on every participating rank.
+    This scopes the pending native EP2 bridge to its exact IR1 producer. A
+    router read of expert-1's weight remains remote and must acquire an
+    explicit transfer before projection can succeed.
     """
+    if getattr(ir1, "producer_pass", None) != "moe_ep_shared_reverse_ir1_candidate":
+        return None
+    if len(group.placements) == 1:
+        return group.placements
+    if (group.axis is not MeshAxisName.EP
+            or group.logical_shape != (1, 2)
+            or tuple(place.rank for place in group.placements) != (0, 1)
+            or len(ir1.nodes) != 38):
+        _fail("EP2 shared reverse requires exact two-rank source geometry",
+              node.id)
+    rank = (node.workload.expert
+            if node.kind is OpKind.MOE_EXPERT_FORWARD else 0)
+    if rank not in (0, 1):
+        _fail("EP2 expert has no physical owner rank", node.id)
+    owner = group.placements[rank]
+    manifest = ir1.persistent_state_manifest
+    if manifest is None:
+        _fail("EP2 shared reverse requires physical parameter homes", node.id)
+    states = {state.id: state for state in manifest.declarations}
+    homes = {binding.state_ref: binding.die_id
+             for binding in manifest.bindings}
+    accesses = tuple(access for access in ir1.state_accesses
+                     if access.node_ref == node.id)
+    remote = tuple(access for access in accesses if access.rank != rank)
+    if (remote and (node.kind is not OpKind.MOE_ROUTER
+                    or len(remote) != 1 or remote[0].rank != 1)):
+        _fail("EP2 remote parameter requires an explicit transfer", node.id)
+    for access in accesses:
+        state = states.get(access.state_ref)
+        if (state is None or access.state_ref not in homes
+                or homes[access.state_ref]
+                != group.placements[access.rank].die_id
+                or (node.kind is OpKind.MOE_EXPERT_FORWARD
+                    and state.identity.ep_owner_rank != rank)):
+            _fail("EP2 state access differs from its physical owner", node.id)
+    return (owner,)
+
+
+def _dense_train_tp_owner_placements(ir1: IR1, node: PhysicalNode, group):
+    """Select source-bound EP2 or Dense shard owners before ordinary projection."""
+    ep_owner = _moe_ep_shared_reverse_owner_placements(ir1, node, group)
+    if ep_owner is not None:
+        return ep_owner
     if (len(group.placements) <= 1
             or node.kind not in (
                 OpKind.GEMM_WEIGHT_WGRAD, OpKind.NORM_GAMMA_WGRAD,
@@ -771,6 +815,15 @@ class NaiveProjectToIR2:
                     and getattr(task.origin_ref, "rank", None) == access.rank
                 )
                 tensor_ref = declaration.identity.tensor_ref
+                if (not candidates
+                        and ir1.producer_pass == "moe_ep_shared_reverse_ir1_candidate"
+                        and node_index[access.node_ref].kind is OpKind.MOE_ROUTER
+                        and access.rank == 1):
+                    raise UnsupportedFeatureError(
+                        "EP2 remote router parameter requires an explicit "
+                        "owner-to-consumer state transfer",
+                        path=f"ir1.state_accesses.{access.id}",
+                    )
                 if (
                     not candidates
                     or (

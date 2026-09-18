@@ -3,7 +3,10 @@
 from dataclasses import replace
 import unittest
 
-from llm.frontend.wafer_frontend.errors import SchemaError
+from llm.frontend.wafer_frontend.errors import SchemaError, UnsupportedFeatureError
+from llm.frontend.wafer_frontend.policies.naive_project_to_ir2 import (
+    NaiveProjectToIR2, _dense_train_tp_owner_placements,
+)
 from llm.frontend.wafer_frontend.schema.flexible_moe import MoeRectFlowStage
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep2_rank_plan import (
     build_moe_ep2_rank_plan,
@@ -41,6 +44,33 @@ class MoeEp2RankPlanTest(unittest.TestCase):
                 sequence=Fixture.sequence, placement=placement,
                 context=Fixture.context, dense_manifest=Fixture.manifest,
             ))
+
+    def test_ir2_ordinary_owner_matches_source_plan_and_rejects_implicit_remote_read(self):
+        for source in self.candidates:
+            graph = source.physical_ir1
+            group = graph.groups[0]
+            plan = build_moe_ep2_rank_plan(source, Fixture.sequence)
+            expected = {item.node_ref: (item.rank, item.die_id)
+                        for item in plan.node_ranks}
+            actual = {
+                node.id: (
+                    placement.rank, placement.die_id,
+                )
+                for node in graph.nodes
+                for placement in _dense_train_tp_owner_placements(
+                    graph, node, group,
+                )
+            }
+            self.assertEqual(actual, expected)
+            self.assertEqual(sum(rank == 1 for rank, _die in actual.values()), 2)
+            # The rank-1 router weight still lives on the remote Die. Until
+            # there is a signed DTE state transfer, projection must fail.
+            with self.assertRaisesRegex(
+                UnsupportedFeatureError, "explicit owner-to-consumer state transfer",
+            ):
+                NaiveProjectToIR2().run(
+                    graph, (), (), state_transfers=(),
+                )
 
     def test_both_steps_have_exact_owner_ranks_and_six_remote_values(self):
         plans = [build_moe_ep2_rank_plan(source, Fixture.sequence) for source in self.candidates]
