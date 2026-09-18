@@ -1,0 +1,63 @@
+{
+  "case": {
+    "d2d_packets": [
+      26880,
+      26880
+    ],
+    "external_dma_events": 390,
+    "external_kv_probes": 72,
+    "external_read_bytes": 762048,
+    "external_write_bytes": 48384,
+    "finalizer_sha256": "0cc4d6c7639a020082de2c64f629727f3ff5b0fca6694a931229e26a9aa3da60",
+    "functional": false,
+    "highest_paged_state_end_bytes_per_die": 17088,
+    "kv_page_bytes": [
+      0,
+      13824,
+      16128,
+      18432
+    ],
+    "kv_versions": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "logical_hbm_capacity_bytes_per_die": 18432,
+    "makespan_cycles": 129027,
+    "model_digest": "2e4f864a6abb623f3af3510f2addc5df2d17487b2dd17bf7878268c3a4a34de9",
+    "npusim_sha256": "a80a5208a2176ad80ae7aa286f15ec98f94c1bb8f0f5091c16ca4aa5d388fae1",
+    "offload_logical_graph_digest": "bb5541d06bdd8d440b15e9371eac7d691fd1c747f7a11004c057d8d6e9e3e45d",
+    "paired_fresh_runs": 2,
+    "physical_die_ids": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "resident_logical_graph_digest": "bb5541d06bdd8d440b15e9371eac7d691fd1c747f7a11004c057d8d6e9e3e45d",
+    "resident_rejection_code": "memory_capacity_exceeded",
+    "resolver_sha256": "d7cdc133368d23fec802c0220fa3367c327d02ad780846a8187ce88851bd1048",
+    "simulation_sha256": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb",
+    "source_tool_binding_sha256": "381e6281b2b9a6ab89dc9dc653a922df0efbaf3762c91ba0be844f1035b6cd6c",
+    "used_runtime_cores": [
+      0,
+      4,
+      8,
+      12,
+      16,
+      20
+    ]
+  },
+  "full_fresh_evidence_sha256": "37e8989554baff8ad7e40f651969d1949af4fcfbd0ecb64060fc2ac5e50c357b",
+  "independent_full_materializations": 2,
+  "mesh_size": "6x1",
+  "per_materialization_report_sha256": [
+    "09deef2567066cef2bf994f6475e43c49686dc3c4f87c423eb9b3c8f5e3c990c",
+    "09deef2567066cef2bf994f6475e43c49686dc3c4f87c423eb9b3c8f5e3c990c"
+  ],
+  "schema_version": "dense-tp6-paged-full-fresh-compact-v1",
+  "status": "verified"
+}
