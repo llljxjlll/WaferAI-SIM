@@ -1,0 +1,96 @@
+{
+  "fresh_a": {
+    "full_training_gate": "closed",
+    "hardware_sha256": "ea58a8c1c47b05e0eacff00edcf0d91f5691025859178cde8b04d45e5a195a5c",
+    "model_functional_verified": false,
+    "native": {
+      "dma_events": 130,
+      "external_read_bytes": 4864,
+      "external_write_bytes": 1904,
+      "full_training_gate": "closed",
+      "makespan_cycles": 17633,
+      "native_sha256": "61b753a956471f74e7a18320d1aa217a7b08995d771eaf078339b67186b3bc16",
+      "negative_tests": [
+        "linked_record",
+        "zero_seed",
+        "capacity"
+      ],
+      "numeric_gradient_witness": false,
+      "positive_log_sha256": "a9922f25ddab1f286c9f899497269fda0f6e72ec356c76538be90b753582a513",
+      "sidecar_sha256": "f621871dafb4193d8138cdcd74b604b95c9f105fb5facb89576cf643e91d16c4",
+      "state_digests": [
+        "26a9dedf9bb3dfedc565d05c53acd7a1adce3a9f54c504eda8b4dfa6ed9f3c13",
+        "26a9dedf9bb3dfedc565d05c53acd7a1adce3a9f54c504eda8b4dfa6ed9f3c13",
+        "26a9dedf9bb3dfedc565d05c53acd7a1adce3a9f54c504eda8b4dfa6ed9f3c13"
+      ],
+      "status": "pass",
+      "train_sgd": 38
+    },
+    "npusim_sha256": "61b753a956471f74e7a18320d1aa217a7b08995d771eaf078339b67186b3bc16",
+    "paged_artifact_sha256": [
+      "2d5664f72108256c7585848319d096ccf179c0e51018772b9a2cadb4498ee7df",
+      "4aae885ae1937707328a61d43059c508f9a6e91e369f3fc526912e3a9b2a69f8"
+    ],
+    "paged_manifest_digests": [
+      "8c0995a30994b5dda010434ead04705aa6726404b6dfbc67e0235d5d1a98dcee",
+      "b37ab81cae9d6b1697f7263b15f1c5ca553ca99513b7390a7de7089742e52539"
+    ],
+    "resident_only_rejected": true,
+    "resident_rejection_log_sha256": "3466a1637524f448c0735383c647833ee15e20bf48a2f521e8bc06966dc269b1",
+    "schema_version": "moe_full_train_paged_native_fresh/v1",
+    "sidecar_sha256": "f621871dafb4193d8138cdcd74b604b95c9f105fb5facb89576cf643e91d16c4",
+    "source_commit": "735e902f9afcbe94ae45d9054ac414c07c63e365",
+    "source_manifest_digests": [
+      "dc8ad89d35250842c57879b5e0b060d2da03746b7fcdead9e17ca7ff14b7c851",
+      "ea870015740883ba3ad90cb516c4bc064342a517041624d20df1e964b1b042ca"
+    ],
+    "source_tree_clean_at_entry": true
+  },
+  "fresh_b": {
+    "full_training_gate": "closed",
+    "hardware_sha256": "ea58a8c1c47b05e0eacff00edcf0d91f5691025859178cde8b04d45e5a195a5c",
+    "model_functional_verified": false,
+    "native": {
+      "dma_events": 130,
+      "external_read_bytes": 4864,
+      "external_write_bytes": 1904,
+      "full_training_gate": "closed",
+      "makespan_cycles": 17633,
+      "native_sha256": "61b753a956471f74e7a18320d1aa217a7b08995d771eaf078339b67186b3bc16",
+      "negative_tests": [
+        "linked_record",
+        "zero_seed",
+        "capacity"
+      ],
+      "numeric_gradient_witness": false,
+      "positive_log_sha256": "5ad28ff125b345cf84709c00174d2765cf506e82c8f0535086ae67e77ae9d432",
+      "sidecar_sha256": "f621871dafb4193d8138cdcd74b604b95c9f105fb5facb89576cf643e91d16c4",
+      "state_digests": [
+        "26a9dedf9bb3dfedc565d05c53acd7a1adce3a9f54c504eda8b4dfa6ed9f3c13",
+        "26a9dedf9bb3dfedc565d05c53acd7a1adce3a9f54c504eda8b4dfa6ed9f3c13",
+        "26a9dedf9bb3dfedc565d05c53acd7a1adce3a9f54c504eda8b4dfa6ed9f3c13"
+      ],
+      "status": "pass",
+      "train_sgd": 38
+    },
+    "npusim_sha256": "61b753a956471f74e7a18320d1aa217a7b08995d771eaf078339b67186b3bc16",
+    "paged_artifact_sha256": [
+      "2d5664f72108256c7585848319d096ccf179c0e51018772b9a2cadb4498ee7df",
+      "4aae885ae1937707328a61d43059c508f9a6e91e369f3fc526912e3a9b2a69f8"
+    ],
+    "paged_manifest_digests": [
+      "8c0995a30994b5dda010434ead04705aa6726404b6dfbc67e0235d5d1a98dcee",
+      "b37ab81cae9d6b1697f7263b15f1c5ca553ca99513b7390a7de7089742e52539"
+    ],
+    "resident_only_rejected": true,
+    "resident_rejection_log_sha256": "3466a1637524f448c0735383c647833ee15e20bf48a2f521e8bc06966dc269b1",
+    "schema_version": "moe_full_train_paged_native_fresh/v1",
+    "sidecar_sha256": "f621871dafb4193d8138cdcd74b604b95c9f105fb5facb89576cf643e91d16c4",
+    "source_commit": "735e902f9afcbe94ae45d9054ac414c07c63e365",
+    "source_manifest_digests": [
+      "dc8ad89d35250842c57879b5e0b060d2da03746b7fcdead9e17ca7ff14b7c851",
+      "ea870015740883ba3ad90cb516c4bc064342a517041624d20df1e964b1b042ca"
+    ],
+    "source_tree_clean_at_entry": true
+  }
+}
