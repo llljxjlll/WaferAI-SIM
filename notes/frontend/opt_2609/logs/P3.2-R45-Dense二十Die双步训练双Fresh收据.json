@@ -1,0 +1,62 @@
+{
+  "ce_backward_per_run": 40,
+  "ce_forward_per_run": 40,
+  "cross_core_fences": 110,
+  "dp_degree": 2,
+  "fresh": [
+    {
+      "artifact_sha256": "f718cd7933e2ab0f3c7610a8ac1f123c31bd926504564785b7df5066a4f37e7d",
+      "elapsed_seconds": 1589.892,
+      "linked_manifest_sha256": "4eacbf28c447c17a6cdd484a97c1498b7e2c55f011d7c89fd0a2c3b8da8e57f8",
+      "native_stdout_bytes": 15477964,
+      "native_stdout_sha256": "eca46876233cbbeff0bb2352f4a7c16b16c82165f1f66abb0d6891720be3119e",
+      "physical_dag_sha256": "a45a711abe049245815127228fdfe88812c7ab57e865b77b7628c22fa14341fd",
+      "program_io_sha256": "cd3d8aefebfc21a16deda8954c44ebd2d2878972662ccb35d2120a1f30991ae0",
+      "raw_bytes": 258707196,
+      "receipt_sha256": "71726df811a97c4a2269c9918a06a3bc6bcb942b53c4b60f306edf065f68f18a"
+    },
+    {
+      "artifact_sha256": "f718cd7933e2ab0f3c7610a8ac1f123c31bd926504564785b7df5066a4f37e7d",
+      "elapsed_seconds": 1590.435,
+      "linked_manifest_sha256": "4eacbf28c447c17a6cdd484a97c1498b7e2c55f011d7c89fd0a2c3b8da8e57f8",
+      "native_stdout_bytes": 15477964,
+      "native_stdout_sha256": "8aa14761c921ffa53c274ed02610be0ec49f39202cd8b50d1a1d1c9e8e4a0009",
+      "physical_dag_sha256": "a45a711abe049245815127228fdfe88812c7ab57e865b77b7628c22fa14341fd",
+      "program_io_sha256": "cd3d8aefebfc21a16deda8954c44ebd2d2878972662ccb35d2120a1f30991ae0",
+      "raw_bytes": 258707195,
+      "receipt_sha256": "71726df811a97c4a2269c9918a06a3bc6bcb942b53c4b60f306edf065f68f18a"
+    }
+  ],
+  "independent_full_materializations": 2,
+  "layers": 2,
+  "linked_fragments": 6248,
+  "makespan_cycles": [
+    378788,
+    378788
+  ],
+  "mesh": [
+    2,
+    10
+  ],
+  "native_invocations": 2,
+  "numeric_mode": "timing",
+  "physical_actions": 24960,
+  "physical_parameter_states": 300,
+  "program_io_initializations": 2450,
+  "program_io_probes": 40,
+  "schema_version": "p3_2_dense_tp10dp2_double_fresh/v1",
+  "sgd_steps": 2,
+  "sgd_updates_per_run": 600,
+  "simulation_sha256": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb",
+  "source_commit": "0a8deffe61043667c5e3357f528c8f89a540fc1c",
+  "source_nodes": 1042,
+  "state_version_edges": 410,
+  "status": "verified",
+  "step_parameter_gradient_paths": 600,
+  "tool_sha256": {
+    "finalizer": "0cc4d6c7639a020082de2c64f629727f3ff5b0fca6694a931229e26a9aa3da60",
+    "npusim": "a80a5208a2176ad80ae7aa286f15ec98f94c1bb8f0f5091c16ca4aa5d388fae1",
+    "resolver": "d7cdc133368d23fec802c0220fa3367c327d02ad780846a8187ce88851bd1048"
+  },
+  "tp_degree": 10
+}
