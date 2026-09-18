@@ -20,7 +20,7 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_forward_validator import 
     MoeFullTrainForwardValidator,
 )
 from llm.frontend.wafer_frontend.passes.validate_ir0 import DenseIR0Validator
-from llm.frontend.wafer_frontend.schema.ir0 import EdgeKind,GraphEdge,IR0
+from llm.frontend.wafer_frontend.schema.ir0 import EdgeKind,GraphEdge,IR0,StateAccess
 from llm.frontend.wafer_frontend.schema.moe_full_training_block_workload import (
     MoeForwardBlockKind,
 )
@@ -49,6 +49,27 @@ class MoeFullTrainForwardIr0Test(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedFeatureError,
                                     "typed source phase"):
             DenseIR0Validator.validate(phase.graph)
+
+    def test_ep2_owner1_parameter_read_cannot_claim_rank0(self):
+        phase = build_moe_full_train_forward_ir0(self.forward, self.sequence)
+        states = {state.id: state for state in phase.graph.persistent_states}
+        target = next(access for access in phase.graph.state_accesses
+                      if states[access.state_ref].identity.ep_owner_rank == 1)
+        self.assertEqual(target.rank, 1)
+        forged = StateAccess.create(
+            node_ref=target.node_ref, state_ref=target.state_ref,
+            mode=target.mode, rank=0,
+            read_offset=target.read_offset, read_shape=target.read_shape,
+            write_offset=target.write_offset, write_shape=target.write_shape,
+        )
+        graph = IR0.create(
+            producer_pass=phase.graph.producer_pass,
+            **{**phase.graph._semantic_key(),
+               "state_accesses": tuple(forged if item is target else item
+                                       for item in phase.graph.state_accesses)},
+        )
+        with self.assertRaisesRegex(SchemaError, "exact TP shard, DP2 replica or EP owner"):
+            graph.validate("forged_ep_home")
 
     def test_true_one_die_two_layer_ep1_forward_source(self):
         sequence = compile_moe_sequence(

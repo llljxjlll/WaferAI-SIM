@@ -6,6 +6,13 @@ import unittest
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes.moe_full_train_ep_ir1_source import (
     build_moe_ep_placed_ir1_candidate,
+    build_moe_ep_shared_reverse_ir1_candidate,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_forward_ir0 import (
+    build_moe_full_train_forward_ir0,
+)
+from llm.frontend.wafer_frontend.passes.moe_full_train_ep_placement import (
+    build_moe_full_train_ep_placement,
 )
 from llm.frontend.wafer_frontend.schema.persistent_state import (
     PersistentStateIdentity, StateKind,
@@ -20,7 +27,7 @@ from llm.frontend.wafer_frontend.policies.naive_intra_die import (
     NaiveIntraDiePolicy, _ordinary_rank_local_view,
 )
 from llm.frontend.wafer_frontend.schema.ir1 import IR1, RankPlacement
-from llm.frontend.wafer_frontend.schema.ir0 import OpKind
+from llm.frontend.wafer_frontend.schema.ir0 import OpKind, StateAccess
 
 
 class MoeFullTrainEpIr1SourceTest(unittest.TestCase):
@@ -98,6 +105,84 @@ class MoeFullTrainEpIr1SourceTest(unittest.TestCase):
             _ordinary_rank_local_view(
                 expert_task, input_value,
                 replace(partitioned, groups=(forged_group,)),
+            )
+
+    def test_ep2_both_steps_place_real_shared_reverse_and_preserve_owners(self):
+        candidates = []
+        for step in (0, 1):
+            phase = self.phase if step == 0 else build_moe_full_train_forward_ir0(
+                self.original_dense, self.sequence, step=step,
+            )
+            placement = self.placement if step == 0 else build_moe_full_train_ep_placement(
+                phase, original_dense=self.original_dense,
+                dense_manifest=self.dense_manifest, sequence=self.sequence,
+                context=self.context,
+            )
+            candidate = build_moe_ep_shared_reverse_ir1_candidate(
+                phase, original_dense=self.original_dense,
+                sequence=self.sequence, placement=placement,
+                context=self.context, dense_manifest=self.dense_manifest,
+            )
+            candidate.validate_source_against(
+                phase, original_dense=self.original_dense,
+                sequence=self.sequence, placement=placement,
+                context=self.context, dense_manifest=self.dense_manifest,
+            )
+            self.assertEqual(len(candidate.physical_ir1.nodes), 38)
+            self.assertEqual(len(candidate.forward.owner_proofs), 16)
+            self.assertEqual(len(candidate.physical_ir1.persistent_state_manifest.bindings), 29)
+            self.assertEqual({proof.physical_die for proof in
+                              candidate.forward.owner_proofs}, {0, 1})
+            declarations = {state.id: state for state in
+                            candidate.physical_ir1.persistent_state_manifest.declarations}
+            self.assertTrue(all(
+                access.rank == declarations[access.state_ref].identity.ep_owner_rank
+                for access in candidate.physical_ir1.state_accesses
+                if declarations[access.state_ref].identity.ep_owner_rank is not None
+            ))
+            placed = IR1.create(
+                producer_pass="placement", **candidate.physical_ir1._semantic_key(),
+            )
+            partitioned = partition_ir1(placed)
+            projected = NaiveProjectToIR2().run(
+                partitioned, (), (), state_transfers=(),
+            )
+            projected.validate_against(partitioned, (), (), ())
+            self.assertEqual(len(projected.dags), 2)
+            self.assertEqual(sum(len(dag.tasks) for dag in projected.dags), 106)
+            candidates.append(candidate)
+        self.assertNotEqual(candidates[0].physical_ir1.id,
+                            candidates[1].physical_ir1.id)
+        first = candidates[0]
+        declarations = {state.id: state for state in
+                        first.physical_ir1.persistent_state_manifest.declarations}
+        remote = next(access for access in first.physical_ir1.state_accesses
+                      if declarations[access.state_ref].identity.ep_owner_rank == 1)
+        forged_access = StateAccess.create(
+            node_ref=remote.node_ref, state_ref=remote.state_ref,
+            mode=remote.mode, rank=0,
+            read_offset=remote.read_offset, read_shape=remote.read_shape,
+            write_offset=remote.write_offset, write_shape=remote.write_shape,
+        )
+        forged_ir1 = IR1.create(
+            producer_pass=first.physical_ir1.producer_pass,
+            **{**first.physical_ir1._semantic_key(),
+               "state_accesses": tuple(
+                   forged_access if item is remote else item
+                   for item in first.physical_ir1.state_accesses)},
+        )
+        with self.assertRaisesRegex(SchemaError, "physical TP shard or EP owner"):
+            forged_ir1.validate("forged_ep_rank0")
+        forged = replace(first.physical_ir1.nodes[-1],
+                         execution_group_ref="forged_group")
+        with self.assertRaisesRegex(SchemaError, "preserve source gradients"):
+            replace(first, physical_ir1=replace(
+                first.physical_ir1,
+                nodes=(*first.physical_ir1.nodes[:-1], forged),
+            )).validate_source_against(
+                self.phase, original_dense=self.original_dense,
+                sequence=self.sequence, placement=self.placement,
+                context=self.context, dense_manifest=self.dense_manifest,
             )
 
     def test_all_32_shared_moe_physical_candidates_and_16_ep_owners(self):

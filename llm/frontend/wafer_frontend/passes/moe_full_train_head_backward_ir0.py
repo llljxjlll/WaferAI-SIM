@@ -46,10 +46,10 @@ def append_moe_full_train_head_backward_ir0(source: IR0) -> IR0:
         or source.job is not JobKind.TRAIN
         or len(source.instances) != 1
         or source.instances[0].parallel.tp != 1
-        or source.instances[0].parallel.ep != 1
+        or source.instances[0].parallel.ep not in (1, 2)
         or len(source.nodes) < 3
     ):
-        raise SchemaError("requires exact TP1/EP1 MoE CE backward source", path="source")
+        raise SchemaError("requires exact TP1/EP1-or-EP2 MoE CE backward source", path="source")
     instance = source.instances[0]
     node_by_id = {node.id: node for node in source.nodes}
     value_by_id = {value.id: value for value in source.values}

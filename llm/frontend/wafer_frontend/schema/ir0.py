@@ -2796,9 +2796,30 @@ class IR0:
                     declaration.identity.shard_index + instance.parallel.tp
                 )
             )
-            if access.rank != declaration.identity.shard_index and not exact_dp2_replica:
+            identity = declaration.identity
+            exact_ep_owner = (
+                identity.ep_owner_rank is not None
+                and self.job is JobKind.TRAIN
+                and len(self.instances) == 1
+                and instance.role is LogicalRole.TRAIN
+                and instance.replicas == 1
+                and instance.parallel.tp == 1
+                and instance.parallel.ep in (1, 2)
+                and instance.parallel.pp == instance.parallel.dp == 1
+                and tuple((axis.name, axis.size) for axis in mesh.axes) == (
+                    (MeshAxisName.TP, 1),
+                    (MeshAxisName.EP, instance.parallel.ep),
+                )
+                and identity.shard_index == 0
+                and access.rank == identity.ep_owner_rank
+            )
+            if (identity.ep_owner_rank is not None and not exact_ep_owner) or (
+                identity.ep_owner_rank is None
+                and access.rank != identity.shard_index
+                and not exact_dp2_replica
+            ):
                 raise SchemaError(
-                    "access rank must equal the state shard_index or its exact TP/DP2 replica",
+                    "access rank must match the exact TP shard, DP2 replica or EP owner",
                     path=f"{access_path}.rank",
                 )
             if access.mode not in allowed_modes[declaration.access]:

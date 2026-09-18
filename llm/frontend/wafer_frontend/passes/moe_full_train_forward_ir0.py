@@ -421,7 +421,7 @@ def build_moe_full_train_forward_ir0(
             states.append(declaration)
             new_accesses.append(StateAccess.create(
                 node_ref=read_node_ref, state_ref=declaration.id,
-                mode=StateAccessMode.READ, rank=0,
+                mode=StateAccessMode.READ, rank=owner,
             ))
             owner_bindings.append(MoeForwardEpStateOwner(
                 declaration.id, source.id, view.id, logical_name, owner, 0,

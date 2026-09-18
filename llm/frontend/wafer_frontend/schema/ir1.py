@@ -1621,9 +1621,13 @@ class IR1:
                         "state access node must match the state owner",
                         path=access_path,
                     )
-                if access.rank != identity.shard_index:
+                expected_rank = (
+                    identity.ep_owner_rank if identity.ep_owner_rank is not None
+                    else identity.shard_index
+                )
+                if access.rank != expected_rank:
                     raise SchemaError(
-                        "state access rank must equal the state shard",
+                        "state access rank must equal the physical TP shard or EP owner",
                         path=f"{access_path}.rank",
                     )
                 if access.mode not in allowed_modes[declaration.access]:

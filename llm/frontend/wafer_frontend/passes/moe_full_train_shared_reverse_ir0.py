@@ -26,8 +26,8 @@ def append_moe_full_train_shared_reverse_ir0(source: IR0) -> IR0:
     if (source.producer_pass != "moe_full_train_head_backward_ir0"
             or len(source.instances) != 1
             or source.instances[0].parallel.tp != 1
-            or source.instances[0].parallel.ep != 1):
-        raise SchemaError("requires exact EP1 MoE head backward source",
+            or source.instances[0].parallel.ep not in (1, 2)):
+        raise SchemaError("requires exact EP1/EP2 MoE head backward source",
                           path="source")
     instance = source.instances[0]
     nodes = {node.id: node for node in source.nodes}

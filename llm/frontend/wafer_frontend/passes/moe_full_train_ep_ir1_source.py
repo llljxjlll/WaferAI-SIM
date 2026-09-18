@@ -1,8 +1,8 @@
 """Strict EP1/EP2 source→physical IR1 candidate with expert owner proof.
 
-The candidate uses official IR1 schema types and must pass public IR1.validate.
-It is a forward source only; full native TRAIN still requires N6 lowering,
-backward dataflow and two complete linked SGD steps.
+The candidates use official IR1 schema types and must pass public IR1.validate.
+The shared reverse candidate ends at dCombined; full native TRAIN still
+requires expert reverse, N6 lowering and two complete linked SGD steps.
 """
 
 from __future__ import annotations
@@ -10,7 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..errors import SchemaError
+from ..schema.ir0 import IR0
 from ..schema.ir1 import IR1
+from .moe_full_train_ce_backward_ir0 import append_moe_full_train_ce_backward_ir0
+from .moe_full_train_head_backward_ir0 import append_moe_full_train_head_backward_ir0
+from .moe_full_train_shared_reverse_ir0 import append_moe_full_train_shared_reverse_ir0
 from ..schema.moe_compile_sequence import MoeCompileSequence
 from .moe_full_train_ep_placement import MoeFullTrainEpPlacement
 from .moe_full_train_forward_ir0 import FullMoeForwardIr0Phase
@@ -155,5 +159,93 @@ def build_moe_ep_placed_ir1_candidate(
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class MoeEpSharedReverseIr1Candidate:
+    """Source-bound CE→head→dCombined IR1; expert reverse is not included."""
+
+    forward: MoeEpPlacedIr1SourceCandidate
+    source_ir0: IR0
+    physical_ir1: IR1
+
+    def validate_source_against(
+        self, phase: FullMoeForwardIr0Phase, *, original_dense,
+        sequence: MoeCompileSequence, placement: MoeFullTrainEpPlacement,
+        context, dense_manifest,
+    ) -> None:
+        self.forward.validate_source_against(
+            phase, original_dense, sequence, placement, context, dense_manifest,
+        )
+        expected = append_moe_full_train_shared_reverse_ir0(
+            append_moe_full_train_head_backward_ir0(
+                append_moe_full_train_ce_backward_ir0(phase),
+            ),
+        )
+        group = placement.physical_group
+        ir1 = self.physical_ir1
+        if (self.source_ir0 != expected
+                or ir1.source_ir0_id != expected.id
+                or ir1.profile != expected.profile
+                or ir1.fusion_candidates != expected.fusion_candidates
+                or ir1.instance_profiles != expected.instance_profiles
+                or ir1.node_profiles != expected.node_profiles
+                or ir1.pd_plan_id != expected.pd_plan_id
+                or ir1.fabric != context.fabric
+                or ir1.groups != (group,)
+                or ir1.persistent_state_manifest !=
+                   placement.persistent_state_manifest
+                or ir1.nodes != tuple(_physical_node(node, group.id)
+                                      for node in expected.nodes)
+                or ir1.instances != (_physical_instance(
+                    expected.instances[0], expected, (group,)),)
+                or ir1.values != expected.values
+                or ir1.edges != expected.edges
+                or ir1.state_accesses != expected.state_accesses):
+            raise SchemaError(
+                "EP shared reverse must preserve source gradients, expert owners and physical placement",
+                path="moe_ep_shared_reverse_ir1_candidate.source",
+            )
+        ir1.validate("moe_ep_shared_reverse_ir1_candidate.official")
+
+
+def build_moe_ep_shared_reverse_ir1_candidate(
+    phase: FullMoeForwardIr0Phase, *, original_dense,
+    sequence: MoeCompileSequence, placement: MoeFullTrainEpPlacement,
+    context, dense_manifest,
+) -> MoeEpSharedReverseIr1Candidate:
+    """Place one EP1/EP2 shared reverse step without claiming expert WGRAD."""
+    forward = build_moe_ep_placed_ir1_candidate(
+        phase, original_dense=original_dense, sequence=sequence,
+        placement=placement, context=context, dense_manifest=dense_manifest,
+    )
+    source = append_moe_full_train_shared_reverse_ir0(
+        append_moe_full_train_head_backward_ir0(
+            append_moe_full_train_ce_backward_ir0(phase),
+        ),
+    )
+    group = placement.physical_group
+    physical = IR1.create(
+        producer_pass="moe_ep_shared_reverse_ir1_candidate",
+        source_ir0_id=source.id, profile=source.profile,
+        fabric=context.fabric,
+        instances=(_physical_instance(source.instances[0], source, (group,)),),
+        groups=(group,),
+        nodes=tuple(_physical_node(node, group.id) for node in source.nodes),
+        values=source.values, edges=source.edges,
+        fusion_candidates=source.fusion_candidates,
+        state_accesses=source.state_accesses,
+        persistent_state_manifest=placement.persistent_state_manifest,
+        instance_profiles=source.instance_profiles,
+        node_profiles=source.node_profiles, pd_plan_id=source.pd_plan_id,
+    )
+    result = MoeEpSharedReverseIr1Candidate(forward, source, physical)
+    result.validate_source_against(
+        phase, original_dense=original_dense, sequence=sequence,
+        placement=placement, context=context, dense_manifest=dense_manifest,
+    )
+    return result
+
+
 __all__=["MoeEpPlacedStateOwnerProof","MoeEpPlacedIr1SourceCandidate",
-           "build_moe_ep_placed_ir1_candidate"]
+           "MoeEpSharedReverseIr1Candidate",
+           "build_moe_ep_placed_ir1_candidate",
+           "build_moe_ep_shared_reverse_ir1_candidate"]

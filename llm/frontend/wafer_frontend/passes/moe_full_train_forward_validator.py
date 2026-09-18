@@ -127,7 +127,7 @@ class MoeFullTrainForwardValidator:
                                   path=f"{path}.owner[{state.id}]")
             expected_accesses.add(StateAccess.create(
                 node_ref=weight.consumers[0], state_ref=state.id,
-                mode=StateAccessMode.READ,rank=owner.tp_shard,
+                mode=StateAccessMode.READ,rank=owner.ep_owner,
             ))
         for layer, state_ref in enumerate(phase.route_state_refs):
             expected_accesses.add(StateAccess.create(

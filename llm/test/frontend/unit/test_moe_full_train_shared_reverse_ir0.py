@@ -9,6 +9,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_ce_backward_ir0 import (
 from llm.frontend.wafer_frontend.passes.moe_full_train_head_backward_ir0 import (
     append_moe_full_train_head_backward_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_forward_ir0 import (
+    build_moe_full_train_forward_ir0,
+)
 from llm.frontend.wafer_frontend.passes.moe_full_train_shared_reverse_ir0 import (
     append_moe_full_train_shared_reverse_ir0,
 )
@@ -54,6 +57,40 @@ class MoeSharedReverseTest(unittest.TestCase):
             self.assertEqual(values[residual_dx.outputs[1]].producer,
                              residual_dx.id)
             self.assertEqual(len(graph.nodes), 36)
+            graph.validate()
+
+    def test_ep2_both_steps_reach_shared_dcombined_with_expert_owners_intact(self):
+        phases = (Fixture.phase, build_moe_full_train_forward_ir0(
+            Fixture.dense, Fixture.sequence, step=1,
+        ))
+        graphs = tuple(append_moe_full_train_shared_reverse_ir0(
+            append_moe_full_train_head_backward_ir0(
+                append_moe_full_train_ce_backward_ir0(phase),
+            ),
+        ) for phase in phases)
+        self.assertNotEqual(graphs[0].id, graphs[1].id)
+        for phase, graph in zip(phases, graphs, strict=True):
+            nodes = {node.id: node for node in graph.nodes}
+            values = {value.id: value for value in graph.values}
+            ce = nodes["T0.cross_entropy"]
+            ce_backward = nodes[f"{ce.id}_backward"]
+            head_backward = nodes["backward::T0.lm_head"]
+            residual_backward = nodes["backward::T0.layer1.residual2"]
+            self.assertEqual(graph.instances[0].parallel.ep, 2)
+            self.assertTrue(set(phase.graph.state_accesses).issubset(
+                set(graph.state_accesses)))
+            new_accesses = set(graph.state_accesses) - set(phase.graph.state_accesses)
+            self.assertEqual({item.node_ref for item in new_accesses},
+                             {"backward::T0.lm_head"})
+            self.assertEqual(len(graph.persistent_states),
+                             len(phase.graph.persistent_states))
+            self.assertNotEqual(ce_backward.inputs[2], ce.outputs[0])
+            self.assertIsNone(values[ce_backward.inputs[2]].producer)
+            self.assertEqual(head_backward.inputs[1], ce_backward.outputs[0])
+            self.assertEqual(values[residual_backward.outputs[1]].shape,
+                             values[nodes["T0.layer1.moe.combine"].outputs[0]].shape)
+            self.assertTrue(all(f"T0.layer1.moe.expert{expert}" in nodes
+                                for expert in (0, 1)))
             graph.validate()
 
     def test_requires_real_head_source_and_no_duplicate(self):

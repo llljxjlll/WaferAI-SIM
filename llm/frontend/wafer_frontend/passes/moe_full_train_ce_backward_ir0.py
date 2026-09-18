@@ -26,9 +26,9 @@ def append_moe_full_train_ce_backward_ir0(phase: FullMoeForwardIr0Phase) -> IR0:
             or forward.job is not JobKind.TRAIN
             or len(forward.instances) != 1
             or forward.instances[0].parallel.tp != 1
-            or forward.instances[0].parallel.ep != 1
+            or forward.instances[0].parallel.ep not in (1, 2)
             or any(node.phase is not OpPhase.FWD for node in forward.nodes)):
-        raise SchemaError("requires exact EP1 MoE forward phase", path="phase")
+        raise SchemaError("requires exact EP1/EP2 MoE forward phase", path="phase")
     ce_nodes = tuple(node for node in forward.nodes
                      if node.kind is OpKind.CE_FORWARD)
     if len(ce_nodes) != 1:
