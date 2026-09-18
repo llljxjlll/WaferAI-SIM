@@ -47,8 +47,19 @@ std::vector<uint8_t> Storage::Read(uint64_t address,
     if (size_bytes == 0)
         throw std::invalid_argument("SRAM read size must be non-zero");
     CheckRange(address, size_bytes);
-    if (!IsValid(address, size_bytes))
-        throw std::runtime_error("read from invalid SRAM byte range");
+    if (!IsValid(address, size_bytes)) {
+        const auto first = std::find(
+            valid_.begin() + static_cast<size_t>(address),
+            valid_.begin() + static_cast<size_t>(address + size_bytes),
+            uint8_t{0});
+        const auto first_invalid = static_cast<uint64_t>(
+            first - valid_.begin());
+        throw std::runtime_error(
+            "read from invalid SRAM byte range: address=" +
+            std::to_string(address) + " size=" +
+            std::to_string(size_bytes) + " first_invalid=" +
+            std::to_string(first_invalid));
+    }
     std::vector<uint8_t> result(static_cast<size_t>(size_bytes), 0);
     if (payload_mode_)
         std::copy_n(bytes_.begin() + static_cast<size_t>(address),

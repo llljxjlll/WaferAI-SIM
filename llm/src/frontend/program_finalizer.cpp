@@ -3027,7 +3027,9 @@ ExternalRecord FinalizeRecord(
                 ApplyAddend(symbol(id).definition->value,
                             relocation(id).addend, path);
             if (address > 0xffff)
-                Fail(path, "compute relocated address cannot fit the uint16 wire");
+                Fail(path, "compute relocated address cannot fit the uint16 wire: address=" +
+                     std::to_string(address) + " symbol=" +
+                     symbol(id).definition->symbol.id);
             resolved.emplace(id, address);
             AppendRelocation(artifact, core_index, instruction_index, id,
                              relocation(id), symbols);
@@ -5115,6 +5117,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         }
         std::size_t standalone_fragment_count = 0;
         std::size_t dp2_gradient_fragment_count = 0;
+        std::set<uint64_t> dp2_gradient_dies;
         std::map<std::string, std::pair<std::size_t, std::size_t>>
             dp2_gradient_fragments_by_dag;
         std::set<std::string> rooted_local_dag_ids;
@@ -5328,6 +5331,8 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                     Fail("linked_program_manifest.fragments",
                          "DP2 gradient fragments require train lineage and exact physical rank actions");
                 ++dp2_gradient_fragment_count;
+                for (const CoreFragmentStreamDto &stream : fragment.core_streams)
+                    dp2_gradient_dies.insert(stream.logical_core.die_id);
                 auto &counts =
                     dp2_gradient_fragments_by_dag[fragment.source_global_dag_id];
                 if (fragment.claimed_action_ids.size() == 5)
@@ -6913,6 +6918,7 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
         }
         std::size_t standalone_digest_count = 0;
         std::size_t dp2_route_digest_count = 0;
+        std::string dp2_route_schema_version;
         for (const ManifestInputDigestDto &digest : manifest.input_digests) {
             if (digest.kind == ManifestInputKindDto::STANDALONE_PLAN) {
                 ++standalone_digest_count;
@@ -6926,36 +6932,46 @@ ProgramArtifact ProgramArtifactFinalizer::Finalize(
                        ManifestInputKindDto::DENSE_DP2_ROUTE_PLAN) {
                 ++dp2_route_digest_count;
                 if (!train_link ||
-                    digest.schema_version !=
-                        "wafer_frontend.dense_dp2_route_plan/v1alpha1" ||
+                    (digest.schema_version !=
+                         "wafer_frontend.dense_dp2_route_plan/v1alpha1" &&
+                     digest.schema_version !=
+                         "wafer_frontend.dense_dp2_route_plan/v2alpha1") ||
                     digest.artifact_id.rfind("dense_dp2_route_plan_", 0) != 0)
                     Fail("linked_program_manifest.input_digests",
                          "DP2 gradient route anchor has no exact train source/schema identity");
+                dp2_route_schema_version = digest.schema_version;
                 expected_inputs.emplace(digest.kind, digest.artifact_id,
                                         digest.schema_version);
             }
         }
+        const std::size_t dp2_tp_width = dp2_gradient_dies.size() / 2;
+        const std::size_t dp2_gradients_per_replica = 30 * dp2_tp_width;
         if ((dp2_gradient_fragment_count == 0 && dp2_route_digest_count != 0) ||
             (dp2_gradient_fragment_count != 0 &&
              (dp2_route_digest_count != 1 ||
-              dp2_gradient_fragment_count != 120 ||
+              dp2_gradient_dies.size() < 2 ||
+              dp2_gradient_dies.size() % 2 != 0 ||
+              (dp2_tp_width == 2) !=
+                  (dp2_route_schema_version ==
+                   "wafer_frontend.dense_dp2_route_plan/v1alpha1") ||
+              dp2_gradient_fragment_count != 2 * dp2_gradients_per_replica ||
               dp2_gradient_fragments_by_dag.size() != 2 ||
               !std::any_of(
                   dp2_gradient_fragments_by_dag.begin(),
                   dp2_gradient_fragments_by_dag.end(),
-                  [](const auto &entry) {
-                      return entry.second.first == 60 &&
+                  [dp2_gradients_per_replica](const auto &entry) {
+                      return entry.second.first == dp2_gradients_per_replica &&
                              entry.second.second == 0;
                   }) ||
               !std::any_of(
                   dp2_gradient_fragments_by_dag.begin(),
                   dp2_gradient_fragments_by_dag.end(),
-                  [](const auto &entry) {
+                  [dp2_gradients_per_replica](const auto &entry) {
                       return entry.second.first == 0 &&
-                             entry.second.second == 60;
+                             entry.second.second == dp2_gradients_per_replica;
                   }))))
             Fail("linked_program_manifest.input_digests",
-                 "DP2 route trust anchor must match exactly both 60-gradient physical replica programs");
+                 "DP2 route trust anchor must match both complete physical replica programs");
         if (standalone_digest_count != standalone_fragment_count)
             Fail("linked_program_manifest.input_digests",
                  "standalone plan trust anchors must bijectively match standalone fragments");

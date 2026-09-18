@@ -14,8 +14,10 @@ from ..schema.ir0 import OpKind
 
 def project_dense_dp2_tasks(source: DenseDP2RoutePlan) -> DenseDP2ProjectedTasks:
     """Preserve true die, rank, route, byte and producer dependencies, exactly."""
-    if not source.gradients or len(source.dp_groups) != 2:
-        raise SchemaError("DP2 requires two physical gradient groups and gradients",
+    shards = {gradient.tp_shard for gradient in source.gradients}
+    if (not shards or shards != set(range(len(source.dp_groups)))
+            or len({group.id for group in source.dp_groups}) != len(shards)):
+        raise SchemaError("DP2 requires one physical gradient group per TP shard",
                           path="dense_dp2_route_plan")
     group_index = {group.id: group for group in source.dp_groups}
     result: list[DenseDP2ProjectedTask] = []

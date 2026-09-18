@@ -22,6 +22,7 @@ from llm.frontend.wafer_frontend.passes.train_global_action import build_train_g
 from llm.frontend.wafer_frontend.passes.train_link_program import link_train
 from llm.frontend.wafer_frontend.passes.train_lower_program import lower_train
 from llm.frontend.wafer_frontend.policies.registry import RegistryKind, production_registry
+from llm.frontend.wafer_frontend.policies.naive_intra_die import NaiveIntraDiePolicy
 from llm.frontend.wafer_frontend.schema._validation_session import builder_validation_session
 from llm.frontend.wafer_frontend.schema.artifact_manifest import RecordOpcode
 from llm.frontend.wafer_frontend.schema.full_dense_gradient_requirements import build_dense_full_train_requirements
@@ -43,16 +44,21 @@ from llm.test.frontend.unit.test_flexible_dense_train import _hardware, _spec
 
 
 @builder_validation_session()
-def compile_dp2(output: Path, *, on_linked=None) -> dict:
+def compile_dp2(output: Path, *, columns: int = 2, on_linked=None) -> dict:
+    if not 1 <= columns <= 10:
+        raise ValueError("DP2 rectangular TP columns must be 1..10")
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     producer = "dp2_production_n4"
-    plan = build_flexible_dense_train_plan(_spec(2, 2), RectMeshSpec(2, 2))
+    plan = build_flexible_dense_train_plan(_spec(2, columns), RectMeshSpec(2, columns))
     graph = build_full_dense_training_two_step_ir0(plan)
-    if len(graph.persistent_states) != 30:
-        raise RuntimeError("DP2 source must retain thirty TP shards before two physical replicas")
+    per_replica_states = 15 * columns
+    physical_states = 2 * per_replica_states
+    step_gradients = 2 * per_replica_states
+    if len(graph.persistent_states) != per_replica_states:
+        raise RuntimeError("DP2 source lost a TP parameter shard before two physical replicas")
     print("SOURCE", len(graph.nodes), flush=True)
-    hardware = _hardware(2, 2)
+    hardware = _hardware(2, columns)
     placement = PlacementContext.create(
         producer_pass=producer,
         fabric=physical_fabric_from_data(hardware),
@@ -75,13 +81,13 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
         partitioned, planning,
         dense_dp2_plan=plan, dp2_placement_context=placement,
     )
-    if len(planned.dp_gradient_routes.gradients) != 60:
-        raise RuntimeError("DP2 requires sixty source-bound cross-replica gradients")
+    if len(planned.dp_gradient_routes.gradients) != step_gradients:
+        raise RuntimeError("DP2 requires a source-bound cross-replica gradient for each step and TP shard")
     projected = project_train_forward(
         planned,
         ProjectToIR2Context.create(producer_pass=producer, state_transfers=()),
     )
-    if len(projected.dp_projected_tasks.tasks) != 480:
+    if len(projected.dp_projected_tasks.tasks) != 8 * step_gradients:
         raise RuntimeError("DP2 source/N5 gradient task coverage is incomplete")
     print("PROJECTED", len(projected.dp_projected_tasks.tasks), flush=True)
     scheduled = schedule_train_forward(
@@ -90,12 +96,14 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
             producer_pass=producer,
             policy=registry.instantiate(RegistryKind.INTRA_DIE, "naive").selection,
         ),
+        policy=NaiveIntraDiePolicy(wire_address_limit_bytes=65536)
+               if columns > 2 else None,
     )
     active_dies = {schedule.die_id for replica in scheduled.replicas
                    for schedule in replica.schedule_set.schedules
                    if schedule.placements}
-    if active_dies != {0, 1, 2, 3}:
-        raise RuntimeError("DP2 schedule must use four physical dies")
+    if active_dies != set(range(2 * columns)):
+        raise RuntimeError("DP2 schedule must use every physical die")
     print("SCHEDULED", len(scheduled.replicas), flush=True)
     global_actions = build_train_global_action(scheduled)
     print("GLOBAL_DAG", len(global_actions.replicas), flush=True)
@@ -107,7 +115,7 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
     state_inventory = require_exact_dense_parameter_state_inventory(
         manifest, plan, requirements,
     )
-    if len(requirements.paths) != 120 or len(state_inventory) != 60:
+    if len(requirements.paths) != 2 * physical_states or len(state_inventory) != physical_states:
         raise RuntimeError("DP2 physical per-owner parameter requirements are incomplete")
     print("PHYSICAL_STATES", len(state_inventory), "GRADIENT_PATHS", len(requirements.paths), flush=True)
     manifest_file = output / "full_dp2_two_step.linked.json"
@@ -123,28 +131,28 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
     physical_path.write_text(canonical_json(physical), encoding="utf-8")
     cross_core_fences = sum(len(dense_dp2_state_version_fences(
         replica.lowering_context.global_dag)) for replica in linked.source.replicas)
-    if (len(physical.state_version_edges) != 60 + cross_core_fences
+    if (len(physical.state_version_edges) != physical_states + cross_core_fences
             or cross_core_fences < 1):
-        raise RuntimeError("all sixty DP2 parameter versions and real cross-core fences must close")
+        raise RuntimeError("all DP2 parameter versions and real cross-core fences must close")
     print("PHYSICAL_GRADIENT_GATE", len(physical.actions),
           len(physical.state_version_edges), "FENCES", cross_core_fences,
           flush=True)
     counts = Counter(record.opcode for fragment in _leaf_fragments(manifest.fragments)
                      for stream in fragment.core_streams for record in stream.records)
     expected = {
-        RecordOpcode.SGD_UPDATE: 120,
-        RecordOpcode.CROSS_ENTROPY_FORWARD: 8,
-        RecordOpcode.CROSS_ENTROPY_BACKWARD: 8,
+        RecordOpcode.SGD_UPDATE: 2 * physical_states,
+        RecordOpcode.CROSS_ENTROPY_FORWARD: 4 * columns,
+        RecordOpcode.CROSS_ENTROPY_BACKWARD: 4 * columns,
     }
     if any(counts[opcode] != count for opcode, count in expected.items()) or (
-        counts[RecordOpcode.DTE_SEND] < 120
-        or counts[RecordOpcode.DTE_RECV] < 120
-        or counts[RecordOpcode.LOCAL_REDUCE] < 60
+        counts[RecordOpcode.DTE_SEND] < 2 * step_gradients
+        or counts[RecordOpcode.DTE_RECV] < 2 * step_gradients
+        or counts[RecordOpcode.LOCAL_REDUCE] < step_gradients
     ):
         raise RuntimeError("DP2 true DP gradient DTE/SUM/SGD or CE native inventory incomplete")
     receipt = {
         "schema_version": "full_dense_dp2_native_compile/v1",
-        "mesh": [2, 2], "tp_degree": 2, "dp_degree": 2,
+        "mesh": [2, columns], "tp_degree": columns, "dp_degree": 2,
         "steps": 2, "layers": 2,
         "source_nodes": len(graph.nodes),
         "source_trainable_state_shards": len(graph.persistent_states),
@@ -176,5 +184,6 @@ def compile_dp2(output: Path, *, on_linked=None) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--tp-columns", type=int, default=2)
     arguments = parser.parse_args()
-    compile_dp2(arguments.output)
+    compile_dp2(arguments.output, columns=arguments.tp_columns)

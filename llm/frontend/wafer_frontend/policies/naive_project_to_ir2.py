@@ -328,11 +328,12 @@ class NaiveProjectToIR2:
                 item.sync_refs[dp_replica_index]
                 for item in dp_route_plan.gradients
             )
-            if (len(dp_sync_refs) != 60 or len(set(dp_sync_refs)) != 60
+            if (len(dp_sync_refs) != len(dp_route_plan.gradients)
+                or len(set(dp_sync_refs)) != len(dp_route_plan.gradients)
                 or tuple(node.id for node in ir1.nodes
                          if node.kind is OpKind.COLLECTIVE
                          and node.id.startswith("dp_sync::")) != dp_sync_refs):
-                _fail("DP2 projection needs 60 exact physical SUM source refs",
+                _fail("DP2 projection needs every exact physical SUM source ref",
                       "dp_sync_refs")
         if any(
             node.kind is OpKind.COLLECTIVE
@@ -692,7 +693,7 @@ class NaiveProjectToIR2:
                           "dp_projected_tasks")
                 dp_tasks_by_ref.setdefault(projected.source_sync_ref, []).append(projected)
             if set(dp_tasks_by_ref) != set(dp_sync_refs):
-                _fail("cross-DP task source nodes need exact 60-source coverage",
+                _fail("cross-DP task source nodes need complete gradient coverage",
                       "dp_projected_tasks")
 
         for node in ir1.nodes:
@@ -715,9 +716,11 @@ class NaiveProjectToIR2:
 
         if dp_projected_tasks is not None:
             assert dp_route_plan is not None and dp_replica_index is not None
-            if (sum(map(len, per_die.values())) != (300 if dp_replica_index == 0 else 180)
-                or set(per_die) != owned_dies):
-                _fail("DP root/child must own exactly 300/180 physical gradient tasks",
+            tasks_per_gradient = 5 if dp_replica_index == 0 else 3
+            if (sum(map(len, per_die.values()))
+                    != tasks_per_gradient * len(dp_route_plan.gradients)
+                    or set(per_die) != owned_dies):
+                _fail("DP root/child must own every physical gradient action",
                       "dp_projected_tasks")
             for die_id in sorted(per_die):
                 dp_refs_by_die[die_id] = tuple(dict.fromkeys(
@@ -725,8 +728,10 @@ class NaiveProjectToIR2:
                     if item.replica_index == dp_replica_index
                     and item.die_id == die_id
                 ))
-                if len(dp_refs_by_die[die_id]) != 30:
-                    _fail("each physical TP die must cover 30 DP gradients",
+                if len(dp_refs_by_die[die_id]) != (
+                    len(dp_route_plan.gradients) // len(dp_route_plan.dp_groups)
+                ):
+                    _fail("each physical TP die must cover every step-local gradient",
                           "dp_projected_tasks")
                 region_id = f"region.dp_gradient.{dp_route_plan.id}.die.{die_id}"
                 regions_by_die[die_id].append(IntraDieRegion(

@@ -2782,22 +2782,23 @@ class IR0:
                 and len(self.instances) == 1
                 and instance.role is LogicalRole.TRAIN
                 and instance.replicas == 1
-                and (instance.parallel.tp, instance.parallel.dp,
-                     instance.parallel.pp, instance.parallel.ep) == (2, 2, 1, 1)
+                and instance.parallel.dp == 2
+                and instance.parallel.pp == instance.parallel.ep == 1
                 and tuple((axis.name, axis.size) for axis in mesh.axes) == (
-                    (MeshAxisName.TP, 2), (MeshAxisName.DP, 2),
+                    (MeshAxisName.TP, instance.parallel.tp),
+                    (MeshAxisName.DP, 2),
                 )
                 and declaration.identity.kind in (
                     StateKind.PARAMETER, StateKind.TRAINABLE_PARAMETER,
                 )
-                and access.rank in (
-                    declaration.identity.shard_index,
-                    declaration.identity.shard_index + 2,
+                and 0 <= declaration.identity.shard_index < instance.parallel.tp
+                and access.rank == (
+                    declaration.identity.shard_index + instance.parallel.tp
                 )
             )
             if access.rank != declaration.identity.shard_index and not exact_dp2_replica:
                 raise SchemaError(
-                    "access rank must equal the state shard_index or its exact TP2/DP2 replica",
+                    "access rank must equal the state shard_index or its exact TP/DP2 replica",
                     path=f"{access_path}.rank",
                 )
             if access.mode not in allowed_modes[declaration.access]:

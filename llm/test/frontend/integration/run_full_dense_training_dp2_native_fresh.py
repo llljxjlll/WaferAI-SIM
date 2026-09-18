@@ -1,4 +1,4 @@
-"""Independently compile and execute one real TP2×DP2 two-step Dense TRAIN invocation.
+"""Independently compile and execute one real TP×DP2 two-step Dense TRAIN invocation.
 
 Run twice with distinct empty output roots and the same frozen tools for full
 materialize→finalize→resolve→simulate repeatability verification.
@@ -45,6 +45,9 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
              simulation: Path, timeout: int) -> None:
     manifest = linked.manifest
     linked.validate()
+    columns = plan.spec.tp_degree
+    logical_states = 15 * columns
+    physical_states = 2 * logical_states
     leaves = _leaf_fragments(manifest.fragments)
     ce_values = {
         node.inputs[2]
@@ -59,14 +62,14 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
         for fragment in leaves for abi in fragment.buffer_abi
         if abi.value_id in ce_values
     }
-    if len(ce_seeds) != 8 or any(len(seed) < 4 or len(seed) % 4 for seed in ce_seeds.values()):
-        raise RuntimeError("two DP replicas need eight independent FP32 CE dLoss BufferABI seeds")
+    if len(ce_seeds) != 4 * columns or any(len(seed) < 4 or len(seed) % 4 for seed in ce_seeds.values()):
+        raise RuntimeError("two DP replicas need one independent FP32 CE dLoss seed per TP shard and step")
     states, expected = build_deterministic_timing_state_overrides(linked)
-    if len(states) != 30 or expected:
-        raise RuntimeError("DP2 ProgramIO requires thirty logical TP seed patterns shared by two physical DP copies")
+    if len(states) != logical_states or expected:
+        raise RuntimeError("DP2 ProgramIO requires one logical seed pattern per TP parameter shard")
     active_dies = {binding.logical_core.die_id for binding in manifest.core_bindings}
-    if active_dies != {0, 1, 2, 3} or len(manifest.core_bindings) != 10:
-        raise RuntimeError("DP2 native ProgramArtifact must bind ten actual cores across four dies")
+    if active_dies != set(range(2 * columns)) or len(manifest.core_bindings) != 5 * columns:
+        raise RuntimeError("DP2 native ProgramArtifact must bind each actual core across all physical dies")
     repository = Path(__file__).resolve().parents[4]
     dram_source = repository / "DRAMSys"
     dram_link = output / "DRAMSys"
@@ -102,11 +105,11 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
         item.target for item in io.initializations
         if isinstance(item.target, ProgramHbmTarget)
     )
-    if (len(physical_state_abis) != 60
-            or len(hbm_initializations) != 60
+    if (len(physical_state_abis) != physical_states
+            or len(hbm_initializations) != physical_states
             or {item.state_abi_id for item in hbm_initializations}
                != physical_state_abis):
-        raise RuntimeError("each of the sixty real DP2 StateABI homes needs its own physical HBM initialization")
+        raise RuntimeError("each real DP2 StateABI home needs its own physical HBM initialization")
     io_path = output / "full_dp2_two_step.program_io.json"
     io_path.write_text(canonical_json(io), encoding="utf-8")
     receipt.update({
@@ -127,7 +130,7 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
         json.dumps(resolve, indent=2) + "\n", encoding="utf-8",
     )
     _run(resolve, output, 180, output / "program_io_resolver.stdout.txt")
-    hardware = json.loads(specialize_p5_large_release_hardware(2, 2))
+    hardware = json.loads(specialize_p5_large_release_hardware(2, columns))
     hardware["memory"]["sram_size"] = 1 << 20
     hardware["memory"]["sram"]["capacity_bytes"] = 1 << 20
     hardware["memory"]["sram"]["regions"][0]["name"] = "sram"
@@ -163,8 +166,8 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
                                if item.logical_core == stream.logical_core)
             if core_stream.records[ref.fragment_record_index].opcode is RecordOpcode.SGD_UPDATE:
                 expected_sgd_cores[binding_core[stream.logical_core]] += 1
-    if sum(expected_sgd_cores.values()) != 120:
-        raise RuntimeError("both DP replicas must execute all 120 per-shard SGD updates")
+    if sum(expected_sgd_cores.values()) != 4 * logical_states:
+        raise RuntimeError("both DP replicas must execute both steps of every parameter update")
     native_sha = hashlib.sha256(npusim.read_bytes()).hexdigest()
     native_cwd = output / "native_run"
     native_cwd.mkdir(exist_ok=False)
@@ -180,15 +183,15 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
     if (tuple(row[0] for row in markers) != ("resolved", "applied", "verify")
             or any(row[1:] != (str(len(io.initializations)),
                                   str(len(io.output_probes)), "1") for row in markers)
-            or stdout.count("[TRAIN_CE] core=") != 8
-            or stdout.count("[TRAIN_CE_BACKWARD] core=") != 8
+            or stdout.count("[TRAIN_CE] core=") != 4 * columns
+            or stdout.count("[TRAIN_CE_BACKWARD] core=") != 4 * columns
             or sgd_cores != expected_sgd_cores
             or d2d is None or int(d2d.group(1)) <= 0 or int(d2d.group(2)) <= 0
             or cycles is None or stdout.count("[SIM_RESULT] makespan_cycles=") != 1
             or "[DRAIN] router_residual=0" not in stdout
             or "[DRAIN] d2d_link_residual=0" not in stdout
             or hashlib.sha256(npusim.read_bytes()).hexdigest() != native_sha):
-        raise RuntimeError("single-invocation TP2×DP2 native CE/SGD/DTE/ProgramIO/drain proof failed")
+        raise RuntimeError("single-invocation TP×DP2 native CE/SGD/DTE/ProgramIO/drain proof failed")
     receipt.update({
         "program_invocations": 1, "native_executed": True,
         "npusim_sha256": native_sha, "makespan_cycles": int(cycles.group(1)),
@@ -204,13 +207,14 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--tp-columns", type=int, default=2)
     parser.add_argument("--npusim", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)
     parser.add_argument("--simulation", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=1200)
     args = parser.parse_args()
-    compile_dp2(args.output, on_linked=lambda linked, plan, output, receipt: _execute(
+    compile_dp2(args.output, columns=args.tp_columns, on_linked=lambda linked, plan, output, receipt: _execute(
         linked, plan, output, receipt,
         npusim=args.npusim, finalizer=args.finalizer,
         resolver=args.resolver, simulation=args.simulation,

@@ -143,8 +143,10 @@ def project_train_forward(
 
         dp_tasks = project_dense_dp2_tasks(dp_routes)
         dp_tasks.validate_against(dp_routes)
-        if len(dp_routes.gradients) != 60 or len(dp_tasks.tasks) != 480:
-            raise SchemaError("DP2 N5 requires all 60 gradients and 480 physical tasks",
+        expected_gradients = 2 * 15 * len(dp_routes.dp_groups)
+        if (len(dp_routes.gradients) != expected_gradients
+                or len(dp_tasks.tasks) != 8 * expected_gradients):
+            raise SchemaError("DP2 N5 requires every step, parameter shard, and physical task",
                               path="source.dp_gradient_routes")
     replicas: list[TrainProjectedReplica] = []
     for index, source_replica in enumerate(source.replicas):

@@ -72,6 +72,40 @@ class FullDenseTrainingDP2SourceTest(unittest.TestCase):
                          if edge.kind is EdgeKind.CONTROL and ".store0_to." in edge.id)
         self.assertEqual(len(controls), 30)
 
+    def test_tp3_dp2_source_placement_and_gradient_routes_cover_six_dies(self) -> None:
+        plan = build_flexible_dense_train_plan(_spec(2, 3), RectMeshSpec(2, 3))
+        graph = build_full_dense_training_two_step_ir0(plan)
+        DenseIR0Validator.validate(graph, "tp3_dp2")
+        self.assertEqual(len(graph.persistent_states), 45)
+        self.assertEqual({access.rank for access in graph.state_accesses}, set(range(6)))
+        context = PlacementContext.create(
+            producer_pass="dp2_tp3_placement",
+            fabric=physical_fabric_from_data(_hardware(2, 3)),
+            placement=plan.source_experiment.placement,
+            hbm_address_spaces=hbm_address_spaces_from_data(_hardware(2, 3)),
+        )
+        placed = place_train_forward_ir0(graph, context)
+        self.assertEqual(
+            tuple(tuple(item.die_id for item in replica.graph.groups[0].placements)
+                  for replica in placed.replicas),
+            ((0, 1, 2), (3, 4, 5)),
+        )
+        routes = build_dense_dp2_route_plan(plan, placed, context)
+        routes.validate_against(plan, placed, context)
+        self.assertEqual(len(routes.gradients), 90)
+        self.assertEqual(
+            tuple(tuple(item.die_id for item in group.placements)
+                  for group in routes.dp_groups),
+            ((0, 3), (1, 4), (2, 5)),
+        )
+        for gradient in routes.gradients:
+            self.assertEqual(gradient.group_ref,
+                             routes.dp_groups[gradient.tp_shard].id)
+            self.assertEqual(
+                gradient.reduce_route.die_path[0],
+                routes.dp_groups[gradient.tp_shard].placements[1].die_id,
+            )
+
     def test_dp_sync_is_required_and_cannot_consume_other_parameter_gradient(self) -> None:
         graph = self.graph
         nodes = list(graph.nodes)

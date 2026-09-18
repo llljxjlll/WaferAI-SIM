@@ -2191,7 +2191,8 @@ ResolvedContract Resolve(const Contract &contract,
             // every other overlapping allocation must have finished before the
             // terminal writer starts.  The other linkers retain their own gates.
             uint64_t final_lifetime_end = 0;
-            if (manifest.producer_pass == "manifest_linker") {
+            if (manifest.producer_pass == "manifest_linker" ||
+                manifest.producer_pass == "train_manifest_linker") {
                 for (const auto &candidate_entry : closure.allocations) {
                     const Allocation &candidate = candidate_entry.second;
                     if (candidate.runtime_core_id == allocation.runtime_core_id)
@@ -2209,7 +2210,8 @@ ResolvedContract Resolve(const Contract &contract,
                     continue;
                 if (absolute < other.absolute_start + other.size_bytes &&
                     other.absolute_start < end &&
-                    !(manifest.producer_pass == "manifest_linker" &&
+                    !((manifest.producer_pass == "manifest_linker" ||
+                       manifest.producer_pass == "train_manifest_linker") &&
                       allocation.abi->lifetime_end_exclusive ==
                           final_lifetime_end &&
                       other.abi->lifetime_end_exclusive <=

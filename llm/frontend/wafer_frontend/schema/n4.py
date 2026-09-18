@@ -1597,7 +1597,7 @@ class TrainInterDiePlannedIR1:
             if (
                 routes is None or self.dp_degree != 2
                 or len(self.replicas) != 2
-                or len(routes.dp_groups) != 2
+                or len(routes.dp_groups) != len(self.replicas[0].graph.groups[0].placements)
                 or len(routes.gradients) != len(dp_refs[0])
                 or len(dp_refs[0]) != len(dp_refs[1])
                 or routes.source_ir0_id != self.replicas[0].graph.source_ir0_id
@@ -1630,7 +1630,7 @@ class TrainInterDiePlannedIR1:
                                   path=f"{path}.dp_gradient_routes")
             for index, gradient in enumerate(routes.gradients):
                 if (
-                    gradient.tp_shard not in (0, 1)
+                    gradient.tp_shard not in range(len(routes.dp_groups))
                     or gradient.step not in (0, 1)
                     or gradient.group_ref != routes.dp_groups[gradient.tp_shard].id
                     or gradient.reduce_route not in routes.dp_groups[gradient.tp_shard].embedding.routes

@@ -62,7 +62,7 @@ def _scopes(graph: IR0) -> tuple[tuple[LogicalInstance, DeviceMesh], ...]:
             len(mesh.axes) != 1 or mesh.axes[0].name is not MeshAxisName.TP
         ):
             _unsupported(
-                "N3b requires a TP mesh (or exact two-axis DP2 training source)",
+                "N3b requires a one-dimensional TP mesh (or exact two-axis DP2 training source)",
                 path=f"{instance_path}.meshes[0].axes",
             )
         if mesh.axes[0].size != instance.parallel.tp:
@@ -237,15 +237,27 @@ def _expected_group(
     *,
     rank_to_die_override: tuple[int, ...] | None = None,
     group_id_suffix: str = "",
+    axis: MeshAxisName = MeshAxisName.TP,
 ) -> PhysicalGroup:
+    if axis is MeshAxisName.DP:
+        if (rank_to_die_override is None or len(mesh.axes) != 2
+                or mesh.axes[1].name is not MeshAxisName.DP
+                or mesh.axes[1].size != instance.parallel.dp):
+            raise SchemaError("DP group requires the exact source DP mesh and physical ranks",
+                              path="placement.train_replica")
+        expected_rank_count = mesh.axes[1].size
+    elif axis is MeshAxisName.TP:
+        expected_rank_count = mesh.axes[0].size
+    else:
+        raise SchemaError("unsupported physical group axis", path="placement.train_replica")
     rank_to_die = (
         _placement_die_ids(instance, mesh, context)
         if rank_to_die_override is None
         else rank_to_die_override
     )
-    if len(rank_to_die) != mesh.axes[0].size:
+    if len(rank_to_die) != expected_rank_count:
         raise SchemaError(
-            "rank_to_die override must exactly cover the TP mesh",
+            "rank_to_die override must exactly cover the selected mesh axis",
             path="placement.train_replica",
         )
     group_id = f"group__{instance.id}__{mesh.id}{group_id_suffix}"
@@ -259,7 +271,7 @@ def _expected_group(
             id=group_id,
             instance_id=instance.id,
             mesh_ref=mesh.id,
-            axis=MeshAxisName.TP,
+            axis=axis,
             logical_shape=(rank_count,),
             placements=placements,
             embedding=GroupEmbedding((), (), ()),
@@ -322,7 +334,7 @@ def _expected_group(
         id=group_id,
         instance_id=instance.id,
         mesh_ref=mesh.id,
-        axis=MeshAxisName.TP,
+        axis=axis,
         logical_shape=(rank_count,),
         placements=placements,
         embedding=GroupEmbedding(routes, capacities, (profile,)),

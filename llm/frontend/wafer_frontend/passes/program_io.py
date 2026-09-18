@@ -2710,7 +2710,7 @@ def _build_timing_program_io_prevalidated(
 
     reused_owned_roots = set()
     if (
-        source.manifest.producer_pass == "manifest_linker"
+        source.manifest.producer_pass in ("manifest_linker", "train_manifest_linker")
         or packed_swizzle
         or (
             type(source) is UnfusedComparisonStandardLinkedProgram

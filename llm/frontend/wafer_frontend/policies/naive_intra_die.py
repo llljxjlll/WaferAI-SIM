@@ -538,6 +538,22 @@ def _ordinary_schedule(
     }
     state_value_ids = {value.id for value in dag.state_staging_values}
     terminal_value_ids = {value.id for value in ir1.values if not value.consumers}
+    if wire_address_limit_bytes is not None:
+        # Train ProgramIO probes true terminals after the whole invocation;
+        # persisted optimizer outputs are observed through state ABI instead.
+        terminal_value_ids.difference_update(
+            output for node in ir1.nodes
+            if node.kind is OpKind.OPTIMIZER_UPDATE
+            for output in node.outputs
+        )
+    terminal_end_by_core = {
+        core_id: len(task_ids) for core_id, task_ids in order_by_core.items()
+    }
+    eager_gradient_seed_ids = (
+        {output for node in ir1.nodes if node.id.startswith("wgrad::")
+         for output in node.outputs}
+        if wire_address_limit_bytes is not None else set()
+    )
     staging_value_index = {
         value.id: value for value in dag.state_staging_values
     }
@@ -1154,6 +1170,13 @@ def _ordinary_schedule(
             and binding.size_bytes == size_bytes
             and binding.alignment_bytes == alignment_bytes
             and binding.lifetime_end_exclusive <= lifetime_start
+            and (
+                wire_address_limit_bytes is None
+                or (
+                    binding.value_id not in terminal_value_ids
+                    and binding.value_id not in eager_gradient_seed_ids
+                )
+            )
             and all(
                 other.core_id != core_id
                 or other.region_ref != region.id
@@ -1194,7 +1217,12 @@ def _ordinary_schedule(
             # Otherwise the late output can occupy a reclaimed hole and its
             # terminal validity depends on incidental previous traffic.
             terminal_output = owned and value_id in terminal_value_ids
-            new_start = 0 if not owned or terminal_output else lifetime_start
+            new_start = (
+                0 if not owned or terminal_output
+                or value_id in eager_gradient_seed_ids else lifetime_start
+            )
+            if terminal_output:
+                lifetime_end = terminal_end_by_core[core_id]
             blockers = tuple(
                 binding for binding in binding_by_key.values()
                 if binding.core_id == core_id
@@ -1202,9 +1230,15 @@ def _ordinary_schedule(
                 and (
                     0 if binding.ownership is BufferOwnership.BORROWED
                     or binding.value_id in terminal_value_ids
+                    or binding.value_id in eager_gradient_seed_ids
                     else binding.lifetime_start
                 ) < lifetime_end
-                and new_start < binding.lifetime_end_exclusive
+                and new_start < (
+                    terminal_end_by_core[binding.core_id]
+                    if binding.ownership is BufferOwnership.OWNED
+                    and binding.value_id in terminal_value_ids
+                    else binding.lifetime_end_exclusive
+                )
             )
             gap_offsets = {0}
             gap_offsets.update(

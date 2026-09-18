@@ -6882,8 +6882,10 @@ class LinkedProgramManifest:
                     for leaf in dp_gradient_leaves)
                 or not is_local_train_intermediate and (
                     not train_inputs or len(dp_route_digests) != 1
-                    or dp_route_digests[0].schema_version
-                       != "wafer_frontend.dense_dp2_route_plan/v1alpha1"
+                    or dp_route_digests[0].schema_version not in (
+                        "wafer_frontend.dense_dp2_route_plan/v1alpha1",
+                        "wafer_frontend.dense_dp2_route_plan/v2alpha1",
+                    )
                     or len(dp_dag_ids) != 2 or len(counts) != 2
                     or counts[0] == 0 or counts[0] != counts[1]
                 )

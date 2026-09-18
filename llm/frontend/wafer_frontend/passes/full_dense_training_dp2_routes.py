@@ -5,7 +5,6 @@ inside either replica's local N4 collective plan as a TP AllReduce.
 """
 from __future__ import annotations
 
-from dataclasses import replace
 
 from ..errors import SchemaError
 from ..schema.common import DType, MeshAxisName, RoundingMode, stable_artifact_id
@@ -106,10 +105,10 @@ def build_dense_dp2_route_plan(
     plan.validate("dp2_route_plan")
     placed.validate("dp2_placed")
     context.validate("dp2_placement")
-    if (plan.spec.dp_degree != 2 or plan.spec.tp_degree != 2
+    if (plan.spec.dp_degree != 2 or plan.spec.tp_degree < 1
             or len(placed.replicas) != 2
             or placed.placement_context_id != context.id):
-        raise SchemaError("routes require exact TP2/DP2 physical placement",
+        raise SchemaError("routes require exact TP/DP2 physical placement",
                           path="dense_dp2_route_plan")
     source = build_full_dense_training_two_step_ir0(plan)
     if (placed.source_ir0_id != source.id
@@ -120,8 +119,9 @@ def build_dense_dp2_route_plan(
     for index, graph in enumerate(replica_graphs):
         group = graph.groups[0]
         if (graph.source_ir0_id != source.id
-                or len(group.placements) != 2
-                or tuple(placement.rank for placement in group.placements) != (0, 1)
+                or len(group.placements) != plan.spec.tp_degree
+                or tuple(placement.rank for placement in group.placements)
+                   != tuple(range(plan.spec.tp_degree))
                 or group.axis is not MeshAxisName.TP
                 or graph.fabric != context.fabric):
             raise SchemaError("DP2 replica TP group or fabric drifted",
@@ -129,14 +129,15 @@ def build_dense_dp2_route_plan(
     instance = source.instances[0]
     (mesh,) = instance.meshes
     groups = tuple(
-        replace(_expected_group(
+        _expected_group(
             source, context, instance, mesh,
             rank_to_die_override=tuple(
                 graph.groups[0].placements[tp].die_id for graph in replica_graphs
             ),
             group_id_suffix=f"__dp_gradient_tp{tp}",
-        ), axis=MeshAxisName.DP)
-        for tp in (0, 1)
+            axis=MeshAxisName.DP,
+        )
+        for tp in range(plan.spec.tp_degree)
     )
     for tp, group in enumerate(groups):
         group.validate(f"dense_dp2_route_plan.dp_groups[{tp}]")
@@ -186,7 +187,7 @@ def build_dense_dp2_route_plan(
                       for route in groups[tp].embedding.routes}
             wgrad_value = graph_values[0][wgrad_output]
             local_shape = tuple(
-                extent // 2 if axis is MeshAxisName.TP else extent
+                extent // plan.spec.tp_degree if axis is MeshAxisName.TP else extent
                 for extent, axis in zip(
                     wgrad_value.shape, wgrad_value.sharding.dim_map, strict=True
                 )
@@ -221,7 +222,9 @@ def build_dense_dp2_route_plan(
                    gradients=tuple(gradients))
     return DenseDP2RoutePlan(
         stable_artifact_id("dense_dp2_route_plan", payload,
-                           schema_version="dense_dp2_route_plan/v1"),
+                           schema_version=("dense_dp2_route_plan/v1" if
+                                           plan.spec.tp_degree == 2 else
+                                           "dense_dp2_route_plan/v2")),
         **payload,
     )
 

@@ -973,6 +973,7 @@ def _entry_order(entry: ProgramSramInitialization | ProgramOutputProbe) -> tuple
 def _validate_nonoverlap(
     spans: list[tuple[int, str, int, int, str]],
     path: str,
+    labels: dict[str, str] | None = None,
 ) -> None:
     previous: tuple[int, str, int, int, str] | None = None
     for span in sorted(spans):
@@ -983,7 +984,9 @@ def _validate_nonoverlap(
             and span[2] < previous[3]
         ):
             raise SchemaError(
-                "physical byte ranges must not overlap",
+                "physical byte ranges must not overlap: "
+                f"{previous!r} ({(labels or {}).get(previous[4], '')}) vs "
+                f"{span!r} ({(labels or {}).get(span[4], '')})",
                 path=path,
             )
         previous = span
@@ -1004,6 +1007,7 @@ def _validate_allocation_nonoverlap(
         )
         reuse_authorized = (
             producer_pass == "manifest_linker"
+            or producer_pass == "train_manifest_linker"
             or producer_pass == "moe_swizzle_standard_linker"
             or (
                 producer_pass == "unfused_comparison_standard_linker"
@@ -1570,6 +1574,8 @@ class ProgramIoContract:
         _validate_nonoverlap(
             initialization_ranges,
             f"{path}.initializations",
+            {entry.id: getattr(entry.target, "value_id", "")
+             for entry in self.initializations},
         )
         _validate_nonoverlap(probe_ranges, f"{path}.output_probes")
 
@@ -1611,7 +1617,9 @@ class ProgramIoContract:
                                 "unfused_comparison_standard_linker",
                                 "moe_swizzle_standard_linker",
                             )
-                            or manifest.producer_pass == "manifest_linker"
+                            or manifest.producer_pass in (
+                                "manifest_linker", "train_manifest_linker",
+                            )
                             and target.abi.ownership is BufferOwnership.OWNED
                             and target.abi.lifetime_end_exclusive
                             == terminal_end_by_core[target.runtime_core_id]
@@ -1619,6 +1627,11 @@ class ProgramIoContract:
                     )
                 ):
                     raise SchemaError(
-                        "after-program probe rejects physical allocation reuse/aliasing",
+                        "after-program probe rejects physical allocation reuse/aliasing: "
+                        f"probe={target.abi.value_id!r} ({target.abi.lifetime_start}, "
+                        f"{target.abi.lifetime_end_exclusive}), "
+                        f"other={other.abi.value_id!r} "
+                        f"({other.abi.lifetime_start}, "
+                        f"{other.abi.lifetime_end_exclusive})",
                         path=f"{path}.output_probes[{index}].capture",
                     )

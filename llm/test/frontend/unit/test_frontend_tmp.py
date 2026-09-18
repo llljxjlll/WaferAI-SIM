@@ -40,6 +40,18 @@ class ManagedFrontendTmpTest(unittest.TestCase):
         self.assertFalse(job.exists())
         self.assertEqual((untouched / 'proof').read_text(), 'keep')
 
+    def test_nested_build_tree_is_removed_when_scratch_job_finishes(self) -> None:
+        result = self.run_cli(
+            'run', '--name', 'compile', '--', sys.executable, '-c',
+            "from pathlib import Path; import os; "
+            "build=Path(os.environ['WAFERAI_TEMP_DIR'])/'build'; "
+            "build.mkdir(); (build/'npusim').write_bytes(b'binary')",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        job = Path(json.loads(result.stdout.splitlines()[0])['job'])
+        self.assertFalse(job.exists())
+        self.assertFalse((job / 'build').exists())
+
     def test_failed_scratch_ttl_and_evidence_release(self) -> None:
         self.base[-1] = '1'
         failed = self.run_cli('run', '--name', 'failure', '--', sys.executable,

@@ -1448,7 +1448,7 @@ class TrainProjectedIR2:
         if self.dp_gradient_routes is not None:
             assert self.dp_projected_tasks is not None
             self.dp_projected_tasks.validate_against(self.dp_gradient_routes)
-            if (self.dp_degree != 2 or len(self.dp_gradient_routes.gradients) != 60
+            if (self.dp_degree != 2 or len(self.dp_gradient_routes.gradients) != 30 * len(self.dp_gradient_routes.dp_groups)
                     or any(replica.dp_gradient_routes != self.dp_gradient_routes
                            or replica.dp_projected_tasks != self.dp_projected_tasks
                            for replica in self.replicas)):

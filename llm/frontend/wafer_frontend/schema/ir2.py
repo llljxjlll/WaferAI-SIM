@@ -3963,14 +3963,14 @@ class IR2ProjectionResult:
                 gradient.sync_refs[dp_replica_index]
                 for gradient in dp_route_plan.gradients
             )
-            if (len(expected_sync_refs) != 60
+            if (len(expected_sync_refs) != 30 * len(dp_route_plan.dp_groups)
                     or self.dp_sync_refs != expected_sync_refs
                     or set(expected_sync_refs) != {
                         node.id for node in ir1.nodes
                         if node.kind is OpKind.COLLECTIVE
                         and node.workload.mesh_axes == (MeshAxisName.DP,)
                     }):
-                raise SchemaError("DP2 projection must cover exactly all 60 genuine source synchronizations",
+                raise SchemaError("DP2 projection must cover every genuine source synchronization",
                                   path=f"{path}.dp_sync_refs")
         if self.producer_pass == "intra_die_refine":
             if (
