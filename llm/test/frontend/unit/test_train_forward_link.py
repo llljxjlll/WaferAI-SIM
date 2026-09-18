@@ -4,11 +4,13 @@ from collections import Counter, defaultdict
 from dataclasses import replace
 import json
 import unittest
+from unittest.mock import patch
 
 from test_train_forward_global_action import _global_action
 
 from llm.frontend.wafer_frontend.errors import SchemaError
 from llm.frontend.wafer_frontend.passes import link_train, lower_train
+from llm.frontend.wafer_frontend.lowering.linker import NaiveManifestLinker
 from llm.frontend.wafer_frontend.schema import TrainLinkedProgram
 from llm.frontend.wafer_frontend.schema.common import stable_artifact_id
 from llm.frontend.wafer_frontend.schema.artifact_manifest import (
@@ -60,6 +62,23 @@ class TrainForwardLinkTest(unittest.TestCase):
         _, train_global = _global_action()
         cls.source = lower_train(train_global)
         cls.result = link_train(cls.source)
+
+    def test_builder_links_once_and_external_validation_relinks(self) -> None:
+        calls = 0
+        original = NaiveManifestLinker.link_train
+
+        def count_link(linker, source):
+            nonlocal calls
+            calls += 1
+            return original(linker, source)
+
+        with patch.object(NaiveManifestLinker, "link_train", count_link):
+            result = link_train(self.source)
+            self.assertEqual(calls, 1)
+            # A fresh validation session must independently prove the strict
+            # quotient instead of trusting the builder's transient proof.
+            result.validate()
+            self.assertEqual(calls, 2)
 
     def test_dp2_is_one_exact_canonical_manifest(self) -> None:
         result = self.result

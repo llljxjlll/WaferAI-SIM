@@ -12,7 +12,9 @@ from .artifact_manifest import (
     RegionManifest,
 )
 from .common import stable_artifact_id, validate_nonempty, validate_uint64
-from ._validation_session import mark_validation_complete, validation_seen
+from ._validation_session import (
+    cached_validation_aux, mark_validation_complete, validation_seen,
+)
 from .ir0 import TrainStructure
 from .n6 import _leaf_fragment, _validate_lowered_fragments
 from .train_global_action import (
@@ -524,12 +526,15 @@ class TrainLinkedProgram:
             )
         from ..lowering.linker import NaiveManifestLinker
 
-        expected_manifest = NaiveManifestLinker().link_train(self.source)
-        if self.manifest != expected_manifest:
-            raise SchemaError(
-                "manifest must equal the strict unified Train quotient",
-                path=f"{path}.manifest",
-            )
+        if cached_validation_aux(
+            self.source, "strict_train_linked_manifest"
+        ) is not self.manifest:
+            expected_manifest = NaiveManifestLinker().link_train(self.source)
+            if self.manifest != expected_manifest:
+                raise SchemaError(
+                    "manifest must equal the strict unified Train quotient",
+                    path=f"{path}.manifest",
+                )
         expected_id = stable_artifact_id(
             "train_linked_program",
             self._semantic_key(),
