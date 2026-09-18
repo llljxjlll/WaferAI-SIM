@@ -98,9 +98,53 @@ def audit_full_fresh(directory: Path, mesh_size: str) -> dict[str, object]:
     }
 
 
+_RECEIPT_FIELDS = (
+    "model_digest", "resident_logical_graph_digest",
+    "offload_logical_graph_digest", "resident_rejection_code",
+    "logical_hbm_capacity_bytes_per_die",
+    "highest_paged_state_end_bytes_per_die", "physical_die_ids",
+    "used_runtime_cores", "external_dma_events", "external_kv_probes",
+    "external_read_bytes", "external_write_bytes", "d2d_packets",
+    "makespan_cycles", "kv_versions", "kv_page_bytes",
+    "paired_fresh_runs", "source_tool_binding_sha256", "npusim_sha256",
+    "finalizer_sha256", "resolver_sha256", "simulation_sha256",
+    "functional",
+)
+
+
+def compact_receipt(root: Path, evidence: dict[str, object]) -> dict[str, object]:
+    """Retain audited metrics and artifact hashes before scratch is pruned."""
+
+    case = evidence["case"]
+    assert isinstance(case, dict)
+    report = case["report"]
+    assert isinstance(report, dict)
+    return {
+        "schema_version": "dense-tp6-paged-full-fresh-compact-v1",
+        "status": evidence["status"],
+        "mesh_size": evidence["mesh_size"],
+        "independent_full_materializations": evidence[
+            "independent_full_materializations"],
+        "full_fresh_evidence_sha256": _sha(root / "full_fresh_evidence.json"),
+        "per_materialization_report_sha256": [
+            _sha(root / f"full_fresh_{index}" /
+                 "dense-inference-tp6-paged-runtime-evidence.json")
+            for index in (0, 1)
+        ],
+        "case": {name: report[name] for name in _RECEIPT_FIELDS},
+    }
+
+
 def run(args: argparse.Namespace) -> None:
     _active_for_mesh(args.mesh_size)
     root = args.output_root.resolve()
+    receipt_path = getattr(args, "receipt_output", None)
+    if receipt_path is not None:
+        receipt_path = receipt_path.resolve()
+        if receipt_path == root or root in receipt_path.parents:
+            raise ValueError("compact receipt must outlive the Fresh scratch root")
+        if receipt_path.exists() or not receipt_path.parent.is_dir():
+            raise ValueError("compact receipt requires a new path in an existing directory")
     if root.exists():
         raise ValueError("full-fresh output root must be a new path")
     root.mkdir(parents=True)
@@ -127,16 +171,27 @@ def run(args: argparse.Namespace) -> None:
         evidence.append(audit_full_fresh(directory, args.mesh_size))
     if evidence[0] != evidence[1]:
         raise ValueError("two independently compiled source-bound TP6 offload materializations disagree")
-    (root / "full_fresh_evidence.json").write_text(json.dumps({
+    final_evidence = {
         "status": "verified", "mesh_size": args.mesh_size,
         "independent_full_materializations": 2, "case": evidence[0],
-    }, indent=2, sort_keys=True), encoding="utf-8")
+    }
+    (root / "full_fresh_evidence.json").write_text(
+        json.dumps(final_evidence, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    if receipt_path is not None:
+        with receipt_path.open("x", encoding="utf-8") as handle:
+            json.dump(compact_receipt(root, final_evidence), handle,
+                      indent=2, sort_keys=True)
+            handle.write("\n")
     print(f"Dense TP6 {args.mesh_size} inference 18KiB external offload PASS two independent full materializations", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--receipt-output", type=Path,
+                        help="new compact receipt outside the Fresh scratch root")
     parser.add_argument("--mesh-size", default="2x3",
                         help="canonical 1..10 rectangle with at least six Dies")
     parser.add_argument("--npusim", type=Path, required=True)
