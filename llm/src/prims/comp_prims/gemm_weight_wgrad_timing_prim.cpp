@@ -1,4 +1,5 @@
 #include "prims/gemm_weight_wgrad_timing_prim.h"
+#include "prims/timing_wgrad_output.h"
 
 #include "utils/prim_utils.h"
 
@@ -119,13 +120,14 @@ void gemm_weight_wgrad_timing::initialize() {
                   {"output", static_cast<int>(profile.gradient.bytes / 2)}};
 }
 
-void gemm_weight_wgrad_timing::taskCore(TaskCoreContext &, string,
+void gemm_weight_wgrad_timing::taskCore(TaskCoreContext &context, string,
                                          u_int64_t &dram, u_int64_t &exu,
                                          u_int64_t &sfu, u_int64_t &vec) {
     const auto profile = work();
     dram = sfu = 0;
     exu = profile.exu_flops;
     vec = profile.fp32_accumulator_vec_ops;
+    MaterializeTimingWgrad(context, profile.gradient);
 }
 
 vector<sc_bv<128>> gemm_weight_wgrad_timing::serialize() {

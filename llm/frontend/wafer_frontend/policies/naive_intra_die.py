@@ -549,11 +549,6 @@ def _ordinary_schedule(
     terminal_end_by_core = {
         core_id: len(task_ids) for core_id, task_ids in order_by_core.items()
     }
-    eager_gradient_seed_ids = (
-        {output for node in ir1.nodes if node.id.startswith("wgrad::")
-         for output in node.outputs}
-        if wire_address_limit_bytes is not None else set()
-    )
     staging_value_index = {
         value.id: value for value in dag.state_staging_values
     }
@@ -1174,7 +1169,6 @@ def _ordinary_schedule(
                 wire_address_limit_bytes is None
                 or (
                     binding.value_id not in terminal_value_ids
-                    and binding.value_id not in eager_gradient_seed_ids
                 )
             )
             and all(
@@ -1218,8 +1212,7 @@ def _ordinary_schedule(
             # terminal validity depends on incidental previous traffic.
             terminal_output = owned and value_id in terminal_value_ids
             new_start = (
-                0 if not owned or terminal_output
-                or value_id in eager_gradient_seed_ids else lifetime_start
+                0 if not owned or terminal_output else lifetime_start
             )
             if terminal_output:
                 lifetime_end = terminal_end_by_core[core_id]
@@ -1230,7 +1223,6 @@ def _ordinary_schedule(
                 and (
                     0 if binding.ownership is BufferOwnership.BORROWED
                     or binding.value_id in terminal_value_ids
-                    or binding.value_id in eager_gradient_seed_ids
                     else binding.lifetime_start
                 ) < lifetime_end
                 and new_start < (

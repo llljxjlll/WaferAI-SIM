@@ -6,7 +6,8 @@
 #include <vector>
 
 // Typed, physical per-core SRAM spans. The program memory schedule owns
-// allocation, transfers and initialization; these Prims charge timing only.
+// allocation and transfers; these Prims charge timing and materialize their
+// deterministic zero FP32 outputs when a native SRAM payload is present.
 enum class WeightGradBufferDType : uint8_t { INT32, FP16, FP32 };
 
 struct WeightGradBufferABI {

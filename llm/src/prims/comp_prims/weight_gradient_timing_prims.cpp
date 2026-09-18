@@ -1,4 +1,5 @@
 #include "prims/weight_gradient_timing_prims.h"
+#include "prims/timing_wgrad_output.h"
 
 #include "utils/prim_utils.h"
 
@@ -222,7 +223,7 @@ void embedding_table_wgrad_timing::initialize() {
                   {"output", static_cast<int>(profile.gradient.bytes / 2)}};
 }
 
-void embedding_table_wgrad_timing::taskCore(TaskCoreContext &, string,
+void embedding_table_wgrad_timing::taskCore(TaskCoreContext &context, string,
                                              u_int64_t &dram, u_int64_t &exu,
                                              u_int64_t &sfu, u_int64_t &vec) {
     const auto profile = work();
@@ -230,6 +231,7 @@ void embedding_table_wgrad_timing::taskCore(TaskCoreContext &, string,
     vec = Add(profile.trace_vec_ops,
               Add(profile.scatter_vec_ops, profile.fp32_accumulate_vec_ops,
                   "EMBEDDING two-step work"), "EMBEDDING two-step work");
+    MaterializeTimingWgrad(context, profile.gradient);
 }
 
 vector<sc_bv<128>> embedding_table_wgrad_timing::serialize() {
@@ -307,7 +309,7 @@ void norm_gamma_wgrad_timing::initialize() {
                    static_cast<int>(profile.gamma_gradient.bytes / 2)}};
 }
 
-void norm_gamma_wgrad_timing::taskCore(TaskCoreContext &, string,
+void norm_gamma_wgrad_timing::taskCore(TaskCoreContext &context, string,
                                         u_int64_t &dram, u_int64_t &exu,
                                         u_int64_t &sfu, u_int64_t &vec) {
     const auto profile = work();
@@ -315,6 +317,7 @@ void norm_gamma_wgrad_timing::taskCore(TaskCoreContext &, string,
     sfu = profile.sfu_ops;
     vec = Add(profile.normalization_vec_ops, profile.fp32_accumulate_vec_ops,
               "NORM_GAMMA vector work");
+    MaterializeTimingWgrad(context, profile.gamma_gradient);
 }
 
 vector<sc_bv<128>> norm_gamma_wgrad_timing::serialize() {

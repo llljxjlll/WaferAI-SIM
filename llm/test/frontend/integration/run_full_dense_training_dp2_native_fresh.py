@@ -86,7 +86,10 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
     (output / "finalizer_command.json").write_text(
         json.dumps(finalize, indent=2) + "\n", encoding="utf-8",
     )
-    _run(finalize, output, 240, output / "finalizer.stdout.txt")
+    # The finalizer validates every physical fragment. Large TP manifests
+    # can exceed the small-shape fixed deadline while making normal progress.
+    _run(finalize, output, max(240, 90 * columns),
+         output / "finalizer.stdout.txt")
     artifact_sha = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
     report = json.loads(finalizer_path.read_text(encoding="utf-8"))
     if (report.get("artifact_sha256") != artifact_sha
@@ -129,7 +132,8 @@ def _execute(linked, plan, output: Path, receipt: dict, *,
     (output / "program_io_resolve_command.json").write_text(
         json.dumps(resolve, indent=2) + "\n", encoding="utf-8",
     )
-    _run(resolve, output, 180, output / "program_io_resolver.stdout.txt")
+    _run(resolve, output, max(180, 60 * columns),
+         output / "program_io_resolver.stdout.txt")
     hardware = json.loads(specialize_p5_large_release_hardware(2, columns))
     hardware["memory"]["sram_size"] = 1 << 20
     hardware["memory"]["sram"]["capacity_bytes"] = 1 << 20
