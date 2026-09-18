@@ -1,9 +1,12 @@
 #include "prims/gemm_input_dx_npu_prim.h"
+#include "memory/sram/sram_access_unit.h"
+#include "memory/sram/sram_storage.h"
 #include "utils/prim_utils.h"
 
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 REGISTER_PRIM(gemm_input_dx_timing, PrimId::GEMM_INPUT_DX_TIMING);
 
@@ -59,13 +62,28 @@ void gemm_input_dx_timing::initialize() {
                                         "GEMM dX FP16 output")}};
 }
 
-void gemm_input_dx_timing::taskCore(TaskCoreContext &, string,
+void gemm_input_dx_timing::taskCore(TaskCoreContext &context, string,
                                     u_int64_t &dram, u_int64_t &exu,
                                     u_int64_t &sfu, u_int64_t &vec) {
     const auto profile = work();
     dram = sfu = 0;
     exu = profile.exu_flops;
     vec = profile.fp16_output_vec_ops;
+    // A timing kernel has no numerical derivative. Still, its full typed dX
+    // span must become valid before a later DTE/LSU consumer reads it.
+    if (context.sram_storage != nullptr &&
+        context.sram_storage->payload_mode()) {
+        if (context.sram_access == nullptr)
+            throw std::logic_error("timing GEMM dX lacks program SRAM output");
+        sram::Request write;
+        write.initiator = sram::Initiator::kCompute;
+        write.command = sram::Command::kWrite;
+        write.address = profile.tile.output.byte_address;
+        write.size_bytes = profile.tile.output.bytes;
+        write.payload = std::vector<uint8_t>(
+            static_cast<size_t>(profile.tile.output.bytes));
+        context.sram_access->Access(write);
+    }
 }
 
 vector<sc_bv<128>> gemm_input_dx_timing::serialize() {

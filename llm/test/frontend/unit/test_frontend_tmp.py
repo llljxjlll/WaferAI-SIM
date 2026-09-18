@@ -62,10 +62,11 @@ class ManagedFrontendTmpTest(unittest.TestCase):
         original_marker = (failed_job / '.waferai-frontend-job.json').read_bytes()
         self.base[-1] = '0'
         preview = self.run_cli('prune')
-        self.assertIn(str(failed_job), json.loads(preview.stdout)['removed'])
+        self.assertNotIn(str(failed_job), json.loads(preview.stdout)['removed'])
         self.assertEqual((failed_job / '.waferai-frontend-job.json').read_bytes(), original_marker)
-        self.assertTrue(failed_job.exists())
         self.assertEqual(self.run_cli('prune', '--apply').returncode, 0)
+        self.assertTrue(failed_job.exists())
+        self.assertEqual(self.run_cli('release', str(failed_job)).returncode, 0)
         self.assertFalse(failed_job.exists())
         evidence = self.run_cli('run', '--kind', 'evidence', '--name', 'native',
                                 '--', sys.executable, '-c',
@@ -78,6 +79,20 @@ class ManagedFrontendTmpTest(unittest.TestCase):
         released = self.run_cli('release', str(job))
         self.assertEqual(released.returncode, 0, released.stderr)
         self.assertFalse(job.exists())
+
+    def test_new_zero_ttl_job_cannot_delete_older_failure_evidence(self) -> None:
+        self.base[-1] = '1'
+        failure = self.run_cli('run', '--name', 'retain', '--',
+                               sys.executable, '-c', 'raise SystemExit(3)')
+        self.assertEqual(failure.returncode, 3)
+        retained = Path(json.loads(failure.stdout.splitlines()[0])['job'])
+        self.base[-1] = '0'
+        later = self.run_cli('run', '--name', 'quick', '--',
+                             sys.executable, '-c', 'pass')
+        self.assertEqual(later.returncode, 0, later.stderr)
+        self.assertTrue(retained.exists())
+        self.assertEqual(self.run_cli('release', str(retained)).returncode, 0)
+        self.assertFalse(retained.exists())
 
     def test_running_and_unmarked_jobs_are_not_pruned(self) -> None:
         initialized = self.run_cli('prune')
@@ -153,6 +168,8 @@ class ManagedFrontendTmpTest(unittest.TestCase):
                 self.assertEqual(Path(f'/proc/{child_pid}/stat').read_text().rsplit(')', 1)[1].split()[0], 'Z')
             self.base[-1] = '0'
             self.assertEqual(self.run_cli('prune', '--apply').returncode, 0)
+            self.assertTrue(job.exists())
+            self.assertEqual(self.run_cli('release', str(job)).returncode, 0)
             self.assertFalse(job.exists())
         finally:
             if process.poll() is None:
@@ -183,6 +200,8 @@ class ManagedFrontendTmpTest(unittest.TestCase):
             self.fail('background writer survived its managed job')
         self.base[-1] = '0'
         self.assertEqual(self.run_cli('prune', '--apply').returncode, 0)
+        self.assertTrue(job.exists())
+        self.assertEqual(self.run_cli('release', str(job)).returncode, 0)
         self.assertFalse(job.exists())
 
     def test_native_job_links_dramsys_within_managed_root(self) -> None:

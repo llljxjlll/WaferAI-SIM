@@ -11,6 +11,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -68,10 +69,15 @@ def metadata(path: Path) -> dict[str, object] | None:
         info = json.loads(marker.read_text())
     except (OSError, ValueError):
         return None
+    retention = info.get('failure_ttl_seconds')
     if (info.get('format') != 1 or info.get('name') != path.name
             or info.get('uid') != os.getuid()
             or info.get('kind') not in ('scratch', 'evidence')
-            or info.get('state') not in ('running', 'failed', 'held', 'released')):
+            or info.get('state') not in ('running', 'failed', 'held', 'released')
+            or (retention is not None and
+                (type(retention) not in (int, float) or
+                 not math.isfinite(retention) or
+                 not 0 <= retention <= 24 * 365 * 3600))):
         return None
     return info
 
@@ -135,8 +141,11 @@ def candidates(root: Path, now: float, failure_ttl: float, *, apply: bool) -> li
             info = dict(info, state='failed', finished=now)
             if apply:
                 save(path, info)
+        # A later short-lived scratch command must not shorten another job's
+        # diagnostic retention. Preexisting markers use the caller's TTL.
+        job_ttl = info.get('failure_ttl_seconds', failure_ttl)
         if info['state'] == 'released' or (info['state'] == 'failed'
-                and now - float(info.get('finished', now)) >= failure_ttl):
+                and now - float(info.get('finished', now)) >= job_ttl):
             result.append((path, info))
     return sorted(result, key=lambda pair: float(pair[1].get('finished', 0)))
 
@@ -188,6 +197,7 @@ def execute(args: argparse.Namespace, root: Path, *,
                 'kind': args.kind, 'state': 'running', 'created': time.time(),
                 'pid': os.getpid(), 'pid_start': pid_start(os.getpid()),
                 'process_group': None, 'boot_id': boot_id(),
+                'failure_ttl_seconds': args.failure_ttl,
             }
             save(path, info)
             if dramsys_root is not None:
