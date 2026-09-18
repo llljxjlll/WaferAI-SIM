@@ -26,6 +26,7 @@ DEFAULT_ROOT = Path('/tmp/waferai-frontend-managed')
 ROOT_MARKER = '.waferai-frontend-root.json'
 JOB_MARKER = '.waferai-frontend-job.json'
 NAME = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}\Z')
+MONITOR_SECONDS = 5
 
 
 def root_ready(root: Path) -> Path:
@@ -228,10 +229,13 @@ def execute(args: argparse.Namespace, root: Path, *,
             save(path, info)
         while True:
             try:
-                code = process.wait(timeout=30)
+                code = process.wait(timeout=MONITOR_SECONDS)
                 break
             except subprocess.TimeoutExpired:
-                if size_bytes(root) > args.max_bytes:
+                # Reclaim expired failures while long native jobs keep running.
+                state = prune(root, apply=True, max_bytes=args.max_bytes,
+                              failure_ttl=args.failure_ttl)
+                if state['over_budget']:
                     os.killpg(process.pid, signal.SIGTERM)
                     try:
                         process.wait(timeout=10)

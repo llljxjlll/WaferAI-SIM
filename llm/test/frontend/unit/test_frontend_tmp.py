@@ -210,6 +210,45 @@ class ManagedFrontendTmpTest(unittest.TestCase):
         path = Path(json.loads(result.stdout.splitlines()[0])['job'])
         self.assertFalse(path.exists())
 
+    def test_running_job_enforces_budget_before_child_finishes(self) -> None:
+        self.base[5] = '0.00001'
+        started = time.monotonic()
+        result = self.run_cli(
+            'run', '--name', 'growing-build', '--', sys.executable, '-c',
+            "from pathlib import Path; import os,time; "
+            "Path(os.environ['TMPDIR'], 'object.o').write_bytes(b'x' * 1048576); "
+            "time.sleep(20)",
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertLess(time.monotonic() - started, 12)
+        job = Path(json.loads(result.stdout.splitlines()[0])['job'])
+        self.assertFalse(job.exists())
+
+    def test_running_job_prunes_expired_failed_sibling(self) -> None:
+        process = subprocess.Popen(
+            [*self.base, 'run', '--name', 'long-running', '--',
+             sys.executable, '-c', 'import time; time.sleep(7)'],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            assert process.stdout is not None
+            live_job = Path(json.loads(process.stdout.readline())['job'])
+            expired = self.root / 'job-expired'
+            expired.mkdir()
+            (expired / '.waferai-frontend-job.json').write_text(json.dumps({
+                'format': 1, 'uid': os.getuid(), 'name': expired.name,
+                'kind': 'scratch', 'state': 'failed', 'finished': 0,
+            }))
+            (expired / 'old-object.o').write_bytes(b'x' * 4096)
+            process.communicate(timeout=12)
+            self.assertEqual(process.returncode, 0)
+            self.assertFalse(expired.exists())
+            self.assertFalse(live_job.exists())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
     def test_refuses_nonempty_unmarked_root_and_path_traversal(self) -> None:
         self.root.mkdir()
         (self.root / 'foreign').write_text('keep')
