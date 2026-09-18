@@ -1,0 +1,53 @@
+{
+  "ce_backward_per_run": 36,
+  "ce_forward_per_run": 36,
+  "dp_degree": 2,
+  "fresh": [
+    {
+      "artifact_sha256": "5f65e533893098170d60d5e5d1862cba9c8b57f582bccc263e3162492f8e8525",
+      "linked_manifest_sha256": "238c4c61977948839dec8184b880ee41398e65013885a2d56cafb8497d7c50f3",
+      "native_stdout_bytes": 13169666,
+      "native_stdout_sha256": "0cdb185a5c24b06bf2bc1084af54e566832405934eac3c7902004c019402f64e",
+      "program_io_sha256": "02c7a71b6e30a5fc0eb5cc27029fa3b430b08bb5a87109d269894ebb47ad9d4b",
+      "receipt_sha256": "bfe2e986ec6f047b89b31e8a6cdd8270c89fc4aa95912213e197cbb0fd9c2048"
+    },
+    {
+      "artifact_sha256": "5f65e533893098170d60d5e5d1862cba9c8b57f582bccc263e3162492f8e8525",
+      "linked_manifest_sha256": "238c4c61977948839dec8184b880ee41398e65013885a2d56cafb8497d7c50f3",
+      "native_stdout_bytes": 13169666,
+      "native_stdout_sha256": "ff0dd7a7247ccecc74f9bb65324f46e8e56b3530825e9ce9b69f53fda6f3a727",
+      "program_io_sha256": "02c7a71b6e30a5fc0eb5cc27029fa3b430b08bb5a87109d269894ebb47ad9d4b",
+      "receipt_sha256": "bfe2e986ec6f047b89b31e8a6cdd8270c89fc4aa95912213e197cbb0fd9c2048"
+    }
+  ],
+  "independent_full_materializations": 2,
+  "layers": 2,
+  "makespan_cycles": [
+    301076,
+    301076
+  ],
+  "mesh": [
+    2,
+    9
+  ],
+  "native_invocations": 2,
+  "numeric_mode": "timing",
+  "physical_actions": 20880,
+  "physical_parameter_states": 270,
+  "program_io_initializations": 2061,
+  "program_io_probes": 36,
+  "schema_version": "p3_2_dense_tp9dp2_double_fresh/v1",
+  "sgd_steps": 2,
+  "sgd_updates_per_run": 540,
+  "source_commit": "698d2b456a184484ca0c4136fd87131bbe4c47d7",
+  "state_version_edges": 369,
+  "status": "verified",
+  "step_parameter_gradient_paths": 540,
+  "tool_sha256": {
+    "finalizer": "0cc4d6c7639a020082de2c64f629727f3ff5b0fca6694a931229e26a9aa3da60",
+    "npusim": "a80a5208a2176ad80ae7aa286f15ec98f94c1bb8f0f5091c16ca4aa5d388fae1",
+    "resolver": "d7cdc133368d23fec802c0220fa3367c327d02ad780846a8187ce88851bd1048",
+    "simulation": "337f5bc3f195489e8c6ef8830d83ce709a3e79a434401bd545504bf543420afb"
+  },
+  "tp_degree": 9
+}
