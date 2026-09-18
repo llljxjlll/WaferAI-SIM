@@ -529,8 +529,8 @@ def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path,
                         default=build / "dense-inference-tp6-paged-offload-canary")
-    parser.add_argument("--mesh-size", choices=("2x3", "3x2", "10x10"),
-                        default="2x3")
+    parser.add_argument("--mesh-size", default="2x3",
+                        help="canonical 1..10 rectangle with at least six Dies")
     parser.add_argument("--npusim", type=Path, default=build / "npusim")
     parser.add_argument("--finalizer", type=Path,
                         default=_ROOT / "build-debug-final/npusim_program_finalizer")

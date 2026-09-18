@@ -17,10 +17,22 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _active_for_mesh(mesh_size: str) -> tuple[int, int, list[int]]:
+    try:
+        rows, columns = map(int, mesh_size.split("x"))
+    except (TypeError, ValueError):
+        raise ValueError("TP6 mesh must be canonical rowsxcolumns") from None
+    if (mesh_size != f"{rows}x{columns}" or not 1 <= rows <= 10
+            or not 1 <= columns <= 10 or rows * columns < 6):
+        raise ValueError("TP6 mesh requires 6..100 physical Dies in 1..10 rectangle")
+    count = rows * columns
+    active = ([0, 1, 2, 6, 7, 8] if (rows, columns) == (3, 3)
+              else [index * (count - 1) // 5 for index in range(6)])
+    return rows, columns, active
+
+
 def audit_full_fresh(directory: Path, mesh_size: str) -> dict[str, object]:
-    rows, columns = map(int, mesh_size.split("x"))
-    active = ([0, 19, 39, 59, 79, 99] if mesh_size == "10x10"
-              else list(range(6)))
+    rows, columns, active = _active_for_mesh(mesh_size)
     report = json.loads((directory / "dense-inference-tp6-paged-runtime-evidence.json").read_text(encoding="utf-8"))
     hardware = json.loads((directory / "hardware.json").read_text(encoding="utf-8"))
     if report.get("resident_rejection_code") != "memory_capacity_exceeded":
@@ -87,6 +99,7 @@ def audit_full_fresh(directory: Path, mesh_size: str) -> dict[str, object]:
 
 
 def run(args: argparse.Namespace) -> None:
+    _active_for_mesh(args.mesh_size)
     root = args.output_root.resolve()
     if root.exists():
         raise ValueError("full-fresh output root must be a new path")
@@ -124,7 +137,8 @@ def run(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--mesh-size", choices=("2x3", "3x2", "10x10"), default="2x3")
+    parser.add_argument("--mesh-size", default="2x3",
+                        help="canonical 1..10 rectangle with at least six Dies")
     parser.add_argument("--npusim", type=Path, required=True)
     parser.add_argument("--finalizer", type=Path, required=True)
     parser.add_argument("--resolver", type=Path, required=True)
