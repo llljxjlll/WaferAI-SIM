@@ -16,6 +16,9 @@ from llm.frontend.wafer_frontend.passes.moe_full_train_shared_reverse_ir0 import
 from llm.frontend.wafer_frontend.passes.moe_full_train_combine_backward_ir0 import (
     append_moe_full_train_combine_backward_ir0,
 )
+from llm.frontend.wafer_frontend.passes.moe_full_train_forward_ir0 import (
+    build_moe_full_train_forward_ir0,
+)
 from llm.frontend.wafer_frontend.schema.action import (
     canonical_compute_operand_roles,
 )
@@ -59,6 +62,52 @@ class MoeCombineBackwardSourceTest(unittest.TestCase):
                  ("router_score_gradient", "expert_output_gradient")))
             self.assertEqual(len(graph.nodes), 37)
             graph.validate()
+
+    def test_ep2_two_steps_scatter_distinct_expert_gradients(self):
+        phases = (
+            Fixture.phase,
+            build_moe_full_train_forward_ir0(Fixture.dense,
+                                             Fixture.sequence, step=1),
+        )
+        for step, phase in enumerate(phases):
+            with self.subTest(step=step):
+                source = append_moe_full_train_shared_reverse_ir0(
+                    append_moe_full_train_head_backward_ir0(
+                        append_moe_full_train_ce_backward_ir0(phase)))
+                graph = append_moe_full_train_combine_backward_ir0(source)
+                nodes = {node.id: node for node in graph.nodes}
+                values = {value.id: value for value in graph.values}
+                forward = nodes["T0.layer1.moe.combine"]
+                residual = nodes["backward::T0.layer1.residual2"]
+                backward = nodes["backward::T0.layer1.moe.combine"]
+                self.assertEqual(backward.workload.expert_count, 2)
+                self.assertEqual(backward.inputs,
+                                 (*forward.inputs[-2:], *forward.inputs[:-2],
+                                  residual.outputs[1]))
+                self.assertEqual(len(backward.outputs), 3)
+                self.assertEqual(canonical_compute_operand_roles(
+                    backward.kind, backward.workload, tiled=False),
+                    (("route_ids", "route_scores", "expert0_output",
+                      "expert1_output", "dcombined_gradient"),
+                     ("router_score_gradient",
+                      "expert0_output_gradient",
+                      "expert1_output_gradient")))
+                self.assertEqual(values[backward.outputs[0]].shape, (4, 2))
+                for expert in (0, 1):
+                    self.assertEqual(values[backward.outputs[expert+1]].shape,
+                                     values[forward.inputs[expert]].shape)
+                    self.assertNotEqual(backward.outputs[expert+1],
+                                        forward.inputs[expert])
+                graph.validate()
+                forged = replace(backward, inputs=(
+                    *backward.inputs[:3], backward.inputs[2],
+                    backward.inputs[4],
+                ))
+                semantic = graph._semantic_key()
+                semantic["nodes"] = (*graph.nodes[:-1], forged)
+                with self.assertRaises(SchemaError):
+                    IR0.create(producer_pass=graph.producer_pass,
+                               **semantic).validate()
 
     def test_wrong_route_digest_and_no_dcombined_fail_closed(self):
         with self.assertRaises(SchemaError):

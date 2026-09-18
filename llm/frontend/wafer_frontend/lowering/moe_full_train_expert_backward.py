@@ -39,6 +39,9 @@ def lower_moe_expert_backward_fragment(
     action.validate("action")
     workload = action.compute.workload
     workload.validate("action.compute.workload")
+    if workload.expert_count != 1:
+        raise SchemaError("native expert reverse currently supports EP1 only",
+                          path="action.compute.workload")
     m, h, i = (workload.token_count, workload.hidden_size,
                workload.intermediate_size)
     if tuple(item.role for item in action.compute.inputs) != (

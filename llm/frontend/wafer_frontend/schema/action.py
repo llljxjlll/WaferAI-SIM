@@ -300,9 +300,19 @@ def canonical_compute_operand_roles(
                 ("expert_activation_gradient", "gate_weight_gradient",
                  "up_weight_gradient", "down_weight_gradient"))
     if op_kind is OpKind.MOE_COMBINE_BACKWARD:
-        return (("route_ids", "route_scores", "expert_output",
+        experts = (
+            ("expert_output",) if workload.expert_count == 1
+            else tuple(f"expert{rank}_output"
+                       for rank in range(workload.expert_count))
+        )
+        gradients = (
+            ("expert_output_gradient",) if workload.expert_count == 1
+            else tuple(f"expert{rank}_output_gradient"
+                       for rank in range(workload.expert_count))
+        )
+        return (("route_ids", "route_scores", *experts,
                  "dcombined_gradient"),
-                ("router_score_gradient", "expert_output_gradient"))
+                ("router_score_gradient", *gradients))
     if op_kind is OpKind.GEMM:
         return ("lhs", "rhs"), (("partial",) if tiled else ("output",))
     if op_kind is OpKind.EMBEDDING:

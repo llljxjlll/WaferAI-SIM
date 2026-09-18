@@ -1,4 +1,4 @@
-"""Typed EP1 expert reverse with native recomputation of SwiGLU activations.
+"""Typed expert reverse with recomputation of SwiGLU activations.
 
 The derivative uses actual combine dExpert.  Gate/up projections must be
 recomputed from the same forward activation and weights before their FP32
@@ -39,11 +39,12 @@ class MoeExpertBackwardWorkload:
             if type(value) is not int or value < (0 if name in ("step", "layer", "expert") else 1):
                 raise SchemaError("expert backward has invalid source geometry",
                                   path=f"{path}.{name}")
-        if (self.expert_count != 1 or self.expert != 0
+        if (self.expert_count not in (1, 2)
+                or self.expert >= self.expert_count
                 or self.input_dtype is not DType.FP16
                 or self.gradient_dtype is not DType.FP32
                 or self.output_dtype is not DType.FP16):
-            raise SchemaError("physical expert reverse currently requires EP1 FP16→FP32",
+            raise SchemaError("expert reverse requires EP1/EP2 owner and FP16→FP32",
                               path=path)
 
     @property

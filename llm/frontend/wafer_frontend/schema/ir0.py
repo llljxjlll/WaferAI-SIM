@@ -1660,12 +1660,13 @@ class LogicalNode:
         if self.kind is OpKind.MOE_COMBINE_BACKWARD:
             if (self.phase is not OpPhase.DGRAD
                     or self.impl_ref != "moe_combine_backward"
-                    or len(self.inputs) != 4 or len(self.outputs) != 2
+                    or len(self.inputs) != self.workload.expert_count + 3
+                    or len(self.outputs) != self.workload.expert_count + 1
                     or self.math.accumulation_dtype is not DType.FP32
                     or self.effects != NodeEffects(EffectKind.PURE, None, None)):
                 raise SchemaError(
-                    "0x28 requires exact route/score/expert/dCombined, "
-                    "dScore/dExpert, and pure DGRAD",
+                    "combine backward needs route/score, every expert return, "
+                    "dCombined, dScore, every dExpert and pure DGRAD",
                     path=path,
                 )
         source_moe = {
@@ -2324,8 +2325,10 @@ class IR0:
                            workload.source_route_trace_digest
                         or combine.workload.source_route_trace_digest !=
                            workload.source_route_trace_digest
-                        or forward.outputs[0] != combine.inputs[2]
-                        or node.inputs != (*forward.inputs, combine.outputs[1])
+                        or combine.workload.expert_count != workload.expert_count
+                        or forward.outputs[0] != combine.inputs[2 + workload.expert]
+                        or node.inputs != (*forward.inputs,
+                                           combine.outputs[1 + workload.expert])
                         or node.stage != forward.stage
                         or tuple((value_index[ref].shape, value_index[ref].dtype)
                                  for ref in node.outputs) != (
@@ -2408,17 +2411,16 @@ class IR0:
                         or forward.workload.token_count != workload.token_count
                         or forward.workload.hidden_size != workload.hidden_size
                         or forward.workload.expert_count != workload.expert_count
-                        or workload.expert_count != 1
-                        or node.inputs[:3] != (
-                            forward.inputs[-2], forward.inputs[-1],
-                            forward.inputs[0])
-                        or node.inputs[3] not in value_index
-                        or value_index[node.inputs[3]].producer is None
+                        or workload.expert_count not in (1, 2)
+                        or node.inputs[:-1] != (
+                            *forward.inputs[-2:], *forward.inputs[:-2])
+                        or node.inputs[-1] not in value_index
+                        or value_index[node.inputs[-1]].producer is None
                         or node.stage != forward.stage):
-                    raise SchemaError("0x28 must bind same source combine "
-                                      "route/score/expert and real upstream",
+                    raise SchemaError("combine backward must bind same source "
+                                      "route/score/each expert and real upstream",
                                       path=f"{path}.nodes[{index}].inputs")
-                upstream = value_index[node.inputs[3]]
+                upstream = value_index[node.inputs[-1]]
                 producer = node_index.get(upstream.producer)
                 if (producer is None
                         or producer.kind is not OpKind.RESIDUAL_BACKWARD
@@ -2431,14 +2433,20 @@ class IR0:
                                       path=f"{path}.nodes[{index}].inputs")
                 m, h, e = (workload.token_count, workload.hidden_size,
                            workload.expert_count)
-                specs = (((m, 5), DType.INT32), ((m, e), DType.FP16),
-                         ((m, h), DType.FP16), ((m, h), DType.FP16),
-                         ((m, e), DType.FP16), ((m, h), DType.FP16))
+                expert_shapes = tuple(
+                    (count, h) for count in forward.workload.expert_histogram
+                )
+                specs = (
+                    ((m, 5), DType.INT32), ((m, e), DType.FP16),
+                    *((shape, DType.FP16) for shape in expert_shapes),
+                    ((m, h), DType.FP16), ((m, e), DType.FP16),
+                    *((shape, DType.FP16) for shape in expert_shapes),
+                )
                 actual = tuple((value_index[ref].shape, value_index[ref].dtype)
                                for ref in (*node.inputs, *node.outputs))
                 if actual != specs:
-                    raise SchemaError("0x28 route/score/expert/dCombined "
-                                      "operand extents differ",
+                    raise SchemaError("combine backward route/score/each expert/"
+                                      "dCombined/dScore/dExpert extents differ",
                                       path=f"{path}.nodes[{index}].inputs")
             workload_profile = getattr(node.workload, "profile", None)
             if (

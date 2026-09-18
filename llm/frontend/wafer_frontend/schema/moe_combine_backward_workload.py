@@ -1,4 +1,4 @@
-"""Physical 0x28 score-weighted top1 MoE combine reverse workload."""
+"""Score-weighted top1 MoE combine reverse; native 0x28 is EP1-only."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class MoeCombineBackwardWorkload:
                     self.upstream_dtype, self.dscore_dtype,
                     self.dexpert_dtype))):
             raise SchemaError(
-                "native 0x28 requires source-bound INT32 route and FP16 "
+                "combine reverse requires source-bound INT32 route and FP16 "
                 "score/expert/dCombined/dScore/dExpert extents",
                 path=path,
             )
