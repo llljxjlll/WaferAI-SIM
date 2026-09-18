@@ -1,0 +1,23 @@
+{
+  "baseline": {
+    "compile_failure_sha256": "8c61feca36c83de97807cd962973c0bf130e71e2c6a8115930cb47d9d23e1eff",
+    "error": "schema_error at schedule.die_0.core_0.sram_region_0: wire-addressable SRAM liveness capacity exceeded: required=384, available=65536, value='temp.fused_op_skeleton_76337f448f1fd630.chunk.5.rank.0.a', lifetime=(0,302)",
+    "live_bindings_sha256": "8cfedbbb7a8b136c5e5b667a5728f4b684c2b7e31f1bdf3514e6981f85ad2d8a",
+    "source_policy_sha256": "e45b219cf159e7c3792486af5d3f8bc95a8570b8978d5085dc11a37a71ef5346"
+  },
+  "diagnostic_repack_experiment": {
+    "committed": false,
+    "embedding_table_bytes": 49152,
+    "live_bindings_sha256": "7d78fced7ecee825bd397d86ee85dc078b9e2297c18d1408ce0d0ceba56c7512",
+    "minimum_at_start_bytes": 69124,
+    "minimum_excess_bytes": 3588,
+    "reverted": true,
+    "simultaneously_preseeded_borrowed_bytes": 19972,
+    "simultaneously_preseeded_borrowed_count": 53,
+    "wire_capacity_bytes": 65536
+  },
+  "mesh_size": "2x6",
+  "profile": "all_dies_scaled",
+  "source_commit": "ca770ead",
+  "status": "blocked_by_simultaneous_program_io_seeds"
+}
