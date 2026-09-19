@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 import unittest
 
 from llm.frontend.wafer_frontend.errors import SchemaError
@@ -73,6 +74,7 @@ from llm.frontend.wafer_frontend.schema.ir2 import (
     TensorSlice,
     canonical_semantic_flow_id,
     dense_row_major_view_byte_addend,
+    fused_lhs_materialize_action_id,
 )
 from llm.frontend.wafer_frontend.schema.swizzle_plan import (
     SwizzleValueOrigin,
@@ -528,7 +530,7 @@ def _exact_projection(
     dags: list[IntraDieDAG] = []
     for program in plan.rank_programs:
         region_id = f"region_{program.rank}"
-        task_ids = {action.id: f"task_{action.id}" for action in program.actions}
+        task_ids = {action.id: f"task.{action.id}" for action in program.actions}
         tasks: list[SemanticTask] = []
         flows: list[SemanticFlow] = []
         for source in program.actions:
@@ -567,6 +569,52 @@ def _exact_projection(
                         (task_ids[source.id],),
                     )
                 )
+            lhs_copy_id: str | None = None
+            if (
+                not standalone
+                and source.kind is FusionActionKind.COMP
+                and source.compute is not None
+                and source.compute.tile is not None
+            ):
+                lhs = source.compute.tile.input_slices[0]
+                if lhs.operand_id != lhs.source_value_id:
+                    copy_action_id = fused_lhs_materialize_action_id(source.id)
+                    lhs_copy_id = f"task.{copy_action_id}"
+                    source_value = ir1_values[lhs.source_value_id]
+                    dtype_bytes = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}[
+                        source_value.dtype
+                    ]
+                    tasks.append(
+                        SemanticTask(
+                            id=lhs_copy_id,
+                            kind=SemanticTaskKind.LOCAL_COPY,
+                            origin_ref=FusedNodeOrigin(
+                                OriginKind.FUSED, plan.id, program.rank, copy_action_id
+                            ),
+                            region_id=region_id,
+                            op_kind=OpKind.COLLECTIVE,
+                            member_id=source.member_id,
+                            flow_id=None,
+                            chunk_id=source.chunk_id,
+                            collective_step=source.collective_step,
+                            source_rank=None,
+                            destination_rank=None,
+                            tensor_slice=TensorSlice(
+                                lhs.source_value_id, lhs.logical_offset, lhs.logical_shape
+                            ),
+                            bytes=math.prod(lhs.logical_shape) * dtype_bytes,
+                            dtype=source_value.dtype,
+                            shape=lhs.logical_shape,
+                            read_values=(lhs.source_value_id,),
+                            write_values=(lhs.operand_id,),
+                            compute=None,
+                            reduction=None,
+                            sync=SyncContract(f"event.{copy_action_id}", None, None),
+                            deps=tuple(
+                                task_ids[dependency] for dependency in source.deps
+                            ),
+                        )
+                    )
             tasks.append(
                 SemanticTask(
                     id=task_ids[source.id],
@@ -604,7 +652,10 @@ def _exact_projection(
                     compute=source.compute,
                     reduction=source.reduction,
                     sync=source.sync,
-                    deps=tuple(task_ids[dependency] for dependency in source.deps),
+                    deps=tuple(dict.fromkeys((
+                        *(task_ids[dependency] for dependency in source.deps),
+                        *((lhs_copy_id,) if lhs_copy_id is not None else ()),
+                    ))),
                 )
             )
         all_refs = tuple(
@@ -1105,7 +1156,7 @@ def dependency_chain() -> tuple[
         pre_task = _ordinary_task(pre, rank, ())
         fused_tasks = tuple(
             replace(task, deps=task.deps + (pre_task.id,))
-            if task.kind is SemanticTaskKind.COMP
+            if task.kind is SemanticTaskKind.LOCAL_COPY
             else task
             for task in fused_dag.tasks
         )
@@ -1479,7 +1530,7 @@ class IR2SchemaTest(unittest.TestCase):
                 task
                 for task in dag.tasks
                 if isinstance(task.origin_ref, FusedNodeOrigin)
-                and task.kind is SemanticTaskKind.COMP
+                and task.kind is SemanticTaskKind.LOCAL_COPY
             )
             pre = next(
                 task
@@ -1490,7 +1541,7 @@ class IR2SchemaTest(unittest.TestCase):
             self.assertTrue(fused_inputs)
             self.assertTrue(all(pre.id in task.deps for task in fused_inputs))
             self.assertTrue(
-                all("p_v_in" not in task.read_values for task in fused_inputs)
+                all("p_v_in" in task.read_values for task in fused_inputs)
             )
         projection.validate_against(ir1, (fusion_plan,), (standalone_plan,))
 
@@ -2691,11 +2742,11 @@ class IR2SchemaTest(unittest.TestCase):
             pre = task_by_member["p_pre"]
             middle = task_by_member["p_middle"]
             post = task_by_member["p_post"]
-            fused_comps = tuple(
+            fused_entries = tuple(
                 task
                 for task in dag.tasks
                 if isinstance(task.origin_ref, FusedNodeOrigin)
-                and task.kind is SemanticTaskKind.COMP
+                and task.kind is SemanticTaskKind.LOCAL_COPY
             )
             reduce = next(
                 task
@@ -2715,7 +2766,7 @@ class IR2SchemaTest(unittest.TestCase):
                 if isinstance(task.origin_ref, StandaloneNodeOrigin)
                 and task.kind is SemanticTaskKind.BARRIER
             )
-            self.assertTrue(all(task.deps[-1:] == (pre.id,) for task in fused_comps))
+            self.assertTrue(all(task.deps[-1:] == (pre.id,) for task in fused_entries))
             self.assertEqual(middle.deps, (reduce.id,))
             self.assertEqual(local.deps, (middle.id, reduce.id))
             self.assertEqual(post.deps, (barrier.id,))
@@ -2726,11 +2777,11 @@ class IR2SchemaTest(unittest.TestCase):
         pre = next(task for task in dag.tasks if task.member_id == "p_pre")
         middle = next(task for task in dag.tasks if task.member_id == "p_middle")
         post = next(task for task in dag.tasks if task.member_id == "p_post")
-        fused_comp = next(
+        fused_entry = next(
             task
             for task in dag.tasks
             if isinstance(task.origin_ref, FusedNodeOrigin)
-            and task.kind is SemanticTaskKind.COMP
+            and task.kind is SemanticTaskKind.LOCAL_COPY
         )
         local = next(
             task
@@ -2741,7 +2792,8 @@ class IR2SchemaTest(unittest.TestCase):
 
         mutations = {
             "ordinary_to_fusion_missing": replace(
-                fused_comp, deps=tuple(dep for dep in fused_comp.deps if dep != pre.id)
+                fused_entry,
+                deps=tuple(dep for dep in fused_entry.deps if dep != pre.id),
             ),
             "fusion_to_ordinary_extra": replace(
                 middle, deps=middle.deps + (pre.id,)

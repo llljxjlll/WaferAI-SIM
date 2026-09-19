@@ -300,8 +300,8 @@ def _compute_contract(
                 ComputeOperandSlice(
                     input_ids[0],
                     gemm.inputs[0],
-                    (chunk.offset[0], 0),
-                    (chunk.shape[0], full_k),
+                    (chunk.offset[0], rhs_k_offset),
+                    (chunk.shape[0], rank_k),
                 ),
                 ComputeOperandSlice(
                     input_ids[1],

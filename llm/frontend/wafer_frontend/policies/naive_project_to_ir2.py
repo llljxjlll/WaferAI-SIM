@@ -56,6 +56,7 @@ from ..schema.ir2 import (
     canonical_state_transfer_task_id,
     canonical_transit_completion_event,
     dense_row_major_view_byte_addend,
+    fused_lhs_materialize_action_id,
 )
 from ..schema.swizzle_plan import FusedPlan, SwizzleFusionPlan
 from ..schema.state_transfer import (
@@ -85,6 +86,9 @@ def _ordinary_region_id(node_id: str, rank: int) -> str:
 
 def _planned_region_id(category: str, plan_id: str, die_id: int) -> str:
     return f"region.{category}.{plan_id}.die.{die_id}"
+
+
+_DTYPE_BYTES = {DType.FP16: 2, DType.FP32: 4, DType.INT32: 4}
 
 
 
@@ -333,6 +337,7 @@ class NaiveProjectToIR2:
 
         group_index = {group.id: group for group in ir1.groups}
         node_index = {node.id: node for node in ir1.nodes}
+        value_index = {value.id: value for value in ir1.values}
         skeleton_index = {
             skeleton.id: skeleton for skeleton in ir1.fused_op_skeletons
         }
@@ -439,6 +444,7 @@ class NaiveProjectToIR2:
         state_values_by_die: dict[int, list[StateStagingValue]] = {
             die.id: [] for die in ir1.fabric.dies
         }
+        fused_lhs_target_by_copy: dict[str, str] = {}
         state_transfer_ids_by_die: dict[int, list[str]] = {
             die.id: [] for die in ir1.fabric.dies
         }
@@ -549,6 +555,66 @@ class NaiveProjectToIR2:
                         )
                     )
                     region_id = _planned_region_id(category, plan.id, die_id)
+                    lhs_copy: SemanticTask | None = None
+                    if (
+                        category == "fusion"
+                        and action.kind is FusionActionKind.COMP
+                        and action.compute is not None
+                        and action.compute.tile is not None
+                    ):
+                        lhs = action.compute.tile.input_slices[0]
+                        if lhs.operand_id != lhs.source_value_id:
+                            source = value_index.get(lhs.source_value_id)
+                            if source is None or source.dtype not in _DTYPE_BYTES:
+                                _fail(
+                                    "fused lhs tile lacks one typed IR-1 source",
+                                    f"fusion_plans.{plan.id}.{action.id}",
+                                )
+                            copy_action_id = fused_lhs_materialize_action_id(
+                                action.id
+                            )
+                            lhs_copy = SemanticTask(
+                                id=_action_task_id(copy_action_id),
+                                kind=SemanticTaskKind.LOCAL_COPY,
+                                origin_ref=FusedNodeOrigin(
+                                    OriginKind.FUSED, plan.id, program.rank,
+                                    copy_action_id,
+                                ),
+                                region_id=region_id,
+                                op_kind=OpKind.COLLECTIVE,
+                                member_id=action.member_id,
+                                flow_id=None,
+                                chunk_id=action.chunk_id,
+                                collective_step=action.collective_step,
+                                source_rank=None,
+                                destination_rank=None,
+                                tensor_slice=TensorSlice(
+                                    lhs.source_value_id, lhs.logical_offset,
+                                    lhs.logical_shape,
+                                ),
+                                bytes=(math.prod(lhs.logical_shape)
+                                       * _DTYPE_BYTES[source.dtype]),
+                                dtype=source.dtype,
+                                shape=lhs.logical_shape,
+                                read_values=(lhs.source_value_id,),
+                                write_values=(lhs.operand_id,),
+                                compute=None,
+                                reduction=None,
+                                sync=SyncContract(
+                                    f"event.{copy_action_id}", None, None
+                                ),
+                                deps=tuple(
+                                    _action_task_id(dependency)
+                                    for dependency in action.deps
+                                ),
+                            )
+                            tasks_by_die[die_id].append(lhs_copy)
+                            plan_task_ids_by_die.setdefault(die_id, []).append(
+                                lhs_copy.id
+                            )
+                            fused_lhs_target_by_copy[lhs_copy.id] = (
+                                _action_task_id(action.id)
+                            )
                     task = SemanticTask(
                         id=_action_task_id(action.id),
                         kind=SemanticTaskKind(action.kind.value),
@@ -574,10 +640,13 @@ class NaiveProjectToIR2:
                         compute=action.compute,
                         reduction=action.reduction,
                         sync=action.sync,
-                        deps=tuple(
-                            _action_task_id(dependency)
-                            for dependency in action.deps
-                        ),
+                        deps=tuple(dict.fromkeys((
+                            *(
+                                _action_task_id(dependency)
+                                for dependency in action.deps
+                            ),
+                            *((lhs_copy.id,) if lhs_copy is not None else ()),
+                        ))),
                     )
                     tasks_by_die[die_id].append(task)
                     plan_task_ids_by_die.setdefault(die_id, []).append(task.id)
@@ -1054,9 +1123,14 @@ class NaiveProjectToIR2:
 
         for die_id, die_tasks in tasks_by_die.items():
             rewritten_tasks: list[SemanticTask] = []
+            anchored_comp_ids = set(fused_lhs_target_by_copy.values())
             for original_task in die_tasks:
                 target = task_updates.get(original_task.id, original_task)
-                rewritten_tasks.extend(dma_in_by_target.get(target.id, ()))
+                dma_anchor = fused_lhs_target_by_copy.get(target.id, target.id)
+                if target.id not in anchored_comp_ids:
+                    rewritten_tasks.extend(
+                        dma_in_by_target.get(dma_anchor, ())
+                    )
                 rewritten_tasks.append(target)
                 rewritten_tasks.extend(dma_out_by_target.get(target.id, ()))
             tasks_by_die[die_id] = rewritten_tasks
@@ -1777,7 +1851,8 @@ class NaiveProjectToIR2:
                     is CollectiveKind.REDUCE_SCATTER
                     else ({
                         "ordinary": (SemanticTaskKind.COMP,),
-                        "fusion": (SemanticTaskKind.COMP,),
+                        "fusion": (SemanticTaskKind.LOCAL_COPY,
+                                   SemanticTaskKind.COMP),
                         "standalone": (SemanticTaskKind.LOCAL_COPY,),
                         "dp": (SemanticTaskKind.LOCAL_COPY, SemanticTaskKind.SEND),
                     }[destination_kind])
@@ -1797,6 +1872,14 @@ class NaiveProjectToIR2:
                         key=lambda item: item.id,
                     )
                 )
+                if destination_kind == "fusion" and any(
+                    task.kind is SemanticTaskKind.LOCAL_COPY
+                    for task in entries
+                ):
+                    entries = tuple(
+                        task for task in entries
+                        if task.kind is SemanticTaskKind.LOCAL_COPY
+                    )
                 if (edge.kind is EdgeKind.CONTROL
                     and node_index[edge.source_node].kind is OpKind.OPTIMIZER_UPDATE):
                     owner_accesses = tuple(access for access in ir1.state_accesses

@@ -69,15 +69,34 @@ if TYPE_CHECKING:
     from .dense_dp_sync_tasks import DenseDP2ProjectedTasks
 
 
-INTRA_DIE_DAG_SCHEMA_VERSION = "wafer_frontend.intra_die_dag/v1alpha14"
+INTRA_DIE_DAG_SCHEMA_VERSION = "wafer_frontend.intra_die_dag/v1alpha15"
 INTRA_DIE_SCHEDULE_SCHEMA_VERSION = "wafer_frontend.intra_die_schedule/v1alpha14"
 INTRA_DIE_SCHEDULE_SET_SCHEMA_VERSION = "wafer_frontend.intra_die_schedule_set/v1alpha9"
-IR2_PROJECTION_RESULT_SCHEMA_VERSION = "wafer_frontend.ir2_projection_result/v1alpha13"
+IR2_PROJECTION_RESULT_SCHEMA_VERSION = "wafer_frontend.ir2_projection_result/v1alpha14"
 SEMANTIC_FLOW_ID_SCHEMA_VERSION = "wafer_frontend.semantic_flow_identity/v1"
 STATE_STAGING_VALUE_SCHEMA_VERSION = "wafer_frontend.state_staging_value/v1alpha1"
 STATE_TRANSFER_IR2_ID_SCHEMA_VERSION = (
     "wafer_frontend.state_transfer_ir2_identity/v1"
 )
+FUSED_LHS_MATERIALIZE_SUFFIX = ".lhs_materialize"
+
+
+def fused_lhs_materialize_action_id(compute_action_id: str) -> str:
+    validate_nonempty(compute_action_id, "compute_action_id")
+    if compute_action_id.endswith(FUSED_LHS_MATERIALIZE_SUFFIX):
+        raise SchemaError(
+            "compute action is already a fused lhs materialization",
+            path="compute_action_id",
+        )
+    return compute_action_id + FUSED_LHS_MATERIALIZE_SUFFIX
+
+
+def _fused_lhs_source_action_id(action_id: str) -> str | None:
+    if not action_id.endswith(FUSED_LHS_MATERIALIZE_SUFFIX):
+        return None
+    source = action_id[:-len(FUSED_LHS_MATERIALIZE_SUFFIX)]
+    return source or None
+
 
 
 class OriginKind(str, Enum):
@@ -3274,7 +3293,8 @@ class IntraDieDAG:
                 is CollectiveKind.REDUCE_SCATTER
                 else {
                     "ordinary": (SemanticTaskKind.COMP,),
-                    "fusion": (SemanticTaskKind.COMP,),
+                    "fusion": (SemanticTaskKind.LOCAL_COPY,
+                               SemanticTaskKind.COMP),
                     "standalone": (SemanticTaskKind.LOCAL_COPY,),
                 }[unit_kind]
             )
@@ -3295,7 +3315,7 @@ class IntraDieDAG:
                     )
                 return False
 
-            return tuple(
+            result = tuple(
                 sorted(
                     (
                         task
@@ -3311,6 +3331,14 @@ class IntraDieDAG:
                     key=lambda task: task.id,
                 )
             )
+            if unit_kind == "fusion" and any(
+                task.kind is SemanticTaskKind.LOCAL_COPY for task in result
+            ):
+                result = tuple(
+                    task for task in result
+                    if task.kind is SemanticTaskKind.LOCAL_COPY
+                )
+            return result
 
         def completion_tasks(
             node_id: str,
@@ -3437,11 +3465,35 @@ class IntraDieDAG:
         }
         for index, task in enumerate(self.tasks):
             origin = task.origin_ref
+            derived_lhs_materialization = False
             if isinstance(origin, FusedNodeOrigin):
-                source_action = fusion_actions.get((origin.plan_id, origin.rank, origin.action_id))
+                source_action = fusion_actions.get((
+                    origin.plan_id, origin.rank, origin.action_id
+                ))
                 source_plan = fusion_plan_index.get(origin.plan_id)
                 if source_action is None:
-                    raise SchemaError("fused origin references a dangling action", path=f"{path}.tasks[{index}].origin_ref")
+                    parent_action_id = _fused_lhs_source_action_id(
+                        origin.action_id
+                    )
+                    source_action = (
+                        fusion_actions.get((
+                            origin.plan_id, origin.rank, parent_action_id
+                        ))
+                        if parent_action_id is not None
+                        else None
+                    )
+                    derived_lhs_materialization = (
+                        source_action is not None
+                        and task.kind is SemanticTaskKind.LOCAL_COPY
+                    )
+                if source_action is None or (
+                    task.kind is SemanticTaskKind.LOCAL_COPY
+                    and not derived_lhs_materialization
+                ):
+                    raise SchemaError(
+                        "fused origin references a dangling action",
+                        path=f"{path}.tasks[{index}].origin_ref",
+                    )
             elif isinstance(origin, StandaloneNodeOrigin):
                 if origin.collective_plan_id == self.dp_gradient_plan_id:
                     # The source-rebuilt per-die task and both endpoint deps
@@ -3463,10 +3515,11 @@ class IntraDieDAG:
             if source_action is not None:
                 if task.kind is SemanticTaskKind.TRANSIT:
                     if source_action.kind is not FusionActionKind.SEND:
-                        raise SchemaError("TRANSIT must derive from SEND", path=f"{path}.tasks[{index}].origin_ref")
+                        raise SchemaError(
+                            "TRANSIT must derive from SEND",
+                            path=f"{path}.tasks[{index}].origin_ref",
+                        )
                     continue
-                if task.kind.value != source_action.kind.value:
-                    raise SchemaError("task kind disagrees with originating action", path=f"{path}.tasks[{index}].kind")
                 assert source_plan is not None
                 group = groups[source_plan.group_ref]
                 expected_die = next(
@@ -3475,7 +3528,82 @@ class IntraDieDAG:
                     if placement.rank == origin.rank
                 )
                 if self.die_id != expected_die:
-                    raise SchemaError("action is projected onto the wrong die", path=f"{path}.tasks[{index}]")
+                    raise SchemaError(
+                        "action is projected onto the wrong die",
+                        path=f"{path}.tasks[{index}]",
+                    )
+                if derived_lhs_materialization:
+                    tile = source_action.compute.tile if (
+                        source_action.kind is FusionActionKind.COMP
+                        and source_action.compute is not None
+                    ) else None
+                    if tile is None:
+                        raise SchemaError(
+                            "fused lhs materialization requires a tiled COMP",
+                            path=f"{path}.tasks[{index}]",
+                        )
+                    lhs = tile.input_slices[0]
+                    source = values.get(lhs.source_value_id)
+                    if (
+                        lhs.operand_id == lhs.source_value_id
+                        or source is None
+                        or source.dtype not in (DType.FP16, DType.FP32, DType.INT32)
+                    ):
+                        raise SchemaError(
+                            "fused lhs materialization lacks a typed source tile",
+                            path=f"{path}.tasks[{index}]",
+                        )
+                    dtype_bytes = {
+                        DType.FP16: 2, DType.FP32: 4, DType.INT32: 4
+                    }[source.dtype]
+                    expected_action_id = fused_lhs_materialize_action_id(
+                        source_action.id
+                    )
+                    expected_deps = tuple(
+                        local_origin_tasks[(
+                            origin.plan_id, origin.rank, dependency
+                        )].id
+                        for dependency in source_action.deps
+                    )
+                    expected_deps = tuple(dict.fromkeys(
+                        expected_deps
+                        + tuple(state_in_deps[task.id])
+                        + transfer_wait_deps[task.id]
+                        + graph_deps[task.id]
+                    ))
+                    if (
+                        origin.action_id != expected_action_id
+                        or task.id != f"task.{expected_action_id}"
+                        or (
+                            task.member_id, task.chunk_id,
+                            task.collective_step, task.tensor_slice,
+                            task.bytes, task.dtype, task.shape,
+                            task.read_values, task.write_values, task.compute,
+                            task.reduction, task.sync, task.op_kind, task.deps,
+                        ) != (
+                            source_action.member_id, source_action.chunk_id,
+                            source_action.collective_step,
+                            TensorSlice(
+                                lhs.source_value_id, lhs.logical_offset,
+                                lhs.logical_shape,
+                            ),
+                            math.prod(lhs.logical_shape) * dtype_bytes,
+                            source.dtype, lhs.logical_shape,
+                            (lhs.source_value_id,), (lhs.operand_id,), None, None,
+                            SyncContract(
+                                f"event.{expected_action_id}", None, None
+                            ),
+                            OpKind.COLLECTIVE, expected_deps,
+                        )
+                    ):
+                        raise SchemaError(
+                            "derived fused lhs materialization disagrees with "
+                            "its tiled COMP",
+                            path=f"{path}.tasks[{index}]",
+                        )
+                    continue
+                if task.kind.value != source_action.kind.value:
+                    raise SchemaError("task kind disagrees with originating action", path=f"{path}.tasks[{index}].kind")
                 chunk = next(
                     (item for item in source_plan.chunk_slices if item.id == source_action.slice_ref),
                     None,
@@ -3529,6 +3657,27 @@ class IntraDieDAG:
                     )].id
                     for dependency in source_action.deps
                 )
+                if (
+                    source_action.kind is FusionActionKind.COMP
+                    and source_action.compute is not None
+                    and source_action.compute.tile is not None
+                    and source_action.compute.tile.input_slices[0].operand_id
+                    != source_action.compute.tile.input_slices[0].source_value_id
+                ):
+                    materialization_key = (
+                        origin.plan_id, origin.rank,
+                        fused_lhs_materialize_action_id(source_action.id),
+                    )
+                    materialization_task = local_origin_tasks.get(
+                        materialization_key
+                    )
+                    if materialization_task is None:
+                        raise SchemaError(
+                            "tiled COMP with a local lhs operand requires its "
+                            "derived lhs materialization task",
+                            path=f"{path}.tasks[{index}].deps",
+                        )
+                    expected_deps += (materialization_task.id,)
                 expected_deps = tuple(
                     dict.fromkeys(
                         expected_deps
@@ -4315,6 +4464,12 @@ class IR2ProjectionResult:
             for task in dag.tasks:
                 origin = task.origin_ref
                 if isinstance(origin, FusedNodeOrigin):
+                    if (
+                        task.kind is SemanticTaskKind.LOCAL_COPY
+                        and _fused_lhs_source_action_id(origin.action_id)
+                        is not None
+                    ):
+                        continue  # Derived task validated against its parent COMP.
                     key = ("fusion", origin.plan_id, origin.rank, origin.action_id)
                 elif isinstance(origin, StandaloneNodeOrigin):
                     if origin.collective_plan_id == self.dp_gradient_plan_id:
@@ -4539,10 +4694,23 @@ class IR2ProjectionResult:
                         path=f"{task_path}.origin_ref.op_id",
                     )
                 return (node_order[origin.op_id], origin.rank, 1, 0, 0, 0)
+            derived_lhs_order = False
             if isinstance(origin, FusedNodeOrigin):
                 base = fusion_action_order.get(
                     (origin.plan_id, origin.rank, origin.action_id)
                 )
+                if base is None:
+                    parent_action_id = _fused_lhs_source_action_id(
+                        origin.action_id
+                    )
+                    if (
+                        parent_action_id is not None
+                        and task.kind is SemanticTaskKind.LOCAL_COPY
+                    ):
+                        base = fusion_action_order.get((
+                            origin.plan_id, origin.rank, parent_action_id
+                        ))
+                        derived_lhs_order = base is not None
             elif origin.collective_plan_id == self.dp_gradient_plan_id:
                 dp_base = dp_action_order.get(
                     (origin.collective_plan_id, origin.rank, origin.action_id)
@@ -4572,7 +4740,8 @@ class IR2ProjectionResult:
                 1,
                 base[2],
                 0,
-                1 if task.kind is SemanticTaskKind.TRANSIT else 0,
+                (-1 if derived_lhs_order else
+                 1 if task.kind is SemanticTaskKind.TRANSIT else 0),
             )
         def canonical_region_key(
             region: IntraDieRegion,

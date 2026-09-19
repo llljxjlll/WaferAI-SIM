@@ -457,7 +457,7 @@ class NaiveIntraDieReduceTest(unittest.TestCase):
         graph, projection = _complete_tp2_projection(large_sram=True)
         result = NaiveIntraDiePolicy().schedule(projection, graph)
         result.validate_against(projection, graph)
-        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (43, 43))
+        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (47, 47))
         self.assertEqual(
             tuple(len(schedule.buffer_bindings) for schedule in result.schedules),
             (38, 38),
@@ -470,7 +470,7 @@ class NaiveIntraDieReduceTest(unittest.TestCase):
                 )
                 for schedule in result.schedules
             ),
-            (1427008, 1427008),
+            (1402432, 1402432),
         )
         for dag, schedule in zip(projection.dags, result.schedules):
             staging_ids = {

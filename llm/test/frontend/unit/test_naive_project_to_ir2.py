@@ -273,15 +273,29 @@ class NaiveProjectToIR2Test(unittest.TestCase):
             for action in program.actions
         )
         tasks = tuple(task for dag in projection.dags for task in dag.tasks)
-        self.assertEqual(len(tasks), len(expected_actions))
-        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (6, 6))
+        copies = tuple(
+            task for task in tasks
+            if task.kind is SemanticTaskKind.LOCAL_COPY
+        )
+        self.assertEqual(len(copies), 4)
+        self.assertEqual(len(tasks), len(expected_actions) + len(copies))
+        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (8, 8))
+        task_index = {task.id: task for task in tasks}
+        for copy in copies:
+            self.assertTrue(copy.id.endswith(".comp.lhs_materialize"))
+            comp = task_index[copy.id.removesuffix(".lhs_materialize")]
+            self.assertEqual(copy.write_values, (comp.read_values[0],))
+            self.assertIn(copy.id, comp.deps)
+            self.assertEqual(copy.tensor_slice.shape,
+                             comp.compute.workload.rank_shape[::2])
         self.assertTrue(
             all(isinstance(task.origin_ref, FusedNodeOrigin) for task in tasks)
         )
-        self.assertEqual(
-            Counter(task.kind for task in tasks),
-            Counter(SemanticTaskKind(action.kind.value) for action in expected_actions),
+        expected_kinds = Counter(
+            SemanticTaskKind(action.kind.value) for action in expected_actions
         )
+        expected_kinds[SemanticTaskKind.LOCAL_COPY] += len(copies)
+        self.assertEqual(Counter(task.kind for task in tasks), expected_kinds)
         self.assertEqual(sum(len(dag.flows) for dag in projection.dags), 4)
         self.assertTrue(
             all(
@@ -340,8 +354,13 @@ class NaiveProjectToIR2Test(unittest.TestCase):
         )
         self.assertEqual(planned_action_count, 56)
         self.assertEqual(len(transits), 4)
-        self.assertEqual(len(tasks), 60)
-        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (15,) * 4)
+        copies = tuple(
+            task for task in tasks
+            if task.kind is SemanticTaskKind.LOCAL_COPY
+        )
+        self.assertEqual(len(copies), 16)
+        self.assertEqual(len(tasks), 76)
+        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (19,) * 4)
         self.assertEqual(sum(len(dag.flows) for dag in projection.dags), 28)
         self.assertTrue(
             all(
@@ -431,7 +450,7 @@ class NaiveProjectToIR2Test(unittest.TestCase):
         )
         # D2-3A adds seven ordinary typed full-forward computes per die while
         # leaving the frozen state-DMA and collective projection unchanged.
-        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (43, 43))
+        self.assertEqual(tuple(len(dag.tasks) for dag in projection.dags), (47, 47))
         node_index = {node.id: node for node in graph.nodes}
         for dag in projection.dags:
             state_tasks = tuple(

@@ -1657,8 +1657,8 @@ class FusionPlan:
                             ComputeOperandSlice(
                                 action.compute.inputs[0].value_id,
                                 member.inputs[0],
-                                (chunk.offset[0], 0),
-                                (chunk.shape[0], full_k),
+                                (chunk.offset[0], rhs_k_offset),
+                                (chunk.shape[0], rank_k),
                             ),
                             ComputeOperandSlice(
                                 rhs_operand_id,

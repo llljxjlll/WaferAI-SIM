@@ -116,8 +116,9 @@ def compute_contract(
             origin_workload=full,
             input_slices=(
                 ComputeOperandSlice(
-                    reads[0], node.inputs[0], (chunk.offset[0], 0),
-                    (chunk.shape[0], full.logical_shape[2]),
+                    reads[0], node.inputs[0],
+                    (chunk.offset[0], rank * full.rank_shape[2]),
+                    (chunk.shape[0], full.rank_shape[2]),
                 ),
                 ComputeOperandSlice(
                     reads[1], node.inputs[1], (rank * full.rank_shape[2], 0),
@@ -751,7 +752,10 @@ class ActionSchemaTest(unittest.TestCase):
             )
             self.assertEqual(
                 (tile.input_slices[0].logical_offset, tile.input_slices[0].logical_shape),
-                ((chunk.offset[0], 0), (chunk.shape[0], full_k)),
+                (
+                    (chunk.offset[0], rank * rank_k),
+                    (chunk.shape[0], rank_k),
+                ),
             )
             self.assertEqual(
                 (tile.input_slices[1].logical_offset, tile.input_slices[1].logical_shape),
