@@ -1,0 +1,173 @@
+{
+  "compile": {
+    "compiled_core_die_ids": [
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    ],
+    "intra_die_wire_address_limit_bytes": 65536,
+    "linked_manifest_sha256": [
+      "a7e955068bd846895b0d0dad650c71c12228148162b0c9deac229f1db30e255d",
+      "f29bac28d46b4ea42a1b3e944c0a12b5cb1486f23bae0e088a92b8471a40b870",
+      "6394dd26a5674fa9c88f667edd499bf6bd9db9da9919d700f881b41b7b00a7e4"
+    ],
+    "npup_sha256": [
+      "8bf95a3b3bc106c7ce15388bc9f0bd48873c47dcd94914b3b685f51d43517c18",
+      "0375f09703bf036e93ba842b88e979d5e37bf00e0d63c5c25d3695053872db64",
+      "61e6df07b887eebd5c27c76242a704f2f45d223a0fcc9d39c5cdbbf8fb53ebc2"
+    ],
+    "peak_rss_kib": 1347996,
+    "source_sha256_at_compile": {
+      "llm/frontend/wafer_frontend/policies/naive_inter_die.py": "ba1ead0f5044611b395688d3d1f4c86c90c9d0bb72299b804dd7df1ac0ce8150",
+      "llm/frontend/wafer_frontend/policies/naive_project_to_ir2.py": "5c020e99e98a94e06dca00af7bf1bf1561cf62a7f81dfca3a34e7cf661d0fddc",
+      "llm/frontend/wafer_frontend/schema/action.py": "ef6216cc654005ddd01d39171a15a2d458426a0841524526a13afeef3be3d012",
+      "llm/frontend/wafer_frontend/schema/ir2.py": "e960d522f0767df7eb1b1e6923a8c1bfcb3c7c2e1702f182454fc08ba58d2d61"
+    },
+    "wall_seconds": 528.212
+  },
+  "date": "2026-09-19",
+  "execution_note": {
+    "automated_fresh_rerun_required_for_matrix_credit": true,
+    "initial_runner_failure": "returncode=-6: /workspace/build-debug-final/npusim --program-sequence /tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_0.npup,/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_1.npup,/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_2.npup --linked-manifest-sequence /tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_0.linked.json,/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_1.linked.json,/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_2.linked.json --program-io-sequence /tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_0.program_io.json,/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_1.program_io.json,/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/segment_2.program_io.json --hardware-config /tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/hardware.json --simulation-config /workspace/llm/test/program/p5_behavioral_simulation.json --mapping-config /tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/mapping.spec --trace-window 1000000\nstdout_file=/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out/npusim.failure.stdout.txt\nstdout_tail=\n        SystemC 2.3.3-Accellera --- Jan  6 2026 03:02:18\n        Copyright (c) 1996-2018 by all Contributors,\n        ALL RIGHTS RESERVED\n\u001b[32m\u001b[32m[INFO]\u001b[0m\u001b[92m[CONFIG]\u001b[0m        ControlCore config: mode=legacy_shared cores=0-3.                                                              | \u001b[36m0 s\u001b[0m\n\nFatal: Configuration2: Unsupported DRAM type\nIn file: /workspace/DRAMSys/src/configuration/DRAMSys/config/DRAMSysConfiguration.cpp:56\n\nInfo: (I99) simulation aborted\n",
+    "replay_cwd": "/tmp/waferai-frontend-m3-dense-tile/job-dense-all-die-2x6-local-copy-p6bpamxu/out",
+    "replay_exact_compiled_artifacts": true
+  },
+  "native_replay": {
+    "collective_drain_zero": true,
+    "credit_balanced": true,
+    "d2d_drain_zero": true,
+    "drain_markers": [
+      [
+        "3",
+        "1"
+      ]
+    ],
+    "exit_code": 0,
+    "hostlane": {
+      "ack_total": 72,
+      "done_total": 36,
+      "mismatch": 0,
+      "per_lane_done": "3,3,3,3,3,3,3,3,3,3,3,3"
+    },
+    "kv_markers": [
+      [
+        "0",
+        "18432",
+        "f7b586904e3678145aa47e4232587c913139cef0102d6d8e9276fc80c35cbad3"
+      ],
+      [
+        "1",
+        "36864",
+        "1c0273095382988333e2f2b5ae487cea460737ed9be65cbad9c5de537f95bf75"
+      ],
+      [
+        "2",
+        "55296",
+        "35295da1d5eca0b6db3168c0a64a2d61ed3ae8ca283dd4aa6116aa04703dcb60"
+      ]
+    ],
+    "makespan_cycles": 374660,
+    "npusim_sha256": "a80a5208a2176ad80ae7aa286f15ec98f94c1bb8f0f5091c16ca4aa5d388fae1",
+    "p2p_drain_zero_count": 12,
+    "program_memory_all_balanced": true,
+    "program_memory_rows": 12,
+    "real_time_seconds": 562.955,
+    "router_drain_zero": true,
+    "segment_markers": [
+      [
+        "0",
+        "0"
+      ],
+      [
+        "1",
+        "0"
+      ],
+      [
+        "2",
+        "1"
+      ]
+    ],
+    "sim_result_count": 1,
+    "simulated_time_ns": 749320,
+    "stdout_sha256": "8087fbbaca07bdc78dca0507b43d8c3a83fd8333332a3f9fe2aa3e8a945254ef"
+  },
+  "schema": "waferai.frontend.m3_dense_all_die_local_lhs_materialization_receipt/v1",
+  "scope": {
+    "active_die_ids": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "idle_die_ids": [],
+    "mesh": "2x6",
+    "scaled_all_dies": true,
+    "segments": 3,
+    "sequence_digest": "0158cde46981034853a08ca45d9a93a9f326fdf2eacdb40081f9fe329d633f0f",
+    "source_request_sha256": "e1a4d8972231af97f9baea3f7f67ea0399048ae741b15b7137d0fdad99cb2449",
+    "workload_case_id": "workload_case_d52597e04953b831"
+  },
+  "source_after_replay": {
+    "drift": {
+      "llm/frontend/wafer_frontend/schema/ir2.py": {
+        "after_replay": "08bbb4c967806bb225a2a863a8a59629862a0831c6e73c418d1e81f5a7c67f8e",
+        "at_compile": "e960d522f0767df7eb1b1e6923a8c1bfcb3c7c2e1702f182454fc08ba58d2d61"
+      }
+    },
+    "drift_explanation": "Only schema/ir2.py changed after compile: schema version bump and missing-derived-task SchemaError hardening; lowering and native artifacts were unchanged.",
+    "sha256": {
+      "llm/frontend/wafer_frontend/policies/naive_inter_die.py": "ba1ead0f5044611b395688d3d1f4c86c90c9d0bb72299b804dd7df1ac0ce8150",
+      "llm/frontend/wafer_frontend/policies/naive_project_to_ir2.py": "5c020e99e98a94e06dca00af7bf1bf1561cf62a7f81dfca3a34e7cf661d0fddc",
+      "llm/frontend/wafer_frontend/schema/action.py": "ef6216cc654005ddd01d39171a15a2d458426a0841524526a13afeef3be3d012",
+      "llm/frontend/wafer_frontend/schema/ir2.py": "08bbb4c967806bb225a2a863a8a59629862a0831c6e73c418d1e81f5a7c67f8e"
+    }
+  },
+  "status": "verified_exact_native_replay"
+}
