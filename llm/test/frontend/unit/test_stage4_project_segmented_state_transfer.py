@@ -78,8 +78,8 @@ class Stage4ProjectSegmentedStateTransferTest(unittest.TestCase):
         self.assertEqual(
             (INTRA_DIE_DAG_SCHEMA_VERSION, IR2_PROJECTION_RESULT_SCHEMA_VERSION),
             (
-                "wafer_frontend.intra_die_dag/v1alpha14",
-                "wafer_frontend.ir2_projection_result/v1alpha13",
+                "wafer_frontend.intra_die_dag/v1alpha15",
+                "wafer_frontend.ir2_projection_result/v1alpha14",
             ),
         )
         self.assertEqual(
